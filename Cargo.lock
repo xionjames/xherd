@@ -921,6 +921,16 @@ dependencies = [
 [[package]]
 name = "xherd-plugin"
 version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "xherd-core",
+]
 
 [[package]]
 name = "xherd-store"
