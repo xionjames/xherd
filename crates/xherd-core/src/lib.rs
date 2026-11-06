@@ -6,6 +6,7 @@ pub mod config;
 pub mod domain;
 pub mod exec;
 pub mod paths;
+pub mod queue;
 pub mod report;
 pub mod status;
 
