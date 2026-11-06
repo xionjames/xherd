@@ -14,7 +14,7 @@ Decisions in `doc/design.md` §19 are settled; do not re-open them in code. Cite
 
 ## Status
 
-Milestone **M0 (skeleton)** done on branch `m0-skeleton`. Next: **M1** (one agent end to end: `xherd new`, worktree + `.xherd/`, Claude Code runtime plugin, XAP gates, hash approvals). Agents cannot be created from the CLI/API yet; tests seed them directly.
+M0 (skeleton) is merged. **M1** (one agent end to end) is in progress on branch `m1-one-agent`; progress is tracked as checkboxes in `doc/design.md` §18. M1 scope decisions: approvals from the CLI only (the UI comes in M2); xhSpec v0 ships the `feature` flow only. Agents cannot be created from the CLI/API yet; tests seed them directly.
 
 ## Layout
 
@@ -25,6 +25,8 @@ Milestone **M0 (skeleton)** done on branch `m0-skeleton`. Next: **M1** (one agen
 | `crates/xherd-daemon` | `Daemon::start` (config, user token, store, plugins, supervisor, queue replay, reconcile, scheduler); `supervisor` (slots, start queue, port blocks); `actor` (one per agent: `Msg::{Report, User, Tick, WorkDone}`); `driver` (`Driver` trait, `TerminalDriver` on tmux, `FakeDriver` for tests); `scheduler` (all periodic jobs); `support` (clock, change hub, tokens). |
 | `crates/xherd-api` | axum router: `/api/v1/{healthz,state,agents,agents/{id},agents/{id}/{pause,resume,cancel,send},hooks}`; `User` and `AgentAuth` extractors. |
 | `crates/xherd-plugin` | `xherd-plugin.json` manifests, `Registry` (built-ins overridden by external, broken listed), settings/secrets resolution, command protocol (`run_command`, `run_typed`, `run_hook`, `run_checks`). |
+| `crates/xherd-flow` | Flow packs: `xherd-flow.yaml` manifest (`Pack`, `Flow`, `StageDef`, `next` rules with the fixed `Condition` vocabulary and a `Facts` trait), `template::render` (`{name}` placeholders; `${…}` kept), `frontmatter::parse`. `xhspec()` returns the built-in pack embedded from `packs/xhspec/`. |
+| `packs/xhspec` | The built-in xhSpec pack (`xherd-flow.yaml`; prompts come later in M1). |
 | `crates/xherd-term` | `Tmux` (exact `=name` targets, optional `-L` socket), `ScreenRules`. PTY bridge comes with the UI (M2). |
 | `crates/xherd-git` | `Git`: worktrees (`--no-track`), diffs, commit files, bundles, `info/exclude`. |
 | `crates/xherd-cli` | Binary `xherd`: `daemon`, `status`, `ls`, `pause|resume|cancel|send <agent>`, `hook <event>`, `report …`. |
@@ -70,6 +72,8 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 - `rusqlite` is pinned to the version `rusqlite_migration` uses (both link `sqlite3`); bump them together.
 - `ureq` 3 treats HTTP errors as `Err` unless `http_status_as_error(false)`; the CLI sets it.
 - In axum handlers, read the peer address through the `ConnectInfo` extractor (not `extensions.get`) so `MockConnectInfo` works in tests.
+- YAML is parsed with `yaml_serde` (the maintained serde_yaml). It expects `!Tag` syntax for enums; pack enums written as one-key maps (`Condition`) go through a raw struct with `try_from`.
+- Pack manifests use `deny_unknown_fields`: fields not implemented yet (`views`, `extends`, `parse`…) are rejected, not ignored.
 - Supervisor messages carry `oneshot` replies straight to the caller; the supervisor never awaits an actor.
 
 ## Commits
