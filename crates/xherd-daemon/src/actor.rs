@@ -316,7 +316,57 @@ impl Actor {
                 Effect::AfterStop => {}
             }
         }
+        if result == ReportResult::Applied
+            && r.event == ReportEvent::SessionStart
+            && self.agent.next_prompt.is_some()
+        {
+            self.send_first_prompt().await;
+        }
         result
+    }
+
+    /// The session is ready: type the command it was started for (the flow's
+    /// start command, or the next command after approving a parked agent;
+    /// R-005d, R-028). It is cleared once typed, so later session starts
+    /// (`/clear`, resume) do not repeat it.
+    async fn send_first_prompt(&mut self) {
+        let Some(cmd) = self.agent.next_prompt.clone() else {
+            return;
+        };
+        let runtime = self
+            .agent
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let enters = self
+            .agent
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))
+            .and_then(|p| p.install.get(runtime))
+            .filter(|i| cmd.starts_with(&i.prefix))
+            .map_or(1, |i| i.slash_enters);
+        let before = self.agent.status;
+        match self.send(&cmd, enters).await {
+            Ok(()) => {
+                self.agent.next_prompt = None;
+                self.log(None, "first-prompt", Some(json!({"text": cmd})))
+                    .await;
+                self.commit(before).await;
+            }
+            Err(e) => {
+                self.log(
+                    None,
+                    "first-prompt-failed",
+                    Some(json!({"text": cmd, "error": e.message})),
+                )
+                .await;
+                self.notify(format!(
+                    "{}: could not send {cmd:?}: {}",
+                    self.agent.name, e.message
+                ));
+            }
+        }
     }
 
     // ---- XAP -------------------------------------------------------------------

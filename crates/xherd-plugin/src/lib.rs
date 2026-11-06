@@ -12,8 +12,19 @@ use serde_json::{Map, Value, json};
 use xherd_core::exec::{Cmd, ExecError, run};
 
 pub mod manifest;
+pub mod runtime;
 
 pub use manifest::{Check, Kind, MANIFEST_FILE, Manifest, Setting};
+
+/// Built-in plugins compiled into the binary (R-504), from `plugins/`.
+pub fn builtins() -> Vec<Manifest> {
+    [include_str!(
+        "../../../plugins/claude-code/xherd-plugin.json"
+    )]
+    .into_iter()
+    .map(|json| Manifest::parse(json).expect("built-in plugin manifest is valid (tested)"))
+    .collect()
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Plugin {

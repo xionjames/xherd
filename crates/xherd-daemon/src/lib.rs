@@ -56,7 +56,7 @@ impl Options {
             driver,
             clock,
             xherd_bin: "xherd".into(),
-            builtin_plugins: Vec::new(),
+            builtin_plugins: xherd_plugin::builtins(),
             scheduler: None,
             delivery_ack: std::time::Duration::from_secs(10),
             screen_rules: None,
@@ -77,6 +77,8 @@ pub struct Daemon {
     pub sup: SupervisorHandle,
     pub driver: Arc<dyn Driver>,
     pub clock: Arc<dyn Clock>,
+    /// Absolute path of the `xherd` binary (hook commands, `XHERD_BIN`).
+    pub xherd_bin: String,
 }
 
 impl Daemon {
@@ -122,7 +124,7 @@ impl Daemon {
         let settings = ActorSettings {
             idle_alert_minutes: config.idle_alert_minutes,
             gate_park_minutes: config.gate_park_minutes,
-            xherd_bin: opts.xherd_bin,
+            xherd_bin: opts.xherd_bin.clone(),
             xherd_url: config.url(),
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
@@ -151,6 +153,7 @@ impl Daemon {
             sup,
             driver: opts.driver,
             clock: opts.clock,
+            xherd_bin: opts.xherd_bin,
         };
         d.import_ledgers().await;
         let replayed = d.replay_queue().await?;

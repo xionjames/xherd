@@ -203,17 +203,50 @@ async fn flow_none_and_origin_base() {
 }
 
 #[tokio::test]
-async fn without_a_runtime_command_the_agent_errors_clearly() {
+async fn starts_claude_code_with_hooks() {
     let t = setup().await;
-    t.d.new_agent(req(&t, "SC-5")).await.unwrap();
+    let wt =
+        t.ws.path()
+            .join("worktrees")
+            .join(repo_name(&t))
+            .join("SC-5");
+    let a = t.d.new_agent(req(&t, "SC-5")).await.unwrap();
+    assert_eq!(a.launch, Some(vec!["claude".to_string()]));
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(wt.join(".claude/settings.local.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+        "'xherd' hook stop # xherd"
+    );
+    let status = git(&wt, &["status", "--porcelain", "--untracked-files=all"]);
+    assert!(status.stdout.is_empty(), "hook file is excluded from git");
     for _ in 0..200 {
         let a = t.d.action("SC-5", UserAction::Get).await.unwrap();
-        if a.status == Status::Error {
+        if a.status == Status::Running {
             let ev = t.d.store.events(&a.id, 10).await.unwrap();
-            assert!(ev.iter().any(|e| e.kind == "start-failed"));
+            assert!(ev.iter().any(|e| e.kind == "session-started"));
             return;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    panic!("agent never reached error");
+    panic!("agent never started");
+}
+
+#[tokio::test]
+async fn refuses_without_a_runtime_plugin() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path());
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.builtin_plugins.clear();
+    let d = Daemon::start(paths, o).await.unwrap();
+    let r = NewAgent {
+        ticket_key: "SC-6".into(),
+        slug: None,
+        repo: home.path().to_string_lossy().into_owned(),
+        base: None,
+        flow: None,
+        prompt: None,
+    };
+    assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
 }

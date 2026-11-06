@@ -9,6 +9,7 @@ use xherd_core::paths::write_atomic;
 use xherd_core::xap::Refusal;
 use xherd_core::{Agent, Status};
 use xherd_git::Git;
+use xherd_plugin::runtime::{self, Terminal};
 
 use crate::{ActionError, Daemon};
 
@@ -45,6 +46,17 @@ impl Daemon {
                 format!("pack {} has no flow {:?}", xherd_flow::XHSPEC, c.flow),
             ));
         }
+
+        let rt_name = xherd_flow::approve::DEFAULT_RUNTIME;
+        let rt = self
+            .plugins
+            .get(rt_name)
+            .ok_or_else(|| format!("runtime plugin {rt_name} is not installed"))
+            .and_then(|p| Terminal::of(&p.manifest))
+            .map_err(|e| refuse("runtime_unusable", e))?;
+        let launch = rt
+            .argv(runtime::DEFAULT_PERMISSION_MODE)
+            .map_err(|e| refuse("runtime_unusable", e))?;
 
         let git = Git::new("git");
         let given = Path::new(req.repo.trim());
@@ -98,12 +110,13 @@ impl Daemon {
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);
-        a.runtime = Some(xherd_flow::approve::DEFAULT_RUNTIME.into());
+        a.runtime = Some(rt_name.into());
+        a.launch = Some(launch);
         a.next_prompt = Some(match pack {
             Some(p) => {
                 let start = &p.flow(&c.flow).expect("checked above").start;
                 p.command(
-                    xherd_flow::approve::DEFAULT_RUNTIME,
+                    rt_name,
                     start,
                     &[
                         ("key", &c.ticket_key),
@@ -124,6 +137,9 @@ impl Daemon {
 
         let res = async {
             prepare_xherd_dir(&git, &workdir, &a).await?;
+            if let Some(h) = &rt.hooks {
+                install_hooks(&git, &workdir, h, &self.xherd_bin).await?;
+            }
             self.create_agent(a).await
         }
         .await;
@@ -181,6 +197,29 @@ async fn prepare_xherd_dir(git: &Git, workdir: &Path, a: &Agent) -> Result<(), A
     let f = dir.join("instructions.md");
     write_atomic(&f, new::instructions_md(a).as_bytes(), None).map_err(|e| io(&f, e))?;
     git.add_excludes(workdir, &[".xherd/"])
+        .await
+        .map_err(|e| refuse("git", e.to_string()))
+}
+
+/// Make the runtime report to xherd (R-005b): merge xherd's tagged hook
+/// entries into the runtime's settings file and keep that file out of git.
+async fn install_hooks(
+    git: &Git,
+    workdir: &Path,
+    h: &runtime::HookFile,
+    xherd_bin: &str,
+) -> Result<(), ActionError> {
+    let f = workdir.join(&h.file);
+    let existing = std::fs::read_to_string(&f).ok();
+    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin)
+        .map_err(|e| refuse("runtime_hooks", e))?;
+    if let Some(dir) = f.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| refuse("io", format!("{}: {e}", dir.display())))?;
+    }
+    write_atomic(&f, text.as_bytes(), None)
+        .map_err(|e| refuse("io", format!("{}: {e}", f.display())))?;
+    git.add_excludes(workdir, &[&h.file])
         .await
         .map_err(|e| refuse("git", e.to_string()))
 }

@@ -120,6 +120,30 @@ async fn failed_start_is_an_error_and_frees_the_slot() {
 }
 
 #[tokio::test]
+async fn first_prompt_is_typed_once_the_session_is_ready() {
+    let t = daemon(4).await;
+    let mut a = agent("SC-1", 1);
+    a.pack = Some("xhspec".into());
+    a.flow = Some("feature".into());
+    a.next_prompt = Some("/xhspec:feature SC-1 add login".into());
+    let a = t.d.create_agent(a).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
+    assert_eq!(t.drv.calls(), vec!["start SC-1 fake-runtime --go"]);
+
+    let start = rep(&a, "s1", ReportEvent::SessionStart, 1, Value::Null);
+    assert_eq!(t.d.report(start).await, Some(ReportResult::Applied));
+    let typed = r#"send SC-1 "/xhspec:feature SC-1 add login" 1"#.to_string();
+    assert_eq!(t.drv.calls().last(), Some(&typed));
+    let now = t.d.action("SC-1", UserAction::Get).await.unwrap();
+    assert_eq!(now.next_prompt, None);
+
+    // A later session start (e.g. after /clear) types nothing again.
+    let again = rep(&a, "s2", ReportEvent::SessionStart, 2, Value::Null);
+    t.d.report(again).await;
+    assert_eq!(t.drv.calls().iter().filter(|c| **c == typed).count(), 1);
+}
+
+#[tokio::test]
 async fn reports_sequence_dedupe_and_unknown_agents() {
     let t = daemon(4).await;
     let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
