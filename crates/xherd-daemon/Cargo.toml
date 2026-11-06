@@ -1,0 +1,27 @@
+[package]
+name = "xherd-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = "0.1.92"
+getrandom = "0.4.3"
+hex = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["sync", "rt", "time", "macros"] }
+tracing = "0.1.44"
+xherd-core = { version = "0.1.0", path = "../xherd-core" }
+xherd-plugin = { version = "0.1.0", path = "../xherd-plugin" }
+xherd-store = { version = "0.1.0", path = "../xherd-store" }
+xherd-term = { version = "0.1.0", path = "../xherd-term" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "test-util"] }
