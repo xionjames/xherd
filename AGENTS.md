@@ -14,20 +14,29 @@ Decisions in `doc/design.md` §19 are settled; do not re-open them in code. Cite
 
 ## Status
 
-Milestone **M0 (skeleton)** in progress on branch `m0-skeleton`. Nothing user-facing yet.
+Milestone **M0 (skeleton)** done on branch `m0-skeleton`. Next: **M1** (one agent end to end: `xherd new`, worktree + `.xherd/`, Claude Code runtime plugin, XAP gates, hash approvals). Agents cannot be created from the CLI/API yet; tests seed them directly.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `crates/xherd-core` | Domain: `Status` + lifecycle table (`next_status`), `Agent`, `Report` + `apply_report` (sequence rules), flow types (`Gate`, `Task`, `Commit`, `Role`), `Paths`, `Config`/`Secrets`, `exec::run` (the only way to run external commands). Pure and heavily tested. |
-| `crates/xherd-store` | SQLite schema, migrations, writer task. |
-| `crates/xherd-daemon` | Supervisor, agent actors, scheduler. |
-| `crates/xherd-api` | axum routes and auth. |
-| `crates/xherd-plugin` | Plugin manifests, settings/secrets, command protocol. |
-| `crates/xherd-term` | tmux wrapper, screen rules. |
-| `crates/xherd-git` | git wrappers. |
-| `crates/xherd-cli` | The `xherd` binary. |
+| `crates/xherd-core` | Domain: `Status` + lifecycle table (`status::next_status`), `Agent` (`fire(Trigger)`), `Report` + `report::apply_report` (sequence rules R-009, no revival R-008), flow types (`Gate`, `Task`, `Commit`, `Role`), `Paths`, `Config`/`Secrets` (schema migrations, unknown keys kept), `queue` (`hook-queue.jsonl`, sync, file-locked), `exec::run` (the only way to run external commands). Pure and heavily tested (incl. proptest). |
+| `crates/xherd-store` | SQLite (WAL, one writer thread, read-only pool), forward-only migrations in `schema.rs` (append only), `VACUUM INTO` copy before migrating. |
+| `crates/xherd-daemon` | `Daemon::start` (config, user token, store, plugins, supervisor, queue replay, reconcile, scheduler); `supervisor` (slots, start queue, port blocks); `actor` (one per agent: `Msg::{Report, User, Tick, WorkDone}`); `driver` (`Driver` trait, `TerminalDriver` on tmux, `FakeDriver` for tests); `scheduler` (all periodic jobs); `support` (clock, change hub, tokens). |
+| `crates/xherd-api` | axum router: `/api/v1/{healthz,state,agents,agents/{id},agents/{id}/{pause,resume,cancel,send},hooks}`; `User` and `AgentAuth` extractors. |
+| `crates/xherd-plugin` | `xherd-plugin.json` manifests, `Registry` (built-ins overridden by external, broken listed), settings/secrets resolution, command protocol (`run_command`, `run_typed`, `run_hook`, `run_checks`). |
+| `crates/xherd-term` | `Tmux` (exact `=name` targets, optional `-L` socket), `ScreenRules`. PTY bridge comes with the UI (M2). |
+| `crates/xherd-git` | `Git`: worktrees (`--no-track`), diffs, commit files, bundles, `info/exclude`. |
+| `crates/xherd-cli` | Binary `xherd`: `daemon`, `status`, `ls`, `pause|resume|cancel|send <agent>`, `hook <event>`, `report …`. |
+
+## Running it
+
+```sh
+XHERD_HOME=/tmp/xh cargo run -p xherd-cli -- daemon     # JSON logs on stderr; XHERD_LOG=debug for more
+XHERD_HOME=/tmp/xh cargo run -p xherd-cli -- status
+```
+
+Data root: `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd`. `config.json` there holds the port (4740), `tmuxSocket` and the generated user token used by the CLI.
 
 ## Build and test
 
@@ -52,6 +61,16 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 - Files the daemon writes go through `paths::write_atomic`; secrets are mode 0600.
 - Minimal code: no abstraction for a single use; flag unrelated problems instead of fixing them silently.
 - Clean room: never copy or name proprietary tools, prompts, texts or design tokens from other products.
+
+## Gotchas
+
+- `xherd hook` is handled in `main` **before** clap, inside `catch_unwind` with a silent panic hook, so bad arguments or panics still exit 0 with no output. Keep it that way.
+- Sequence numbers from the CLI are `max(last + 1, now in µs)` (`.xherd/seq`), so counter-based and time-based reports from the same agent stay ordered.
+- Hooks without a token, or with the daemon unreachable / 5xx, are appended to `hook-queue.jsonl`; 4xx answers are not queued (a retry would not help). The daemon replays the queue at start and every minute.
+- `rusqlite` is pinned to the version `rusqlite_migration` uses (both link `sqlite3`); bump them together.
+- `ureq` 3 treats HTTP errors as `Err` unless `http_status_as_error(false)`; the CLI sets it.
+- In axum handlers, read the peer address through the `ConnectInfo` extractor (not `extensions.get`) so `MockConnectInfo` works in tests.
+- Supervisor messages carry `oneshot` replies straight to the caller; the supervisor never awaits an actor.
 
 ## Commits
 

@@ -1,3 +1,291 @@
-fn main() {
-    println!("Hello, world!");
+//! The `xherd` binary.
+
+use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
+
+use clap::{Parser, Subcommand};
+use serde_json::Value;
+use xherd_core::config::Config;
+use xherd_core::paths::Paths;
+
+mod report;
+
+#[derive(Parser)]
+#[command(
+    name = "xherd",
+    version,
+    about = "Run, watch and steer a herd of coding agents"
+)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Run the daemon in the foreground.
+    Daemon,
+    /// Is the daemon up?
+    Status,
+    /// List agents.
+    Ls,
+    /// Pause an agent (ends its session).
+    Pause { agent: String },
+    /// Resume a paused, cancelled or failed agent.
+    Resume { agent: String },
+    /// Cancel an agent (ends its session, keeps the worktree).
+    Cancel { agent: String },
+    /// Type a message into an agent's session.
+    Send { agent: String, text: String },
+    /// Runtime hook (reads the hook JSON on stdin). Silent; always exits 0.
+    Hook { event: String },
+    /// Push status for agents or wrappers without hooks.
+    Report {
+        #[arg(long, value_parser = ["working", "idle", "blocked"])]
+        state: Option<String>,
+        #[arg(long)]
+        release: bool,
+        #[arg(long)]
+        message: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        resume_cmd: Option<String>,
+        #[arg(long)]
+        seq: Option<u64>,
+    },
+}
+
+fn main() -> ExitCode {
+    // Hot path first: no argument parser errors, no panics, nothing on stdout (R-012).
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("hook") {
+        std::panic::set_hook(Box::new(|_| {}));
+        let event = args.get(2).cloned().unwrap_or_default();
+        let _ = std::panic::catch_unwind(|| report::hook(&event));
+        return ExitCode::SUCCESS;
+    }
+
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => {
+            let code = if e.use_stderr() { 64 } else { 0 };
+            let _ = e.print();
+            return ExitCode::from(code);
+        }
+    };
+    let code = match cli.cmd {
+        Cmd::Daemon => run_daemon(),
+        Cmd::Status => status(),
+        Cmd::Ls => ls(),
+        Cmd::Pause { agent } => action(&agent, "pause", None),
+        Cmd::Resume { agent } => action(&agent, "resume", None),
+        Cmd::Cancel { agent } => action(&agent, "cancel", None),
+        Cmd::Send { agent, text } => {
+            action(&agent, "send", Some(serde_json::json!({"text": text})))
+        }
+        Cmd::Hook { .. } => 0,
+        Cmd::Report {
+            state,
+            release,
+            message,
+            session,
+            resume_cmd,
+            seq,
+        } => report::report(report::ReportArgs {
+            state,
+            release,
+            message,
+            session,
+            resume_cmd,
+            seq,
+        }),
+    };
+    ExitCode::from(code as u8)
+}
+
+// ---- daemon -------------------------------------------------------------------
+
+fn run_daemon() -> i32 {
+    let filter = tracing_subscriber::EnvFilter::try_from_env("XHERD_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("xherd daemon: {e}");
+            return 1;
+        }
+    };
+    match rt.block_on(daemon_main()) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!(error = %e, "daemon stopped");
+            eprintln!("xherd daemon: {e}");
+            1
+        }
+    }
+}
+
+async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
+    let paths = Paths::from_env();
+    let (cfg, _) = Config::load(&paths.config())?;
+    let addr = format!("{}:{}", cfg.bind, cfg.port);
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| format!("cannot listen on {addr}: {e} (is another daemon running?)"))?;
+
+    let tmux = xherd_term::Tmux::new(cfg.tmux_socket.clone());
+    let mut opts = xherd_daemon::Options::new(
+        Arc::new(xherd_daemon::TerminalDriver { tmux }),
+        Arc::new(xherd_daemon::SystemClock),
+    );
+    opts.xherd_bin = std::env::current_exe()?.to_string_lossy().into_owned();
+    opts.scheduler = Some(Default::default());
+    let d = xherd_daemon::Daemon::start(paths.clone(), opts).await?;
+    tracing::info!(url = %format!("http://{addr}"), data = %paths.root.display(), version = xherd_core::VERSION, "xherd daemon listening");
+    xherd_api::serve(d, listener, shutdown_signal()).await?;
+    tracing::info!("xherd daemon stopped; agent sessions keep running");
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! { _ = ctrl_c => {}, _ = term => {} }
+}
+
+// ---- user client ----------------------------------------------------------------
+
+struct Client {
+    url: String,
+    token: Option<String>,
+    agent: ureq::Agent,
+}
+
+impl Client {
+    fn new() -> Result<Client, String> {
+        let (cfg, _) = Config::load(&Paths::from_env().config()).map_err(|e| e.to_string())?;
+        let url = std::env::var("XHERD_URL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.url());
+        let agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(1)))
+            .timeout_global(Some(Duration::from_secs(30)))
+            .build()
+            .new_agent();
+        Ok(Client {
+            url,
+            token: cfg.user_token,
+            agent,
+        })
+    }
+
+    fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
+        let url = format!("{}/api/v1{path}", self.url.trim_end_matches('/'));
+        let auth = self.token.as_ref().map(|t| format!("Bearer {t}"));
+        let res = if method == "GET" {
+            let mut r = self.agent.get(&url);
+            if let Some(a) = &auth {
+                r = r.header("Authorization", a);
+            }
+            r.call()
+        } else {
+            let mut r = self.agent.post(&url);
+            if let Some(a) = &auth {
+                r = r.header("Authorization", a);
+            }
+            match body {
+                Some(b) => r.send_json(b),
+                None => r.send_empty(),
+            }
+        };
+        let resp = res.map_err(|e| format!("daemon not reachable at {}: {e}", self.url))?;
+        let ok = resp.status().is_success();
+        let v: Value = resp.into_body().read_json().unwrap_or(Value::Null);
+        if ok {
+            Ok(v)
+        } else {
+            Err(v["error"].as_str().unwrap_or("request failed").to_string())
+        }
+    }
+}
+
+fn status() -> i32 {
+    match Client::new().and_then(|c| c.call("GET", "/healthz", None).map(|v| (c.url, v))) {
+        Ok((url, v)) => {
+            println!(
+                "xherd {} running at {url}",
+                v["version"].as_str().unwrap_or("?")
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
+}
+
+fn ls() -> i32 {
+    let v = match Client::new().and_then(|c| c.call("GET", "/agents", None)) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let agents = v["agents"].as_array().cloned().unwrap_or_default();
+    if agents.is_empty() {
+        println!("no agents");
+        return 0;
+    }
+    println!("{:<24} {:<14} SESSION", "NAME", "STATUS");
+    for a in agents {
+        println!(
+            "{:<24} {:<14} {}",
+            a["name"].as_str().unwrap_or("?"),
+            a["status"].as_str().unwrap_or("?"),
+            a["session"].as_str().unwrap_or("-")
+        );
+    }
+    0
+}
+
+fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
+    match Client::new().and_then(|c| c.call("POST", &format!("/agents/{agent}/{what}"), body)) {
+        Ok(v) => {
+            println!(
+                "{} is {}",
+                v["agent"]["name"].as_str().unwrap_or(agent),
+                v["agent"]["status"].as_str().unwrap_or("?")
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
 }
