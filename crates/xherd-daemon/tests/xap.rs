@@ -40,7 +40,16 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 async fn setup() -> T {
+    setup_with(true).await
+}
+
+async fn setup_with(fresh_sessions: bool) -> T {
     let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"freshSessions": fresh_sessions}).to_string(),
+    )
+    .unwrap();
     let wt = tempfile::tempdir().unwrap();
     git(wt.path(), &["init", "-q", "-b", "main"]);
     git(wt.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
@@ -248,11 +257,9 @@ async fn tasks_and_commit_with_real_git() {
     t.d.action("SC-1", UserAction::Approve { reason: None })
         .await
         .unwrap();
-    assert!(
-        t.drv
-            .calls()
-            .iter()
-            .any(|c| c == "send SC-1 \"/xhspec:commit C01\" 1")
+    assert_eq!(
+        get(&t).await.next_prompt.as_deref(),
+        Some("/xhspec:commit C01")
     );
     assert_eq!(get(&t).await.commits[0].status, CommitStatus::Approved);
 
@@ -357,7 +364,8 @@ async fn refused_when_not_live_or_without_flow() {
 
 #[tokio::test]
 async fn approve_docs_gate_hands_on_next_command() {
-    let t = setup().await;
+    // Without fresh sessions the command is typed into the current one.
+    let t = setup_with(false).await;
     let spec = t.wt.path().join(".xherd/spec/spec.md");
     std::fs::write(&spec, "---\nticket: SC-1\n---\n# Spec\n").unwrap();
 
@@ -436,7 +444,7 @@ async fn design_skip_goes_to_tasks() {
         .unwrap();
     stop(&t, 1).await;
     act(&t, UserAction::Approve { reason: None }).await.unwrap();
-    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:tasks\" 1"]);
+    assert_eq!(get(&t).await.next_prompt.as_deref(), Some("/xhspec:tasks"));
 }
 
 #[tokio::test]
@@ -549,4 +557,64 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
         .unwrap();
     assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
     assert_ne!(a.status, Status::Parked);
+}
+
+async fn session_start(t: &T, seq: u64) {
+    let r = Report {
+        id: format!("start-{seq}"),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::SessionStart,
+        payload: json!({"session_id": format!("s-{seq}")}),
+        seq,
+        at: 0,
+    };
+    t.d.report(r).await;
+}
+
+#[tokio::test]
+async fn approval_starts_a_fresh_session_with_the_next_command() {
+    let t = setup().await;
+    session_start(&t, 1).await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 2).await;
+    let generation = get(&t).await.generation;
+
+    let a = act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    // The window's process is replaced; nothing is typed into the old session.
+    assert!(t.drv.calls().contains(&"respawn SC-1 rt".to_string()));
+    assert!(sends(&t).is_empty());
+    assert_eq!(a.status, Status::Running);
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
+    assert_eq!(a.session, None);
+    assert!(a.generation > generation);
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "fresh-session"));
+
+    // The new session is ready: the command is typed once.
+    session_start(&t, 3).await;
+    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
+    let a = get(&t).await;
+    assert_eq!((a.next_prompt, a.session.as_deref()), (None, Some("s-3")));
+    session_start(&t, 4).await;
+    assert_eq!(sends(&t).len(), 1);
+}
+
+#[tokio::test]
+async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
+    let t = setup().await;
+    act(&t, UserAction::Pause).await.unwrap();
+    let a = act(&t, UserAction::Resume).await.unwrap();
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:resume"));
+
+    let mut a = get(&t).await;
+    a.status = Status::Paused;
+    a.next_prompt = Some("/xhspec:pr-review".into());
+    t.d.store.put_agent(&a).await.unwrap();
+    let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
+    let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
+    let a = d.action("SC-1", UserAction::Resume).await.unwrap();
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:pr-review"));
 }

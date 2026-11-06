@@ -46,6 +46,9 @@ pub struct Config {
     /// 0 = no idle alerts.
     pub idle_alert_minutes: u64,
     pub pause_timeout_sec: u64,
+    /// After an approved gate, replace the runtime session with a new one
+    /// started with the next command instead of typing it (R-023).
+    pub fresh_sessions: bool,
     pub event_retention_days: u64,
     pub update_check: bool,
     /// Workspace root holding `worktrees/` (design §8.1). `None`:
@@ -73,6 +76,7 @@ impl Default for Config {
             gate_park_minutes: 30,
             idle_alert_minutes: 15,
             pause_timeout_sec: 120,
+            fresh_sessions: true,
             event_retention_days: 90,
             update_check: true,
             workspace: None,

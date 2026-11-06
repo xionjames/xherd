@@ -651,7 +651,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Claude Code in tmux
   - [x] XAP gates
   - [x] Hash approvals from the CLI
-  - [ ] Fresh sessions
+  - [x] Fresh sessions
   - [ ] Commit gates
   - [ ] Ship
   - [ ] Draft PR via GitHub

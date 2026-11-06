@@ -109,6 +109,7 @@ pub enum SupEvent {
 pub struct ActorSettings {
     pub idle_alert_minutes: u64,
     pub gate_park_minutes: u64,
+    pub fresh_sessions: bool,
     pub delivery_ack: Duration,
     pub xherd_bin: String,
     pub xherd_url: String,
@@ -120,6 +121,7 @@ impl Default for ActorSettings {
         ActorSettings {
             idle_alert_minutes: 15,
             gate_park_minutes: 30,
+            fresh_sessions: true,
             delivery_ack: Duration::from_secs(10),
             xherd_bin: "xherd".into(),
             xherd_url: "http://127.0.0.1:4740".into(),
@@ -557,6 +559,12 @@ impl Actor {
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
+                // The runtime cannot resume its own session yet (no resume
+                // argv), so the new session reloads the state with the pack's
+                // `resume` command; a pending next prompt wins (R-027).
+                if self.agent.next_prompt.is_none() {
+                    self.agent.next_prompt = self.resume_command();
+                }
                 "user.resume"
             }
             UserAction::Cancel => {
@@ -812,6 +820,25 @@ impl Actor {
                 self.agent.next_prompt = next.map(|n| n.0);
                 self.agent.fire(Trigger::Unpark, now);
             }
+            (_, Some((cmd, _))) if self.fresh_sessions_on() => {
+                match self.fresh_session(&cmd).await {
+                    Ok(()) => {
+                        self.agent.fire(Trigger::UserInput, now);
+                    }
+                    Err(e) => {
+                        self.log(
+                            None,
+                            "hand-on-failed",
+                            Some(json!({"next": cmd, "error": e.message})),
+                        )
+                        .await;
+                        self.notify(format!(
+                            "{}: approved, but could not start a fresh session for {cmd:?}: {}",
+                            self.agent.name, e.message
+                        ));
+                    }
+                }
+            }
             // The approval stands even if typing fails; the user is told the command.
             (_, Some((cmd, enters))) => match self.send(&cmd, enters).await {
                 Ok(()) => {
@@ -833,6 +860,51 @@ impl Actor {
             (_, None) => {}
         }
         Ok(())
+    }
+
+    /// Whether an approval replaces the session (R-023): fresh sessions are
+    /// on and the agent follows a flow (R-024; flow `none` has no gates).
+    /// Background tasks (also R-024) are not tracked yet.
+    fn fresh_sessions_on(&self) -> bool {
+        self.env.settings.fresh_sessions && self.agent.pack.is_some()
+    }
+
+    /// Replace the runtime process in the agent window by a new session
+    /// (`respawn-window`; other windows keep running, R-023). The command is
+    /// typed on the new session's `session-start`, like a first prompt. The
+    /// session keeps its environment and agent token.
+    async fn fresh_session(&mut self, cmd: &str) -> Result<(), ActionError> {
+        let argv = self
+            .agent
+            .launch
+            .clone()
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
+        self.env
+            .driver
+            .respawn(&self.ctx(), &argv)
+            .await
+            .map_err(|e| refuse("driver", e.0))?;
+        self.delivery = None;
+        self.agent.session = None;
+        self.agent.next_prompt = Some(cmd.to_string());
+        self.log(None, "fresh-session", Some(json!({"next": cmd})))
+            .await;
+        Ok(())
+    }
+
+    /// The pack's `resume` command for the agent's runtime; `None` for flow
+    /// `none` or a pack without one.
+    fn resume_command(&self) -> Option<String> {
+        let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
+        let runtime = self
+            .agent
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        pack.command(runtime, pack.commands.get("resume")?, &[])
+            .map_err(|e| tracing::warn!(agent = %self.agent.name, error = %e, "no resume command"))
+            .ok()
     }
 
     fn next_command(&self, wd: &Path, gate: &Gate) -> Result<Option<(String, u32)>, ActionError> {

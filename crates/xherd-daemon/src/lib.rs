@@ -125,6 +125,7 @@ impl Daemon {
         let settings = ActorSettings {
             idle_alert_minutes: config.idle_alert_minutes,
             gate_park_minutes: config.gate_park_minutes,
+            fresh_sessions: config.fresh_sessions,
             xherd_bin: opts.xherd_bin.clone(),
             xherd_url: config.url(),
             delivery_ack: opts.delivery_ack,
