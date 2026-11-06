@@ -32,6 +32,22 @@ enum Cmd {
     Daemon,
     /// Is the daemon up?
     Status,
+    /// Create an agent: worktree, branch and `.xherd/` for a ticket.
+    New {
+        /// Ticket key (upper-cased).
+        key: String,
+        #[arg(long)]
+        slug: Option<String>,
+        /// Flow of the built-in pack, or `none` (default `feature`).
+        #[arg(long)]
+        flow: Option<String>,
+        /// Local repository (default: the current directory).
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        base: Option<String>,
+        prompt: Option<String>,
+    },
     /// List agents.
     Ls,
     /// Pause an agent (ends its session).
@@ -118,6 +134,14 @@ fn main() -> ExitCode {
         Cmd::Daemon => run_daemon(),
         Cmd::Status => status(),
         Cmd::Ls => ls(),
+        Cmd::New {
+            key,
+            slug,
+            flow,
+            repo,
+            base,
+            prompt,
+        } => new_agent(key, slug, flow, repo, base, prompt),
         Cmd::Pause { agent } => action(&agent, "pause", None),
         Cmd::Resume { agent } => action(&agent, "resume", None),
         Cmd::Cancel { agent } => action(&agent, "cancel", None),
@@ -358,6 +382,49 @@ fn gate_summary(g: &Value) -> String {
         Some("question") => format!("question: {}", g["text"].as_str().unwrap_or("")),
         Some(k) => k.to_string(),
         None => "-".into(),
+    }
+}
+
+fn new_agent(
+    key: String,
+    slug: Option<String>,
+    flow: Option<String>,
+    repo: Option<String>,
+    base: Option<String>,
+    prompt: Option<String>,
+) -> i32 {
+    // The daemon has its own working directory: send an absolute path.
+    let repo = match repo {
+        Some(r) if r.contains("://") || r.starts_with("git@") => r,
+        r => {
+            let p = r.map_or_else(std::env::current_dir, |r| std::fs::canonicalize(&r));
+            match p {
+                Ok(p) => p.to_string_lossy().into_owned(),
+                Err(e) => {
+                    eprintln!("xherd new: repository: {e}");
+                    return 2;
+                }
+            }
+        }
+    };
+    let body = serde_json::json!({
+        "ticketKey": key, "slug": slug, "repo": repo, "base": base, "flow": flow, "prompt": prompt,
+    });
+    match Client::new().and_then(|c| c.call("POST", "/agents", Some(body))) {
+        Ok(v) => {
+            let a = &v["agent"];
+            println!(
+                "{} {} in {}",
+                a["name"].as_str().unwrap_or("?"),
+                a["status"].as_str().unwrap_or("?"),
+                a["workdir"].as_str().unwrap_or("?")
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("xherd new: {e}");
+            2
+        }
     }
 }
 

@@ -15,6 +15,7 @@ use xherd_plugin::Registry;
 use xherd_store::Store;
 
 pub mod actor;
+mod create;
 pub mod driver;
 pub mod scheduler;
 pub mod supervisor;

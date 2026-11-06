@@ -50,6 +50,12 @@ pub struct Agent {
     /// argv that starts the runtime; filled from the runtime plugin (M1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch: Option<Vec<String>>,
+    /// Repository root the worktree was created from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Base the branch was created from (resolved ref, e.g. `origin/main`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
     /// Runtime plugin name (`claude-code` when unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
@@ -101,6 +107,8 @@ impl Agent {
             resume_cmd: None,
             workdir: None,
             launch: None,
+            repo: None,
+            base: None,
             runtime: None,
             next_prompt: None,
             pack: None,

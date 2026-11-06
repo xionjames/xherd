@@ -17,7 +17,15 @@ async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
     let dir = tempfile::tempdir().unwrap();
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.scheduler = None;
-    let d = Daemon::start(Paths::at(dir.path()), o).await.unwrap();
+    let paths = Paths::at(dir.path());
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(dir.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let d = Daemon::start(paths, o).await.unwrap();
     let mut a = Agent::new("SC-1", "SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
     let a = d.create_agent(a).await.unwrap();
@@ -267,4 +275,69 @@ async fn xap_endpoint() {
         (json!(false), json!("no_flow"))
     );
     assert!(v["message"].as_str().unwrap().contains("without a flow"));
+}
+
+#[tokio::test]
+async fn create_agent_endpoint() {
+    let (dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let post = |body: Value| {
+        Request::post("/api/v1/agents")
+            .header("host", "127.0.0.1:4740")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let run = |args: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .status()
+                .unwrap()
+                .success()
+        )
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["commit", "-q", "--allow-empty", "-m", "base"]);
+    let repo = repo.to_string_lossy().into_owned();
+
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"ticketKey": "bad key", "repo": repo})),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("bad_key"))
+    );
+    let (s, _) = call(
+        app.clone(),
+        post(json!({"ticketKey": "SC-9", "repo": repo, "extra": 1})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"ticketKey": "SC-1", "repo": repo})),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("name_taken"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"ticketKey": "sc-9", "repo": repo})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["agent"]["name"], "SC-9");
 }

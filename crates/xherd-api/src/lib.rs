@@ -24,7 +24,7 @@ pub fn router(d: Daemon) -> Router {
     Router::new()
         .route("/api/v1/healthz", get(healthz))
         .route("/api/v1/state", get(state))
-        .route("/api/v1/agents", get(list_agents))
+        .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/hooks", post(hooks))
@@ -77,6 +77,9 @@ impl From<ActionError> for ApiError {
             "unknown_agent" => StatusCode::NOT_FOUND,
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             "usage" => StatusCode::BAD_REQUEST,
+            "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
+            | "not_a_repo" | "base_unresolved" => StatusCode::UNPROCESSABLE_ENTITY,
+            "io" | "git" => StatusCode::INTERNAL_SERVER_ERROR,
             "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
         };
@@ -250,6 +253,16 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
 async fn list_agents(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
     let agents = d.store.list_agents().await.map_err(ApiError::internal)?;
     Ok(Json(json!({"agents": agents})))
+}
+
+/// Create an agent (spec §5.1). Body: `NewAgent`, unknown fields refused.
+async fn new_agent(
+    _: User,
+    State(d): State<Daemon>,
+    Json(req): Json<xherd_core::new::NewAgent>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    let agent = d.new_agent(req).await?;
+    Ok((StatusCode::CREATED, Json(json!({"agent": agent}))))
 }
 
 async fn get_agent(
