@@ -110,3 +110,46 @@ async fn failures_carry_stderr() {
         .to_string();
     assert!(err.contains("nope"), "{err}");
 }
+
+#[tokio::test]
+async fn diff_proposed_covers_new_deleted_and_leaves_the_index_alone() {
+    let d = tempfile::tempdir().unwrap();
+    let g = init_repo(d.path()).await;
+    let dir = d.path();
+    std::fs::write(dir.join("b.txt"), "gone\n").unwrap();
+    std::fs::write(dir.join(".gitignore"), "*.log\n").unwrap();
+    g.run(dir, &["add", "."]).await.unwrap();
+    g.run(dir, &["commit", "--quiet", "-m", "b"]).await.unwrap();
+
+    std::fs::write(dir.join("a.txt"), "two\n").unwrap();
+    std::fs::remove_file(dir.join("b.txt")).unwrap();
+    std::fs::write(dir.join("new [1].txt"), "fresh\n").unwrap();
+    std::fs::write(dir.join("x.log"), "ignored but proposed\n").unwrap();
+    std::fs::write(dir.join("other.txt"), "not proposed\n").unwrap();
+    let files: Vec<String> = ["a.txt", "b.txt", "new [1].txt", "x.log", "missing.txt"]
+        .map(String::from)
+        .to_vec();
+    let diff = g.diff_proposed(dir, &files).await.unwrap();
+    assert!(diff.contains("+two"), "{diff}");
+    assert!(
+        diff.contains("deleted file mode") && diff.contains("-gone"),
+        "{diff}"
+    );
+    assert!(diff.contains("+fresh"), "{diff}");
+    assert!(diff.contains("+ignored but proposed"), "{diff}");
+    assert!(!diff.contains("not proposed"), "{diff}");
+    assert!(!diff.contains("missing.txt"), "{diff}");
+
+    // The worktree's own index is untouched.
+    assert_eq!(
+        g.run(dir, &["diff", "--cached", "--name-only"])
+            .await
+            .unwrap(),
+        ""
+    );
+    assert_eq!(g.diff_proposed(dir, &[]).await.unwrap(), "");
+    assert_eq!(
+        g.diff_proposed(dir, &["missing.txt".into()]).await.unwrap(),
+        ""
+    );
+}

@@ -51,14 +51,21 @@ impl Git {
 
     /// Run git in `dir`; returns stdout with the trailing newline trimmed.
     pub async fn run(&self, dir: &Path, args: &[&str]) -> Result<String> {
+        self.run_env(dir, &[], args).await
+    }
+
+    async fn run_env(&self, dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Result<String> {
         let mut argv = vec![self.bin.clone()];
         argv.extend(args.iter().map(|s| s.to_string()));
-        let out = run(Cmd::new(argv)
+        let mut cmd = Cmd::new(argv)
             .cwd(dir)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
-            .timeout(self.timeout))
-        .await?;
+            .timeout(self.timeout);
+        for (k, v) in env {
+            cmd = cmd.env(*k, *v);
+        }
+        let out = run(cmd).await?;
         let joined = args.join(" ");
         if out.timed_out {
             return Err(GitError::Timeout { args: joined });
@@ -209,6 +216,53 @@ impl Git {
         files.sort();
         files.dedup();
         Ok(files)
+    }
+
+    /// Unified diff of HEAD against `paths` as they are in the working tree,
+    /// as if exactly these files were staged: new (even untracked or ignored)
+    /// and deleted files included, paths taken literally. A temporary index is
+    /// used, so the worktree's own index is never touched. Paths in neither
+    /// HEAD nor the working tree are skipped.
+    pub async fn diff_proposed(&self, dir: &Path, paths: &[String]) -> Result<String> {
+        if paths.is_empty() {
+            return Ok(String::new());
+        }
+        let index = std::env::temp_dir().join(format!("xherd-index-{}", xherd_core::new_id()));
+        let idx = index.to_string_lossy().into_owned();
+        let env = [("GIT_INDEX_FILE", idx.as_str())];
+        let lit = "--literal-pathspecs";
+        let res = async {
+            self.run_env(dir, &env, &["read-tree", "HEAD"]).await?;
+            let mut args = vec![lit, "ls-files", "-z", "--"];
+            args.extend(paths.iter().map(String::as_str));
+            let tracked = self.run_env(dir, &env, &args).await?;
+            let tracked: Vec<&str> = tracked.split('\0').collect();
+            let present: Vec<&str> = paths
+                .iter()
+                .map(String::as_str)
+                .filter(|p| tracked.contains(p) || dir.join(p).symlink_metadata().is_ok())
+                .collect();
+            if present.is_empty() {
+                return Ok(String::new());
+            }
+            let mut args = vec![lit, "add", "--all", "--force", "--"];
+            args.extend(&present);
+            self.run_env(dir, &env, &args).await?;
+            let mut args = vec![
+                lit,
+                "diff",
+                "--cached",
+                "--no-color",
+                "--no-ext-diff",
+                "HEAD",
+                "--",
+            ];
+            args.extend(&present);
+            self.run_env(dir, &env, &args).await
+        }
+        .await;
+        let _ = std::fs::remove_file(&index);
+        res
     }
 
     /// Files touched by one commit.

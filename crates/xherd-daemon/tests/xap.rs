@@ -618,3 +618,42 @@ async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
     let a = d.action("SC-1", UserAction::Resume).await.unwrap();
     assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:pr-review"));
 }
+
+#[tokio::test]
+async fn diff_shows_the_proposed_commit_or_every_change() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
+    std::fs::write(wt.join("gone.txt"), "old\n").unwrap();
+    git(wt, &["add", "gone.txt"]);
+    git(wt, &["commit", "-q", "-m", "gone"]);
+    std::fs::remove_file(wt.join("gone.txt")).unwrap();
+    std::fs::write(wt.join("a.txt"), "new a\n").unwrap();
+    std::fs::write(wt.join("other.txt"), "left out\n").unwrap();
+
+    let v = t.d.diff("SC-1").await.unwrap();
+    assert!(v["commit"].is_null());
+    assert_eq!(v["files"], json!(["a.txt", "gone.txt", "other.txt"]));
+    assert!(v["diff"].as_str().unwrap().contains("+left out"));
+
+    xap(
+        &t,
+        "c1",
+        "commit.propose",
+        json!({"id": "C01", "subject": "a", "files": ["a.txt", "gone.txt"]}),
+    )
+    .await
+    .unwrap();
+    let v = t.d.diff("SC-1").await.unwrap();
+    assert_eq!(v["commit"]["id"], "C01");
+    assert_eq!(v["files"], json!(["a.txt", "gone.txt"]));
+    assert_eq!(v["others"], json!(["other.txt"]));
+    assert_eq!(v["head"], git(wt, &["rev-parse", "HEAD"]));
+    let diff = v["diff"].as_str().unwrap();
+    assert!(diff.contains("+new a") && diff.contains("-old"), "{diff}");
+    assert!(!diff.contains("left out"), "{diff}");
+    // Viewing changes nothing the agent will commit from.
+    assert_eq!(git(wt, &["diff", "--cached", "--name-only"]), "");
+
+    assert_eq!(t.d.diff("nobody").await.unwrap_err().code, "unknown_agent");
+}

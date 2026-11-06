@@ -26,6 +26,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/state", get(state))
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
+        .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/install", post(install))
         .route("/api/v1/hooks", post(hooks))
@@ -306,6 +307,12 @@ async fn get_agent(
         .map(|e| json!({"id": e.id, "kind": e.kind, "payload": e.payload, "at": e.at}))
         .collect();
     Ok(Json(json!({"agent": agent, "events": events})))
+}
+
+/// `GET /agents/:id/diff`: the open commit proposal's diff, else every
+/// uncommitted change (`Daemon::diff`).
+async fn diff(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(d.diff(&id).await?))
 }
 
 #[derive(Deserialize, Default)]

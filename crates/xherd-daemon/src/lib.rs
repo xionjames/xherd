@@ -187,6 +187,40 @@ impl Daemon {
         self.sup.action(who, a).await
     }
 
+    /// What the user reviews before approving (xap.md §5, R-104): with a
+    /// commit gate open, the diff of exactly the proposed files against HEAD
+    /// (new and deleted files included) and the other uncommitted changes left
+    /// out of it; otherwise the diff of every uncommitted change. Read-only git
+    /// work, run here rather than in the actor.
+    pub async fn diff(&self, who: &str) -> Result<serde_json::Value, ActionError> {
+        let fail = |code: &'static str, message: String| ActionError { code, message };
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = a
+            .workdir
+            .as_deref()
+            .map(std::path::Path::new)
+            .ok_or_else(|| fail("no_workspace", format!("{} has no worktree", a.name)))?;
+        let git = xherd_git::Git::new("git");
+        let git_err = |e: xherd_git::GitError| fail("git", e.to_string());
+        let head = git.rev_parse(wd, "HEAD").await.map_err(git_err)?;
+        let changed = git.changed_files(wd, "HEAD").await.map_err(git_err)?;
+        let (commit, files, others) = match &a.gate {
+            Some(xherd_core::domain::Gate::Commit(c)) => {
+                let others = changed
+                    .into_iter()
+                    .filter(|f| !c.files.contains(f))
+                    .collect();
+                (Some(c), c.files.clone(), others)
+            }
+            _ => (None, changed, Vec::new()),
+        };
+        let diff = git.diff_proposed(wd, &files).await.map_err(git_err)?;
+        Ok(serde_json::json!({
+            "agent": a.name, "head": head, "commit": commit, "files": files,
+            "others": others, "diff": diff,
+        }))
+    }
+
     /// Apply `hook-queue.jsonl` in order (R-014). Returns how many were applied.
     pub async fn replay_queue(&self) -> std::io::Result<usize> {
         let path = self.paths.hook_queue();

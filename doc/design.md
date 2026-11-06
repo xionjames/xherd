@@ -652,7 +652,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] XAP gates
   - [x] Hash approvals from the CLI
   - [x] Fresh sessions
-  - [ ] Commit gates
+  - [x] Commit gates
   - [ ] Ship
   - [ ] Draft PR via GitHub
 - [ ] **M2 UI**

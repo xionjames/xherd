@@ -215,6 +215,15 @@ async fn agent_actions() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
+    let (s, d) = call(
+        app.clone(),
+        get("/api/v1/agents/SC-1/diff").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, d["code"].clone()),
+        (StatusCode::CONFLICT, json!("no_workspace"))
+    );
     assert!(
         v["events"]
             .as_array()

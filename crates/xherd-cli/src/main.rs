@@ -73,6 +73,8 @@ enum Cmd {
     },
     /// Ask the agent to revise its open gate.
     Changes { agent: String, comment: String },
+    /// Show the open commit proposal's diff (else every uncommitted change).
+    Diff { agent: String },
     /// Runtime hook (reads the hook JSON on stdin). Silent; always exits 0.
     Hook { event: String },
     /// Push status for agents or wrappers without hooks.
@@ -166,6 +168,7 @@ fn main() -> ExitCode {
             "request-changes",
             Some(serde_json::json!({"comment": comment})),
         ),
+        Cmd::Diff { agent } => diff(&agent, json),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -457,6 +460,58 @@ fn new_agent(
             2
         }
     }
+}
+
+/// The diff on stdout (pipe it to a pager); what it covers on stderr.
+fn diff(agent: &str, json: bool) -> i32 {
+    let v = match Client::new().and_then(|c| c.call("GET", &format!("/agents/{agent}/diff"), None))
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    if json {
+        println!("{v}");
+        return 0;
+    }
+    let names = |k: &str| {
+        v[k].as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    let c = &v["commit"];
+    if c.is_object() {
+        eprintln!(
+            "commit {} \"{}\": {}",
+            c["id"].as_str().unwrap_or("?"),
+            c["subject"].as_str().unwrap_or(""),
+            names("files")
+        );
+        if let Some(r) = c["needsHuman"].as_str() {
+            eprintln!("needs a human: {r}");
+        }
+        let others = names("others");
+        if !others.is_empty() {
+            eprintln!("not in this commit: {others}");
+        }
+    } else {
+        eprintln!(
+            "no commit proposed; uncommitted changes: {}",
+            names("files")
+        );
+    }
+    let d = v["diff"].as_str().unwrap_or("");
+    if !d.is_empty() {
+        println!("{d}");
+    }
+    0
 }
 
 fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
