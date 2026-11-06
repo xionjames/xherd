@@ -910,6 +910,13 @@ version = "0.1.0"
 [[package]]
 name = "xherd-git"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "xherd-core",
+]
 
 [[package]]
 name = "xherd-plugin"
@@ -932,6 +939,14 @@ dependencies = [
 [[package]]
 name = "xherd-term"
 version = "0.1.0"
+dependencies = [
+ "regex",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "xherd-core",
+]
 
 [[package]]
 name = "zmij"
