@@ -444,3 +444,57 @@ fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shell words of a one-line command (double and single quotes only).
+    fn words(s: &str) -> Vec<String> {
+        let (mut out, mut cur, mut quote, mut any) = (Vec::new(), String::new(), None, false);
+        for c in s.chars() {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), c) => cur.push(c),
+                (None, '"' | '\'') => (quote, any) = (Some(c), true),
+                (None, c) if c.is_whitespace() => {
+                    if any || !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                    any = false;
+                }
+                (None, c) => cur.push(c),
+            }
+        }
+        if any || !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    /// Every `"$XHERD_BIN" …` call the xhSpec prompts teach is a valid
+    /// command line for this CLI (a call ends at the closing backtick).
+    #[test]
+    fn prompt_calls_parse() {
+        let env = |k: &str| (k == "HOME").then(|| "/home/u".to_string());
+        let plan = xherd_flow::xhspec()
+            .plan_install("claude-code", xherd_flow::install::XHSPEC_FILES, &env)
+            .unwrap();
+        let mut seen = 0;
+        for f in &plan {
+            for line in f.text.lines() {
+                for (i, _) in line.match_indices(r#""$XHERD_BIN" "#) {
+                    let rest = &line[i + r#""$XHERD_BIN" "#.len()..];
+                    let call = rest.split('`').next().unwrap();
+                    let argv = std::iter::once("xherd".to_string()).chain(words(call));
+                    if let Err(e) = Cli::try_parse_from(argv) {
+                        panic!("{}: `{call}`: {e}", f.path.display());
+                    }
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 30, "only {seen} calls found");
+        assert_eq!(words(r#"a "b c" 'd' """#), ["a", "b c", "d", ""]);
+    }
+}

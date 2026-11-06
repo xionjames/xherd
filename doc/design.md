@@ -646,7 +646,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] git/tmux wrappers
   - [x] `xherd hook/report` with sequence numbers and the offline queue
 - [ ] **M1 one agent end to end**
-  - [ ] xhSpec v0 (prompts and formats)
+  - [x] xhSpec v0 (prompts and formats)
   - [x] Worktree + `.xherd/`
   - [x] Claude Code in tmux
   - [x] XAP gates

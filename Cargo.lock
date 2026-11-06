@@ -2019,6 +2019,7 @@ dependencies = [
  "xherd-api",
  "xherd-core",
  "xherd-daemon",
+ "xherd-flow",
  "xherd-store",
  "xherd-term",
 ]
