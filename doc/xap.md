@@ -1,0 +1,144 @@
+# XAP — xherd agent protocol (reference)
+
+> Status: **draft, protocol version 1** · 2026-11-06 · Part of [`spec.md`](./spec.md) (§5.4, §6, §8).
+>
+> XAP is how an agent, an SDD's commands, or a wrapper tells xherd what is happening: status, gates, tasks, commits, PRs. It is a set of `xherd` subcommands (and the same operations as MCP tools). The daemon validates every call; agents never approve anything.
+
+## 1. Conventions
+
+### 1.1 Environment
+
+Every agent session runs with:
+
+| Variable | Meaning |
+|---|---|
+| `XHERD_ENV` | `1` when running under xherd. SDDs skip XAP calls when it is not `1`. |
+| `XHERD_BIN` | Absolute path of the `xherd` binary. Call XAP as `"$XHERD_BIN" …`. |
+| `XHERD_AGENT_ID` | The agent's id. |
+| `XHERD_AGENT_TOKEN` | Agent-scoped token; valid only for this agent's reports and XAP calls. |
+| `XHERD_URL` | Daemon URL (default `http://127.0.0.1:4740`). |
+| `XHERD_PORT_BASE` | First of 10 ports reserved for this agent. |
+
+If `XHERD_AGENT_ID` is missing, the CLI looks for `.xherd/agent.json` in the current directory and its parents.
+
+### 1.2 Exit codes
+
+| Code | Meaning | What the agent should do |
+|---|---|---|
+| 0 | Accepted (or already in that state) | Continue |
+| 2 | Refused: the call is invalid for the current state or files | Read the one-line message on stderr, fix it, call again |
+| 3 | Daemon unreachable (for calls that need an answer) | Stop and wait; do not retry in a loop |
+| 4 | Not running under xherd (`XHERD_ENV` unset and no `agent.json`) | Skip; the SDD works standalone |
+| 64 | Usage error (bad flags) | Fix the command |
+
+Report-only commands (`report`, `hook`, `stage enter`, `task start|done|block`, `issue add`) never fail because of the daemon: when it is down they are queued to `hook-queue.jsonl` and exit 0.
+
+### 1.3 Output
+
+Plain text by default (one line on success). `--json` prints `{"ok": true, "result": {...}}` or `{"ok": false, "code": "...", "message": "..."}`. Refusal codes are stable strings (see each command).
+
+### 1.4 Idempotency and ordering
+
+- Calls with the same arguments in the same state are no-ops (exit 0).
+- Every call carries a client-generated id (dedupe on replay) and, for status reports, a sequence number (`--seq`, monotonic per agent; the CLI generates it from a counter in `.xherd/seq` when omitted).
+- The daemon records every accepted call as an event `xap.<command>`.
+
+### 1.5 Paths
+
+Document paths are relative to the agent's spec folder (`.xherd/spec/` by default, or the committed folder) unless they start with `./` (relative to the worktree root). Absolute paths outside the worktree are refused (`path_outside_workspace`).
+
+## 2. Status
+
+### `xherd hook <event>`
+
+Called by runtime hooks; reads the runtime's hook JSON on stdin. Events: `session-start`, `user-prompt-submit`, `post-tool-use`, `notification`, `stop`. **Never prints to stdout, never exits non-zero.**
+
+### `xherd report`
+
+```
+xherd report --state working|idle|blocked [--message TEXT] [--session ID] [--resume-cmd CMD] [--seq N]
+xherd report --release [--seq N]
+```
+
+For agents or wrappers without hooks. `--resume-cmd` is the command that resumes this session after a restart. `--release` clears the agent's runtime state when the agent exits.
+
+## 3. Stages and gates
+
+### `xherd stage enter <stage> [--role ROLE]`
+
+Marks the current stage (UI and per-step accounting). For dynamic flows, an unknown stage id is appended to the flow.
+
+### `xherd gate open <stage> [options]`
+
+```
+xherd gate open <stage> [--role ROLE] [--doc PATH]... [--artifact PATH]...
+                [--next COMMAND] [--needs-human REASON] [--question TEXT]...
+```
+
+Declares that the agent stops for approval of the listed documents/artifacts. The status becomes `waiting-input` at the next stop.
+
+| Option | Meaning |
+|---|---|
+| `--role` | Step role (`spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`, `explore`, `custom`). Required for dynamic flows; packs already know it. |
+| `--doc` / `--artifact` | Files to approve; each is hashed at declaration. |
+| `--next` | Dynamic flows: command to send after approval; must start with an allowed prefix. |
+| `--needs-human` | Forces a human approval (tripwire) with this reason. |
+| `--question` | Open questions shown with the gate (repeatable). |
+
+Special stages: `pr-triage` and `pr-replies` (PR rounds, no documents).
+
+Refusals: `unknown_stage`, `doc_missing`, `doc_schema` (frontmatter fails the pack's schema; message names the field), `already_approved` (same content already approved), `path_outside_workspace`, `next_not_allowed`, `gate_open_commit` (a commit proposal is still open).
+
+### `xherd ask <text>`
+
+A question without documents. Status becomes `waiting-input`; the user's answer is typed back to the agent.
+
+## 4. Tasks
+
+```
+xherd tasks sync [--file PATH]
+xherd task start <ID>
+xherd task done <ID> --evidence TEXT
+xherd task block <ID> --reason TEXT
+```
+
+`tasks sync` re-reads the task list (built-in parser or the pack's `parse`). Refusals: `task_unknown`, `task_not_ready` (dependencies not done), `task_already_doing` (another task is in progress), `evidence_missing`.
+
+## 5. Commits
+
+```
+xherd commit propose <ID> --subject TEXT --files PATH[,PATH...] [--tasks T01,T02] [--needs-human REASON]
+xherd commit done <ID> --sha SHA
+xherd commit drop <ID> [--reason TEXT]
+```
+
+`propose` opens a commit gate; xherd computes the diff of exactly these files for review and runs the code tripwires. `done` checks that the commit exists on the agent's branch and touches exactly the proposed files. Refusals: `commit_open` (another proposal is open), `files_empty`, `files_outside_scope` (not in the tasks' `files:`; informational when tasks are absent), `sha_unknown`, `sha_files_mismatch`.
+
+## 6. Pull requests, handoff, issues, memory
+
+```
+xherd pr opened --url URL
+xherd handoff written [--file PATH]
+xherd issue add --title TEXT --severity minor|major|blocker [--about PATH]... [--body TEXT]
+xherd memory propose <repo-path> --file PROPOSED_PATH --reason TEXT
+```
+
+`pr opened` starts PR follow-up. `handoff written` confirms a pause/ship handoff (the pause waits for it). `issue add` appends to the issue ledger. `memory propose` registers a proposed `CLAUDE.md`/`AGENTS.md` update.
+
+## 7. MCP transport
+
+`xherd mcp` runs an MCP server over stdio exposing the same operations as tools: `xherd_gate_open`, `xherd_ask`, `xherd_stage_enter`, `xherd_tasks_sync`, `xherd_task_start`, `xherd_task_done`, `xherd_task_block`, `xherd_commit_propose`, `xherd_commit_done`, `xherd_commit_drop`, `xherd_pr_opened`, `xherd_handoff_written`, `xherd_issue_add`, `xherd_memory_propose`. Arguments mirror the CLI flags; refusals are tool errors with the same codes and messages. Status reporting stays on hooks/`report`.
+
+## 8. HTTP
+
+The CLI and MCP server call `POST /api/v1/xap` with `Authorization: Bearer $XHERD_AGENT_TOKEN`:
+
+```json
+{ "id": "01J…", "agentId": "…", "cmd": "gate.open", "args": { "stage": "spec", "role": "spec", "docs": ["spec.md"] }, "at": 1762450000000 }
+```
+
+Response: `200 {"ok": true, "result": {...}}` or `422 {"ok": false, "code": "doc_schema", "message": "spec.md: frontmatter is missing ticket"}`. Status reports use `POST /api/v1/hooks` with `{id, agentId, event, payload, seq, at}`.
+
+## 9. Versioning
+
+This is protocol version **1**. Packs declare `protocol: 1`. New optional flags and commands are minor changes. Removing or changing the meaning of a command, flag or refusal code is a new major; the daemon then supports the current and previous major.

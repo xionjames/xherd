@@ -1,0 +1,6 @@
+.DS_Store
+/target/
+/ui/node_modules/
+/ui/dist/
+/desktop/node_modules/
+*.xherd-new
