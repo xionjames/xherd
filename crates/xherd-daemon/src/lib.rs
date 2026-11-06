@@ -65,6 +65,37 @@ impl Options {
     }
 }
 
+/// The host plugin for pull requests with its settings and secrets resolved
+/// (R-506): `github`, built in or replaced by an external plugin of that name.
+fn host_plugin(
+    plugins: &Registry,
+    paths: &Paths,
+    config: &Config,
+    secrets: &Secrets,
+    xherd_bin: &str,
+) -> Option<Arc<xherd_plugin::host::Host>> {
+    let p = plugins
+        .get(xherd_plugin::host::GITHUB)
+        .filter(|p| p.manifest.kind == xherd_plugin::Kind::Host)?;
+    let m = &p.manifest;
+    let global = config
+        .plugin_settings
+        .get(&m.name)
+        .and_then(serde_json::Value::as_object);
+    Some(Arc::new(xherd_plugin::host::Host {
+        plugin: p.clone(),
+        ctx: xherd_plugin::Context {
+            settings: xherd_plugin::resolve_settings(m, global, None),
+            secrets: xherd_plugin::resolve_secrets(m, &secrets.for_plugin(&m.name)),
+            xherd_bin: xherd_bin.to_string(),
+            xherd_url: config.url(),
+            config_dir: paths.plugin_config(&m.name),
+            state_dir: paths.plugin_state(&m.name),
+            ..xherd_plugin::Context::default()
+        },
+    }))
+}
+
 /// Cheap to clone; every field is shared.
 #[derive(Clone)]
 pub struct Daemon {
@@ -121,6 +152,7 @@ impl Daemon {
             xherd_flow::XHSPEC.to_string(),
             xherd_flow::xhspec(),
         )]));
+        let host = host_plugin(&plugins, &paths, &config, &secrets, &opts.xherd_bin);
         let hub = support::hub();
         let settings = ActorSettings {
             idle_alert_minutes: config.idle_alert_minutes,
@@ -140,6 +172,7 @@ impl Daemon {
             sup: tokio::sync::mpsc::unbounded_channel().0, // replaced by the supervisor
             packs: packs.clone(),
             git: xherd_git::Git::new("git"),
+            host,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);

@@ -44,12 +44,12 @@ async fn setup() -> T {
 }
 
 async fn setup_with(fresh_sessions: bool) -> T {
+    setup_config(json!({"freshSessions": fresh_sessions})).await
+}
+
+async fn setup_config(config: Value) -> T {
     let home = tempfile::tempdir().unwrap();
-    std::fs::write(
-        home.path().join("config.json"),
-        json!({"freshSessions": fresh_sessions}).to_string(),
-    )
-    .unwrap();
+    std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
     let wt = tempfile::tempdir().unwrap();
     git(wt.path(), &["init", "-q", "-b", "main"]);
     git(wt.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
@@ -733,4 +733,113 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     assert!(t.drv.calls().contains(&"stop SC-1".to_string()));
     let events = t.d.store.events(&t.a.id, 50).await.unwrap();
     assert!(events.iter().any(|e| e.kind == "watching"));
+}
+
+/// A fake `gh` that records its argv and working directory and answers with
+/// `answer` (exit 1 when it is `fail`).
+fn fake_gh(dir: &Path, answer: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("gh");
+    let log = dir.join("gh.log");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\necho \"$(pwd) $*\" >> '{}'\n[ '{answer}' = fail ] && {{ echo 'not logged in' >&2; exit 1; }}\necho '{answer}'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+async fn until(t: &T, what: impl Fn(&Agent) -> bool) -> Agent {
+    for _ in 0..400 {
+        let a = get(t).await;
+        if what(&a) {
+            return a;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    get(t).await
+}
+
+#[tokio::test]
+async fn without_a_declared_pr_the_host_plugin_finds_it_after_ship() {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let url = "https://github.com/acme/app/pull/7";
+    let gh = fake_gh(bin_dir.path(), &format!(r#"[{{"url":"{url}"}}]"#));
+    let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
+    let log = bin_dir.path().join("gh.log");
+
+    // Outside the ship stage nothing is looked up.
+    xap(&t, "c1", "stage.enter", json!({"stage": "implement"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    assert_eq!(get(&t).await.status, Status::Idle);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!log.exists());
+
+    // The agent shipped but did not report the PR: the stop finds it (R-302).
+    xap(&t, "c2", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 2).await;
+    let a = until(&t, |a| a.status == Status::Watching).await;
+    assert_eq!(
+        (a.status, a.pr_url.as_deref()),
+        (Status::Watching, Some(url))
+    );
+    let called = std::fs::read_to_string(&log).unwrap();
+    let wd = t.wt.path().canonicalize().unwrap();
+    assert_eq!(
+        called.trim(),
+        format!(
+            "{} pr list --head SC-1 --state all --json url --limit 1",
+            wd.display()
+        )
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "pr-found"));
+}
+
+#[tokio::test]
+async fn a_failed_or_empty_pr_lookup_leaves_the_agent_idle() {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(bin_dir.path(), "fail");
+    let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let mut failed = false;
+    for _ in 0..400 {
+        let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+        if events.iter().any(|e| e.kind == "pr-lookup-failed") {
+            failed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(failed);
+    let a = get(&t).await;
+    assert_eq!((a.status, a.pr_url), (Status::Idle, None));
+
+    let bin_dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(bin_dir.path(), "[]");
+    let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    for _ in 0..400 {
+        if bin_dir.path().join("gh.log").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let a = get(&t).await;
+    assert_eq!((a.status, a.pr_url), (Status::Idle, None));
 }

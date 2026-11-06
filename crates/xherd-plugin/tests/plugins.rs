@@ -156,3 +156,43 @@ async fn command_protocol() {
     assert!(checks[0].ok);
     assert!(!checks[1].ok && checks[1].optional && checks[1].fixable);
 }
+
+#[tokio::test]
+async fn host_pr_for_branch_builtin_and_external() {
+    let gh = builtins().into_iter().find(|m| m.name == "github").unwrap();
+    assert_eq!(gh.kind, Kind::Host);
+    assert_eq!(
+        Value::Object(resolve_settings(&gh, None, None)),
+        json!({"gh": "gh"})
+    );
+
+    // An external `github` replaces the built-in one through the command protocol.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = manifest("github");
+    m["settings"] = json!([]);
+    m["commands"] = json!({"pr-for-branch": ["./run"]});
+    let script = r#"#!/bin/sh
+input=$(cat)
+case "$input" in
+  *'"branch":"SC-1"'*) echo '{"url": "https://example.test/pr/1"}' ;;
+  *'"branch":"SC-2"'*) echo 'null' ;;
+  *) echo '{"url": 3}' ;;
+esac
+"#;
+    write_plugin(d.path(), "github", m, script);
+    let r = Registry::load(builtins(), d.path());
+    let host = host::Host {
+        plugin: r.get("github").unwrap().clone(),
+        ctx: Context::default(),
+    };
+    let wt = d.path();
+    assert_eq!(
+        host.pr_for_branch(wt, "SC-1").await.unwrap().as_deref(),
+        Some("https://example.test/pr/1")
+    );
+    assert_eq!(host.pr_for_branch(wt, "SC-2").await.unwrap(), None);
+    assert!(matches!(
+        host.pr_for_branch(wt, "SC-3").await,
+        Err(PluginError::Shape { .. })
+    ));
+}

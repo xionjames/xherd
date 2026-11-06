@@ -354,17 +354,28 @@ fn ls() -> i32 {
         println!("no agents");
         return 0;
     }
-    println!("{:<24} {:<14} {:<16} GATE", "NAME", "STATUS", "SESSION");
+    println!(
+        "{:<24} {:<14} {:<16} GATE / PR",
+        "NAME", "STATUS", "SESSION"
+    );
     for a in agents {
         println!(
             "{:<24} {:<14} {:<16} {}",
             a["name"].as_str().unwrap_or("?"),
             a["status"].as_str().unwrap_or("?"),
             a["session"].as_str().unwrap_or("-"),
-            gate_summary(&a["gate"])
+            gate_or_pr(&a)
         );
     }
     0
+}
+
+/// The open gate, else the pull request once there is one.
+fn gate_or_pr(a: &Value) -> String {
+    match (a["gate"].is_object(), a["prUrl"].as_str()) {
+        (false, Some(url)) => format!("pr: {url}"),
+        _ => gate_summary(&a["gate"]),
+    }
 }
 
 /// `spec: spec.md`, `commit C01: a.rs, b.rs`, `question: …`, or `-`.
@@ -588,5 +599,19 @@ mod tests {
         }
         assert!(seen > 30, "only {seen} calls found");
         assert_eq!(words(r#"a "b c" 'd' """#), ["a", "b c", "d", ""]);
+    }
+
+    #[test]
+    fn ls_shows_the_gate_else_the_pr() {
+        let url = "https://github.com/acme/app/pull/42";
+        let gate =
+            serde_json::json!({"kind": "docs", "stage": "ship", "files": [{"path": "pr.md"}]});
+        let a = serde_json::json!({"gate": gate, "prUrl": url});
+        assert_eq!(gate_or_pr(&a), "ship: pr.md");
+        assert_eq!(
+            gate_or_pr(&serde_json::json!({"prUrl": url})),
+            format!("pr: {url}")
+        );
+        assert_eq!(gate_or_pr(&serde_json::json!({})), "-");
     }
 }

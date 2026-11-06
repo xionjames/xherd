@@ -72,7 +72,11 @@ pub enum TickKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkResult {
     Screen(String),
-    DeliveryTimeout { delivery: u64 },
+    DeliveryTimeout {
+        delivery: u64,
+    },
+    /// The host plugin's answer to `pr-for-branch` (R-302).
+    PrLookup(Result<Option<String>, String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -141,6 +145,8 @@ pub struct Env {
     /// Flow packs by name.
     pub packs: Arc<BTreeMap<String, Pack>>,
     pub git: xherd_git::Git,
+    /// Host plugin for pull-request lookups (R-302); `None` when not installed.
+    pub host: Option<Arc<xherd_plugin::host::Host>>,
 }
 
 pub type AgentTx = mpsc::UnboundedSender<Msg>;
@@ -329,13 +335,18 @@ impl Actor {
 
     /// After ship (R-301): an agent following a flow that stopped with its PR
     /// open and nothing waiting on the user ends its session and watches the
-    /// PR. Flow `none` keeps its session (no ship stage).
+    /// PR. Without a declared PR, a stop in the ship stage asks the host
+    /// plugin for the branch's PR (R-302). Flow `none` keeps its session (no
+    /// ship stage).
     async fn after_ship(&mut self) {
         if self.agent.status != Status::Idle
             || self.agent.gate.is_some()
             || self.agent.pack.is_none()
-            || self.agent.pr_url.is_none()
         {
+            return;
+        }
+        if self.agent.pr_url.is_none() {
+            self.find_pr();
             return;
         }
         let before = self.agent.status;
@@ -344,6 +355,42 @@ impl Actor {
         self.log(None, "watching", Some(json!({"pr": self.agent.pr_url})))
             .await;
         self.commit(before).await;
+    }
+
+    /// Look the branch's PR up through the host plugin (slow: spawned, back
+    /// as `WorkDone`). Only in the ship stage, where the agent opens it.
+    fn find_pr(&self) {
+        let ship = match (&self.agent.pack, &self.agent.flow, &self.agent.stage) {
+            (Some(p), Some(f), Some(stage)) => self
+                .env
+                .packs
+                .get(p)
+                .and_then(|p| p.flow(f))
+                .is_some_and(|f| {
+                    f.stages
+                        .iter()
+                        .any(|s| &s.id == stage && s.role == xherd_core::domain::Role::Ship)
+                }),
+            _ => false,
+        };
+        let (Some(host), Ok(wd), true) = (self.env.host.clone(), self.workdir(), ship) else {
+            return;
+        };
+        let (tx, generation, branch) = (
+            self.tx.clone(),
+            self.agent.generation,
+            self.agent.name.clone(),
+        );
+        tokio::spawn(async move {
+            let result = host
+                .pr_for_branch(&wd, &branch)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::PrLookup(result),
+            });
+        });
     }
 
     /// The session is ready: type the command it was started for (the flow's
@@ -1113,6 +1160,19 @@ impl Actor {
                     at: self.now(),
                 };
                 self.on_report(r, Origin::Daemon).await;
+            }
+            WorkResult::PrLookup(Ok(None)) => {}
+            WorkResult::PrLookup(Ok(Some(url))) => {
+                let before = self.agent.status;
+                self.agent.pr_url = Some(url.clone());
+                self.log(None, "pr-found", Some(json!({"url": url}))).await;
+                self.commit(before).await;
+                self.after_ship().await;
+            }
+            WorkResult::PrLookup(Err(e)) => {
+                tracing::warn!(agent = %self.agent.name, error = %e, "PR lookup failed");
+                self.log(None, "pr-lookup-failed", Some(json!({"error": e})))
+                    .await;
             }
             WorkResult::DeliveryTimeout { delivery } => match self.delivery {
                 Some((d, false))
