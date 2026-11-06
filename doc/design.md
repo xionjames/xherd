@@ -634,7 +634,7 @@ doc/                            spec.md, design.md, xap.md, integrate-your-sdd.m
 
 ## 18. Milestones
 
-Tick an item when it is merged to `main`; tick the milestone when all its items are.
+Tick an item when it is done (tests green on the milestone branch); tick the milestone when all its items are and it is merged to `main`.
 
 - [x] **M0 skeleton**
   - [x] Cargo workspace
@@ -649,8 +649,8 @@ Tick an item when it is merged to `main`; tick the milestone when all its items 
   - [ ] xhSpec v0 (prompts and formats)
   - [ ] Worktree + `.xherd/`
   - [ ] Claude Code in tmux
-  - [ ] XAP gates
-  - [ ] Hash approvals from the CLI
+  - [x] XAP gates
+  - [x] Hash approvals from the CLI
   - [ ] Fresh sessions
   - [ ] Commit gates
   - [ ] Ship

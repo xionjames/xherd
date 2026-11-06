@@ -2,6 +2,7 @@
 //! `next` rules, command templates, and document frontmatter. The daemon never
 //! interprets a pack's prose; it only needs what is here.
 
+pub mod approve;
 pub mod frontmatter;
 pub mod manifest;
 pub mod tasks;

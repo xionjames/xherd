@@ -286,6 +286,13 @@ fn end_to_end_replay_and_live_hooks() {
     // XAP: accepted (0), refused (2), refused with --json on stdout.
     let o = xherd(home.path(), wt.path(), &["ask", "which db?"], &env, "");
     assert_eq!(o.status.code(), Some(0), "{o:?}");
+    assert!(ls().contains("question: which db?"), "{}", ls());
+    let o = xherd(home.path(), wt.path(), &["approve", "SC-1"], &[], "");
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("answer it with"),
+        "{o:?}"
+    );
     let o = xherd(home.path(), wt.path(), &["task", "start", "T01"], &env, "");
     assert_eq!(o.status.code(), Some(2), "{o:?}");
     assert!(String::from_utf8_lossy(&o.stderr).contains("no_flow"));

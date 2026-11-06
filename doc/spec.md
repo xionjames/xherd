@@ -736,6 +736,7 @@ xherd login [URL]                       pair this CLI with a daemon (host compan
 xherd new <KEY> [--slug s] [--flow f] [--pack p] [--repo dir|url] [--base b]
           [--runtime r] [--autonomy a] [--tool-permissions p] [--driver terminal|acp] ["prompt"]
 xherd ls | attach | open | shell | pause | resume | approve | cancel <agent>
+xherd changes <agent> "comment"         request changes at the open gate
 xherd pause --all                       kill switch
 xherd pair                              one-time pairing link
 xherd install [--runtime r | --all] [--pack p]

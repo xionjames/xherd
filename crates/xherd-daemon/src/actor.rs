@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
+use xherd_core::domain::{CommitStatus, Gate};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
 use xherd_core::xap::{Refusal, XapCall, XapCmd, refuse as refusal};
@@ -43,6 +44,14 @@ pub enum UserAction {
     Cancel,
     Send {
         text: String,
+    },
+    /// Approve the open gate and hand on the next command (R-104).
+    Approve {
+        reason: Option<String>,
+    },
+    /// Send the agent a change request for the open gate (R-105).
+    RequestChanges {
+        comment: String,
     },
     Get,
 }
@@ -264,6 +273,14 @@ impl Actor {
                 Ok(false) => {}
                 Err(e) => tracing::error!(%e, "event lookup failed"),
             }
+        }
+        if origin == Origin::Agent
+            && matches!(r.event, ReportEvent::Stop | ReportEvent::Idle)
+            && self.agent.status.is_live()
+            && self.agent.gate.is_none()
+            && r.seq > self.agent.last_seq
+        {
+            self.infer_gate().await;
         }
         let before = self.agent.status;
         let now = self.now();
@@ -507,8 +524,16 @@ impl Actor {
                 "user.cancel"
             }
             UserAction::Send { text } => {
-                self.send(text).await?;
+                self.send(text, 1).await?;
                 "user.send"
+            }
+            UserAction::Approve { reason } => {
+                self.approve(reason.clone()).await?;
+                "user.approve"
+            }
+            UserAction::RequestChanges { comment } => {
+                self.request_changes(comment).await?;
+                "user.request-changes"
             }
         };
         self.log(None, kind, None).await;
@@ -581,7 +606,7 @@ impl Actor {
             .map_err(|e| refuse("driver", e.0))
     }
 
-    async fn send(&mut self, text: &str) -> Result<(), ActionError> {
+    async fn send(&mut self, text: &str, enters: u32) -> Result<(), ActionError> {
         match self.agent.status {
             Status::Blocked => {
                 return Err(refuse(
@@ -596,7 +621,7 @@ impl Actor {
         }
         self.env
             .driver
-            .send(&self.ctx(), text, 1)
+            .send(&self.ctx(), text, enters)
             .await
             .map_err(|e| refuse("driver", e.0))?;
         self.next_delivery += 1;
@@ -618,6 +643,235 @@ impl Actor {
                 result: WorkResult::DeliveryTimeout { delivery },
             });
         });
+    }
+
+    // ---- approvals ---------------------------------------------------------------
+
+    /// The open gate, if it is one the user can approve or change, and the
+    /// agent stopped for it.
+    fn gate_for_user(&self, parked_ok: bool) -> Result<Gate, ActionError> {
+        let gate =
+            self.agent.gate.clone().ok_or_else(|| {
+                refuse("no_gate", format!("{} has no open gate", self.agent.name))
+            })?;
+        if let Gate::Question { .. } = gate {
+            return Err(refuse(
+                "no_gate",
+                "the agent asked a question; answer it with `xherd send`",
+            ));
+        }
+        match self.agent.status {
+            Status::WaitingInput | Status::Idle => Ok(gate),
+            Status::Parked if parked_ok => Ok(gate),
+            s => Err(refuse(
+                "not_waiting",
+                format!(
+                    "{} is {s}; act on the gate once it stops there",
+                    self.agent.name
+                ),
+            )),
+        }
+    }
+
+    /// Approve by content hash (R-104, R-106): ledger file first (fsync),
+    /// then the database, then hand on the next command.
+    async fn approve(&mut self, reason: Option<String>) -> Result<(), ActionError> {
+        let gate = self.gate_for_user(true)?;
+        let wd = self.workdir().map_err(|e| refuse(e.code, e.message))?;
+        let (label, files): (String, Vec<String>) = match &gate {
+            Gate::Docs { stage, files, .. } => (
+                stage.clone(),
+                files.iter().map(|f| f.path.clone()).collect(),
+            ),
+            Gate::Commit(c) => (
+                format!("commit {}", c.id),
+                c.files.iter().map(|f| format!("./{f}")).collect(),
+            ),
+            _ => unreachable!("checked in gate_for_user"),
+        };
+        // Hash what is on disk now: that is what the user is approving.
+        let mut approved = Vec::new();
+        for f in &files {
+            match inside(&wd, f).map(std::fs::read) {
+                Some(Ok(bytes)) => approved.push((
+                    f.clone(),
+                    xherd_core::hash::content_sha256(&bytes),
+                    Some(String::from_utf8_lossy(&bytes).into_owned()),
+                )),
+                // A commit may delete files.
+                _ if matches!(gate, Gate::Commit(_)) => {
+                    approved.push((f.clone(), "deleted".into(), None))
+                }
+                _ => {
+                    return Err(refuse(
+                        "doc_missing",
+                        format!("{f} does not exist any more"),
+                    ));
+                }
+            }
+        }
+        let next = self.next_command(&wd, &gate)?;
+        let now = self.now();
+        let head = self.env.git.rev_parse(&wd, "HEAD").await.ok();
+        let lines: Vec<Value> = approved
+            .iter()
+            .map(|(file, sha, _)| {
+                json!({"gate": label, "file": file, "sha256": sha, "actor": "user", "auto": false,
+                       "reason": reason, "at": now, "commit": head})
+            })
+            .collect();
+        append_ledger(&wd, &lines).map_err(|e| refuse("ledger", e.to_string()))?;
+        for (file, sha, text) in &approved {
+            let row = xherd_store::Approval {
+                agent_id: self.agent.id.clone(),
+                file: file.clone(),
+                sha256: sha.clone(),
+                at: now,
+                actor: "user".into(),
+                auto: false,
+                reason: reason.clone(),
+            };
+            let stored = self.env.store.insert_approval(row).await;
+            let reviewed = match text {
+                Some(t) if matches!(gate, Gate::Docs { .. }) => {
+                    self.env.store.put_reviewed(&self.agent.id, file, t).await
+                }
+                _ => Ok(()),
+            };
+            stored
+                .and(reviewed)
+                .map_err(|e| refuse("store", e.to_string()))?;
+        }
+
+        if let Gate::Commit(c) = &gate
+            && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
+        {
+            mine.status = CommitStatus::Approved;
+        }
+        self.agent.gate = None;
+        self.agent.generation += 1;
+        self.log(
+            None,
+            "approval",
+            Some(json!({"gate": label, "files": files, "reason": reason, "next": next.as_ref().map(|n| &n.0)})),
+        )
+        .await;
+        match (self.agent.status, next) {
+            (Status::Parked, next) => {
+                // The next session starts with it once a slot is free (R-028).
+                self.agent.next_prompt = next.map(|n| n.0);
+                self.agent.fire(Trigger::Unpark, now);
+            }
+            // The approval stands even if typing fails; the user is told the command.
+            (_, Some((cmd, enters))) => match self.send(&cmd, enters).await {
+                Ok(()) => {
+                    self.agent.fire(Trigger::UserInput, now);
+                }
+                Err(e) => {
+                    self.log(
+                        None,
+                        "hand-on-failed",
+                        Some(json!({"next": cmd, "error": e.message})),
+                    )
+                    .await;
+                    self.notify(format!(
+                        "{}: approved, but could not send {cmd:?}: {}",
+                        self.agent.name, e.message
+                    ));
+                }
+            },
+            (_, None) => {}
+        }
+        Ok(())
+    }
+
+    fn next_command(&self, wd: &Path, gate: &Gate) -> Result<Option<(String, u32)>, ActionError> {
+        let Some(pack) = self
+            .agent
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))
+        else {
+            return Ok(None);
+        };
+        let facts = xherd_flow::approve::DirFacts {
+            spec_dir: xherd_flow::approve::spec_dir(wd),
+            tasks: &self.agent.tasks,
+        };
+        xherd_flow::approve::next_command(pack, &self.agent, gate, &facts, false)
+            .map_err(|e| refuse("flow", e))
+    }
+
+    async fn request_changes(&mut self, comment: &str) -> Result<(), ActionError> {
+        if comment.trim().is_empty() {
+            return Err(refuse("usage", "say what to change"));
+        }
+        let gate = self.gate_for_user(false)?;
+        let text = xherd_flow::approve::changes_message(&gate, comment);
+        self.send(&text, 1).await?;
+        self.agent.fire(Trigger::UserInput, self.now());
+        Ok(())
+    }
+
+    /// The agent stopped without a declared gate: open one from the flow's
+    /// documents if some exist unapproved (R-102) or changed since approved (R-107).
+    async fn infer_gate(&mut self) {
+        let packs = self.env.packs.clone();
+        let Some(flow) = self
+            .agent
+            .pack
+            .as_deref()
+            .and_then(|p| packs.get(p))
+            .and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()))
+        else {
+            return;
+        };
+        let Ok(wd) = self.workdir() else { return };
+        let ever = self
+            .env
+            .store
+            .approved_files(&self.agent.id)
+            .await
+            .unwrap_or_default();
+        let mut seen = Vec::new();
+        for s in &flow.stages {
+            for d in s.docs() {
+                let Ok(path) = xherd_flow::xap::doc_path(d, &wd) else {
+                    continue;
+                };
+                let sha = inside(&wd, &path)
+                    .and_then(|p| std::fs::read(p).ok())
+                    .map(|b| xherd_core::hash::content_sha256(&b));
+                let approved = match &sha {
+                    Some(h) => self
+                        .env
+                        .store
+                        .approved(&self.agent.id, &path, h)
+                        .await
+                        .unwrap_or(false),
+                    None => false,
+                };
+                seen.push(xherd_flow::approve::DocSeen {
+                    stage: s.id.clone(),
+                    ever_approved: ever.contains(&path),
+                    path,
+                    sha256: sha,
+                    approved,
+                });
+            }
+        }
+        if let Some((gate, reopened)) = xherd_flow::approve::infer_gate(flow, &seen) {
+            let kind = if reopened {
+                "gate-reopened"
+            } else {
+                "gate-inferred"
+            };
+            if let Gate::Docs { stage, .. } = &gate {
+                self.agent.stage = Some(stage.clone());
+            }
+            self.log(None, kind, Some(json!({"gate": gate}))).await;
+            self.agent.gate = Some(gate);
+        }
     }
 
     // ---- ticks and async work --------------------------------------------------
@@ -748,4 +1002,22 @@ fn inside(wd: &Path, doc: &str) -> Option<PathBuf> {
         .canonicalize()
         .ok()?;
     (abs.starts_with(wd.canonicalize().ok()?) && abs.is_file()).then_some(abs)
+}
+
+/// Append to `.xherd/ledger/approvals.jsonl` and fsync (design §3.4).
+fn append_ledger(wd: &Path, lines: &[Value]) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = wd.join(".xherd/ledger");
+    std::fs::create_dir_all(&dir)?;
+    let mut buf = Vec::new();
+    for l in lines {
+        serde_json::to_writer(&mut buf, l)?;
+        buf.push(b'\n');
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("approvals.jsonl"))?;
+    f.write_all(&buf)?;
+    f.sync_all()
 }

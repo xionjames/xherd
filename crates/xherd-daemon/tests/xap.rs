@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use xherd_core::domain::{CommitStatus, Gate};
+use xherd_core::hash::content_sha256;
 use xherd_core::paths::Paths;
 use xherd_core::report::{Report, ReportEvent};
 use xherd_core::xap::{Refusal, XapCall};
@@ -75,6 +76,30 @@ fn call(a: &Agent, id: &str, cmd: &str, args: Value) -> XapCall {
 
 async fn xap(t: &T, id: &str, cmd: &str, args: Value) -> Result<Value, Refusal> {
     t.d.xap(call(&t.a, id, cmd, args)).await
+}
+
+async fn stop(t: &T, seq: u64) {
+    let r = Report {
+        id: format!("stop-{seq}"),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::Stop,
+        payload: Value::Null,
+        seq,
+        at: 0,
+    };
+    t.d.report(r).await;
+}
+
+async fn act(t: &T, a: UserAction) -> Result<Agent, ActionError> {
+    t.d.action("SC-1", a).await
+}
+
+fn sends(t: &T) -> Vec<String> {
+    t.drv
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("send "))
+        .collect()
 }
 
 async fn get(t: &T) -> Agent {
@@ -219,14 +244,17 @@ async fn tasks_and_commit_with_real_git() {
         .unwrap_err();
     assert_eq!(e.code, "commit_not_approved");
 
-    // Approving comes with hash approvals; mark it approved in the store and
-    // restart on the same data dir (the fake session stays alive).
-    let mut a = get(&t).await;
-    a.commits[0].status = CommitStatus::Approved;
-    t.d.store.put_agent(&a).await.unwrap();
-    let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
-    let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
-    let t = T { d, ..t };
+    stop(&t, 1).await;
+    t.d.action("SC-1", UserAction::Approve { reason: None })
+        .await
+        .unwrap();
+    assert!(
+        t.drv
+            .calls()
+            .iter()
+            .any(|c| c == "send SC-1 \"/xhspec:commit C01\" 1")
+    );
+    assert_eq!(get(&t).await.commits[0].status, CommitStatus::Approved);
 
     let e = xap(
         &t,
@@ -325,4 +353,200 @@ async fn refused_when_not_live_or_without_flow() {
         .await
         .unwrap_err();
     assert_eq!(e.code, "unknown_agent");
+}
+
+#[tokio::test]
+async fn approve_docs_gate_hands_on_next_command() {
+    let t = setup().await;
+    let spec = t.wt.path().join(".xherd/spec/spec.md");
+    std::fs::write(&spec, "---\nticket: SC-1\n---\n# Spec\n").unwrap();
+
+    // Nothing to approve yet; then not stopped yet.
+    assert_eq!(
+        act(&t, UserAction::Approve { reason: None })
+            .await
+            .unwrap_err()
+            .code,
+        "no_gate"
+    );
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        act(&t, UserAction::Approve { reason: None })
+            .await
+            .unwrap_err()
+            .code,
+        "not_waiting"
+    );
+    stop(&t, 1).await;
+    assert_eq!(get(&t).await.status, Status::WaitingInput);
+
+    let a = act(
+        &t,
+        UserAction::Approve {
+            reason: Some("lgtm".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!((a.status, a.gate.is_none()), (Status::Running, true));
+    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
+
+    let sha = content_sha256(&std::fs::read(&spec).unwrap());
+    let ledger =
+        std::fs::read_to_string(t.wt.path().join(".xherd/ledger/approvals.jsonl")).unwrap();
+    let line: Value = serde_json::from_str(ledger.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        (line["gate"].as_str(), line["file"].as_str()),
+        (Some("spec"), Some("spec.md"))
+    );
+    assert_eq!(
+        (line["sha256"].as_str(), line["reason"].as_str()),
+        (Some(sha.as_str()), Some("lgtm"))
+    );
+    assert!(line["commit"].as_str().is_some_and(|c| c.len() == 40));
+    assert!(t.d.store.approved(&t.a.id, "spec.md", &sha).await.unwrap());
+    assert!(
+        t.d.store
+            .reviewed(&t.a.id, "spec.md")
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("# Spec")
+    );
+
+    // Same content again: already approved.
+    let e = xap(&t, "c2", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "already_approved");
+}
+
+#[tokio::test]
+async fn design_skip_goes_to_tasks() {
+    let t = setup().await;
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/spec.md"),
+        "---\ndesign: skip\n---\n",
+    )
+    .unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:tasks\" 1"]);
+}
+
+#[tokio::test]
+async fn request_changes_keeps_the_gate() {
+    let t = setup().await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let a = act(
+        &t,
+        UserAction::RequestChanges {
+            comment: "split R3".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.status, Status::Running);
+    assert!(a.gate.is_some());
+    let s = sends(&t);
+    assert!(s[0].contains("spec gate (spec.md): split R3"), "{s:?}");
+
+    // Questions are answered with send, not approved.
+    let t2 = setup().await;
+    xap(&t2, "q1", "ask", json!({"text": "which db?"}))
+        .await
+        .unwrap();
+    stop(&t2, 1).await;
+    assert_eq!(
+        act(&t2, UserAction::Approve { reason: None })
+            .await
+            .unwrap_err()
+            .code,
+        "no_gate"
+    );
+}
+
+#[tokio::test]
+async fn edited_or_undeclared_documents_open_a_gate_on_stop() {
+    let t = setup().await;
+    let spec = t.wt.path().join(".xherd/spec/spec.md");
+    std::fs::write(&spec, "# v1\n").unwrap();
+    // Declared nothing: the spec is inferred.
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::WaitingInput);
+    assert!(matches!(&a.gate, Some(Gate::Docs { stage, .. }) if stage == "spec"));
+    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+
+    // Approved and unchanged: idle.
+    stop(&t, 2).await;
+    assert_eq!(get(&t).await.status, Status::Idle);
+
+    // Edited after approval: re-opened.
+    std::fs::write(&spec, "# v2\n").unwrap();
+    t.d.action("SC-1", UserAction::Send { text: "go".into() })
+        .await
+        .unwrap();
+    stop(&t, 3).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::WaitingInput);
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "gate-inferred"));
+    assert!(events.iter().any(|e| e.kind == "gate-reopened"));
+}
+
+#[tokio::test]
+async fn ledger_file_wins_after_restart() {
+    let t = setup().await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    t.d.store
+        .write(|c| {
+            c.execute("DELETE FROM approvals", [])?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
+    let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
+    assert!(
+        d.store
+            .approved(&t.a.id, "spec.md", &content_sha256(b"# v1\n"))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn approving_a_parked_agent_queues_it_with_the_next_command() {
+    let t = setup().await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let mut a = get(&t).await;
+    a.status = Status::Parked;
+    t.d.store.put_agent(&a).await.unwrap();
+    let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
+    let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
+    let a = d
+        .action("SC-1", UserAction::Approve { reason: None })
+        .await
+        .unwrap();
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
+    assert_ne!(a.status, Status::Parked);
 }

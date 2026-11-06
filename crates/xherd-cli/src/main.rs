@@ -42,6 +42,14 @@ enum Cmd {
     Cancel { agent: String },
     /// Type a message into an agent's session.
     Send { agent: String, text: String },
+    /// Approve the agent's open gate (documents or commit) as they are now.
+    Approve {
+        agent: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Ask the agent to revise its open gate.
+    Changes { agent: String, comment: String },
     /// Runtime hook (reads the hook JSON on stdin). Silent; always exits 0.
     Hook { event: String },
     /// Push status for agents or wrappers without hooks.
@@ -116,6 +124,16 @@ fn main() -> ExitCode {
         Cmd::Send { agent, text } => {
             action(&agent, "send", Some(serde_json::json!({"text": text})))
         }
+        Cmd::Approve { agent, reason } => action(
+            &agent,
+            "approve",
+            Some(serde_json::json!({"reason": reason})),
+        ),
+        Cmd::Changes { agent, comment } => action(
+            &agent,
+            "request-changes",
+            Some(serde_json::json!({"comment": comment})),
+        ),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -301,16 +319,46 @@ fn ls() -> i32 {
         println!("no agents");
         return 0;
     }
-    println!("{:<24} {:<14} SESSION", "NAME", "STATUS");
+    println!("{:<24} {:<14} {:<16} GATE", "NAME", "STATUS", "SESSION");
     for a in agents {
         println!(
-            "{:<24} {:<14} {}",
+            "{:<24} {:<14} {:<16} {}",
             a["name"].as_str().unwrap_or("?"),
             a["status"].as_str().unwrap_or("?"),
-            a["session"].as_str().unwrap_or("-")
+            a["session"].as_str().unwrap_or("-"),
+            gate_summary(&a["gate"])
         );
     }
     0
+}
+
+/// `spec: spec.md`, `commit C01: a.rs, b.rs`, `question: …`, or `-`.
+fn gate_summary(g: &Value) -> String {
+    let list = |v: &Value, key: Option<&str>| {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| key.map_or(x.as_str(), |k| x[k].as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    match g["kind"].as_str() {
+        Some("docs") => format!(
+            "{}: {}",
+            g["stage"].as_str().unwrap_or("?"),
+            list(&g["files"], Some("path"))
+        ),
+        Some("commit") => format!(
+            "commit {}: {}",
+            g["id"].as_str().unwrap_or("?"),
+            list(&g["files"], None)
+        ),
+        Some("question") => format!("question: {}", g["text"].as_str().unwrap_or("")),
+        Some(k) => k.to_string(),
+        None => "-".into(),
+    }
 }
 
 fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {

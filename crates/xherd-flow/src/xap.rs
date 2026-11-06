@@ -435,16 +435,21 @@ pub fn apply(
                 needs_human: needs_human.clone(),
             };
             if let Some(open) = open_commit(a) {
-                if open.id == *id && open.status == CommitStatus::Proposed && *open == proposal {
-                    return Ok(false);
+                if open.id == *id && open.status == CommitStatus::Proposed {
+                    if *open == proposal {
+                        return Ok(false);
+                    }
+                    // Revised after a change request: replace the proposal.
+                    a.commits.retain(|c| c.id != *id);
+                } else {
+                    return Err(refuse(
+                        "commit_open",
+                        format!(
+                            "commit proposal {} is still open; finish or drop it first",
+                            open.id
+                        ),
+                    ));
                 }
-                return Err(refuse(
-                    "commit_open",
-                    format!(
-                        "commit proposal {} is still open; finish or drop it first",
-                        open.id
-                    ),
-                ));
             }
             if a.commits.iter().any(|c| c.id == *id) {
                 return Err(refuse(

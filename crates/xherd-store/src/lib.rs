@@ -2,6 +2,7 @@
 //! read-write connection, a small pool of read-only connections, forward-only
 //! migrations run at open after a `VACUUM INTO` copy (R-1305).
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -41,6 +42,18 @@ pub struct Event {
     pub kind: String,
     pub payload: Option<Value>,
     pub at: Millis,
+}
+
+/// One row of the `approvals` table (design §3.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Approval {
+    pub agent_id: String,
+    pub file: String,
+    pub sha256: String,
+    pub at: Millis,
+    pub actor: String,
+    pub auto: bool,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,6 +272,59 @@ impl Store {
             )
             .optional()?
             .is_some())
+        })
+        .await
+    }
+
+    /// Record an approval; an identical (agent, file, hash) row is kept.
+    pub async fn insert_approval(&self, r: Approval) -> Result<()> {
+        self.write(move |c| {
+            c.execute(
+                "INSERT OR IGNORE INTO approvals (agent_id, file, sha256, at, actor, auto, reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    r.agent_id, r.file, r.sha256, r.at, r.actor, r.auto, r.reason
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Files with at least one approval for this agent.
+    pub async fn approved_files(&self, agent_id: &str) -> Result<BTreeSet<String>> {
+        let a = agent_id.to_string();
+        self.read(move |c| {
+            let mut st = c.prepare("SELECT DISTINCT file FROM approvals WHERE agent_id = ?1")?;
+            let rows = st.query_map([a], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<BTreeSet<String>>>()?)
+        })
+        .await
+    }
+
+    /// The text the user approved last, for "changed since you reviewed".
+    pub async fn put_reviewed(&self, agent_id: &str, file: &str, text: &str) -> Result<()> {
+        let (a, f, t) = (agent_id.to_string(), file.to_string(), text.to_string());
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO reviewed (agent_id, file, text) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(agent_id, file) DO UPDATE SET text = excluded.text",
+                params![a, f, t],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn reviewed(&self, agent_id: &str, file: &str) -> Result<Option<String>> {
+        let (a, f) = (agent_id.to_string(), file.to_string());
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT text FROM reviewed WHERE agent_id = ?1 AND file = ?2",
+                params![a, f],
+                |r| r.get(0),
+            )
+            .optional()?)
         })
         .await
     }

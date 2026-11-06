@@ -50,6 +50,12 @@ pub struct Agent {
     /// argv that starts the runtime; filled from the runtime plugin (M1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch: Option<Vec<String>>,
+    /// Runtime plugin name (`claude-code` when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    /// Command to start the next session with (approval of a parked agent, R-028).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_prompt: Option<String>,
     /// Flow pack and flow (`None` = flow `none`, R-033).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pack: Option<String>,
@@ -95,6 +101,8 @@ impl Agent {
             resume_cmd: None,
             workdir: None,
             launch: None,
+            runtime: None,
+            next_prompt: None,
             pack: None,
             flow: None,
             stage: None,

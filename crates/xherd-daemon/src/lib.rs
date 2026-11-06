@@ -151,6 +151,7 @@ impl Daemon {
             driver: opts.driver,
             clock: opts.clock,
         };
+        d.import_ledgers().await;
         let replayed = d.replay_queue().await?;
         if replayed > 0 {
             tracing::info!(replayed, "replayed queued reports");
@@ -207,6 +208,43 @@ impl Daemon {
         }
         queue::done(&path)?;
         Ok(applied)
+    }
+
+    /// Re-read approval ledgers of agents with a workspace: rows missing from
+    /// the database are added, so the file wins (design §3.4).
+    async fn import_ledgers(&self) {
+        let Ok(agents) = self.store.list_agents().await else {
+            return;
+        };
+        for a in agents {
+            let Some(wd) = &a.workdir else { continue };
+            let Ok(text) = std::fs::read_to_string(
+                std::path::Path::new(wd).join(".xherd/ledger/approvals.jsonl"),
+            ) else {
+                continue;
+            };
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                    tracing::warn!(agent = %a.name, "skipping bad approval ledger line");
+                    continue;
+                };
+                let (Some(file), Some(sha)) = (v["file"].as_str(), v["sha256"].as_str()) else {
+                    continue;
+                };
+                let row = xherd_store::Approval {
+                    agent_id: a.id.clone(),
+                    file: file.into(),
+                    sha256: sha.into(),
+                    at: v["at"].as_i64().unwrap_or(0),
+                    actor: v["actor"].as_str().unwrap_or("user").into(),
+                    auto: v["auto"].as_bool().unwrap_or(false),
+                    reason: v["reason"].as_str().map(str::to_string),
+                };
+                if let Err(e) = self.store.insert_approval(row).await {
+                    tracing::error!(agent = %a.name, error = %e, "approval import failed");
+                }
+            }
+        }
     }
 
     /// Compare live agents with the driver's sessions (R-011).

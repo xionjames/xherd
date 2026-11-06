@@ -76,7 +76,8 @@ impl From<ActionError> for ApiError {
         let status = match e.code {
             "unknown_agent" => StatusCode::NOT_FOUND,
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-            "store" | "driver" => StatusCode::INTERNAL_SERVER_ERROR,
+            "usage" => StatusCode::BAD_REQUEST,
+            "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
         };
         ApiError::new(status, e.code, e.message)
@@ -271,30 +272,39 @@ async fn get_agent(
 
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct SendBody {
-    text: String,
+struct ActionBody {
+    text: Option<String>,
+    reason: Option<String>,
+    comment: Option<String>,
 }
 
 async fn agent_action(
     _: User,
     State(d): State<Daemon>,
     Path((id, action)): Path<(String, String)>,
-    body: Option<Json<SendBody>>,
+    body: Option<Json<ActionBody>>,
 ) -> ApiResult<Json<Value>> {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let required = |v: Option<String>, field: &str| {
+        v.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                format!("body {{\"{field}\": …}} required"),
+            )
+        })
+    };
     let a = match action.as_str() {
         "pause" => UserAction::Pause,
         "resume" => UserAction::Resume,
         "cancel" => UserAction::Cancel,
-        "send" => {
-            let Some(Json(b)) = body else {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad_request",
-                    "body {\"text\": …} required",
-                ));
-            };
-            UserAction::Send { text: b.text }
-        }
+        "send" => UserAction::Send {
+            text: required(b.text, "text")?,
+        },
+        "approve" => UserAction::Approve { reason: b.reason },
+        "request-changes" => UserAction::RequestChanges {
+            comment: required(b.comment, "comment")?,
+        },
         _ => {
             return Err(ApiError::new(
                 StatusCode::NOT_FOUND,
