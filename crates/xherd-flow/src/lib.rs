@@ -4,7 +4,9 @@
 
 pub mod frontmatter;
 pub mod manifest;
+pub mod tasks;
 pub mod template;
+pub mod xap;
 
 pub use manifest::{
     Condition, Facts, Flow, GateKind, GateSpec, NextRule, Pack, PackError, StageDef,

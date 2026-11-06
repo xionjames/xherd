@@ -1,6 +1,6 @@
-//! HTTP API (design §7). M0 serves health, state, agents and their basic
-//! actions, and `POST /hooks` for status reports. XAP, websockets and the UI
-//! come in later milestones.
+//! HTTP API (design §7): health, state, agents and their actions,
+//! `POST /hooks` for status reports and `POST /xap` for the agent protocol.
+//! Websockets and the UI come in M2.
 
 use std::net::SocketAddr;
 
@@ -14,7 +14,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use xherd_core::report::Report;
-use xherd_daemon::support::{SCOPE_HOOKS, TOKEN_AGENT, TOKEN_USER};
+use xherd_core::xap::XapCall;
+use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER};
 use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
 pub const BODY_LIMIT: usize = 5 * 1024 * 1024;
@@ -27,6 +28,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/hooks", post(hooks))
+        .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(d)
@@ -167,8 +169,25 @@ impl FromRequestParts<Daemon> for User {
     }
 }
 
-/// An agent token; `0` is the agent id it belongs to.
-pub struct AgentAuth(pub String);
+/// An agent token: the agent it belongs to and its scopes.
+pub struct AgentAuth {
+    pub agent_id: String,
+    pub scopes: Vec<String>,
+}
+
+impl AgentAuth {
+    fn require(&self, scope: &str) -> ApiResult<()> {
+        if self.scopes.iter().any(|s| s == scope) {
+            Ok(())
+        } else {
+            Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "scope",
+                format!("token lacks the {scope} scope"),
+            ))
+        }
+    }
+}
 
 impl FromRequestParts<Daemon> for AgentAuth {
     type Rejection = ApiError;
@@ -188,13 +207,10 @@ impl FromRequestParts<Daemon> for AgentAuth {
             .await
             .map_err(ApiError::internal)?;
         match row {
-            Some(r)
-                if r.kind == TOKEN_AGENT
-                    && !r.revoked
-                    && r.scopes.iter().any(|s| s == SCOPE_HOOKS) =>
-            {
-                Ok(AgentAuth(r.subject.unwrap_or_default()))
-            }
+            Some(r) if r.kind == TOKEN_AGENT && !r.revoked => Ok(AgentAuth {
+                agent_id: r.subject.unwrap_or_default(),
+                scopes: r.scopes,
+            }),
             _ => Err(deny()),
         }
     }
@@ -292,11 +308,12 @@ async fn agent_action(
 }
 
 async fn hooks(
-    AgentAuth(subject): AgentAuth,
+    auth: AgentAuth,
     State(d): State<Daemon>,
     Json(r): Json<Report>,
 ) -> ApiResult<Json<Value>> {
-    if r.agent_id != subject {
+    auth.require(SCOPE_HOOKS)?;
+    if r.agent_id != auth.agent_id {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "wrong_agent",
@@ -310,5 +327,48 @@ async fn hooks(
             "unknown_agent",
             "no such agent",
         )),
+    }
+}
+
+/// `POST /api/v1/xap` (xap.md §8): `200 {ok, result}` or `{ok: false, code, message}`.
+async fn xap(auth: AgentAuth, State(d): State<Daemon>, body: axum::body::Bytes) -> Response {
+    let fail = |status: StatusCode, code: &str, message: String| {
+        (
+            status,
+            Json(json!({"ok": false, "code": code, "message": message})),
+        )
+            .into_response()
+    };
+    if let Err(e) = auth.require(SCOPE_XAP) {
+        return e.into_response();
+    }
+    let call: XapCall = match serde_json::from_slice(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                "usage",
+                format!("bad XAP call: {e}"),
+            );
+        }
+    };
+    if call.agent_id != auth.agent_id {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "wrong_agent",
+            "token belongs to another agent".into(),
+        );
+    }
+    match d.xap(call).await {
+        Ok(result) => Json(json!({"ok": true, "result": result})).into_response(),
+        Err(r) => {
+            let status = match r.code {
+                "unknown_agent" => StatusCode::NOT_FOUND,
+                "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                "internal" => StatusCode::INTERNAL_SERVER_ERROR,
+                _ => StatusCode::UNPROCESSABLE_ENTITY,
+            };
+            fail(status, r.code, r.message)
+        }
     }
 }

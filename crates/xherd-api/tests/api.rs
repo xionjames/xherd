@@ -205,3 +205,66 @@ async fn agent_actions() {
             .any(|e| e["kind"] == "user.pause")
     );
 }
+
+#[tokio::test]
+async fn xap_endpoint() {
+    let (_dir, d, a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let token = mint_token(
+        &d.store,
+        TOKEN_AGENT,
+        Some(&a.id),
+        &[SCOPE_HOOKS, SCOPE_XAP],
+        1,
+    )
+    .await
+    .unwrap();
+    let hooks_only = mint_token(&d.store, TOKEN_AGENT, Some(&a.id), &[SCOPE_HOOKS], 1)
+        .await
+        .unwrap();
+    let post = |tok: &str, body: String| {
+        Request::post("/api/v1/xap")
+            .header("host", "127.0.0.1:4740")
+            .header("authorization", format!("Bearer {tok}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let ask =
+        json!({"id": "x1", "agentId": a.id, "cmd": "ask", "args": {"text": "which db?"}, "at": 0});
+
+    let (s, v) = call(app.clone(), post(&hooks_only, ask.to_string())).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("scope"))
+    );
+
+    let mut other = ask.clone();
+    other["agentId"] = json!("someone-else");
+    let (s, v) = call(app.clone(), post(&token, other.to_string())).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("wrong_agent"))
+    );
+
+    let (s, v) = call(app.clone(), post(&token, "{\"cmd\": 1}".into())).await;
+    assert_eq!(
+        (s, v["ok"].clone(), v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!(false), json!("usage"))
+    );
+
+    let (s, v) = call(app.clone(), post(&token, ask.to_string())).await;
+    assert_eq!((s, v["ok"].clone()), (StatusCode::OK, json!(true)), "{v}");
+    assert_eq!(v["result"]["gate"]["kind"], "question");
+
+    // The setup agent has no flow: stage calls are refused with 422.
+    let stage = json!({"id": "x2", "agentId": a.id, "cmd": "stage.enter", "args": {"stage": "spec"}, "at": 0});
+    let (s, v) = call(app.clone(), post(&token, stage.to_string())).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        (v["ok"].clone(), v["code"].clone()),
+        (json!(false), json!("no_flow"))
+    );
+    assert!(v["message"].as_str().unwrap().contains("without a flow"));
+}

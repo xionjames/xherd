@@ -15,6 +15,8 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["sync", "rt", "time", "macros"] }
 tracing = "0.1.44"
 xherd-core = { version = "0.1.0", path = "../xherd-core" }
+xherd-flow = { version = "0.1.0", path = "../xherd-flow" }
+xherd-git = { version = "0.1.0", path = "../xherd-git" }
 xherd-plugin = { version = "0.1.0", path = "../xherd-plugin" }
 xherd-store = { version = "0.1.0", path = "../xherd-store" }
 xherd-term = { version = "0.1.0", path = "../xherd-term" }

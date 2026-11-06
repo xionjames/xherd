@@ -246,6 +246,23 @@ impl Store {
         .await
     }
 
+    // ---- approvals -----------------------------------------------------------
+
+    /// The ledger approves `file` at exactly this content (R-107).
+    pub async fn approved(&self, agent_id: &str, file: &str, sha256: &str) -> Result<bool> {
+        let (a, f, h) = (agent_id.to_string(), file.to_string(), sha256.to_string());
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT 1 FROM approvals WHERE agent_id = ?1 AND file = ?2 AND sha256 = ?3",
+                params![a, f, h],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+        })
+        .await
+    }
+
     // ---- events ------------------------------------------------------------
 
     /// Insert unless an event with this id exists. Returns whether it was new.

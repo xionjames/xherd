@@ -3,7 +3,8 @@
 //! and publishes. Slow work runs in spawned tasks and comes back as `WorkDone`
 //! tagged with the agent's generation; stale results are dropped.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +13,10 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
+use xherd_core::xap::{Refusal, XapCall, XapCmd, refuse as refusal};
 use xherd_core::{Agent, Status, Trigger};
+use xherd_flow::Pack;
+use xherd_flow::xap::{CommitFact, DocFact, DocState, Observed};
 use xherd_store::{Event, Store};
 use xherd_term::ScreenRules;
 
@@ -23,6 +27,7 @@ use crate::support::{Change, Clock, Hub, SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, mi
 pub enum Msg {
     Report(Report, Origin, Option<oneshot::Sender<ReportResult>>),
     User(UserAction, oneshot::Sender<Result<Agent, ActionError>>),
+    Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
     WorkDone { generation: u64, result: WorkResult },
 }
@@ -122,6 +127,9 @@ pub struct Env {
     pub clock: Arc<dyn Clock>,
     pub settings: Arc<ActorSettings>,
     pub sup: mpsc::UnboundedSender<SupEvent>,
+    /// Flow packs by name.
+    pub packs: Arc<BTreeMap<String, Pack>>,
+    pub git: xherd_git::Git,
 }
 
 pub type AgentTx = mpsc::UnboundedSender<Msg>;
@@ -162,6 +170,9 @@ impl Actor {
                 Msg::User(action, reply) => {
                     let res = self.on_user(action).await.map(|()| self.agent.clone());
                     let _ = reply.send(res);
+                }
+                Msg::Xap(call, reply) => {
+                    let _ = reply.send(self.on_xap(call).await);
                 }
                 Msg::Tick(t) => self.on_tick(t).await,
                 Msg::WorkDone { generation, result } => {
@@ -289,6 +300,162 @@ impl Actor {
             }
         }
         result
+    }
+
+    // ---- XAP -------------------------------------------------------------------
+
+    /// Validate and apply one XAP call (design §6.5). Accepted calls are logged
+    /// as `xap.<cmd>` under the call id, which also de-duplicates replays.
+    async fn on_xap(&mut self, call: XapCall) -> Result<Value, Refusal> {
+        if !self.agent.status.is_live() {
+            return Err(refusal(
+                "not_live",
+                format!("{} is {}", self.agent.name, self.agent.status),
+            ));
+        }
+        if self.env.store.event_exists(&call.id).await.unwrap_or(false) {
+            return Ok(json!({"changed": false, "duplicate": true}));
+        }
+        let packs = self.env.packs.clone();
+        let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
+        let obs = self.observe(pack, &call.cmd).await?;
+        let (before, now) = (self.agent.status, self.now());
+        let changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
+        if let XapCmd::IssueAdd { .. } = &call.cmd {
+            self.append_issue(&call)
+                .map_err(|e| refusal("internal", format!("issue ledger: {e}")))?;
+        }
+        let args = serde_json::to_value(&call.cmd)
+            .map(|v| v["args"].clone())
+            .unwrap_or(Value::Null);
+        self.log(
+            Some(call.id.clone()),
+            &format!("xap.{}", call.cmd.name()),
+            Some(json!({"args": args, "changed": changed})),
+        )
+        .await;
+        if changed {
+            self.commit(before).await;
+        }
+        Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
+    }
+
+    fn workdir(&self) -> Result<PathBuf, Refusal> {
+        self.agent
+            .workdir
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                refusal(
+                    "no_workspace",
+                    format!("{} has no workspace", self.agent.name),
+                )
+            })
+    }
+
+    /// Look at the files and git for calls that need it. Small local reads,
+    /// done inline: the agent waits for the answer anyway.
+    async fn observe(&self, pack: Option<&Pack>, cmd: &XapCmd) -> Result<Observed, Refusal> {
+        use xherd_flow::xap::{HANDOFF, doc_path, gate_docs};
+        Ok(match cmd {
+            XapCmd::GateOpen { .. } => {
+                let wd = self.workdir()?;
+                let mut facts = Vec::new();
+                for d in gate_docs(&self.agent, pack, cmd, &wd)? {
+                    facts.push(self.doc_fact(&wd, d).await);
+                }
+                Observed::Docs(facts)
+            }
+            XapCmd::TasksSync { file } => {
+                let wd = self.workdir()?;
+                let d = doc_path(file.as_deref().unwrap_or("tasks.md"), &wd)?;
+                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+            }
+            XapCmd::HandoffWritten { file } => {
+                let wd = self.workdir()?;
+                let d = doc_path(file.as_deref().unwrap_or(HANDOFF), &wd)?;
+                Observed::Exists(inside(&wd, &d).is_some())
+            }
+            XapCmd::CommitDone { sha, .. } => {
+                let wd = self.workdir()?;
+                let git = &self.env.git;
+                let full = git.rev_parse(&wd, sha).await.ok();
+                let (on_branch, files) = match &full {
+                    Some(f) => (
+                        git.is_ancestor(&wd, f, "HEAD").await,
+                        git.commit_files(&wd, f).await.unwrap_or_default(),
+                    ),
+                    None => (false, Vec::new()),
+                };
+                Observed::Commit(CommitFact {
+                    sha: full,
+                    on_branch,
+                    files,
+                })
+            }
+            _ => Observed::Nothing,
+        })
+    }
+
+    async fn doc_fact(&self, wd: &Path, path: String) -> DocFact {
+        let rel = xherd_flow::xap::worktree_rel(&path);
+        let state = match (wd.join(&rel).canonicalize(), wd.canonicalize()) {
+            (Ok(abs), Ok(root)) if !abs.starts_with(&root) => DocState::Outside,
+            (Ok(abs), Ok(_)) if abs.is_file() => match std::fs::read(&abs) {
+                Ok(bytes) => {
+                    let sha256 = xherd_core::hash::content_sha256(&bytes);
+                    let frontmatter_error = path
+                        .ends_with(".md")
+                        .then(|| {
+                            xherd_flow::frontmatter::parse(&String::from_utf8_lossy(&bytes)).err()
+                        })
+                        .flatten();
+                    let approved = self
+                        .env
+                        .store
+                        .approved(&self.agent.id, &path, &sha256)
+                        .await
+                        .unwrap_or(false);
+                    DocState::Present {
+                        sha256,
+                        frontmatter_error,
+                        approved,
+                    }
+                }
+                Err(_) => DocState::Missing,
+            },
+            _ => DocState::Missing,
+        };
+        DocFact { path, state }
+    }
+
+    /// `.xherd/ledger/issues.jsonl` (R-131).
+    fn append_issue(&self, call: &XapCall) -> std::io::Result<()> {
+        use std::io::Write;
+        let XapCmd::IssueAdd {
+            title,
+            severity,
+            about,
+            body,
+        } = &call.cmd
+        else {
+            return Ok(());
+        };
+        let dir = self
+            .workdir()
+            .map_err(|e| std::io::Error::other(e.message))?
+            .join(".xherd/ledger");
+        std::fs::create_dir_all(&dir)?;
+        let mut line = serde_json::to_vec(&json!({
+            "id": call.id, "title": title, "severity": severity,
+            "about": about, "body": body, "at": call.at,
+        }))?;
+        line.push(b'\n');
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("issues.jsonl"))?
+            .write_all(&line)
     }
 
     // ---- user actions --------------------------------------------------------
@@ -571,4 +738,14 @@ impl Actor {
             },
         }
     }
+}
+
+/// The file of a canonical document path, if it exists inside the worktree
+/// (symlinks resolved).
+fn inside(wd: &Path, doc: &str) -> Option<PathBuf> {
+    let abs = wd
+        .join(xherd_flow::xap::worktree_rel(doc))
+        .canonicalize()
+        .ok()?;
+    (abs.starts_with(wd.canonicalize().ok()?) && abs.is_file()).then_some(abs)
 }

@@ -20,16 +20,16 @@ M0 (skeleton) is merged. **M1** (one agent end to end) is in progress on branch 
 
 | Path | Contents |
 |---|---|
-| `crates/xherd-core` | Domain: `Status` + lifecycle table (`status::next_status`), `Agent` (`fire(Trigger)`), `Report` + `report::apply_report` (sequence rules R-009, no revival R-008), flow types (`Gate`, `Task`, `Commit`, `Role`), `Paths`, `Config`/`Secrets` (schema migrations, unknown keys kept), `queue` (`hook-queue.jsonl`, sync, file-locked), `exec::run` (the only way to run external commands). Pure and heavily tested (incl. proptest). |
+| `crates/xherd-core` | Domain: `Status` + lifecycle table (`status::next_status`), `Agent` (`fire(Trigger)`), `Report` + `report::apply_report` (sequence rules R-009, no revival R-008), flow types (`Gate`, `Task`, `Commit`, `Role`), `xap` (wire types `XapCall`/`XapCmd`, `Refusal`), `hash::content_sha256` (CRLF-normalised), `Paths`, `Config`/`Secrets` (schema migrations, unknown keys kept), `queue` (`hook-queue.jsonl`: reports and report-only XAP calls, sync, file-locked), `exec::run` (the only way to run external commands). Pure and heavily tested (incl. proptest). |
 | `crates/xherd-store` | SQLite (WAL, one writer thread, read-only pool), forward-only migrations in `schema.rs` (append only), `VACUUM INTO` copy before migrating. |
-| `crates/xherd-daemon` | `Daemon::start` (config, user token, store, plugins, supervisor, queue replay, reconcile, scheduler); `supervisor` (slots, start queue, port blocks); `actor` (one per agent: `Msg::{Report, User, Tick, WorkDone}`); `driver` (`Driver` trait, `TerminalDriver` on tmux, `FakeDriver` for tests); `scheduler` (all periodic jobs); `support` (clock, change hub, tokens). |
-| `crates/xherd-api` | axum router: `/api/v1/{healthz,state,agents,agents/{id},agents/{id}/{pause,resume,cancel,send},hooks}`; `User` and `AgentAuth` extractors. |
+| `crates/xherd-daemon` | `Daemon::start` (config, user token, store, plugins, supervisor, queue replay, reconcile, scheduler); `supervisor` (slots, start queue, port blocks); `actor` (one per agent: `Msg::{Report, User, Xap, Tick, WorkDone}`; `on_xap` observes files/git, then calls `xherd_flow::xap::apply`); `driver` (`Driver` trait, `TerminalDriver` on tmux, `FakeDriver` for tests); `scheduler` (all periodic jobs); `support` (clock, change hub, tokens). |
+| `crates/xherd-api` | axum router: `/api/v1/{healthz,state,agents,agents/{id},agents/{id}/{pause,resume,cancel,send},hooks,xap}`; `User` and `AgentAuth` (agent id + scopes) extractors. `/xap` answers `{ok, result}` or `{ok: false, code, message}` (422). |
 | `crates/xherd-plugin` | `xherd-plugin.json` manifests, `Registry` (built-ins overridden by external, broken listed), settings/secrets resolution, command protocol (`run_command`, `run_typed`, `run_hook`, `run_checks`). |
-| `crates/xherd-flow` | Flow packs: `xherd-flow.yaml` manifest (`Pack`, `Flow`, `StageDef`, `next` rules with the fixed `Condition` vocabulary and a `Facts` trait), `template::render` (`{name}` placeholders; `${…}` kept), `frontmatter::parse`. `xhspec()` returns the built-in pack embedded from `packs/xhspec/`. |
+| `crates/xherd-flow` | Flow packs: `xherd-flow.yaml` manifest (`Pack`, `Flow`, `StageDef`, `next` rules with the fixed `Condition` vocabulary and a `Facts` trait), `template::render` (`{name}` placeholders; `${…}` kept), `frontmatter::parse`, `tasks::parse` (xhSpec `tasks.md`). `xap::apply` is the pure XAP validation (refusal codes, xap.md) over what the actor observed (`Observed`); `xap::doc_path` canonicalises document paths (`spec.md` = spec folder, `./x` = worktree root). `xhspec()` returns the built-in pack embedded from `packs/xhspec/`. |
 | `packs/xhspec` | The built-in xhSpec pack (`xherd-flow.yaml`; prompts come later in M1). |
 | `crates/xherd-term` | `Tmux` (exact `=name` targets, optional `-L` socket), `ScreenRules`. PTY bridge comes with the UI (M2). |
 | `crates/xherd-git` | `Git`: worktrees (`--no-track`), diffs, commit files, bundles, `info/exclude`. |
-| `crates/xherd-cli` | Binary `xherd`: `daemon`, `status`, `ls`, `pause|resume|cancel|send <agent>`, `hook <event>`, `report …`. |
+| `crates/xherd-cli` | Binary `xherd`: `daemon`, `status`, `ls`, `pause|resume|cancel|send <agent>`, `hook <event>`, `report …`, and XAP (`stage enter`, `gate open`, `ask`, `tasks sync`, `task start|done|block`, `commit propose|done|drop`, `pr opened`, `handoff written`, `issue add`; global `--json`). `memory propose` and `xherd mcp` are not implemented yet. |
 
 ## Running it
 
@@ -74,6 +74,8 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 - In axum handlers, read the peer address through the `ConnectInfo` extractor (not `extensions.get`) so `MockConnectInfo` works in tests.
 - YAML is parsed with `yaml_serde` (the maintained serde_yaml). It expects `!Tag` syntax for enums; pack enums written as one-key maps (`Condition`) go through a raw struct with `try_from`.
 - Pack manifests use `deny_unknown_fields`: fields not implemented yet (`views`, `extends`, `parse`…) are rejected, not ignored.
+- XAP calls are de-duplicated by call id through the events table (`xap.<cmd>` events use the call id). A replayed call answers `{"changed": false, "duplicate": true}`.
+- XAP observation (file reads, git) runs inline in the actor; keep it to small local reads.
 - Supervisor messages carry `oneshot` replies straight to the caller; the supervisor never awaits an actor.
 
 ## Commits

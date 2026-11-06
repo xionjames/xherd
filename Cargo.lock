@@ -2028,11 +2028,13 @@ name = "xherd-core"
 version = "0.1.0"
 dependencies = [
  "fd-lock",
+ "hex",
  "nix",
  "proptest",
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
@@ -2055,6 +2057,8 @@ dependencies = [
  "tokio",
  "tracing",
  "xherd-core",
+ "xherd-flow",
+ "xherd-git",
  "xherd-plugin",
  "xherd-store",
  "xherd-term",

@@ -10,6 +10,7 @@ use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
 mod report;
+mod xap;
 
 #[derive(Parser)]
 #[command(
@@ -18,6 +19,9 @@ mod report;
     about = "Run, watch and steer a herd of coding agents"
 )]
 struct Cli {
+    /// Machine-readable output (XAP commands).
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -55,6 +59,32 @@ enum Cmd {
         #[arg(long)]
         seq: Option<u64>,
     },
+    /// XAP: mark the current stage.
+    #[command(subcommand)]
+    Stage(xap::StageCmd),
+    /// XAP: declare an approval gate.
+    #[command(subcommand)]
+    Gate(xap::GateCmd),
+    /// XAP: ask the user a question and wait.
+    Ask { text: String },
+    /// XAP: task list.
+    #[command(subcommand)]
+    Tasks(xap::TasksCmd),
+    /// XAP: task progress.
+    #[command(subcommand)]
+    Task(xap::TaskCmd),
+    /// XAP: commit gates.
+    #[command(subcommand)]
+    Commit(xap::CommitCmd),
+    /// XAP: pull request opened.
+    #[command(subcommand)]
+    Pr(xap::PrCmd),
+    /// XAP: handoff note written.
+    #[command(subcommand)]
+    Handoff(xap::HandoffCmd),
+    /// XAP: record an out-of-scope finding.
+    #[command(subcommand)]
+    Issue(xap::IssueCmd),
 }
 
 fn main() -> ExitCode {
@@ -75,6 +105,7 @@ fn main() -> ExitCode {
             return ExitCode::from(code);
         }
     };
+    let json = cli.json;
     let code = match cli.cmd {
         Cmd::Daemon => run_daemon(),
         Cmd::Status => status(),
@@ -101,6 +132,15 @@ fn main() -> ExitCode {
             resume_cmd,
             seq,
         }),
+        Cmd::Stage(c) => xap::run(c.into(), json),
+        Cmd::Gate(c) => xap::run(c.into(), json),
+        Cmd::Ask { text } => xap::run(xherd_core::xap::XapCmd::Ask { text }, json),
+        Cmd::Tasks(c) => xap::run(c.into(), json),
+        Cmd::Task(c) => xap::run(c.into(), json),
+        Cmd::Commit(c) => xap::run(c.into(), json),
+        Cmd::Pr(c) => xap::run(c.into(), json),
+        Cmd::Handoff(c) => xap::run(c.into(), json),
+        Cmd::Issue(c) => xap::run(c.into(), json),
     };
     ExitCode::from(code as u8)
 }

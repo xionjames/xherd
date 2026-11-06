@@ -1,12 +1,16 @@
 //! The xherd daemon core: supervisor, agent actors, drivers, scheduler.
 //! HTTP lives in `xherd-api`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use xherd_core::config::{Config, ConfigError, Secrets};
 use xherd_core::paths::Paths;
+use xherd_core::queue::Queued;
 use xherd_core::report::{Origin, Report};
+use xherd_core::xap::{Refusal, XapCall};
 use xherd_core::{Agent, queue};
+use xherd_flow::Pack;
 use xherd_plugin::Registry;
 use xherd_store::Store;
 
@@ -67,6 +71,7 @@ pub struct Daemon {
     pub secrets: Arc<Secrets>,
     pub store: Store,
     pub plugins: Arc<Registry>,
+    pub packs: Arc<BTreeMap<String, Pack>>,
     pub hub: Hub,
     pub sup: SupervisorHandle,
     pub driver: Arc<dyn Driver>,
@@ -108,6 +113,10 @@ impl Daemon {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
         }
 
+        let packs = Arc::new(BTreeMap::from([(
+            xherd_flow::XHSPEC.to_string(),
+            xherd_flow::xhspec(),
+        )]));
         let hub = support::hub();
         let settings = ActorSettings {
             idle_alert_minutes: config.idle_alert_minutes,
@@ -124,6 +133,8 @@ impl Daemon {
             clock: opts.clock.clone(),
             settings: Arc::new(settings),
             sup: tokio::sync::mpsc::unbounded_channel().0, // replaced by the supervisor
+            packs: packs.clone(),
+            git: xherd_git::Git::new("git"),
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
@@ -134,6 +145,7 @@ impl Daemon {
             secrets: Arc::new(secrets),
             store,
             plugins: Arc::new(plugins),
+            packs,
             hub,
             sup,
             driver: opts.driver,
@@ -159,6 +171,11 @@ impl Daemon {
         self.sup.report(r, Origin::Agent).await
     }
 
+    /// Route an XAP call from an agent (design §6.5).
+    pub async fn xap(&self, call: XapCall) -> Result<serde_json::Value, Refusal> {
+        self.sup.xap(call).await
+    }
+
     pub async fn action(&self, who: &str, a: UserAction) -> Result<Agent, ActionError> {
         self.sup.action(who, a).await
     }
@@ -166,16 +183,26 @@ impl Daemon {
     /// Apply `hook-queue.jsonl` in order (R-014). Returns how many were applied.
     pub async fn replay_queue(&self) -> std::io::Result<usize> {
         let path = self.paths.hook_queue();
-        let reports = tokio::task::spawn_blocking({
+        let items = tokio::task::spawn_blocking({
             let p = path.clone();
             move || queue::take(&p)
         })
         .await
         .map_err(std::io::Error::other)??;
         let mut applied = 0;
-        for r in reports {
-            if self.report(r).await == Some(ReportResult::Applied) {
-                applied += 1;
+        for item in items {
+            match item {
+                Queued::Report(r) => {
+                    if self.report(r).await == Some(ReportResult::Applied) {
+                        applied += 1;
+                    }
+                }
+                Queued::Xap(call) => match self.xap(call).await {
+                    Ok(_) => applied += 1,
+                    Err(e) => {
+                        tracing::warn!(code = e.code, error = %e.message, "queued XAP call refused")
+                    }
+                },
             }
         }
         queue::done(&path)?;

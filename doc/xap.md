@@ -33,6 +33,8 @@ If `XHERD_AGENT_ID` is missing, the CLI looks for `.xherd/agent.json` in the cur
 
 Report-only commands (`report`, `hook`, `stage enter`, `task start|done|block`, `issue add`) never fail because of the daemon: when it is down they are queued to `hook-queue.jsonl` and exit 0.
 
+Refusals any command may return: `not_live` (the agent has no live session), `no_flow` (stage, gate, task and commit calls for an agent with flow `none`; `ask`, `pr opened`, `handoff written` and `issue add` still work), `no_workspace`, `unknown_agent`, `usage` (malformed call).
+
 ### 1.3 Output
 
 Plain text by default (one line on success). `--json` prints `{"ok": true, "result": {...}}` or `{"ok": false, "code": "...", "message": "..."}`. Refusal codes are stable strings (see each command).
@@ -87,7 +89,9 @@ Declares that the agent stops for approval of the listed documents/artifacts. Th
 
 Special stages: `pr-triage` and `pr-replies` (PR rounds, no documents).
 
-Refusals: `unknown_stage`, `doc_missing`, `doc_schema` (frontmatter fails the pack's schema; message names the field), `already_approved` (same content already approved), `path_outside_workspace`, `next_not_allowed`, `gate_open_commit` (a commit proposal is still open).
+Without `--doc`/`--artifact`, the stage's documents from the pack are used.
+
+Refusals: `unknown_stage`, `no_docs_gate` (the stage gates commits or has no documents), `doc_missing`, `doc_schema` (frontmatter does not parse or fails the pack's schema; message names the field), `already_approved` (same content already approved), `path_outside_workspace` (also through symlinks), `next_not_allowed` (`--next` on a pack flow: the pack decides), `gate_open_commit` (a commit proposal is still open).
 
 ### `xherd ask <text>`
 
@@ -102,7 +106,7 @@ xherd task done <ID> --evidence TEXT
 xherd task block <ID> --reason TEXT
 ```
 
-`tasks sync` re-reads the task list (built-in parser or the pack's `parse`). Refusals: `task_unknown`, `task_not_ready` (dependencies not done), `task_already_doing` (another task is in progress), `evidence_missing`.
+`tasks sync` re-reads the task list (built-in parser or the pack's `parse`); default file `tasks.md`. The file is the source of tasks; a status already reported through XAP is kept when the file still says `todo`. Refusals: `doc_missing`, `doc_schema` (the list does not parse), `task_unknown`, `task_not_ready` (dependencies not done), `task_already_doing` (another task is in progress), `evidence_missing`.
 
 ## 5. Commits
 
@@ -112,7 +116,7 @@ xherd commit done <ID> --sha SHA
 xherd commit drop <ID> [--reason TEXT]
 ```
 
-`propose` opens a commit gate; xherd computes the diff of exactly these files for review and runs the code tripwires. `done` checks that the commit exists on the agent's branch and touches exactly the proposed files. Refusals: `commit_open` (another proposal is open), `files_empty`, `files_outside_scope` (not in the tasks' `files:`; informational when tasks are absent), `sha_unknown`, `sha_files_mismatch`.
+`propose` opens a commit gate; xherd computes the diff of exactly these files for review and runs the code tripwires. `done` is accepted only after the proposal was approved, and checks that the commit exists on the agent's branch and touches exactly the proposed files. Commit ids are never reused, even after `drop`. Refusals: `commit_open` (another proposal is open), `docs_gate_open` (a document gate waits for approval), `commit_id_used`, `files_empty`, `task_unknown`, `files_outside_scope` (not in the `files:` of the listed tasks; no check when `--tasks` is absent or a listed task declares no files), `commit_unknown`, `commit_not_approved`, `commit_done` (already committed), `sha_unknown` (no such commit, or not on the agent's branch), `sha_files_mismatch`.
 
 ## 6. Pull requests, handoff, issues, memory
 
@@ -123,7 +127,7 @@ xherd issue add --title TEXT --severity minor|major|blocker [--about PATH]... [-
 xherd memory propose <repo-path> --file PROPOSED_PATH --reason TEXT
 ```
 
-`pr opened` starts PR follow-up. `handoff written` confirms a pause/ship handoff (the pause waits for it). `issue add` appends to the issue ledger. `memory propose` registers a proposed `CLAUDE.md`/`AGENTS.md` update.
+`pr opened` starts PR follow-up (refused with `bad_url` unless http(s)). `handoff written` confirms a pause/ship handoff (the pause waits for it); default file `.xherd/HANDOFF.md`, refused with `doc_missing` when absent. `issue add` appends to the issue ledger (`.xherd/ledger/issues.jsonl`). `memory propose` registers a proposed `CLAUDE.md`/`AGENTS.md` update.
 
 ## 7. MCP transport
 

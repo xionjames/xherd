@@ -115,7 +115,7 @@ pub fn deliver(r: &Report) -> Delivered {
         }
     }
     // No token (e.g. a wrapper outside the session) or daemon unreachable.
-    match xherd_core::queue::append(&Paths::from_env().hook_queue(), r) {
+    match xherd_core::queue::append(&Paths::from_env().hook_queue(), &r.clone().into()) {
         Ok(()) => Delivered::Queued,
         Err(e) => Delivered::Rejected(format!("cannot queue report: {e}")),
     }

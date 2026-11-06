@@ -339,10 +339,15 @@ async fn queued_reports_are_replayed_on_start() {
             ReportEvent::Stop,
             5,
             json!({"message": "all done"}),
-        ),
+        )
+        .into(),
     )
     .unwrap();
-    queue::append(&q, &rep(&a, "q0", ReportEvent::Working, 4, Value::Null)).unwrap();
+    queue::append(
+        &q,
+        &rep(&a, "q0", ReportEvent::Working, 4, Value::Null).into(),
+    )
+    .unwrap();
 
     // Restart on the same data dir; the fake session is still alive.
     let o = Options::new(t.drv.clone(), Arc::new(ManualClock::new(2_000_000)));
