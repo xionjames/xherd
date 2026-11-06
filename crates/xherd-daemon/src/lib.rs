@@ -190,8 +190,10 @@ impl Daemon {
     /// What the user reviews before approving (xap.md §5, R-104): with a
     /// commit gate open, the diff of exactly the proposed files against HEAD
     /// (new and deleted files included) and the other uncommitted changes left
-    /// out of it; otherwise the diff of every uncommitted change. Read-only git
-    /// work, run here rather than in the actor.
+    /// out of it; at a ship gate, the branch as it will be pushed
+    /// (`<base>...HEAD`) and the uncommitted files that would stay behind;
+    /// otherwise the diff of every uncommitted change. Read-only git work, run
+    /// here rather than in the actor.
     pub async fn diff(&self, who: &str) -> Result<serde_json::Value, ActionError> {
         let fail = |code: &'static str, message: String| ActionError { code, message };
         let a = self.action(who, UserAction::Get).await?;
@@ -204,6 +206,28 @@ impl Daemon {
         let git_err = |e: xherd_git::GitError| fail("git", e.to_string());
         let head = git.rev_parse(wd, "HEAD").await.map_err(git_err)?;
         let changed = git.changed_files(wd, "HEAD").await.map_err(git_err)?;
+        if let (
+            Some(xherd_core::domain::Gate::Docs {
+                role: xherd_core::domain::Role::Ship,
+                ..
+            }),
+            Some(base),
+        ) = (&a.gate, &a.base)
+        {
+            let range = format!("{base}...HEAD");
+            let files: Vec<String> = git
+                .run(wd, &["diff", "--name-only", &range, "--"])
+                .await
+                .map_err(git_err)?
+                .lines()
+                .map(str::to_string)
+                .collect();
+            let diff = git.diff(wd, Some(&range), &[]).await.map_err(git_err)?;
+            return Ok(serde_json::json!({
+                "agent": a.name, "head": head, "branch": range, "files": files,
+                "others": changed, "diff": diff,
+            }));
+        }
         let (commit, files, others) = match &a.gate {
             Some(xherd_core::domain::Gate::Commit(c)) => {
                 let others = changed

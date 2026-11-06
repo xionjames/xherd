@@ -73,7 +73,7 @@ enum Cmd {
     },
     /// Ask the agent to revise its open gate.
     Changes { agent: String, comment: String },
-    /// Show the open commit proposal's diff (else every uncommitted change).
+    /// Show the open commit proposal's diff, the branch at a ship gate, else every uncommitted change.
     Diff { agent: String },
     /// Runtime hook (reads the hook JSON on stdin). Silent; always exits 0.
     Hook { event: String },
@@ -487,7 +487,13 @@ fn diff(agent: &str, json: bool) -> i32 {
             .unwrap_or_default()
     };
     let c = &v["commit"];
-    if c.is_object() {
+    if let Some(range) = v["branch"].as_str() {
+        eprintln!("ship: branch {range}: {}", names("files"));
+        let others = names("others");
+        if !others.is_empty() {
+            eprintln!("uncommitted, not pushed: {others}");
+        }
+    } else if c.is_object() {
         eprintln!(
             "commit {} \"{}\": {}",
             c["id"].as_str().unwrap_or("?"),

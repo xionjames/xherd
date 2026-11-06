@@ -62,6 +62,7 @@ async fn setup_with(fresh_sessions: bool) -> T {
     a.workdir = Some(wt.path().to_string_lossy().into_owned());
     a.pack = Some("xhspec".into());
     a.flow = Some("feature".into());
+    a.base = Some("main".into());
     let a = d.create_agent(a).await.unwrap();
     for _ in 0..200 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
@@ -656,4 +657,80 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
     assert_eq!(git(wt, &["diff", "--cached", "--name-only"]), "");
 
     assert_eq!(t.d.diff("nobody").await.unwrap_err().code, "unknown_agent");
+}
+
+#[tokio::test]
+async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
+    git(wt, &["checkout", "-q", "-b", "SC-1"]);
+    std::fs::write(wt.join("feature.rs"), "feature\n").unwrap();
+    git(wt, &["add", "feature.rs"]);
+    git(wt, &["commit", "-q", "-m", "feature"]);
+    std::fs::write(wt.join("stray.txt"), "stray\n").unwrap();
+    std::fs::write(wt.join(".xherd/spec/pr.md"), "# Add the feature\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    assert_eq!(get(&t).await.status, Status::WaitingInput);
+
+    // At the ship gate the user reviews what will be pushed.
+    let v = t.d.diff("SC-1").await.unwrap();
+    assert_eq!(v["branch"], "main...HEAD");
+    assert_eq!(v["files"], json!(["feature.rs"]));
+    assert_eq!(v["others"], json!(["stray.txt"]));
+    assert!(v["diff"].as_str().unwrap().contains("+feature"));
+
+    // Approval hands on the ship command, which pushes and opens the PR.
+    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    session_start(&t, 2).await;
+    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:ship\" 1"]);
+    let url = "https://github.com/acme/app/pull/42";
+    xap(&t, "c2", "pr.opened", json!({"url": url}))
+        .await
+        .unwrap();
+    // Stopped with a question: still live, the user answers first.
+    let ask = Report {
+        id: "ask".into(),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::Stop,
+        payload: json!({"message": "Update the ticket too?"}),
+        seq: 3,
+        at: 0,
+    };
+    t.d.report(ask).await;
+    assert_eq!(get(&t).await.status, Status::WaitingInput);
+    act(&t, UserAction::Send { text: "no".into() })
+        .await
+        .unwrap();
+    let typed = Report {
+        id: "typed".into(),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::UserPromptSubmit,
+        payload: json!({"prompt": "no"}),
+        seq: 4,
+        at: 0,
+    };
+    t.d.report(typed).await;
+
+    // Nothing left to do: the session ends and the agent watches its PR (R-301).
+    let done = Report {
+        id: "done".into(),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::Stop,
+        payload: json!({"message": "Draft PR opened."}),
+        seq: 5,
+        at: 0,
+    };
+    t.d.report(done).await;
+    let a = get(&t).await;
+    assert_eq!(
+        (a.status, a.pr_url.as_deref()),
+        (Status::Watching, Some(url))
+    );
+    assert!(t.drv.calls().contains(&"stop SC-1".to_string()));
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "watching"));
 }

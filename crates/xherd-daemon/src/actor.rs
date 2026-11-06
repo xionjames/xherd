@@ -314,8 +314,8 @@ impl Actor {
                 }
                 Effect::DeliveryAck => self.delivery = None,
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
-                // Token usage, auto-approval, PR lookup: M1+.
-                Effect::AfterStop => {}
+                // Token usage, auto-approval, parking: later milestones.
+                Effect::AfterStop => self.after_ship().await,
             }
         }
         if result == ReportResult::Applied
@@ -325,6 +325,25 @@ impl Actor {
             self.send_first_prompt().await;
         }
         result
+    }
+
+    /// After ship (R-301): an agent following a flow that stopped with its PR
+    /// open and nothing waiting on the user ends its session and watches the
+    /// PR. Flow `none` keeps its session (no ship stage).
+    async fn after_ship(&mut self) {
+        if self.agent.status != Status::Idle
+            || self.agent.gate.is_some()
+            || self.agent.pack.is_none()
+            || self.agent.pr_url.is_none()
+        {
+            return;
+        }
+        let before = self.agent.status;
+        self.end_session().await;
+        self.agent.fire(Trigger::Watch, self.now());
+        self.log(None, "watching", Some(json!({"pr": self.agent.pr_url})))
+            .await;
+        self.commit(before).await;
     }
 
     /// The session is ready: type the command it was started for (the flow's

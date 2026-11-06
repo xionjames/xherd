@@ -653,7 +653,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Hash approvals from the CLI
   - [x] Fresh sessions
   - [x] Commit gates
-  - [ ] Ship
+  - [x] Ship
   - [ ] Draft PR via GitHub
 - [ ] **M2 UI**
   - [ ] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
