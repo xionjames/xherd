@@ -17,6 +17,7 @@ use xherd_store::Store;
 pub mod actor;
 mod create;
 pub mod driver;
+pub mod install;
 pub mod scheduler;
 pub mod supervisor;
 pub mod support;

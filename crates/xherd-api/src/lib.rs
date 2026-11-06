@@ -27,6 +27,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
+        .route("/api/v1/install", post(install))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -78,8 +79,9 @@ impl From<ActionError> for ApiError {
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             "usage" => StatusCode::BAD_REQUEST,
             "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
-            | "not_a_repo" | "base_unresolved" => StatusCode::UNPROCESSABLE_ENTITY,
-            "io" | "git" => StatusCode::INTERNAL_SERVER_ERROR,
+            | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
+            | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
+            "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
             "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
         };
@@ -263,6 +265,29 @@ async fn new_agent(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let agent = d.new_agent(req).await?;
     Ok((StatusCode::CREATED, Json(json!({"agent": agent}))))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InstallReq {
+    #[serde(default)]
+    runtime: Option<String>,
+    #[serde(default)]
+    pack: Option<String>,
+}
+
+/// `xherd install`: the pack's commands for the runtimes, written where the
+/// daemon (and so the agents) run.
+async fn install(
+    _: User,
+    State(d): State<Daemon>,
+    Json(req): Json<InstallReq>,
+) -> ApiResult<Json<Value>> {
+    let env = |k: &str| std::env::var(k).ok();
+    let installed = d
+        .install(req.runtime.as_deref(), req.pack.as_deref(), &env)
+        .await?;
+    Ok(Json(json!({"installed": installed})))
 }
 
 async fn get_agent(

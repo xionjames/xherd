@@ -199,6 +199,16 @@ async fn agent_actions() {
     );
     let (s, _) = call(app.clone(), post("/api/v1/agents/NOPE/pause", None)).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+    // Only refusals here: a real install writes to the user's runtime folder.
+    let (s, v) = call(
+        app.clone(),
+        post("/api/v1/install", Some(json!({"runtime": "nope"}))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("unknown_runtime"))
+    );
     let (s, v) = call(
         app.clone(),
         get("/api/v1/agents/SC-1").body(Body::empty()).unwrap(),

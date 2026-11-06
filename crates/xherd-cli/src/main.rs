@@ -50,6 +50,13 @@ enum Cmd {
     },
     /// List agents.
     Ls,
+    /// Install a pack's commands for agent runtimes (default: xhSpec, every runtime).
+    Install {
+        #[arg(long)]
+        runtime: Option<String>,
+        #[arg(long)]
+        pack: Option<String>,
+    },
     /// Pause an agent (ends its session).
     Pause { agent: String },
     /// Resume a paused, cancelled or failed agent.
@@ -134,6 +141,7 @@ fn main() -> ExitCode {
         Cmd::Daemon => run_daemon(),
         Cmd::Status => status(),
         Cmd::Ls => ls(),
+        Cmd::Install { runtime, pack } => install(runtime, pack),
         Cmd::New {
             key,
             slug,
@@ -382,6 +390,29 @@ fn gate_summary(g: &Value) -> String {
         Some("question") => format!("question: {}", g["text"].as_str().unwrap_or("")),
         Some(k) => k.to_string(),
         None => "-".into(),
+    }
+}
+
+fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
+    let body = serde_json::json!({"runtime": runtime, "pack": pack});
+    match Client::new().and_then(|c| c.call("POST", "/install", Some(body))) {
+        Ok(v) => {
+            for f in v["installed"].as_array().into_iter().flatten() {
+                let path = f["path"].as_str().unwrap_or("?");
+                match f["action"].as_str() {
+                    Some("kept") => {
+                        println!("kept     {path} (edited; new version in {path}.xherd-new)")
+                    }
+                    Some(a) => println!("{a:<8} {path}"),
+                    None => {}
+                }
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("xherd install: {e}");
+            2
+        }
     }
 }
 

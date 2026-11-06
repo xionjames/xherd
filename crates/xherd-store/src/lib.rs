@@ -329,6 +329,51 @@ impl Store {
         .await
     }
 
+    // ---- installs ----------------------------------------------------------
+
+    /// Hash of what `xherd install` last wrote at `path` (design §6.7).
+    pub async fn install_sha(
+        &self,
+        runtime: &str,
+        pack: &str,
+        path: &str,
+    ) -> Result<Option<String>> {
+        let (r, p, f) = (runtime.to_string(), pack.to_string(), path.to_string());
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT sha256 FROM installs WHERE runtime = ?1 AND pack = ?2 AND path = ?3",
+                params![r, p, f],
+                |r| r.get(0),
+            )
+            .optional()?)
+        })
+        .await
+    }
+
+    pub async fn put_install(
+        &self,
+        runtime: &str,
+        pack: &str,
+        path: &str,
+        sha256: &str,
+    ) -> Result<()> {
+        let (r, p, f, h) = (
+            runtime.to_string(),
+            pack.to_string(),
+            path.to_string(),
+            sha256.to_string(),
+        );
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO installs (runtime, pack, path, sha256) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(runtime, pack, path) DO UPDATE SET sha256 = excluded.sha256",
+                params![r, p, f, h],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
     // ---- events ------------------------------------------------------------
 
     /// Insert unless an event with this id exists. Returns whether it was new.
