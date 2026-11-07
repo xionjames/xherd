@@ -17,4 +17,7 @@ export const ICONS: Record<string, string> = {
   activity: 'M4 6h16M4 12h16M4 18h10',
   x: 'M6 6l12 12M18 6L6 18',
   ext: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+  sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  moon: 'M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z',
+  auto: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18',
 };
