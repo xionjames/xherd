@@ -3,11 +3,13 @@
   import type { Agent, AgentEvent } from '../lib/types';
   import { get } from '../lib/api';
   let { agent }: { agent: Agent } = $props();
+  // Effects key on the id: the agent object is replaced on every update.
+  const id = $derived(agent.id);
   let events = $state<AgentEvent[]>([]);
   $effect(() => {
     void agent.lastActivity;
     void agent.status;
-    get<{ events: AgentEvent[] }>(`/agents/${agent.id}`).then((r) => (events = r.events));
+    get<{ events: AgentEvent[] }>(`/agents/${id}`).then((r) => (events = r.events));
   });
   const time = (ms: number) => new Date(ms).toLocaleString();
   const summary = (p: unknown) => {

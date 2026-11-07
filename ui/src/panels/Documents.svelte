@@ -10,6 +10,8 @@
   import DiffLines from '../components/DiffLines.svelte';
 
   let { agent }: { agent: Agent } = $props();
+  // Effects key on the id: the agent object is replaced on every update.
+  const id = $derived(agent.id);
 
   interface Doc { path: string; text: string; sha256: string; reviewed: string | null }
   let docs = $state<string[]>([]);
@@ -24,14 +26,14 @@
 
   $effect(() => {
     void gateKey;
-    get<{ docs: string[] }>(`/agents/${agent.id}/docs`).then((r) => (docs = r.docs), (e) => (error = e.message));
+    get<{ docs: string[] }>(`/agents/${id}/docs`).then((r) => (docs = r.docs), (e) => (error = e.message));
   });
   $effect(() => {
     void gateKey;
     const path = selected;
     if (!path) return;
-    get<Doc>(`/agents/${agent.id}/file?path=${encodeURIComponent(path)}`).then(
-      (d) => { doc = d; error = null; markRead(agent.id, d.path, d.sha256); },
+    get<Doc>(`/agents/${id}/file?path=${encodeURIComponent(path)}`).then(
+      (d) => { doc = d; error = null; markRead(id, d.path, d.sha256); },
       (e) => { doc = null; error = e.message; },
     );
   });

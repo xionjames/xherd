@@ -16,6 +16,7 @@ xherd-core = { version = "0.1.0", path = "../xherd-core" }
 xherd-daemon = { version = "0.1.0", path = "../xherd-daemon" }
 xherd-plugin = { version = "0.1.0", path = "../xherd-plugin" }
 xherd-store = { version = "0.1.0", path = "../xherd-store" }
+xherd-term = { version = "0.1.0", path = "../xherd-term" }
 
 [lints]
 workspace = true

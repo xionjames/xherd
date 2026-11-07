@@ -7,6 +7,8 @@
   import DiffLines from '../components/DiffLines.svelte';
 
   let { agent }: { agent: Agent } = $props();
+  // Effects key on the id: the agent object is replaced on every update.
+  const id = $derived(agent.id);
   let d = $state<DiffAnswer | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(false);
@@ -14,12 +16,12 @@
 
   async function load() {
     loading = true;
-    try { d = await get<DiffAnswer>(`/agents/${agent.id}/diff`); error = null; }
+    try { d = await get<DiffAnswer>(`/agents/${id}/diff`); error = null; }
     catch (e) { error = (e as Error).message; }
     finally { loading = false; }
   }
   // Reload when what is reviewed changes (gate, commits, activity).
-  const key = $derived(`${agent.id}|${JSON.stringify(agent.gate ?? null)}|${agent.lastActivity}`);
+  const key = $derived(`${id}|${JSON.stringify(agent.gate ?? null)}|${agent.lastActivity}`);
   $effect(() => { void key; load(); });
 
   const files = $derived(d ? parseUnified(d.diff) : []);

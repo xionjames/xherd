@@ -18,6 +18,7 @@ use xherd_core::xap::XapCall;
 use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER};
 use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
+mod term;
 mod ui;
 mod ws;
 
@@ -29,6 +30,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/assets/{*rest}", get(ui::asset))
         .route("/api/v1/healthz", get(healthz))
         .route("/api/v1/ws", get(ws::state_stream))
+        .route("/api/v1/ws/term/{id}", get(term::terminal))
         .route("/api/v1/state", get(state))
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))

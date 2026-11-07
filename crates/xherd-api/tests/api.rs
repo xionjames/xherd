@@ -450,3 +450,76 @@ async fn websocket_streams_agent_changes() {
     .unwrap();
     assert_eq!(msg["agent"]["name"], "SC-1");
 }
+
+#[tokio::test]
+async fn terminal_websocket_attaches_to_the_session() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let (_dir, d, _a) = setup().await;
+    // The fake driver starts no tmux session: make one on a private socket.
+    let sock = format!("xherd-test-term-{}", std::process::id());
+    let tmux = |args: &[&str]| {
+        std::process::Command::new("tmux")
+            .args(["-L", &sock])
+            .args(args)
+            .status()
+            .unwrap()
+    };
+    assert!(
+        tmux(&[
+            "new-session",
+            "-d",
+            "-s",
+            "SC-1",
+            "-x",
+            "80",
+            "-y",
+            "24",
+            "cat"
+        ])
+        .success()
+    );
+    let mut cfg = (*d.config).clone();
+    cfg.tmux_socket = Some(sock.clone());
+    let d = Daemon {
+        config: Arc::new(cfg),
+        ..d
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(xherd_api::serve(
+        d.clone(),
+        listener,
+        std::future::pending(),
+    ));
+
+    let url = format!("ws://127.0.0.1:{port}/api/v1/ws/term/SC-1?cols=80&rows=24");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    ws.send(Message::text(r#"{"type":"resize","cols":90,"rows":25}"#))
+        .await
+        .unwrap();
+    ws.send(Message::binary(b"hello-term\r".to_vec()))
+        .await
+        .unwrap();
+    let mut seen = String::new();
+    let found = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(Ok(m)) = ws.next().await {
+            if let Message::Binary(b) = m {
+                seen.push_str(&String::from_utf8_lossy(&b));
+                if seen.contains("hello-term") {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    drop(ws);
+    // Detaching leaves the session running.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let alive = tmux(&["has-session", "-t", "=SC-1"]).success();
+    tmux(&["kill-server"]);
+    assert!(found, "no echo in {seen:?}");
+    assert!(alive);
+}

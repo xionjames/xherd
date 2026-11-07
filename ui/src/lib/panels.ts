@@ -8,6 +8,7 @@ import Commits from '../panels/Commits.svelte';
 import Changes from '../panels/Changes.svelte';
 import PullRequest from '../panels/PullRequest.svelte';
 import Activity from '../panels/Activity.svelte';
+import TerminalPanel from '../panels/Terminal.svelte';
 
 export const PANELS: Record<string, Component<{ agent: Agent }>> = {
   documents: Documents,
@@ -16,6 +17,7 @@ export const PANELS: Record<string, Component<{ agent: Agent }>> = {
   diff: Changes,
   pr: PullRequest,
   log: Activity,
+  terminal: TerminalPanel,
 };
 
 export interface TabDef {

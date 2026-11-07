@@ -26,7 +26,7 @@
     const g = agent.gate;
     if (g?.kind === 'commit' || (g?.kind === 'docs' && g.role === 'ship')) return 'changes';
     if (g?.kind === 'docs') return 'spec';
-    return agent.flow ? 'spec' : tabs[0]?.id;
+    return agent.flow ? 'spec' : 'terminal';
   });
   const tabId = $derived(tabs.find((t) => t.id === route.query.get('s'))?.id ?? fallback);
   const tab = $derived(tabs.find((t) => t.id === tabId) ?? tabs[0]);
@@ -99,9 +99,7 @@
   </nav>
 </header>
 
-{#if tab?.panel === 'terminal'}
-  <div class="stack"><div class="card cb muted">The terminal comes next.</div></div>
-{:else if Panel}
+{#if Panel}
   {#key agent.id}<Panel {agent} />{/key}
 {/if}
 

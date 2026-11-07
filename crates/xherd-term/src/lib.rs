@@ -1,4 +1,6 @@
-//! tmux wrapper and screen rules. The PTY bridge for `/ws/term/:id` comes with the UI (M2).
+//! tmux wrapper, screen rules, and the PTY bridge for browser terminals.
+
+pub mod pty;
 
 use std::path::Path;
 use std::time::Duration;
@@ -43,6 +45,16 @@ fn window(name: &str, win: Option<&str>) -> String {
 impl Tmux {
     pub fn new(socket: Option<String>) -> Tmux {
         Tmux { socket }
+    }
+
+    /// argv of a tmux client attached to the session (browser terminal).
+    pub fn attach_argv(&self, name: &str) -> Vec<String> {
+        let mut argv = vec!["tmux".to_string()];
+        if let Some(s) = &self.socket {
+            argv.extend(["-L".into(), s.clone()]);
+        }
+        argv.extend(["attach-session".into(), "-t".into(), session(name)]);
+        argv
     }
 
     pub async fn run(&self, args: &[&str]) -> Result<String> {
