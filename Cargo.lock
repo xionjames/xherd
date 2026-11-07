@@ -2471,6 +2471,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "fd-lock",
+ "nix 0.31.3",
  "serde_json",
  "tempfile",
  "tokio",

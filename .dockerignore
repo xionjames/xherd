@@ -1,0 +1,6 @@
+target
+ui/node_modules
+ui/dist
+desktop/node_modules
+.git
+**/.DS_Store

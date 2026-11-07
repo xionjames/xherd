@@ -157,6 +157,21 @@ impl Daemon {
         if let Some(c) = self.trust_check() {
             out.push(c);
         }
+        if self.sandbox {
+            // Stated, never silent (design §8.4): the two-user split is not done yet.
+            out.push(Check {
+                id: "single-user".into(),
+                group: "security",
+                label: "Agents are kept from xherd's settings and secrets".into(),
+                required: false,
+                ok: false,
+                detail: "No: the daemon and the agents run as the same user in this container, \
+                         so an agent can read xherd's config.json and secrets.json. \
+                         Keep plugin secrets you would not hand to an agent out of xherd."
+                    .into(),
+                fix: None,
+            });
+        }
         out.push(self.pack_check(env).await);
         out
     }

@@ -420,16 +420,16 @@ volumes:
 
 ### 8.4 Entrypoint and users
 
-The container starts as root and runs `xherd init`, which:
+The container starts as root under `tini` and runs `xherd init`, which:
 
-1. Creates the agent user with `XHERD_UID`/`XHERD_GID` (the host user) and the daemon user `xherd`, both in group `xherd-ws`.
-2. Exposes the forwarded SSH agent socket to the agent user through a proxy socket it owns (the forwarded socket is root-owned on Docker Desktop).
-3. Prepares `/home/xherd`: daemon data (`.local/share/xherd`, mode 0700, owner `xherd`), agent home areas (logins, toolchains, caches) owned by the agent user.
-4. Writes git config for the agent user: SSH config include, pre-seeded `known_hosts`, credential helper `xherd credential`, URL rewrites only for hosts with `preferHttps`/`preferSsh`.
-5. Starts the tmux server as the agent user and grants the daemon user access to it (`server-access`, tmux ≥ 3.3, **verify**).
-6. Marks the agent CLIs' first-run screens done, runs `xherd install`, then drops privileges and starts the daemon as `xherd`.
+1. Creates the user with `XHERD_UID`/`XHERD_GID` (the host user; an existing user or group with those ids is reused), home `/home/xherd` on the `xherd-home` volume (given to that user when its owner differs, e.g. a new volume).
+2. Copies the image's version-manager seeds (`/opt/xherd/seed`: SDKMAN, nvm, rustup) into the home once; uv and Go are plain binaries in the image.
+3. Exposes the forwarded SSH agent socket (`/run/host-ssh-agent.sock`, root-owned on Docker Desktop) to the user through a `socat` proxy at `/run/xherd/ssh-agent.sock`, owned by the user.
+4. Writes SSH and git config for the user without replacing theirs: an `Include` of `~/.config/xherd/ssh_config` (pre-seeded `known_hosts` for GitHub, GitLab, Bitbucket, checked against their published fingerprints at image build) and an `[include]` of `~/.config/xherd/gitconfig`, the file Settings → Git access rewrites (credential helpers, URL rewrites only for hosts with `preferHttps`/`preferSsh`).
+5. Marks Claude Code's first-run screens done (`hasCompletedOnboarding`; folder trust is still accepted by the user through Setup checks).
+6. Passes the default gateway as `XHERD_LOCAL_PEERS` (the port published on the host's `127.0.0.1` arrives from it, so the daemon treats it as the local host), drops privileges and replaces itself with `xherd daemon` (bound to `0.0.0.0` inside the container through `XHERD_BIND`). The daemon installs the xhSpec commands at every start in the container.
 
-The daemon reads and writes worktrees through group permissions (umask 002, `safe.directory` for git). If the two-user setup is not possible on an engine (**verify** on macOS bind mounts), `xherd init` falls back to a single user and Setup checks say that config and secrets are then readable by agents.
+**Single user (M3)**: the daemon and the agents run as the same user. A daemon user separate from the agent user cannot write into repositories the host user cloned (typically `755`/`644`) without running every repository write as the agent user; that split comes with the guardrails (R-1203). Until then Setup checks state that agents can read xherd's config and secrets.
 
 ### 8.5 Pitfalls
 
@@ -712,7 +712,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D9 | Default port 4740 | Accepted |
 | D10 | Spec documents private by default; committed opt-in | Accepted |
 | D11 | Approvals by content hash; the daemon never edits documents | Accepted |
-| D12 | One shared container; version managers; two users inside (fallback single user) | Accepted |
+| D12 | One shared container; version managers; two users inside (fallback single user; single user until the guardrails milestone) | Accepted |
 | D13 | Single user per daemon | Accepted |
 | D14 | Runtimes declare models with tiers and effort | Accepted |
 | D15 | Step roles shared by all packs | Accepted |

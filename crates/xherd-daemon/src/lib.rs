@@ -54,6 +54,9 @@ pub struct Options {
     /// Running in the xherd container (`XHERD_SANDBOX=1`): toolchains are
     /// installed, not only resolved (R-653).
     pub sandbox: bool,
+    /// Peer addresses treated like loopback: the container's gateway, through
+    /// which the port published on the host's 127.0.0.1 arrives.
+    pub local_peers: Vec<std::net::IpAddr>,
 }
 
 impl Options {
@@ -67,6 +70,7 @@ impl Options {
             delivery_ack: std::time::Duration::from_secs(10),
             screen_rules: None,
             sandbox: false,
+            local_peers: Vec::new(),
         }
     }
 }
@@ -128,6 +132,10 @@ pub struct Daemon {
     pub clock: Arc<dyn Clock>,
     /// Absolute path of the `xherd` binary (hook commands, `XHERD_BIN`).
     pub xherd_bin: String,
+    /// Running in the xherd container (`XHERD_SANDBOX=1`).
+    pub sandbox: bool,
+    /// See `Options::local_peers`.
+    pub local_peers: Arc<Vec<std::net::IpAddr>>,
 }
 
 impl Daemon {
@@ -218,6 +226,8 @@ impl Daemon {
             driver: opts.driver,
             clock: opts.clock,
             xherd_bin: opts.xherd_bin,
+            sandbox: opts.sandbox,
+            local_peers: Arc::new(opts.local_peers),
         };
         d.import_ledgers().await;
         let replayed = d.replay_queue().await?;
@@ -225,6 +235,17 @@ impl Daemon {
             tracing::info!(replayed, "replayed queued reports");
         }
         d.reconcile().await;
+        if d.sandbox {
+            // The container is set up without a shell: commands go where the
+            // agents find them at every start (user-edited files are kept).
+            let env = |v: &str| std::env::var(v).ok();
+            if let Err(e) = d
+                .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, &env)
+                .await
+            {
+                tracing::warn!(error = %e.message, "installing the xhSpec commands failed");
+            }
+        }
         if let Some(iv) = opts.scheduler {
             scheduler::spawn(d.clone(), iv);
         }

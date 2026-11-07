@@ -118,6 +118,14 @@ async fn auth_rules() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(call(remote, req).await.0, StatusCode::UNAUTHORIZED);
+
+    // In the container, the gateway the published port arrives from is local.
+    let mut d2 = d.clone();
+    d2.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
+    let gw =
+        xherd_api::router(d2).layer(MockConnectInfo(SocketAddr::from(([172, 17, 0, 1], 5555))));
+    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    assert_eq!(call(gw, req).await.0, StatusCode::OK);
 }
 
 #[tokio::test]

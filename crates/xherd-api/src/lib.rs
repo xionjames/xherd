@@ -135,7 +135,10 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 async fn is_local(parts: &mut Parts, d: &Daemon) -> bool {
     let peer_local = ConnectInfo::<SocketAddr>::from_request_parts(parts, d)
         .await
-        .is_ok_and(|ConnectInfo(a)| a.ip().is_loopback());
+        .is_ok_and(|ConnectInfo(a)| {
+            let ip = a.ip().to_canonical();
+            ip.is_loopback() || d.local_peers.contains(&ip)
+        });
     let host = parts
         .headers
         .get(header::HOST)

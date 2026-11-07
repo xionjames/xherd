@@ -9,6 +9,7 @@ use serde_json::Value;
 use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
+mod init;
 mod report;
 mod toolchain;
 mod xap;
@@ -31,6 +32,8 @@ struct Cli {
 enum Cmd {
     /// Run the daemon in the foreground.
     Daemon,
+    /// Container entrypoint (root): prepare the user, home, SSH and git, then run the daemon.
+    Init,
     /// Is the daemon up?
     Status,
     /// Create an agent: worktree, branch and `.xherd/` for a ticket.
@@ -155,6 +158,7 @@ fn main() -> ExitCode {
     let json = cli.json;
     let code = match cli.cmd {
         Cmd::Daemon => run_daemon(),
+        Cmd::Init => init::init(),
         Cmd::Status => status(),
         Cmd::Ls => ls(),
         Cmd::Install { runtime, pack } => install(runtime, pack),
@@ -247,7 +251,13 @@ fn run_daemon() -> i32 {
 async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
     let paths = Paths::from_env();
     let (cfg, _) = Config::load(&paths.config())?;
-    let addr = format!("{}:{}", cfg.bind, cfg.port);
+    // In the container the daemon binds every interface (`XHERD_BIND`), and
+    // the published port's gateway counts as the local host (`XHERD_LOCAL_PEERS`).
+    let bind = std::env::var("XHERD_BIND")
+        .ok()
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| cfg.bind.clone());
+    let addr = format!("{bind}:{}", cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("cannot listen on {addr}: {e} (is another daemon running?)"))?;
@@ -260,6 +270,11 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
     opts.xherd_bin = std::env::current_exe()?.to_string_lossy().into_owned();
     opts.scheduler = Some(Default::default());
     opts.sandbox = std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1");
+    opts.local_peers = std::env::var("XHERD_LOCAL_PEERS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
     let d = xherd_daemon::Daemon::start(paths.clone(), opts).await?;
     tracing::info!(url = %format!("http://{addr}"), data = %paths.root.display(), version = xherd_core::VERSION, "xherd daemon listening");
     xherd_api::serve(d, listener, shutdown_signal()).await?;
