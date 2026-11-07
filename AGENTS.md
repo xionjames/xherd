@@ -38,6 +38,7 @@ M0 (skeleton) and **M1** (one agent end to end) are merged; progress is tracked 
 | `crates/xherd-term` | `Tmux` (exact `=name` targets, optional `-L` socket, `attach_argv`), `ScreenRules`, `pty::PtyBridge` (`portable-pty`: a `tmux attach-session` client in a PTY for browser terminals; output on a channel, `input`, `resize`; drop kills the client, never the session). |
 | `crates/xherd-git` | `Git`: worktrees (`--no-track`), diffs (`diff_proposed`: given files vs HEAD through a temporary index), commit files, bundles, `info/exclude`. |
 | `deploy/docker` | `Dockerfile` (multi-stage: UI, daemon, runtime on Debian trixie with git, tmux, gh, glab, socat, tini, Node + Claude Code, uv, Go, seeds of SDKMAN/nvm/rustup in `/opt/xherd/seed`), `known_hosts` + `known_hosts.sha256` (checked at build). Version pins are `ARG`s at the top of the runtime stage. |
+| `deploy/compose` | `compose.yaml` that builds the image from this repo and runs it (`docker compose up -d --build` with a `.env` holding `XHERD_WORKSPACE`, `XHERD_UID`, `XHERD_GID`; `.env` is gitignored), `.env.example`. No host CLI needed. |
 | `crates/xherd-cli` | Binary `xherd`: `daemon`, `init` (`init.rs`: container entrypoint as root: user with the host's ids, home on the volume, seeds, SSH proxy, SSH/git includes, Claude onboarding flag, `XHERD_LOCAL_PEERS`; then setuid and `exec xherd daemon`), `status`, `new <KEY> [--slug] [--flow] [--repo] [--base] [prompt]` (sends an absolute repo path), `ls`, `install [--runtime] [--pack]`, `pause|resume|cancel|send|approve <agent>`, `changes <agent> <comment>`, `diff <agent>` (diff on stdout, what it covers on stderr; the branch at a ship gate; `--json` for the raw answer), `ls` (with the open gate, else the PR URL), `hook <event>`, `report …`, `docker init|doctor|update` (`docker.rs`: compose + `.env` in `~/.config/xherd` (`XDG_CONFIG_HOME`), engine detection, doctor findings each with a fix, update pauses live agents → `compose pull` (failure: resume, nothing changed; `--no-pull` skips it) / `up -d` → healthz → resume; compose is `docker compose`, else `docker-compose`), `open <agent> [--app]`, `attach`, `shell`, `companion` (`open_in.rs`: apps from `~/.config/xherd/open.json` else editors on `PATH`; Docker mode detected from `.env` + a running `xherd` container → `docker exec -it -u <uid>`; `attach`/`shell` `exec` the client, like `toolchain exec`), `credential get` (`git.rs`: git helper protocol, silent on any failure), `git doctor [host] [--repo]`, `toolchain exec -- <argv>` (`toolchain.rs`: carries out `.xherd/toolchain.json`, installs only when the plan says so, caches complete results in `.xherd/toolchain.resolved.json`, then `exec`s the runtime), and XAP (`stage enter`, `gate open`, `ask`, `tasks sync`, `task start|done|block`, `commit propose|done|drop`, `pr opened`, `handoff written`, `issue add`; global `--json`). `memory propose` and `xherd mcp` are not implemented yet. |
 
 ## Running it
@@ -49,6 +50,14 @@ XHERD_HOME=/tmp/xh cargo run -p xherd-cli -- install  # /xhspec:* commands into 
 ```
 
 No trust step is needed: xherd marks each new worktree trusted in Claude Code's config. Claude Code must be logged in (`claude`, then `/login`, once).
+
+In Docker, everything inside the container (daemon, UI, tmux, Claude Code, toolchains), only the workspace shared:
+
+```sh
+cd deploy/compose
+printf 'XHERD_WORKSPACE=%s/xherd\nXHERD_UID=%s\nXHERD_GID=%s\n' "$HOME" "$(id -u)" "$(id -g)" > .env
+mkdir -p ~/xherd && docker compose up -d --build     # http://127.0.0.1:4740/
+```
 
 The UI (needs Node and pnpm; cargo does not run it):
 

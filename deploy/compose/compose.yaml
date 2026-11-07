@@ -1,0 +1,31 @@
+# Build and run xherd from this repository (design §8.3):
+#
+#   cd deploy/compose
+#   printf 'XHERD_WORKSPACE=%s/xherd\nXHERD_UID=%s\nXHERD_GID=%s\n' "$HOME" "$(id -u)" "$(id -g)" > .env
+#   mkdir -p ~/xherd
+#   docker compose up -d --build        # or: docker-compose up -d --build
+#
+# Then open http://127.0.0.1:4740/. Everything runs in the container; the
+# workspace is mounted at the same path, so your editor opens worktrees
+# directly. `xherd docker init` writes the same file for a published image.
+services:
+  xherd:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: xherd:dev
+    container_name: xherd
+    restart: unless-stopped
+    environment:
+      XHERD_WORKSPACE: ${XHERD_WORKSPACE:?set XHERD_WORKSPACE in .env (absolute path)}
+      XHERD_UID: ${XHERD_UID:?set XHERD_UID in .env (id -u)}
+      XHERD_GID: ${XHERD_GID:?set XHERD_GID in .env (id -g)}
+    # Loopback only: the daemon gives local rights to what arrives here.
+    ports: ["127.0.0.1:${XHERD_PORT:-4740}:4740"]
+    volumes:
+      - ${XHERD_WORKSPACE}:${XHERD_WORKSPACE}
+      - xherd-home:/home/xherd
+      # SSH agent (Docker Desktop, OrbStack): uncomment.
+      # - /run/host-services/ssh-auth.sock:/run/host-ssh-agent.sock
+volumes:
+  xherd-home: {}
