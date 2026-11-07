@@ -495,7 +495,7 @@ No same-path requirement (clients do not read the files). Open-in is resolved pe
 
 ### 10.2 Drained update (Docker)
 
-`xherd docker update` (host): `POST /admin/drain` (live agents asked to hand off, then paused with flag `resumeAfterUpdate`) → wait (timeout, `--force`) → `xherd backup create` → `docker compose pull` → `docker compose up -d` → wait for `/healthz` → `POST /admin/resume-drained`. Native updates replace the binary and restart the daemon only (agents keep running in tmux).
+`xherd docker update` (host; `docker compose`, else the standalone `docker-compose`): until `/admin/drain` exists (M4), live agents are paused and recorded in `~/.config/xherd/drained.json`; a failed pull resumes them and changes nothing; `--no-pull` restarts with a locally built image. Target flow: `POST /admin/drain` (live agents asked to hand off, then paused with flag `resumeAfterUpdate`) → wait (timeout, `--force`) → `xherd backup create` → `docker compose pull` → `docker compose up -d` → wait for `/healthz` → `POST /admin/resume-drained`. Native updates replace the binary and restart the daemon only (agents keep running in tmux).
 
 ### 10.3 Release pipeline
 
@@ -673,7 +673,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 - [ ] **M3 Docker-first**
   - [x] Image with version managers
   - [x] `xherd init` (users, SSH proxy, git config)
-  - [ ] `docker init/doctor/update` (init and doctor checked on Colima; update needs `docker compose`, not run yet)
+  - [x] `docker init/doctor/update`
   - [x] Toolchain resolution
   - [x] Open-in (URL schemes, Dev Containers, companion)
   - [x] Git access setup and doctor

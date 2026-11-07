@@ -187,6 +187,9 @@ enum DockerCmd {
         /// Update even when the daemon does not answer.
         #[arg(long)]
         force: bool,
+        /// Restart with the image already here (a local build) instead of pulling.
+        #[arg(long)]
+        no_pull: bool,
     },
 }
 
@@ -236,7 +239,9 @@ fn main() -> ExitCode {
             force,
         }),
         Cmd::Docker(DockerCmd::Doctor) => docker::doctor(),
-        Cmd::Docker(DockerCmd::Update { force }) => with_client(|c| docker::update(c, force)),
+        Cmd::Docker(DockerCmd::Update { force, no_pull }) => {
+            with_client(|c| docker::update(c, force, !no_pull))
+        }
         Cmd::Status => status(),
         Cmd::Ls => ls(),
         Cmd::Install { runtime, pack } => install(runtime, pack),

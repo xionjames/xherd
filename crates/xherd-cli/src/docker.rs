@@ -169,9 +169,29 @@ async fn cmd(argv: &[&str], timeout: u64) -> Result<String, String> {
     }
 }
 
-/// `docker compose -f <file> --env-file <env> …`.
+/// `docker compose` (the CLI plugin), else the standalone `docker-compose`
+/// (Homebrew and some Linux packages install only that).
+fn compose_bin() -> &'static [&'static str] {
+    static BIN: std::sync::OnceLock<&'static [&'static str]> = std::sync::OnceLock::new();
+    BIN.get_or_init(|| {
+        let plugin = std::process::Command::new("docker")
+            .args(["compose", "version"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if plugin {
+            &["docker", "compose"]
+        } else {
+            &["docker-compose"]
+        }
+    })
+}
+
+/// `<compose> -f <file> --env-file <env> …`.
 fn compose_argv<'a>(file: &'a str, env: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
-    let mut v = vec!["docker", "compose", "-f", file, "--env-file", env];
+    let mut v = compose_bin().to_vec();
+    v.extend(["-f", file, "--env-file", env]);
     v.extend_from_slice(rest);
     v
 }
@@ -274,7 +294,8 @@ pub fn init(a: InitArgs) -> i32 {
     println!("wrote      {}", compose.display());
     println!("           {}", env.display());
     println!(
-        "\nStart it:   docker compose -f {} --env-file {} up -d",
+        "\nStart it:   {} -f {} --env-file {} up -d",
+        compose_bin().join(" "),
         compose.display(),
         env.display()
     );
@@ -359,7 +380,7 @@ async fn doctor_findings() -> Vec<Finding> {
             .map(|(_, v)| v.clone())
             .unwrap_or_default()
     };
-    let up_fix = format!("docker compose -f {cf} --env-file {ef} up -d");
+    let up_fix = compose_argv(&cf, &ef, &["up", "-d"]).join(" ");
     let id = cmd(
         &["docker", "inspect", "-f", "{{.State.Status}}", SERVICE],
         20,
@@ -504,7 +525,7 @@ pub fn doctor() -> i32 {
 
 /// Pause live agents, pull, restart, wait for the daemon, resume them
 /// (design §10.2; backups before updates arrive with backups, M4).
-pub fn update(client: &crate::Client, force: bool) -> i32 {
+pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
     let dir = config_dir();
     let (cf, ef) = (
         dir.join("compose.yaml").to_string_lossy().into_owned(),
@@ -550,7 +571,19 @@ pub fn update(client: &crate::Client, force: bool) -> i32 {
             }
         }
     }
-    let steps: [&[&str]; 2] = [&["pull"], &["up", "-d"]];
+    let resume = |live: &[String]| {
+        for a in live {
+            match client.call("POST", &format!("/agents/{a}/resume"), None) {
+                Ok(_) => println!("resumed {a}"),
+                Err(e) => eprintln!("  {a}: {e}"),
+            }
+        }
+    };
+    let steps: Vec<&[&str]> = if pull {
+        vec![&["pull"], &["up", "-d"]]
+    } else {
+        vec![&["up", "-d"]]
+    };
     for rest in steps {
         let argv = compose_argv(&cf, &ef, rest);
         println!("$ {}", argv.join(" "));
@@ -561,6 +594,16 @@ pub fn update(client: &crate::Client, force: bool) -> i32 {
             .await
             .is_ok_and(|o| o.success())
         });
+        if !ok && rest[0] == "pull" {
+            // Nothing was restarted: the running container keeps going.
+            eprintln!(
+                "xherd docker update: `{}` failed; nothing changed (a locally built image: --no-pull)",
+                argv.join(" ")
+            );
+            resume(&live);
+            let _ = std::fs::remove_file(&drained);
+            return 1;
+        }
         if !ok {
             eprintln!(
                 "xherd docker update: `{}` failed; paused agents are listed in {}",
@@ -585,12 +628,7 @@ pub fn update(client: &crate::Client, force: bool) -> i32 {
         );
         return 1;
     }
-    for a in &live {
-        match client.call("POST", &format!("/agents/{a}/resume"), None) {
-            Ok(_) => println!("resumed {a}"),
-            Err(e) => eprintln!("  {a}: {e}"),
-        }
-    }
+    resume(&live);
     let _ = std::fs::remove_file(&drained);
     0
 }
