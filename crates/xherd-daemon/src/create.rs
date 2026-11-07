@@ -51,7 +51,8 @@ impl Daemon {
         let (label, rt) = self
             .plugins
             .get(rt_name)
-            .ok_or_else(|| format!("runtime plugin {rt_name} is not installed"))
+            .filter(|_| self.plugin_enabled(rt_name))
+            .ok_or_else(|| format!("runtime plugin {rt_name} is not installed or is switched off"))
             .and_then(|p| Ok((p.manifest.label.clone(), Terminal::of(&p.manifest)?)))
             .map_err(|e| refuse("runtime_unusable", e))?;
         let launch = rt

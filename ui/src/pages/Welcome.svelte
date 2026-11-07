@@ -2,23 +2,50 @@
   // First-run wizard: welcome → where it runs → tools → checks → ready.
   import Logo from '../components/Logo.svelte';
   import CheckRow from '../components/CheckRow.svelte';
-  import { app } from '../lib/store.svelte';
-  import { put } from '../lib/api';
+  import { app, reload } from '../lib/store.svelte';
+  import { put, post } from '../lib/api';
   import { route, go } from '../lib/router.svelte';
   import { setup, loadChecks, failingRequired } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
   import GitAccess from '../components/GitAccess.svelte';
-  import type { ConfigView } from '../lib/types';
+  import TermView from '../components/TermView.svelte';
+  import type { ConfigView, PluginInfo } from '../lib/types';
 
   const STEPS = ['Welcome', 'Where it runs', 'Your tools', 'Git access', 'Connect & check', 'Ready'];
   const step = $derived(Math.min(Math.max(Number(route.query.get('step') ?? 1), 1), STEPS.length));
   const to = (n: number) => go('/welcome', { step: String(n) });
   const blocked = $derived(failingRequired().length > 0);
   const workspace = $derived(String(app.state?.config.workspace ?? '') || '~/xherd (default)');
-  const KIND: Record<string, string> = { runtime: 'Coding agents', host: 'Git hosts', tracker: 'Issue trackers' };
+  const KIND: Record<string, string> = { runtime: 'Coding agents', host: 'Git hosts', tracker: 'Issue trackers', toolchain: 'Languages' };
   const kinds = $derived([...new Set((app.state?.plugins ?? []).map((p) => p.kind))]);
 
-  $effect(() => { if (step === 5 && !setup.checks) loadChecks(); });
+  $effect(() => { if ((step === 3 || step === 5) && !setup.checks) loadChecks(); });
+
+  const plugins = $derived(app.state?.plugins ?? []);
+  // The last plugin on in its kind cannot be switched off.
+  const lastOn = (p: PluginInfo) => p.enabled && plugins.filter((q) => q.kind === p.kind && q.enabled).length === 1;
+  const loginCheck = (p: PluginInfo) => setup.checks?.find((c) => c.id === `plugin:${p.name}:login`);
+  // An enabled plugin that needs a login and is not logged in holds the step.
+  const toolsBlocked = $derived(plugins.some((p) => p.enabled && p.login && loginCheck(p) && !loginCheck(p)!.ok));
+  let loggingIn = $state<string | null>(null);
+
+  async function toggle(p: PluginInfo) {
+    const off = plugins.filter((q) => (q.name === p.name ? q.enabled : !q.enabled)).map((q) => q.name);
+    try {
+      await put('/config', { disabledPlugins: off });
+      await reload();
+      await loadChecks();
+    } catch (e) {
+      showError('Could not change the plugin', e);
+    }
+  }
+  async function startLogin(p: PluginInfo) {
+    try { await post(`/plugins/${p.name}/login`); loggingIn = p.name; } catch (e) { showError(`Could not log in to ${p.label || p.name}`, e); }
+  }
+  function loginEnded() {
+    loggingIn = null;
+    loadChecks();
+  }
 
   async function finish(next: string) {
     try {
@@ -66,16 +93,33 @@
       </div></section>
     {:else if step === 3}
       <h1>Your tools</h1>
-      <p class="muted">These plugins are on. More runtimes, trackers and hosts come as plugins.</p>
+      <p class="muted">Switch on what you use; at least one of each kind stays on. A plugin that needs a login is set up here.</p>
       {#each kinds as k (k)}
         <span class="lbl">{KIND[k] ?? k}</span>
         <div class="cards">
-          {#each (app.state?.plugins ?? []).filter((p) => p.kind === k) as p (p.name)}
-            <div class="tool on"><div class="tp"><div><h3>{p.label || p.name}</h3><p class="hint">{p.description}</p></div></div>
-              <div class="tf">{p.builtin ? 'Built in' : 'Installed'} · default</div></div>
+          {#each plugins.filter((p) => p.kind === k) as p (p.name)}
+            {@const lc = p.enabled && p.login ? loginCheck(p) : undefined}
+            <div class="tool" class:on={p.enabled}>
+              <label class="tp"><input type="checkbox" style="width:auto;height:auto;margin-top:4px" checked={p.enabled}
+                  disabled={lastOn(p)} title={lastOn(p) ? 'At least one is needed' : ''} onchange={() => toggle(p)} />
+                <div><h3>{p.label || p.name}</h3><p class="hint">{p.description}</p></div></label>
+              <div class="tf">
+                <span class="grow">{p.builtin ? 'Built in' : 'Installed'}</span>
+                {#if lc}
+                  <span class="ckst {lc.ok ? 'ok' : 'bad'}" aria-label={lc.ok ? 'logged in' : 'not logged in'}>{lc.ok ? '✓' : '✕'}</span>
+                  {lc.ok ? 'Logged in' : 'Not logged in'}
+                  {#if !lc.ok}<button class="btn primary sm" onclick={() => startLogin(p)}>Log in</button>{/if}
+                {/if}
+              </div>
+            </div>
           {/each}
         </div>
       {/each}
+      {#if loggingIn}
+        <TermView path="/ws/setup/plugin-login" title={`Log in to ${plugins.find((p) => p.name === loggingIn)?.label ?? loggingIn}`}
+          height="360px" onclose={loginEnded} hint="Follow the steps; the check runs again when it ends." />
+      {/if}
+      {#if toolsBlocked}<p class="hint">Log in to continue; Settings has the same login later.</p>{/if}
     {:else if step === 4}
       <h1>Git access</h1>
       <p class="muted">How agents fetch and push: your SSH agent, a browser login to GitHub or GitLab, or a token. Check each host before you go on; you can skip this and come back in Settings.</p>
@@ -97,7 +141,7 @@
       <span class="grow"></span>
       {#if step > 1}<button class="btn ghost lg" onclick={() => to(step - 1)}>Back</button>{/if}
       {#if step < STEPS.length}
-        <button class="btn primary lg" onclick={() => to(step + 1)}>Next: {STEPS[step].toLowerCase()}</button>
+        <button class="btn primary lg" disabled={step === 3 && toolsBlocked} onclick={() => to(step + 1)}>Next: {STEPS[step].toLowerCase()}</button>
       {:else if blocked}
         <button class="btn primary lg" onclick={() => finish('/setup')}>Open setup checks</button>
       {:else}

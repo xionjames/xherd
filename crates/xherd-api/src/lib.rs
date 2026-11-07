@@ -52,6 +52,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/git/doctor", post(git_doctor))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
+        .route("/api/v1/plugins/{name}/login", post(plugin_login))
         .route("/api/v1/git/credential", post(git_credential))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
@@ -305,7 +306,8 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
                 .collect();
             json!({"name": p.name(), "kind": p.manifest.kind, "version": p.manifest.version,
                    "label": p.manifest.label, "description": p.manifest.description,
-                   "builtin": p.builtin(), "settings": settings})
+                   "builtin": p.builtin(), "settings": settings,
+                   "enabled": d.plugin_enabled(p.name()), "login": p.manifest.login.is_some()})
         })
         .collect();
     Ok(Json(json!({
@@ -539,6 +541,18 @@ async fn git_login(
 ) -> ApiResult<Json<Value>> {
     d.start_git_login(r.host.trim()).await?;
     Ok(Json(json!({"session": xherd_daemon::git_access::LOGIN_ID})))
+}
+
+/// Start a plugin's login (`/ws/setup/plugin-login` shows it).
+async fn plugin_login(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    d.start_plugin_login(&name).await?;
+    Ok(Json(
+        json!({"session": xherd_daemon::git_access::PLUGIN_LOGIN_ID}),
+    ))
 }
 
 #[derive(Deserialize)]

@@ -1,7 +1,7 @@
 //! `GET/PUT /config` (design §7.1): the settings the UI edits, saved to
 //! `config.json`. The running daemon keeps the config it started with
 //! (actors share it), so a change applies at the next start; `welcomed` is
-//! UI-only and needs no restart.
+//! UI-only and needs no restart, like `disabledPlugins` (read live).
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -23,6 +23,8 @@ pub struct ConfigPatch {
     pub workspace: Option<String>,
     /// Plugin name → its settings object (replaces that plugin's settings).
     pub plugin_settings: Option<Map<String, Value>>,
+    /// Names of the plugins that are off (replaces the list).
+    pub disabled_plugins: Option<Vec<String>>,
     pub welcomed: Option<bool>,
 }
 
@@ -77,6 +79,11 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             c.plugin_settings.insert(name, v);
         }
     }
+    if let Some(mut names) = p.disabled_plugins {
+        names.sort();
+        names.dedup();
+        c.disabled_plugins = names;
+    }
     if let Some(b) = p.welcomed {
         c.welcomed = b;
     }
@@ -108,6 +115,7 @@ impl Daemon {
         let saved = self.saved_config()?;
         let mut a = saved.clone();
         a.welcomed = self.config.welcomed;
+        a.disabled_plugins = self.config.disabled_plugins.clone();
         a.user_token = self.config.user_token.clone();
         Ok(json!({
             "config": shown(&saved),
@@ -116,9 +124,36 @@ impl Daemon {
         }))
     }
 
+    /// Names must exist, and every kind that has plugins keeps one on.
+    fn check_disabled(&self, off: &[String]) -> Result<(), ActionError> {
+        if let Some(n) = off.iter().find(|n| self.plugins.get(n).is_none()) {
+            return Err(bad(format!("no plugin named {n}")));
+        }
+        let kinds: std::collections::BTreeSet<String> = self
+            .plugins
+            .all()
+            .map(|p| format!("{:?}", p.manifest.kind))
+            .collect();
+        for k in kinds {
+            let any_on = self
+                .plugins
+                .all()
+                .filter(|p| format!("{:?}", p.manifest.kind) == k)
+                .any(|p| !off.iter().any(|n| n == p.name()));
+            if !any_on {
+                return Err(bad(format!(
+                    "at least one {} plugin must stay on",
+                    k.to_lowercase()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn save_config(&self, patch: ConfigPatch) -> Result<Value, ActionError> {
         let mut c = self.saved_config()?;
         apply(&mut c, patch)?;
+        self.check_disabled(&c.disabled_plugins)?;
         c.save(&self.paths.config()).map_err(|e| ActionError {
             code: "io",
             message: e.to_string(),

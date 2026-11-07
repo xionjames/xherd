@@ -62,6 +62,9 @@ pub struct Config {
     pub tmux_socket: Option<String>,
     /// Plugin settings by plugin name (non-secret).
     pub plugin_settings: Map<String, Value>,
+    /// Plugins switched off in Welcome/Settings; read live, no restart.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disabled_plugins: Vec<String>,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -88,6 +91,7 @@ impl Default for Config {
             workspace: None,
             tmux_socket: None,
             plugin_settings: Map::new(),
+            disabled_plugins: Vec::new(),
             git_hosts: Vec::new(),
             extra: Map::new(),
         }

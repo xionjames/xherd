@@ -51,6 +51,19 @@
         "claude",
         "--version"
       ]
+    },
+    {
+      "name": "login",
+      "argv": [
+        "claude",
+        "auth",
+        "status"
+      ]
     }
+  ],
+  "login": [
+    "claude",
+    "auth",
+    "login"
   ]
 }

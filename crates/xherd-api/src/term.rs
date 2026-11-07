@@ -58,6 +58,7 @@ pub async fn setup_terminal(
 ) -> Response {
     let session = match id.as_str() {
         xherd_daemon::git_access::LOGIN_ID => xherd_daemon::git_access::LOGIN_SESSION,
+        xherd_daemon::git_access::PLUGIN_LOGIN_ID => xherd_daemon::git_access::PLUGIN_LOGIN_SESSION,
         _ => {
             return ApiError::new(
                 StatusCode::NOT_FOUND,

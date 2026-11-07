@@ -73,6 +73,10 @@ export interface PluginInfo {
   builtin: boolean;
   description?: string;
   settings: PluginSetting[];
+  /** Switched on (read live from the saved config). */
+  enabled: boolean;
+  /** Has an interactive login; its status is the check `plugin:<name>:login`. */
+  login: boolean;
 }
 
 export interface PluginSetting {

@@ -21,6 +21,8 @@ use crate::{ActionError, Daemon};
 /// tmux session of the browser login (`gh` / `glab` device flow).
 pub const LOGIN_SESSION: &str = "xherd-setup-git-login";
 pub const LOGIN_ID: &str = "git-login";
+pub const PLUGIN_LOGIN_SESSION: &str = "xherd-setup-plugin-login";
+pub const PLUGIN_LOGIN_ID: &str = "plugin-login";
 
 fn fail(code: &'static str, message: impl Into<String>) -> ActionError {
     ActionError {
@@ -159,10 +161,19 @@ fn cmd_fix(text: impl Into<String>) -> Option<Fix> {
 }
 
 impl Daemon {
-    fn live_config(&self) -> Config {
+    pub(crate) fn live_config(&self) -> Config {
         Config::load(&self.paths.config())
             .map(|(c, _)| c)
             .unwrap_or_else(|_| (*self.config).clone())
+    }
+
+    /// Plugins can be switched off while xherd runs; the saved config decides.
+    pub fn plugin_enabled(&self, name: &str) -> bool {
+        !self
+            .live_config()
+            .disabled_plugins
+            .iter()
+            .any(|n| n == name)
     }
 
     fn live_secrets(&self) -> Secrets {
@@ -391,6 +402,27 @@ impl Daemon {
         }
         let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
         tmux.new_session(LOGIN_SESSION, &home, &[], &argv)
+            .await
+            .map_err(|e| fail("driver", e.to_string()))
+    }
+
+    /// Run a plugin's `login` argv in a tmux session the UI shows
+    /// (`/ws/setup/plugin-login`).
+    pub async fn start_plugin_login(&self, plugin: &str) -> Result<(), ActionError> {
+        let argv = self
+            .plugins
+            .get(plugin)
+            .ok_or_else(|| fail("no_plugin", format!("no plugin named {plugin}")))?
+            .manifest
+            .login
+            .clone()
+            .ok_or_else(|| fail("not_fixable", format!("{plugin} has no login")))?;
+        let tmux = xherd_term::Tmux::new(self.config.tmux_socket.clone());
+        if tmux.has_session(PLUGIN_LOGIN_SESSION).await {
+            let _ = tmux.kill_session(PLUGIN_LOGIN_SESSION).await;
+        }
+        let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+        tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &[], &argv)
             .await
             .map_err(|e| fail("driver", e.to_string()))
     }
