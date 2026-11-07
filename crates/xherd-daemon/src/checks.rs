@@ -169,7 +169,6 @@ impl Daemon {
         let t = rt.trust.as_ref()?;
         let root = self.config.workspace_root().join("worktrees");
         let res = crate::create::check_trust(t, &p.manifest.label, &rt.launch.join(" "), &root);
-        let d = root.display();
         Some(Check {
             id: TRUST_CHECK.into(),
             group: "runtime",
@@ -177,13 +176,12 @@ impl Daemon {
             required: true,
             ok: res.is_ok(),
             detail: match &res {
-                Ok(()) => d.to_string(),
+                Ok(()) => "trusted".into(),
                 // The CLI refusal spells out the manual steps; here the fix
                 // button does them.
-                Err(e) if e.code == "runtime_untrusted" => format!(
-                    "{} does not trust {d} yet, so every new agent would stop at its trust dialog.",
-                    p.manifest.label
-                ),
+                Err(e) if e.code == "runtime_untrusted" => {
+                    "Not yet: new agents would stop at its trust dialog.".into()
+                }
                 Err(e) => e.message.clone(),
             },
             fix: res.is_err().then(|| {
