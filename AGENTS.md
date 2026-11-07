@@ -41,6 +41,12 @@ XHERD_HOME=/tmp/xh cargo run -p xherd-cli -- status
 XHERD_HOME=/tmp/xh cargo run -p xherd-cli -- install  # /xhspec:* commands into ${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xhspec/
 ```
 
+One-time step before `xherd new` with Claude Code: trust the worktrees folder (`<workspace>/worktrees`; default workspace `~/xherd`), or `new` refuses with `runtime_untrusted`:
+
+```sh
+mkdir -p ~/xherd/worktrees && cd ~/xherd/worktrees && claude   # choose "Yes, I trust this folder", then quit
+```
+
 Data root: `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd`. `config.json` there holds the port (4740), `tmuxSocket` and the generated user token used by the CLI.
 
 ## Build and test
@@ -85,6 +91,7 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 - A fresh session respawns only the `agent` window (`respawn-window -k`); the tmux session, its environment (`XHERD_*`, the agent token) and other windows stay. The new process gets the variables because `new-session -e` puts them in the session environment.
 - Approving a parked agent stores the next command in `agent.next_prompt` and queues it; it is typed at the next `session-start` hook, like a new agent's first command.
 - Worktrees live at `<workspace>/worktrees/<repo dir name>/<agent>`; workspace = `config.workspace`, else `$XHERD_WORKSPACE`, else `~/xherd` (design §8.1). Tests must set `workspace` in `config.json` or they write to the real `~/xherd`.
+- `xherd new` / `POST /agents` require the runtime to trust the worktrees root (`data.terminal.trust` in the runtime plugin; Claude Code: `${CLAUDE_CONFIG_DIR:-~}/.claude.json`, `projects[path].hasTrustDialogAccepted`, an ancestor counts). xherd only reads that file, never writes it. Tests that create agents must point `trust.file` of the built-in `claude-code` manifest at a fixture (see `tests/create.rs` setup), never the real `~/.claude.json`.
 - `.xherd/` is excluded through the repo's shared `.git/info/exclude` (one line covers every worktree).
 - A new agent's first command (the flow's `start`, or the prompt for flow `none`) is stored in `agent.next_prompt` and typed when the runtime's `session-start` hook reports, with the pack's `slashEnters` when it starts with the pack prefix. No hook (e.g. Claude Code still shows its folder-trust dialog: attach with `tmux [-L socket] attach -t =NAME` and accept) = nothing typed yet.
 - The runtime's hook file (`.claude/settings.local.json`) is written at creation, not at each launch: xherd's entries (command ends with `# xherd`) are replaced, the user's kept; invalid JSON refuses creation. Hook commands use the daemon's absolute `xherd` path; the token and agent id come from the session environment.

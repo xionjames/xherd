@@ -21,6 +21,11 @@
           "Notification": "notification",
           "Stop": "stop"
         }
+      },
+      "trust": {
+        "file": "${CLAUDE_CONFIG_DIR:-~}/.claude.json",
+        "projects": "projects",
+        "key": "hasTrustDialogAccepted"
       }
     }
   },

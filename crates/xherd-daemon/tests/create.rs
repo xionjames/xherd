@@ -10,7 +10,7 @@ use xherd_core::{Agent, Status};
 use xherd_daemon::*;
 
 struct T {
-    _home: tempfile::TempDir,
+    home: tempfile::TempDir,
     ws: tempfile::TempDir,
     repo: tempfile::TempDir,
     d: Daemon,
@@ -52,14 +52,23 @@ async fn setup() -> T {
         ..Default::default()
     };
     cfg.save(&paths.config()).unwrap();
-    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    // Never the real Claude Code config: a fixture that trusts the workspace.
+    let trust = home.path().join("claude.json");
+    std::fs::write(&trust, trusting(ws.path())).unwrap();
+    let rt = o
+        .builtin_plugins
+        .iter_mut()
+        .find(|m| m.name == "claude-code")
+        .unwrap();
+    rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
     let d = Daemon::start(paths, o).await.unwrap();
-    T {
-        _home: home,
-        ws,
-        repo,
-        d,
-    }
+    T { home, ws, repo, d }
+}
+
+fn trusting(dir: &Path) -> String {
+    serde_json::json!({"projects": {dir.to_string_lossy(): {"hasTrustDialogAccepted": true}}})
+        .to_string()
 }
 
 fn req(t: &T, key: &str) -> NewAgent {
@@ -231,6 +240,33 @@ async fn starts_claude_code_with_hooks() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!("agent never started");
+}
+
+#[tokio::test]
+async fn refuses_until_the_runtime_trusts_the_worktrees_folder() {
+    let t = setup().await;
+    let trust = t.home.path().join("claude.json");
+    let root = t.ws.path().join("worktrees");
+    std::fs::write(&trust, trusting(&root.join("other"))).unwrap();
+    let e = t.d.new_agent(req(&t, "SC-7")).await.unwrap_err();
+    assert_eq!(e.code, "runtime_untrusted");
+    let d = root.display();
+    assert!(
+        e.message
+            .contains(&format!("mkdir -p \"{d}\" && cd \"{d}\" && claude")),
+        "{}",
+        e.message
+    );
+    assert!(root.is_dir(), "created so the instruction works");
+    assert!(
+        !git(t.repo.path(), &["rev-parse", "--verify", "SC-7"])
+            .status
+            .success()
+    );
+
+    // Trusting the folder itself (as Claude Code stores it) is enough.
+    std::fs::write(&trust, trusting(&root.canonicalize().unwrap())).unwrap();
+    t.d.new_agent(req(&t, "SC-7")).await.unwrap();
 }
 
 #[tokio::test]

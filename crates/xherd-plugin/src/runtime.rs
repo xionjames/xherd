@@ -2,6 +2,7 @@
 //! modes, and the hook file that makes the runtime call `xherd hook <event>`.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -25,6 +26,45 @@ pub struct Terminal {
     pub permission_modes: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub hooks: Option<HookFile>,
+    #[serde(default)]
+    pub trust: Option<Trust>,
+}
+
+/// Where the runtime records the folders the user trusts: a JSON file whose
+/// `projects` map has absolute folder paths as keys and `key: true` once the
+/// user accepted the folder. Trust covers subfolders, so trusting the
+/// worktrees root once covers every agent (design §8.1).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Trust {
+    /// May use `${VAR}`, `${VAR:-default}` and a leading `~/`.
+    pub file: String,
+    pub projects: String,
+    pub key: String,
+}
+
+impl Trust {
+    /// Whether `dir` or one of its ancestors is trusted in `text` (the trust
+    /// file). Paths are compared as given and canonicalised (`/tmp` vs
+    /// `/private/tmp` on macOS).
+    pub fn covers(&self, text: &str, dir: &Path) -> bool {
+        let Ok(root) = serde_json::from_str::<Value>(text) else {
+            return false;
+        };
+        let Some(projects) = root[&self.projects].as_object() else {
+            return false;
+        };
+        let forms = |p: &Path| -> Vec<PathBuf> {
+            let mut v = vec![p.to_path_buf()];
+            v.extend(p.canonicalize().ok());
+            v
+        };
+        let dirs = forms(dir);
+        projects
+            .iter()
+            .filter(|(_, v)| v[&self.key] == Value::Bool(true))
+            .flat_map(|(k, _)| forms(Path::new(k)))
+            .any(|k| k.is_absolute() && dirs.iter().any(|d| d.starts_with(&k)))
+    }
 }
 
 /// A settings file in the worktree whose `hooks` map runs a command per event.
@@ -144,6 +184,29 @@ mod tests {
         let h = t.hooks.unwrap();
         assert_eq!(h.file, ".claude/settings.local.json");
         assert_eq!(h.events["Stop"], "stop");
+    }
+
+    #[test]
+    fn trust_covers_subfolders() {
+        let t = claude().trust.unwrap();
+        assert_eq!(t.file, "${CLAUDE_CONFIG_DIR:-~}/.claude.json");
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("ws");
+        let wt = ws.join("worktrees");
+        std::fs::create_dir_all(&wt).unwrap();
+        let file = |k: &Path, v: bool| {
+            json!({"projects": {k.to_string_lossy(): {"hasTrustDialogAccepted": v}}}).to_string()
+        };
+        assert!(t.covers(&file(&ws, true), &wt));
+        assert!(t.covers(&file(&wt, true), &wt));
+        // Stored canonical, asked as given (or the other way round).
+        assert!(t.covers(&file(&ws.canonicalize().unwrap(), true), &wt));
+        assert!(t.covers(&file(&ws, true), &wt.canonicalize().unwrap()));
+        assert!(!t.covers(&file(&ws, false), &wt));
+        assert!(!t.covers(&file(&wt.join("repo"), true), &wt));
+        assert!(!t.covers(&file(&tmp.path().join("w"), true), &wt));
+        assert!(!t.covers("{oops", &wt));
+        assert!(!t.covers("{}", &wt));
     }
 
     #[test]

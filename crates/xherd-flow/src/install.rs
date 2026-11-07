@@ -107,8 +107,9 @@ pub fn render_file(text: &str, vars: &[(&str, &str)]) -> Result<String, String> 
     Ok(out)
 }
 
-/// `${VAR}`, `${VAR:-default}` and a leading `~/` in an install destination.
-fn expand(path: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
+/// `${VAR}`, `${VAR:-default}` and a leading `~/` in a path (install
+/// destinations, runtime trust files).
+pub fn expand(path: &str, env: &dyn Fn(&str) -> Option<String>) -> Result<String, String> {
     let mut out = String::new();
     let mut rest = path;
     while let Some(i) = rest.find("${") {

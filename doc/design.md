@@ -194,6 +194,11 @@ trait Driver {
 | `terminal` (v1) | `tmux new-session -d -s <name> -c <dir> -e XHERD_*=… <argv>` | `send-keys -l` + Enter (extra Enters per runtime) | runtime hooks, `report`, XAP, screen rules | xterm.js over PTY |
 | `acp` (post-v1) | spawn the runtime's ACP agent with stdio pipes, as the ACP client | `session/prompt` | ACP session updates + XAP | transcript; permission requests as buttons |
 
+Terminal runtime specifics (data in the runtime plugin's `data.terminal`):
+
+- **Hooks**: `hooks.file` (Claude Code: `.claude/settings.local.json`) gets xherd's tagged `xherd hook <event>` entries merged in at creation and is excluded from git.
+- **Folder trust**: a runtime that asks "trust this folder?" before running hooks would stop every new worktree at that dialog, and xherd's first command would never be typed. `trust` names where the runtime records trusted folders (Claude Code: `${CLAUDE_CONFIG_DIR:-~}/.claude.json`, `projects["<abs path>"].hasTrustDialogAccepted`). Trust covers subfolders, so it is a one-time prerequisite on the worktrees root (`<workspace>/worktrees`, §8.1), not a per-agent write: xherd only reads that file (the runtime rewrites it concurrently). `xherd new` creates the worktrees root, then refuses with `runtime_untrusted` and the exact steps (run the runtime once in that folder and accept) until it or an ancestor is trusted. Paths are compared as stored and canonicalised (`/tmp` → `/private/tmp`). Runtimes without `trust` skip the check.
+
 ACP specifics:
 
 - **Survive daemon restarts**: the ACP process is started inside a tmux window through a small relay (`xherd acp-relay`) that connects its stdio to a Unix socket; the daemon reconnects to the socket after a restart. Without the relay, the session is resumed with ACP `session/load` where the adapter supports it (**verify** per adapter), else a fresh session.

@@ -17,10 +17,24 @@ async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
     let dir = tempfile::tempdir().unwrap();
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.scheduler = None;
+    // Never the real Claude Code config: a fixture that trusts the workspace.
+    let trust = dir.path().join("claude.json");
+    let ws = dir.path().join("ws");
+    std::fs::write(
+        &trust,
+        json!({"projects": {ws.to_string_lossy(): {"hasTrustDialogAccepted": true}}}).to_string(),
+    )
+    .unwrap();
+    let rt = o
+        .builtin_plugins
+        .iter_mut()
+        .find(|m| m.name == "claude-code")
+        .unwrap();
+    rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
     let paths = Paths::at(dir.path());
     paths.ensure().unwrap();
     xherd_core::config::Config {
-        workspace: Some(dir.path().join("ws").to_string_lossy().into_owned()),
+        workspace: Some(ws.to_string_lossy().into_owned()),
         ..Default::default()
     }
     .save(&paths.config())

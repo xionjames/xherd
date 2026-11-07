@@ -48,15 +48,19 @@ impl Daemon {
         }
 
         let rt_name = xherd_flow::approve::DEFAULT_RUNTIME;
-        let rt = self
+        let (label, rt) = self
             .plugins
             .get(rt_name)
             .ok_or_else(|| format!("runtime plugin {rt_name} is not installed"))
-            .and_then(|p| Terminal::of(&p.manifest))
+            .and_then(|p| Ok((p.manifest.label.clone(), Terminal::of(&p.manifest)?)))
             .map_err(|e| refuse("runtime_unusable", e))?;
         let launch = rt
             .argv(runtime::DEFAULT_PERMISSION_MODE)
             .map_err(|e| refuse("runtime_unusable", e))?;
+        if let Some(t) = &rt.trust {
+            let root = self.config.workspace_root().join("worktrees");
+            check_trust(t, &label, &rt.launch.join(" "), &root)?;
+        }
 
         let git = Git::new("git");
         let given = Path::new(req.repo.trim());
@@ -152,6 +156,28 @@ impl Daemon {
         debug_assert_eq!(a.status, Status::Queued);
         Ok(a)
     }
+}
+
+/// The runtime must already trust the worktrees root (or an ancestor), or it
+/// would stop every new agent at its trust dialog before any hook runs. The
+/// folder is created first so the instruction given works as written.
+fn check_trust(t: &runtime::Trust, label: &str, cmd: &str, dir: &Path) -> Result<(), ActionError> {
+    std::fs::create_dir_all(dir).map_err(|e| refuse("io", format!("{}: {e}", dir.display())))?;
+    let file = xherd_flow::install::expand(&t.file, &|v| std::env::var(v).ok())
+        .map_err(|e| refuse("runtime_unusable", e))?;
+    let text = std::fs::read_to_string(&file).unwrap_or_default();
+    if t.covers(&text, dir) {
+        return Ok(());
+    }
+    let d = dir.display();
+    Err(refuse(
+        "runtime_untrusted",
+        format!(
+            "{label} does not trust {d} yet, so every new agent would stop at its \
+             trust dialog. Do this once: `mkdir -p \"{d}\" && cd \"{d}\" && {cmd}`, choose \
+             \"Yes, I trust this folder\", quit {label}, then retry (trust is read from {file})."
+        ),
+    ))
 }
 
 /// Given base, else the remote's default branch, else the current branch.
