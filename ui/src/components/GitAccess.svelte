@@ -73,7 +73,10 @@
   }
 
   async function runDoctor(host: string) {
-    const d = (doctor[host] ??= { repo: '', findings: null, running: false });
+    // Read back through the store: `a ??= b` evaluates to the raw `b`, not
+    // the reactive proxy, so changes to it would never show.
+    doctor[host] ??= { repo: '', findings: null, running: false };
+    const d = doctor[host];
     d.running = true;
     try {
       d.findings = (await post<{ findings: GitFinding[] }>('/git/doctor', { host, repo: d.repo.trim() || undefined })).findings;
@@ -165,7 +168,7 @@
 
         <div class="row" style="gap:8px;border-top:1px solid var(--fence-soft);padding-top:12px">
           <input class="mono" style="max-width:420px" placeholder="repository URL to test (optional)"
-            value={d?.repo ?? ''} oninput={(e) => ((doctor[r.host] ??= { repo: '', findings: null, running: false }).repo = e.currentTarget.value)} />
+            value={d?.repo ?? ''} oninput={(e) => { doctor[r.host] ??= { repo: '', findings: null, running: false }; doctor[r.host].repo = e.currentTarget.value; }} />
           <button class="btn" disabled={d?.running || dirty} title={dirty ? 'Save first' : ''} onclick={() => runDoctor(r.host)}>
             {d?.running ? 'Checking…' : 'Check access'}</button>
         </div>
