@@ -25,6 +25,9 @@ pub struct ConfigPatch {
     pub plugin_settings: Option<Map<String, Value>>,
     /// Names of the plugins that are off (replaces the list).
     pub disabled_plugins: Option<Vec<String>>,
+    /// Empty string = none.
+    pub git_user_name: Option<String>,
+    pub git_user_email: Option<String>,
     pub welcomed: Option<bool>,
 }
 
@@ -84,6 +87,21 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
         names.dedup();
         c.disabled_plugins = names;
     }
+    for (field, value, what) in [
+        (&mut c.git_user_name, p.git_user_name, "gitUserName"),
+        (&mut c.git_user_email, p.git_user_email, "gitUserEmail"),
+    ] {
+        if let Some(v) = value {
+            let v = v.trim();
+            if v.chars().any(char::is_control) || v.len() > 200 {
+                return Err(bad(format!("{what} must be one short line")));
+            }
+            if what == "gitUserEmail" && !v.is_empty() && !v.contains('@') {
+                return Err(bad("gitUserEmail must be an email address"));
+            }
+            *field = (!v.is_empty()).then(|| v.to_string());
+        }
+    }
     if let Some(b) = p.welcomed {
         c.welcomed = b;
     }
@@ -116,6 +134,8 @@ impl Daemon {
         let mut a = saved.clone();
         a.welcomed = self.config.welcomed;
         a.disabled_plugins = self.config.disabled_plugins.clone();
+        a.git_user_name = self.config.git_user_name.clone();
+        a.git_user_email = self.config.git_user_email.clone();
         a.user_token = self.config.user_token.clone();
         Ok(json!({
             "config": shown(&saved),
@@ -158,6 +178,10 @@ impl Daemon {
             code: "io",
             message: e.to_string(),
         })?;
+        // The commit identity goes into the managed git config at once.
+        if let Err(e) = self.write_gitconfig() {
+            tracing::warn!(error = %e.message, "managed git config not written");
+        }
         self.config_view()
     }
 }

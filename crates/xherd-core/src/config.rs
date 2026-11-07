@@ -65,6 +65,12 @@ pub struct Config {
     /// Plugins switched off in Welcome/Settings; read live, no restart.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled_plugins: Vec<String>,
+    /// Commit identity for the managed git config (agents commit as this
+    /// user). Both are needed; saved live, no restart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_user_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_user_email: Option<String>,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -92,6 +98,8 @@ impl Default for Config {
             tmux_socket: None,
             plugin_settings: Map::new(),
             disabled_plugins: Vec::new(),
+            git_user_name: None,
+            git_user_email: None,
             git_hosts: Vec::new(),
             extra: Map::new(),
         }

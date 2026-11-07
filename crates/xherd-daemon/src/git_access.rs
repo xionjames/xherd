@@ -37,12 +37,25 @@ fn quote(s: &str) -> String {
 
 /// The managed git config (`~/.config/xherd/gitconfig`, included from
 /// `~/.gitconfig` in the container). Pure, so it is tested directly.
-pub fn managed_gitconfig(hosts: &[GitHost], xherd_bin: &str, sandbox: bool) -> String {
+pub fn managed_gitconfig(
+    hosts: &[GitHost],
+    xherd_bin: &str,
+    sandbox: bool,
+    identity: Option<(&str, &str)>,
+) -> String {
     let mut out =
         String::from("# Managed by xherd (Settings → Git access); rewritten on every change.\n");
     if sandbox {
         // One user owns every file in the container (design §8.4).
         out.push_str("[safe]\n\tdirectory = *\n");
+    }
+    if let Some((name, email)) = identity {
+        let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+        out.push_str(&format!(
+            "[user]\n\tname = \"{}\"\n\temail = \"{}\"\n",
+            q(name),
+            q(email)
+        ));
     }
     for h in hosts {
         let helper = match h.credential {
@@ -196,7 +209,12 @@ impl Daemon {
         let Some(p) = self.gitconfig_path() else {
             return Ok(());
         };
-        let text = managed_gitconfig(&self.live_config().git_hosts, &self.xherd_bin, self.sandbox);
+        let c = self.live_config();
+        let identity = match (&c.git_user_name, &c.git_user_email) {
+            (Some(n), Some(e)) => Some((n.as_str(), e.as_str())),
+            _ => None,
+        };
+        let text = managed_gitconfig(&c.git_hosts, &self.xherd_bin, self.sandbox, identity);
         write_atomic(&p, text.as_bytes(), Some(0o644))
             .map_err(|e| fail("io", format!("{}: {e}", p.display())))
     }
@@ -780,6 +798,10 @@ mod tests {
             &[host("github.com", Credential::Gh), gl, bb],
             "/usr/local/bin/xherd",
             true,
+            Some(("Ada \"A\" L", "ada@example.com")),
+        );
+        assert!(
+            t.contains("[user]\n\tname = \"Ada \\\"A\\\" L\"\n\temail = \"ada@example.com\"\n")
         );
         assert!(t.contains("[safe]\n\tdirectory = *\n"));
         assert!(t.contains(
@@ -794,7 +816,8 @@ mod tests {
         ));
         assert!(t.contains("[url \"git@bitbucket.org:\"]\n\tinsteadOf = https://bitbucket.org/\n"));
         assert!(!t.contains("[credential \"https://bitbucket.org\"]"));
-        assert!(!managed_gitconfig(&[], "x", false).contains("[safe]"));
+        assert!(!managed_gitconfig(&[], "x", false, None).contains("[safe]"));
+        assert!(!managed_gitconfig(&[], "x", false, None).contains("[user]"));
     }
 
     #[test]
