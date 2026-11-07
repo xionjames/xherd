@@ -148,7 +148,17 @@ fn write_as(p: &Path, text: &str, w: &Who) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", p.display());
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(err)?;
-        chown(dir, Some(w.uid), Some(w.gid)).map_err(err)?;
+        // create_dir_all makes missing parents (e.g. `~/.config`) as root, and
+        // then gh cannot save its login there: give every directory between
+        // the home and the file to the user, also on existing volumes.
+        for d in dir
+            .ancestors()
+            .take_while(|d| d.starts_with(HOME) && *d != Path::new(HOME))
+        {
+            if !owned_by(d, w.uid) {
+                chown(d, Some(w.uid), Some(w.gid)).map_err(err)?;
+            }
+        }
     }
     write_atomic(p, text.as_bytes(), Some(0o644)).map_err(err)?;
     chown(p, Some(w.uid), Some(w.gid)).map_err(err)
