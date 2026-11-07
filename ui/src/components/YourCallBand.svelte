@@ -87,6 +87,9 @@
       {#if answering && question}<p class="gwhy">“{question}”</p>{/if}
     </div>
     <div class="gact">
+      {#if agent.status === 'blocked'}
+        <a class="btn gate lg" href={href(`/agent/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
+      {/if}
       {#if approvable}
         <textarea bind:value={text} placeholder="Or tell the agent what to change…" aria-label="What to change"></textarea>
         <button class="btn lg" disabled={busy || !text.trim()}
