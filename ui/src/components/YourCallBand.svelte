@@ -14,6 +14,8 @@
   let { agent, flow, tabId }: { agent: Agent; flow?: FlowInfo; tabId?: string } = $props();
   let text = $state('');
   let busy = $state(false);
+  // The band stays one line high; long text opens on demand.
+  let open = $state(false);
 
   const g = $derived(agent.gate);
   const fresh = $derived(app.state?.config.freshSessions !== false);
@@ -90,11 +92,12 @@
 <section class="gband" aria-label="Your call">
   <div class="gtop">
     <div class="ghand" aria-hidden="true"><Icon name="hand" size={20} /></div>
-    <div class="gtitle">
+    <div class="gtitle" class:open class:more={true}>
       <h2>Your call — {title}</h2>
       <p class="muted">{line}</p>
       {#if held}<p class="gwhy">Held: {held}</p>{/if}
       {#if answering && question}<p class="gwhy">“{question}”</p>{/if}
+      <button class="gtoggle" aria-expanded={open} onclick={() => (open = !open)}>{open ? 'Show less' : 'Show more'}</button>
     </div>
     <div class="gact">
       {#if agent.status === 'blocked'}

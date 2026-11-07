@@ -124,20 +124,24 @@
     </div>
   </div>
   <Stepper {agent} {flow} />
-  <nav class="tabs" aria-label="Agent">
+</header>
+
+<div class="aview">
+  <nav class="vnav" aria-label="Agent">
     {#each tabs as t (t.id)}
       {@const b = badge(t.id)}
-      <a class="tb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
+      <a class="vtb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
         href={href(`/agent/${agent.name}`, { s: t.id })}>
         <Icon name={t.icon} />{t.label}{#if b}<span class="tc {b.tone}">{b.n}</span>{/if}
       </a>
     {/each}
   </nav>
-</header>
-
-{#if Panel}
-  {#key agent.id}<Panel {agent} />{/key}
-{/if}
+  <div class="apanel">
+    {#if Panel}
+      {#key agent.id}<Panel {agent} />{/key}
+    {/if}
+  </div>
+</div>
 
 {#if confirmCancel}
   <Dialog title="Cancel {agent.name}?" onclose={() => (confirmCancel = false)}>
