@@ -218,23 +218,23 @@ mod tests {
         let n = |g: &Gate, f: &F, auto| next_command(&p, &a, g, f, auto).unwrap();
         assert_eq!(
             n(&docs("spec"), &F(false), false),
-            Some(("/xhspec:design".into(), 1))
+            Some(("/xhspec:design".into(), 2))
         );
         assert_eq!(
             n(&docs("spec"), &F(true), false),
-            Some(("/xhspec:tasks".into(), 1))
+            Some(("/xhspec:tasks".into(), 2))
         );
         assert_eq!(
             n(&docs("tasks"), &F(false), false),
-            Some(("/xhspec:next".into(), 1))
+            Some(("/xhspec:next".into(), 2))
         );
         assert_eq!(
             n(&commit(), &F(false), false),
-            Some(("/xhspec:commit C02".into(), 1))
+            Some(("/xhspec:commit C02".into(), 2))
         );
         assert_eq!(
             n(&docs("ship"), &F(false), true),
-            Some(("/xhspec:ship --no-ticket-update".into(), 1))
+            Some(("/xhspec:ship --no-ticket-update".into(), 2))
         );
         assert_eq!(
             n(&Gate::Question { text: "?".into() }, &F(false), false),
@@ -244,7 +244,7 @@ mod tests {
         if let Gate::Docs { next, .. } = &mut g {
             *next = Some("/sdd-task".into());
         }
-        assert_eq!(n(&g, &F(false), false), Some(("/sdd-task".into(), 1)));
+        assert_eq!(n(&g, &F(false), false), Some(("/sdd-task".into(), 2)));
     }
 
     #[test]

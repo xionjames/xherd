@@ -132,7 +132,7 @@ async fn first_prompt_is_typed_once_the_session_is_ready() {
 
     let start = rep(&a, "s1", ReportEvent::SessionStart, 1, Value::Null);
     assert_eq!(t.d.report(start).await, Some(ReportResult::Applied));
-    let typed = r#"send SC-1 "/xhspec:feature SC-1 add login" 1"#.to_string();
+    let typed = r#"send SC-1 "/xhspec:feature SC-1 add login" 2"#.to_string();
     assert_eq!(t.drv.calls().last(), Some(&typed));
     let now = t.d.action("SC-1", UserAction::Get).await.unwrap();
     assert_eq!(now.next_prompt, None);

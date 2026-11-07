@@ -400,7 +400,7 @@ async fn approve_docs_gate_hands_on_next_command() {
     .await
     .unwrap();
     assert_eq!((a.status, a.gate.is_none()), (Status::Running, true));
-    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
+    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 2"]);
 
     let sha = content_sha256(&std::fs::read(&spec).unwrap());
     let ledger =
@@ -607,7 +607,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
 
     // The new session is ready: the command is typed once.
     session_start(&t, 3).await;
-    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
+    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 2"]);
     let a = get(&t).await;
     assert_eq!((a.next_prompt, a.session.as_deref()), (None, Some("s-3")));
     session_start(&t, 4).await;
@@ -697,7 +697,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     // Approval hands on the ship command, which pushes and opens the PR.
     act(&t, UserAction::Approve { reason: None }).await.unwrap();
     session_start(&t, 2).await;
-    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:ship\" 1"]);
+    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:ship\" 2"]);
     let url = "https://github.com/acme/app/pull/42";
     xap(&t, "c2", "pr.opened", json!({"url": url}))
         .await

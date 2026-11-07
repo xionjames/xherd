@@ -249,6 +249,7 @@ inputs: {}                       # JSON Schema for New agent fields (none for xh
 install:
   claude-code:
     prefix: "/xhspec:"
+    slashEnters: 2                # the first Enter only picks the command from the completion menu
     commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xhspec/{name}.md", format: command }
     agents:   { from: agents/*.md,   to: "${CLAUDE_CONFIG_DIR:-~/.claude}/agents/{name}.md",          format: claude-agent }
     args: "$ARGUMENTS"
