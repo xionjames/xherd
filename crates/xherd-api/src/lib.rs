@@ -201,9 +201,16 @@ impl FromRequestParts<Daemon> for User {
                 .find_token(&hash_token(t))
                 .await
                 .map_err(ApiError::internal)?;
-            if let Some(row) = row.filter(|r| r.kind == TOKEN_USER && !r.revoked) {
-                let _ = d.store.touch_token(&row.id, d.clock.now()).await;
-                return Ok(User);
+            match row {
+                Some(row) if row.kind == TOKEN_USER && !row.revoked => {
+                    let _ = d.store.touch_token(&row.id, d.clock.now()).await;
+                    return Ok(User);
+                }
+                // A token this daemon never issued (e.g. the host CLI's token
+                // of a native install talking to the container) adds nothing
+                // to a local request, which needs none.
+                None if is_local(parts, d).await => return Ok(User),
+                _ => {}
             }
             return Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,

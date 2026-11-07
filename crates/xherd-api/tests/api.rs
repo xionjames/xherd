@@ -118,6 +118,27 @@ async fn auth_rules() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(call(remote, req).await.0, StatusCode::UNAUTHORIZED);
+    // Locally an unknown token (another install's) changes nothing; an
+    // agent's token never becomes the user's.
+    let req = get("/api/v1/agents")
+        .header("authorization", "Bearer xh_other_install")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local.clone(), req).await.0, StatusCode::OK);
+    let agent_t = xherd_daemon::support::mint_token(
+        &d.store,
+        xherd_daemon::support::TOKEN_AGENT,
+        Some("x"),
+        &["hooks"],
+        1,
+    )
+    .await
+    .unwrap();
+    let req = get("/api/v1/agents")
+        .header("authorization", format!("Bearer {agent_t}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local.clone(), req).await.0, StatusCode::UNAUTHORIZED);
 
     // In the container, the gateway the published port arrives from is local.
     let mut d2 = d.clone();

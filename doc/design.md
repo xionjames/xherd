@@ -669,9 +669,9 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Terminal
   - [x] Diffs
 - [ ] **M3 Docker-first**
-  - [ ] Image with version managers
-  - [ ] `xherd init` (users, SSH proxy, git config)
-  - [ ] `docker init/doctor/update`
+  - [x] Image with version managers
+  - [x] `xherd init` (users, SSH proxy, git config)
+  - [ ] `docker init/doctor/update` (init and doctor checked on Colima; update needs `docker compose`, not run yet)
   - [x] Toolchain resolution
   - [x] Open-in (URL schemes, Dev Containers, companion)
   - [x] Git access setup and doctor

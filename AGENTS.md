@@ -125,6 +125,7 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 - Agent tokens carry `hooks`, `xap` and `credential` scopes; `POST /git/credential` takes the local user or such a token.
 - `Tmux::send_text` pauses 300 ms before each Enter: typed text and Enter sent back to back are taken as one paste by Claude Code and the Enter is dropped (the delivery retry then rescues it 10 s later).
 - Supervisor messages carry `oneshot` replies straight to the caller; the supervisor never awaits an actor.
+- A bearer token this daemon never issued, on an otherwise local request, is ignored (the host CLI of a native install sends its own token to the container); agent and revoked tokens are still refused.
 - Local browsers get full rights by address (loopback peer, local Host, no proxy headers) **and** a local or absent `Origin`: a request carrying another site's `Origin` is refused (no cross-site requests or websockets).
 - Debug builds serve `ui/dist` from disk (rebuild the UI, reload the page); release builds embed it at compile time, so build the UI before `cargo build --release`.
 - UI panels key effects on `const id = $derived(agent.id)`, never `agent.id` directly: the agent object is replaced on every websocket update, and reading it in an effect would reconnect terminals and refetch on each change.
