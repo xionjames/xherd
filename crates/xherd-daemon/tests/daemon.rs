@@ -134,13 +134,23 @@ async fn first_prompt_is_typed_once_the_session_is_ready() {
     assert_eq!(t.d.report(start).await, Some(ReportResult::Applied));
     let typed = r#"send SC-1 "/xhspec:feature SC-1 add login" 1"#.to_string();
     assert_eq!(t.drv.calls().last(), Some(&typed));
+    // Not acknowledged yet: Claude Code may start a second session and lose
+    // the typed text, so the command is typed again at the next start.
     let now = t.d.action("SC-1", UserAction::Get).await.unwrap();
-    assert_eq!(now.next_prompt, None);
-
-    // A later session start (e.g. after /clear) types nothing again.
+    assert!(now.next_prompt.is_some());
     let again = rep(&a, "s2", ReportEvent::SessionStart, 2, Value::Null);
     t.d.report(again).await;
-    assert_eq!(t.drv.calls().iter().filter(|c| **c == typed).count(), 1);
+    assert_eq!(t.drv.calls().iter().filter(|c| **c == typed).count(), 2);
+
+    // Once a prompt is submitted the command is done; a later session start
+    // (e.g. after /clear) types nothing.
+    let submit = rep(&a, "p1", ReportEvent::UserPromptSubmit, 3, Value::Null);
+    t.d.report(submit).await;
+    let now = t.d.action("SC-1", UserAction::Get).await.unwrap();
+    assert_eq!(now.next_prompt, None);
+    let clear = rep(&a, "s3", ReportEvent::SessionStart, 4, Value::Null);
+    t.d.report(clear).await;
+    assert_eq!(t.drv.calls().iter().filter(|c| **c == typed).count(), 2);
 }
 
 #[tokio::test]

@@ -714,9 +714,26 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
     session_start(&t, 3).await;
     assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
     let a = get(&t).await;
-    assert_eq!((a.next_prompt, a.session.as_deref()), (None, Some("s-3")));
+    // Kept until a prompt is accepted: a session start that loses the typed
+    // text types it again.
+    assert_eq!(
+        (a.next_prompt.as_deref(), a.session.as_deref()),
+        (Some("/xhspec:design"), Some("s-3"))
+    );
     session_start(&t, 4).await;
-    assert_eq!(sends(&t).len(), 1);
+    assert_eq!(sends(&t).len(), 2);
+    let submit = Report {
+        id: "submit-5".into(),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::UserPromptSubmit,
+        payload: json!({"prompt": "/xhspec:design"}),
+        seq: 5,
+        at: 0,
+    };
+    t.d.report(submit).await;
+    assert_eq!(get(&t).await.next_prompt, None);
+    session_start(&t, 6).await;
+    assert_eq!(sends(&t).len(), 2);
 }
 
 #[tokio::test]

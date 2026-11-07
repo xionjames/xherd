@@ -173,6 +173,7 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         tx: tx.clone(),
         delivery: None,
         next_delivery: 0,
+        first_unacked: false,
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -186,6 +187,11 @@ struct Actor {
     /// Delivery waiting for acknowledgement: (id, retried).
     delivery: Option<(u64, bool)>,
     next_delivery: u64,
+    /// The first command was typed but no prompt was accepted yet. Claude Code
+    /// can start a second session right after the first `session-start` and
+    /// lose typed input, so the command stays in `next_prompt` and is typed
+    /// again at the next `session-start` until a prompt is submitted.
+    first_unacked: bool,
 }
 
 impl Actor {
@@ -361,7 +367,14 @@ impl Actor {
                     self.log(None, "notify", Some(json!({"text": text}))).await;
                     self.notify(text);
                 }
-                Effect::DeliveryAck => self.delivery = None,
+                Effect::DeliveryAck => {
+                    self.delivery = None;
+                    if self.first_unacked {
+                        self.first_unacked = false;
+                        self.agent.next_prompt = None;
+                        self.commit(self.agent.status).await;
+                    }
+                }
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
                 // Token usage, auto-approval, parking: later milestones.
                 Effect::AfterStop => self.after_ship().await,
@@ -438,8 +451,9 @@ impl Actor {
 
     /// The session is ready: type the command it was started for (the flow's
     /// start command, or the next command after approving a parked agent;
-    /// R-005d, R-028). It is cleared once typed, so later session starts
-    /// (`/clear`, resume) do not repeat it.
+    /// R-005d, R-028). It is cleared once Claude accepts a prompt (the
+    /// `user-prompt-submit` ack), so later session starts (`/clear`, resume)
+    /// do not repeat it, while a start that loses the typed text does.
     async fn send_first_prompt(&mut self) {
         let Some(cmd) = self.agent.next_prompt.clone() else {
             return;
@@ -460,7 +474,7 @@ impl Actor {
         let before = self.agent.status;
         match self.send(&cmd, enters).await {
             Ok(()) => {
-                self.agent.next_prompt = None;
+                self.first_unacked = true;
                 self.log(None, "first-prompt", Some(json!({"text": cmd})))
                     .await;
                 self.commit(before).await;
