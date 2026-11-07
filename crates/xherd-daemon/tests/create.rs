@@ -285,31 +285,55 @@ async fn version_files_wrap_the_launch_in_the_toolchain_step() {
     panic!("agent never started");
 }
 
+/// Each new worktree is marked trusted in the runtime's file, other entries
+/// kept, so no agent stops at the trust dialog (design §4.1).
 #[tokio::test]
-async fn refuses_until_the_runtime_trusts_the_worktrees_folder() {
+async fn trusts_each_new_worktree_in_the_runtime_file() {
     let t = setup().await;
     let trust = t.home.path().join("claude.json");
-    let root = t.ws.path().join("worktrees");
-    std::fs::write(&trust, trusting(&root.join("other"))).unwrap();
-    let e = t.d.new_agent(req(&t, "SC-7")).await.unwrap_err();
-    assert_eq!(e.code, "runtime_untrusted");
-    let d = root.display();
-    assert!(
-        e.message
-            .contains(&format!("mkdir -p \"{d}\" && cd \"{d}\" && claude")),
-        "{}",
-        e.message
-    );
-    assert!(root.is_dir(), "created so the instruction works");
-    assert!(
-        !git(t.repo.path(), &["rev-parse", "--verify", "SC-7"])
-            .status
-            .success()
-    );
+    std::fs::write(
+        &trust,
+        r#"{"userID": "u", "projects": {"/elsewhere": {"x": 1}}}"#,
+    )
+    .unwrap();
+    let a = t.d.new_agent(req(&t, "SC-8")).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&trust).unwrap()).unwrap();
+    assert_eq!(v["userID"], "u");
+    assert_eq!(v["projects"]["/elsewhere"]["x"], 1);
+    let wd = a.workdir.unwrap();
+    assert_eq!(v["projects"][&wd]["hasTrustDialogAccepted"], true);
+    // The worktree as stored and canonicalised (`/var` → `/private/var`), nothing else.
+    assert!(v["projects"].as_object().unwrap().len() <= 3);
 
-    // Trusting the folder itself (as Claude Code stores it) is enough.
-    std::fs::write(&trust, trusting(&root.canonicalize().unwrap())).unwrap();
-    t.d.new_agent(req(&t, "SC-7")).await.unwrap();
+    // A trust file that is not JSON is never overwritten: creation refuses.
+    std::fs::write(&trust, "{oops").unwrap();
+    let e = t.d.new_agent(req(&t, "SC-9")).await.unwrap_err();
+    assert_eq!(e.code, "runtime_trust");
+    assert_eq!(std::fs::read_to_string(&trust).unwrap(), "{oops");
+    assert!(
+        !git(t.repo.path(), &["rev-parse", "--verify", "SC-9"])
+            .status
+            .success(),
+        "nothing left behind"
+    );
+}
+
+#[test]
+fn trust_is_written_only_under_the_worktrees_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = TrustWriter {
+        trust: serde_json::from_value(serde_json::json!({
+            "file": tmp.path().join("t.json").to_string_lossy(),
+            "projects": "projects", "key": "ok"
+        }))
+        .unwrap(),
+        root: tmp.path().join("worktrees"),
+    };
+    assert!(w.ensure(tmp.path()).is_err());
+    assert!(w.ensure(&tmp.path().join("worktrees")).is_err());
+    assert!(w.ensure(&tmp.path().join("worktrees/r/SC-1")).is_ok());
+    let text = std::fs::read_to_string(tmp.path().join("t.json")).unwrap();
+    assert!(text.contains("worktrees/r/SC-1"), "{text}");
 }
 
 #[tokio::test]

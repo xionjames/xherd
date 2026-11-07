@@ -5,7 +5,7 @@
   import TermView from './TermView.svelte';
   let { check, first = false }: { check: Check; first?: boolean } = $props();
   const st = $derived(check.ok ? 'ok' : check.required ? 'bad' : 'opt');
-  // A session fix (the runtime's trust dialog) runs in a terminal here.
+  // A session fix runs in a terminal here.
   let session = $state(false);
 
   async function fix() {

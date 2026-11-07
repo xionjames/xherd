@@ -7,7 +7,6 @@ use std::time::Duration;
 use serde::Serialize;
 use xherd_core::exec::{Cmd, run};
 use xherd_plugin::Kind;
-use xherd_plugin::runtime::Terminal;
 
 use crate::{ActionError, Daemon};
 
@@ -39,9 +38,6 @@ pub struct Check {
 /// Lowest tmux supported (exact `=name` targets, `respawn-window -k` flags).
 const TMUX_MIN: (u32, u32) = (3, 3);
 pub const PACK_CHECK: &str = "pack";
-pub const TRUST_CHECK: &str = "trust";
-/// tmux session of the trust fix. Lowercase, so never an agent name.
-pub const TRUST_SESSION: &str = "xherd-setup-trust";
 
 /// `tmux 3.5a`, `tmux next-3.6` → (3, 5).
 pub fn tmux_version(out: &str) -> Option<(u32, u32)> {
@@ -154,9 +150,6 @@ impl Daemon {
         plugin_checks.sort_by(|a, b| a.id.cmp(&b.id));
         out.extend(plugin_checks);
 
-        if let Some(c) = self.trust_check() {
-            out.push(c);
-        }
         if self.sandbox {
             // Stated, never silent (design §8.4): the two-user split is not done yet.
             out.push(Check {
@@ -174,39 +167,6 @@ impl Daemon {
         }
         out.push(self.pack_check(env).await);
         out
-    }
-
-    /// The default runtime trusts the worktrees folder (else every agent stops
-    /// at the runtime's trust dialog).
-    fn trust_check(&self) -> Option<Check> {
-        let p = self.plugins.get(xherd_flow::approve::DEFAULT_RUNTIME)?;
-        let rt = Terminal::of(&p.manifest).ok()?;
-        let t = rt.trust.as_ref()?;
-        let root = self.config.workspace_root().join("worktrees");
-        let res = crate::create::check_trust(t, &p.manifest.label, &rt.launch.join(" "), &root);
-        Some(Check {
-            id: TRUST_CHECK.into(),
-            group: "runtime",
-            label: format!("{} trusts the worktrees folder", p.manifest.label),
-            required: true,
-            ok: res.is_ok(),
-            detail: match &res {
-                Ok(()) => "trusted".into(),
-                // The CLI refusal spells out the manual steps; here the fix
-                // button does them.
-                Err(e) if e.code == "runtime_untrusted" => {
-                    "Not yet: new agents would stop at its trust dialog.".into()
-                }
-                Err(e) => e.message.clone(),
-            },
-            fix: res.is_err().then(|| {
-                let label = &p.manifest.label;
-                Fix::Session {
-                    label: "Trust the worktrees folder".into(),
-                    explain: format!("Opens {label} here: accept the trust dialog, then quit."),
-                }
-            }),
-        })
     }
 
     /// The xhSpec commands are where the default runtime finds them.
@@ -236,7 +196,7 @@ impl Daemon {
         }
     }
 
-    /// `POST /checks/:id/fix`: install the pack, or start the trust session.
+    /// `POST /checks/:id/fix`: install the pack.
     pub async fn fix_check(
         &self,
         id: &str,
@@ -247,34 +207,11 @@ impl Daemon {
                 .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, env)
                 .await
                 .map(|_| ()),
-            TRUST_CHECK => self.start_trust_session().await,
             _ => Err(ActionError {
                 code: "not_fixable",
                 message: format!("check {id} has no automatic fix"),
             }),
         }
-    }
-
-    /// Start the default runtime in the worktrees folder, in its own tmux
-    /// session, so the user accepts its trust dialog from the browser (no
-    /// shell on the host or container needed). Reuses a running one.
-    async fn start_trust_session(&self) -> Result<(), ActionError> {
-        let fail = |code: &'static str, message: String| ActionError { code, message };
-        let p = self
-            .plugins
-            .get(xherd_flow::approve::DEFAULT_RUNTIME)
-            .ok_or_else(|| fail("runtime_unusable", "no default runtime plugin".into()))?;
-        let rt = Terminal::of(&p.manifest).map_err(|e| fail("runtime_unusable", e))?;
-        let root = self.config.workspace_root().join("worktrees");
-        std::fs::create_dir_all(&root)
-            .map_err(|e| fail("io", format!("{}: {e}", root.display())))?;
-        let tmux = xherd_term::Tmux::new(self.config.tmux_socket.clone());
-        if tmux.has_session(TRUST_SESSION).await {
-            return Ok(());
-        }
-        tmux.new_session(TRUST_SESSION, &root, &[], &rt.launch)
-            .await
-            .map_err(|e| fail("driver", e.to_string()))
     }
 }
 

@@ -158,6 +158,9 @@ pub struct Env {
     pub host: Option<Arc<xherd_plugin::host::Host>>,
     /// Toolchain plugins in registry order (R-652).
     pub toolchains: Arc<Vec<(String, xherd_plugin::toolchain::Toolchain)>>,
+    /// Marks the worktree trusted in the runtime's file before each session
+    /// (the runtime rewrites that file itself, and may drop the entry).
+    pub trust: Option<Arc<crate::TrustWriter>>,
 }
 
 pub type AgentTx = mpsc::UnboundedSender<Msg>;
@@ -798,6 +801,11 @@ impl Actor {
         let Some(wd) = self.agent.workdir.as_deref().map(Path::new) else {
             return launch;
         };
+        if let Some(t) = &self.env.trust
+            && let Err(e) = t.ensure(wd)
+        {
+            tracing::warn!(agent = %self.agent.name, error = %e, "runtime trust not written");
+        }
         let p = plan(
             wd,
             &self.env.toolchains,

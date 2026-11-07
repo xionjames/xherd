@@ -1,6 +1,6 @@
 //! `GET /ws/term/:id?cols=&rows=`: the agent's tmux session in the browser
 //! (spec §17.2). `GET /ws/setup/:id`: the session a setup fix started (the
-//! runtime's trust dialog, a git host login), so setup needs no shell on the host. Binary frames carry terminal bytes both ways; a text frame
+//! git host login), so setup needs no shell on the host. Binary frames carry terminal bytes both ways; a text frame
 //! `{"type":"resize","cols":…,"rows":…}` resizes. Closing the socket detaches
 //! the tmux client; the session keeps running.
 
@@ -57,7 +57,6 @@ pub async fn setup_terminal(
     ws: WebSocketUpgrade,
 ) -> Response {
     let session = match id.as_str() {
-        xherd_daemon::checks::TRUST_CHECK => xherd_daemon::checks::TRUST_SESSION,
         xherd_daemon::git_access::LOGIN_ID => xherd_daemon::git_access::LOGIN_SESSION,
         _ => {
             return ApiError::new(

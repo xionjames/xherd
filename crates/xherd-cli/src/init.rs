@@ -53,7 +53,7 @@ pub fn gitconfig_with_include(text: &str, managed: &str) -> String {
 }
 
 /// Claude Code's first-run screens marked done (design §8.4 step 6). Only
-/// that key is touched; trust is never written (the trust check asks).
+/// that key is touched; the daemon trusts each agent worktree itself.
 pub fn claude_onboarded(text: Option<&str>) -> Option<String> {
     let mut v: serde_json::Map<String, serde_json::Value> = match text {
         None => serde_json::Map::new(),

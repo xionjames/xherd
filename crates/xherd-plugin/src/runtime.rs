@@ -2,7 +2,7 @@
 //! modes, and the hook file that makes the runtime call `xherd hook <event>`.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -30,10 +30,10 @@ pub struct Terminal {
     pub trust: Option<Trust>,
 }
 
-/// Where the runtime records the folders the user trusts: a JSON file whose
-/// `projects` map has absolute folder paths as keys and `key: true` once the
-/// user accepted the folder. Trust covers subfolders, so trusting the
-/// worktrees root once covers every agent (design §8.1).
+/// Where the runtime records the folders it trusts: a JSON file whose
+/// `projects` map has absolute folder paths as keys and `key: true` once a
+/// folder is trusted. xherd sets that key for each agent's own worktree, and
+/// only there (design §4.1), so no agent stops at the runtime's trust dialog.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Trust {
     /// May use `${VAR}`, `${VAR:-default}` and a leading `~/`.
@@ -43,27 +43,43 @@ pub struct Trust {
 }
 
 impl Trust {
-    /// Whether `dir` or one of its ancestors is trusted in `text` (the trust
-    /// file). Paths are compared as given and canonicalised (`/tmp` vs
-    /// `/private/tmp` on macOS).
-    pub fn covers(&self, text: &str, dir: &Path) -> bool {
-        let Ok(root) = serde_json::from_str::<Value>(text) else {
-            return false;
+    /// The trust file's new text with `dir` (as given and canonicalised,
+    /// `/tmp` vs `/private/tmp`) trusted; every other key kept. `None` when
+    /// nothing changes. Text that is not a JSON object is refused, never
+    /// replaced.
+    pub fn with_trusted(&self, text: Option<&str>, dir: &Path) -> Result<Option<String>, String> {
+        let mut root: Map<String, Value> = match text.map(str::trim) {
+            None | Some("") => Map::new(),
+            Some(t) => match serde_json::from_str(t) {
+                Ok(Value::Object(m)) => m,
+                _ => return Err("not a JSON object; left untouched".into()),
+            },
         };
-        let Some(projects) = root[&self.projects].as_object() else {
-            return false;
+        let projects = root
+            .entry(self.projects.clone())
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Some(projects) = projects.as_object_mut() else {
+            return Err(format!(
+                "{:?} is not an object; left untouched",
+                self.projects
+            ));
         };
-        let forms = |p: &Path| -> Vec<PathBuf> {
-            let mut v = vec![p.to_path_buf()];
-            v.extend(p.canonicalize().ok());
-            v
-        };
-        let dirs = forms(dir);
-        projects
-            .iter()
-            .filter(|(_, v)| v[&self.key] == Value::Bool(true))
-            .flat_map(|(k, _)| forms(Path::new(k)))
-            .any(|k| k.is_absolute() && dirs.iter().any(|d| d.starts_with(&k)))
+        let mut forms = vec![dir.to_path_buf()];
+        forms.extend(dir.canonicalize().ok().filter(|c| c != dir));
+        let mut changed = false;
+        for f in forms {
+            let entry = projects
+                .entry(f.to_string_lossy().into_owned())
+                .or_insert_with(|| Value::Object(Map::new()));
+            let Some(e) = entry.as_object_mut() else {
+                return Err(format!("{} is not an object; left untouched", f.display()));
+            };
+            if e.get(&self.key) != Some(&Value::Bool(true)) {
+                e.insert(self.key.clone(), Value::Bool(true));
+                changed = true;
+            }
+        }
+        Ok(changed.then(|| serde_json::to_string_pretty(&root).expect("json")))
     }
 }
 
@@ -187,26 +203,34 @@ mod tests {
     }
 
     #[test]
-    fn trust_covers_subfolders() {
+    fn trust_is_set_for_one_folder_and_keeps_the_rest() {
         let t = claude().trust.unwrap();
         assert_eq!(t.file, "${CLAUDE_CONFIG_DIR:-~}/.claude.json");
         let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().join("ws");
-        let wt = ws.join("worktrees");
+        let wt = tmp.path().join("worktrees/repo/SC-1");
         std::fs::create_dir_all(&wt).unwrap();
-        let file = |k: &Path, v: bool| {
-            json!({"projects": {k.to_string_lossy(): {"hasTrustDialogAccepted": v}}}).to_string()
-        };
-        assert!(t.covers(&file(&ws, true), &wt));
-        assert!(t.covers(&file(&wt, true), &wt));
-        // Stored canonical, asked as given (or the other way round).
-        assert!(t.covers(&file(&ws.canonicalize().unwrap(), true), &wt));
-        assert!(t.covers(&file(&ws, true), &wt.canonicalize().unwrap()));
-        assert!(!t.covers(&file(&ws, false), &wt));
-        assert!(!t.covers(&file(&wt.join("repo"), true), &wt));
-        assert!(!t.covers(&file(&tmp.path().join("w"), true), &wt));
-        assert!(!t.covers("{oops", &wt));
-        assert!(!t.covers("{}", &wt));
+        let old = json!({"userID": "u", "projects": {"/other": {"hasTrustDialogAccepted": true, "allowedTools": []}}});
+        let new = t
+            .with_trusted(Some(&old.to_string()), &wt)
+            .unwrap()
+            .unwrap();
+        let v: Value = serde_json::from_str(&new).unwrap();
+        assert_eq!(v["userID"], "u");
+        assert_eq!(v["projects"]["/other"]["allowedTools"], json!([]));
+        assert_eq!(
+            v["projects"][wt.to_string_lossy().as_ref()]["hasTrustDialogAccepted"],
+            true
+        );
+        let canon = wt.canonicalize().unwrap();
+        assert_eq!(
+            v["projects"][canon.to_string_lossy().as_ref()]["hasTrustDialogAccepted"],
+            true
+        );
+        // Already trusted: nothing to write.
+        assert_eq!(t.with_trusted(Some(&new), &wt).unwrap(), None);
+        assert!(t.with_trusted(None, &wt).unwrap().is_some());
+        assert!(t.with_trusted(Some("{oops"), &wt).is_err());
+        assert!(t.with_trusted(Some(r#"{"projects": 3}"#), &wt).is_err());
     }
 
     #[test]

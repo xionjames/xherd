@@ -57,10 +57,6 @@ impl Daemon {
         let launch = rt
             .argv(runtime::DEFAULT_PERMISSION_MODE)
             .map_err(|e| refuse("runtime_unusable", e))?;
-        if let Some(t) = &rt.trust {
-            let root = self.config.workspace_root().join("worktrees");
-            check_trust(t, &label, &rt.launch.join(" "), &root)?;
-        }
 
         let git = Git::new("git");
         let given = Path::new(req.repo.trim());
@@ -144,6 +140,14 @@ impl Daemon {
         }
 
         let res = async {
+            if let Some(t) = &rt.trust {
+                let w = TrustWriter {
+                    trust: t.clone(),
+                    root: self.config.workspace_root().join("worktrees"),
+                };
+                w.ensure(&workdir)
+                    .map_err(|e| refuse("runtime_trust", format!("{label}: {e}")))?;
+            }
             prepare_xherd_dir(&git, &workdir, &a).await?;
             if let Some(h) = &rt.hooks {
                 install_hooks(&git, &workdir, h, &self.xherd_bin).await?;
@@ -162,31 +166,34 @@ impl Daemon {
     }
 }
 
-/// The runtime must already trust the worktrees root (or an ancestor), or it
-/// would stop every new agent at its trust dialog before any hook runs. The
-/// folder is created first so the instruction given works as written.
-pub(crate) fn check_trust(
-    t: &runtime::Trust,
-    label: &str,
-    cmd: &str,
-    dir: &Path,
-) -> Result<(), ActionError> {
-    std::fs::create_dir_all(dir).map_err(|e| refuse("io", format!("{}: {e}", dir.display())))?;
-    let file = xherd_flow::install::expand(&t.file, &|v| std::env::var(v).ok())
-        .map_err(|e| refuse("runtime_unusable", e))?;
-    let text = std::fs::read_to_string(&file).unwrap_or_default();
-    if t.covers(&text, dir) {
-        return Ok(());
+/// Marks agent worktrees as trusted in the runtime's trust file (declared by
+/// its plugin), so no agent stops at the runtime's trust dialog before any
+/// hook runs. Only folders under the worktrees root are ever written.
+#[derive(Debug, Clone)]
+pub struct TrustWriter {
+    pub trust: runtime::Trust,
+    /// `<workspace>/worktrees`.
+    pub root: PathBuf,
+}
+
+impl TrustWriter {
+    pub fn ensure(&self, dir: &Path) -> Result<(), String> {
+        if !dir.starts_with(&self.root) || dir == self.root {
+            return Err(format!(
+                "{} is not an agent worktree under {}",
+                dir.display(),
+                self.root.display()
+            ));
+        }
+        let file = xherd_flow::install::expand(&self.trust.file, &|v| std::env::var(v).ok())?;
+        let text = std::fs::read_to_string(&file).ok();
+        match self.trust.with_trusted(text.as_deref(), dir) {
+            Ok(Some(new)) => write_atomic(Path::new(&file), new.as_bytes(), Some(0o600))
+                .map_err(|e| format!("{file}: {e}")),
+            Ok(None) => Ok(()),
+            Err(e) => Err(format!("{file}: {e}")),
+        }
     }
-    let d = dir.display();
-    Err(refuse(
-        "runtime_untrusted",
-        format!(
-            "{label} does not trust {d} yet, so every new agent would stop at its \
-             trust dialog. Do this once: `mkdir -p \"{d}\" && cd \"{d}\" && {cmd}`, choose \
-             \"Yes, I trust this folder\", quit {label}, then retry (trust is read from {file})."
-        ),
-    ))
 }
 
 /// In the container only the workspace and `XHERD_EXTRA_PATHS` are mounted

@@ -27,6 +27,7 @@ pub mod supervisor;
 pub mod support;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
+pub use create::TrustWriter;
 pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
 pub use supervisor::SupervisorHandle;
 pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
@@ -200,6 +201,16 @@ impl Daemon {
             screen_rules: opts.screen_rules,
             toolchain_install: opts.sandbox,
         };
+        let trust = plugins
+            .get(xherd_flow::approve::DEFAULT_RUNTIME)
+            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
+            .and_then(|t| t.trust)
+            .map(|trust| {
+                Arc::new(TrustWriter {
+                    trust,
+                    root: config.workspace_root().join("worktrees"),
+                })
+            });
         let toolchains = plugins
             .of_kind(xherd_plugin::Kind::Toolchain)
             .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
@@ -221,6 +232,7 @@ impl Daemon {
             git: xherd_git::Git::new("git"),
             host,
             toolchains: Arc::new(toolchains),
+            trust,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
