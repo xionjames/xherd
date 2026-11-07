@@ -45,10 +45,8 @@ pub fn managed_gitconfig(hosts: &[GitHost], xherd_bin: &str, sandbox: bool) -> S
     for h in hosts {
         let helper = match h.credential {
             Credential::None => None,
-            Credential::Gh => Some(format!(
-                "!gh auth git-credential --hostname {}",
-                quote(&h.host)
-            )),
+            // gh reads the host from git on stdin; it has no --hostname flag.
+            Credential::Gh => Some("!gh auth git-credential".to_string()),
             Credential::Glab => Some("!glab auth git-credential".to_string()),
             Credential::Xherd => Some(format!("!{} credential", quote(xherd_bin))),
         };
@@ -753,7 +751,7 @@ mod tests {
         );
         assert!(t.contains("[safe]\n\tdirectory = *\n"));
         assert!(t.contains(
-            "[credential \"https://github.com\"]\n\thelper =\n\thelper = !gh auth git-credential --hostname 'github.com'\n"
+            "[credential \"https://github.com\"]\n\thelper =\n\thelper = !gh auth git-credential\n"
         ));
         assert!(t.contains("\thelper = !'/usr/local/bin/xherd' credential\n\tusername = me\n"));
         assert!(
