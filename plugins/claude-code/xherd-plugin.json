@@ -6,11 +6,26 @@
   "description": "The Claude Code CLI in a tmux session (terminal driver).",
   "data": {
     "terminal": {
-      "launch": ["claude"],
+      "launch": [
+        "claude"
+      ],
       "permissionModes": {
-        "ask": [],
-        "edits": ["--permission-mode", "acceptEdits"],
-        "all": ["--dangerously-skip-permissions"]
+        "ask": [
+          "--permission-mode",
+          "manual"
+        ],
+        "edits": [
+          "--permission-mode",
+          "acceptEdits"
+        ],
+        "auto": [
+          "--permission-mode",
+          "auto"
+        ],
+        "all": [
+          "--permission-mode",
+          "bypassPermissions"
+        ]
       },
       "hooks": {
         "file": ".claude/settings.local.json",
@@ -29,5 +44,13 @@
       }
     }
   },
-  "checks": [{ "name": "claude", "argv": ["claude", "--version"] }]
+  "checks": [
+    {
+      "name": "claude",
+      "argv": [
+        "claude",
+        "--version"
+      ]
+    }
+  ]
 }

@@ -196,6 +196,8 @@ trait Driver {
 
 Terminal runtime specifics (data in the runtime plugin's `data.terminal`):
 
+- **Permission modes**: one vocabulary for every runtime: `ask` (asks before every tool use that needs permission; the default, spec T1), `edits` (accepts file edits), `auto` (the runtime's own safety checks decide, where it has such a mode), `all` (asks nothing; container only, T4). `permissionModes` maps each mode the runtime offers to **explicit** flags (Claude Code: `--permission-mode manual|acceptEdits|auto|bypassPermissions`); a mode with no flags is refused, so xherd never inherits a default the runtime may change (Claude Code 2.1 switched its default to auto). `ask` is required; runtimes without a mode simply do not offer it.
+
 - **Hooks**: `hooks.file` (Claude Code: `.claude/settings.local.json`) gets xherd's tagged `xherd hook <event>` entries merged in at creation and is excluded from git.
 - **Folder trust**: a runtime that asks "trust this folder?" before running hooks would stop every new agent at that dialog, and xherd's first command would never be typed. `trust` names where the runtime records trusted folders (Claude Code: `${CLAUDE_CONFIG_DIR:-~}/.claude.json`, `projects["<abs path>"].hasTrustDialogAccepted`). Trusting a parent folder does not cover the folders below it (Claude Code 2.1), so xherd sets that key for each agent's own worktree, and only for paths under the worktrees root: when the agent is created and again before every session start (the runtime rewrites the file itself). The path is written as stored and canonicalised (`/tmp` → `/private/tmp`); every other key is kept, and a file that is not a JSON object is never overwritten (creation is refused with `runtime_trust`). Runtimes without `trust` skip this.
 

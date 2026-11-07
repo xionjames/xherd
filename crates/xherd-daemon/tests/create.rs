@@ -228,7 +228,11 @@ async fn starts_claude_code_with_hooks() {
             .join(repo_name(&t))
             .join("SC-5");
     let a = t.d.new_agent(req(&t, "SC-5")).await.unwrap();
-    assert_eq!(a.launch, Some(vec!["claude".to_string()]));
+    // Ask mode passed explicitly, never the runtime's own default.
+    assert_eq!(
+        a.launch.as_deref().map(|l| l.join(" ")).as_deref(),
+        Some("claude --permission-mode manual")
+    );
     let settings: serde_json::Value =
         serde_json::from_slice(&std::fs::read(wt.join(".claude/settings.local.json")).unwrap())
             .unwrap();
@@ -241,7 +245,11 @@ async fn starts_claude_code_with_hooks() {
     for _ in 0..200 {
         let a = t.d.action("SC-5", UserAction::Get).await.unwrap();
         if a.status == Status::Running {
-            assert!(t.fake.calls().contains(&"start SC-5 claude".to_string()));
+            assert!(
+                t.fake
+                    .calls()
+                    .contains(&"start SC-5 claude --permission-mode manual".to_string())
+            );
             let ev = t.d.store.events(&a.id, 10).await.unwrap();
             assert!(ev.iter().any(|e| e.kind == "session-started"));
             return;
@@ -271,7 +279,10 @@ async fn version_files_wrap_the_launch_in_the_toolchain_step() {
             .join("SC-7");
     for _ in 0..200 {
         if let Some(c) = t.fake.calls().iter().find(|c| c.starts_with("start SC-7 ")) {
-            assert_eq!(c, "start SC-7 xherd toolchain exec -- claude");
+            assert_eq!(
+                c,
+                "start SC-7 xherd toolchain exec -- claude --permission-mode manual"
+            );
             let plan: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(wt.join(".xherd/toolchain.json")).unwrap())
                     .unwrap();

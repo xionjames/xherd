@@ -12,6 +12,13 @@ use crate::Manifest;
 /// Tool-permission mode used until agents can choose one (spec §13 T1: ask by default).
 pub const DEFAULT_PERMISSION_MODE: &str = "ask";
 
+/// The permission modes shared by every runtime (design §4.1): `ask` asks
+/// before every tool use that needs permission, `edits` accepts file edits,
+/// `auto` lets the runtime's own safety checks decide, `all` asks nothing.
+/// A runtime maps each mode it offers to explicit flags, so its behaviour
+/// never follows a default the runtime may change; `ask` is required.
+pub const PERMISSION_MODES: &[&str] = &["ask", "edits", "auto", "all"];
+
 /// Appended to every hook command xherd writes, so its entries can be found
 /// and replaced without touching the user's own hooks (R-005b).
 pub const HOOK_TAG: &str = "# xherd";
@@ -105,6 +112,27 @@ impl Terminal {
         if t.launch.is_empty() {
             return Err(format!("runtime {}: empty launch argv", m.name));
         }
+        for (mode, args) in &t.permission_modes {
+            if !PERMISSION_MODES.contains(&mode.as_str()) {
+                return Err(format!(
+                    "runtime {}: unknown permission mode {mode:?} (modes: {})",
+                    m.name,
+                    PERMISSION_MODES.join(", ")
+                ));
+            }
+            if args.is_empty() {
+                return Err(format!(
+                    "runtime {}: permission mode {mode} needs explicit flags (the runtime's default may change)",
+                    m.name
+                ));
+            }
+        }
+        if !t.permission_modes.contains_key(DEFAULT_PERMISSION_MODE) {
+            return Err(format!(
+                "runtime {}: permission mode {DEFAULT_PERMISSION_MODE} is required",
+                m.name
+            ));
+        }
         Ok(t)
     }
 
@@ -189,13 +217,40 @@ mod tests {
     }
 
     #[test]
+    fn permission_modes_are_explicit_and_standard() {
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "claude-code")
+            .unwrap();
+        let set =
+            |m: &mut Manifest, v: Value| m.data.get_mut("terminal").unwrap()["permissionModes"] = v;
+        set(&mut m, json!({"ask": []}));
+        assert!(Terminal::of(&m).unwrap_err().contains("explicit flags"));
+        set(&mut m, json!({"ask": ["-x"], "yolo": ["-y"]}));
+        assert!(
+            Terminal::of(&m)
+                .unwrap_err()
+                .contains("unknown permission mode")
+        );
+        set(&mut m, json!({"edits": ["-e"]}));
+        assert!(Terminal::of(&m).unwrap_err().contains("ask is required"));
+        set(&mut m, json!({"ask": ["-a"]}));
+        assert!(Terminal::of(&m).is_ok());
+    }
+
+    #[test]
     fn builtin_claude_code() {
         let t = claude();
-        assert_eq!(t.argv(DEFAULT_PERMISSION_MODE).unwrap(), ["claude"]);
-        assert_eq!(
-            t.argv("edits").unwrap(),
-            ["claude", "--permission-mode", "acceptEdits"]
-        );
+        let mode = |m: &str| t.argv(m).unwrap()[1..].join(" ");
+        assert_eq!(mode(DEFAULT_PERMISSION_MODE), "--permission-mode manual");
+        assert_eq!(mode("edits"), "--permission-mode acceptEdits");
+        assert_eq!(mode("auto"), "--permission-mode auto");
+        assert_eq!(mode("all"), "--permission-mode bypassPermissions");
+        let mut keys: Vec<&str> = t.permission_modes.keys().map(String::as_str).collect();
+        keys.sort();
+        let mut all = PERMISSION_MODES.to_vec();
+        all.sort();
+        assert_eq!(keys, all);
         assert!(t.argv("nope").is_err());
         let h = t.hooks.unwrap();
         assert_eq!(h.file, ".claude/settings.local.json");
