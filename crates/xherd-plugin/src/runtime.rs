@@ -152,10 +152,14 @@ fn shell_quote(s: &str) -> String {
 
 /// The hook file's new content: `existing` with xherd's tagged entries
 /// replaced and everything else kept. Invalid existing JSON is refused (R-005b).
+/// `read_dirs` (folders xherd installed, outside the worktree) get a
+/// `Read(<dir>/**)` allow rule unless already there, so the agent does not
+/// stop to ask before reading its own commands.
 pub fn merge_hooks(
     existing: Option<&str>,
     h: &HookFile,
     xherd_bin: &str,
+    read_dirs: &[String],
 ) -> Result<String, String> {
     let mut root: Map<String, Value> = match existing.map(str::trim) {
         None | Some("") => Map::new(),
@@ -197,6 +201,24 @@ pub fn merge_hooks(
         {
             Value::Array(groups) => groups.push(entry),
             _ => return Err(format!("{}: hooks.{event} is not a list", h.file)),
+        }
+    }
+    if !read_dirs.is_empty() {
+        let perms = root
+            .entry("permissions")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let allow = perms
+            .as_object_mut()
+            .ok_or_else(|| format!("{}: \"permissions\" is not an object", h.file))?
+            .entry("allow")
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| format!("{}: permissions.allow is not a list", h.file))?;
+        for d in read_dirs {
+            let rule = Value::String(format!("Read({}/**)", d.trim_end_matches('/')));
+            if !allow.contains(&rule) {
+                allow.push(rule);
+            }
         }
     }
     let mut out = serde_json::to_string_pretty(&Value::Object(root)).expect("json");
@@ -293,8 +315,8 @@ mod tests {
         let h = claude().hooks.unwrap();
         let user = r#"{"permissions": {"allow": ["Bash(ls)"]},
             "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}}"#;
-        let once = merge_hooks(Some(user), &h, "/opt/x herd/xherd").unwrap();
-        let twice = merge_hooks(Some(&once), &h, "/usr/bin/xherd").unwrap();
+        let once = merge_hooks(Some(user), &h, "/opt/x herd/xherd", &[]).unwrap();
+        let twice = merge_hooks(Some(&once), &h, "/usr/bin/xherd", &[]).unwrap();
         let v: Value = serde_json::from_str(&twice).unwrap();
         assert_eq!(v["permissions"]["allow"][0], "Bash(ls)");
         let stop = v["hooks"]["Stop"].as_array().unwrap();
@@ -311,13 +333,29 @@ mod tests {
     #[test]
     fn hooks_merge_refuses_bad_json() {
         let h = claude().hooks.unwrap();
-        assert!(merge_hooks(Some("{oops"), &h, "xherd").is_err());
-        assert!(merge_hooks(Some("[]"), &h, "xherd").is_err());
-        assert!(merge_hooks(Some(r#"{"hooks": 1}"#), &h, "xherd").is_err());
+        assert!(merge_hooks(Some("{oops"), &h, "xherd", &[]).is_err());
+        assert!(merge_hooks(Some("[]"), &h, "xherd", &[]).is_err());
+        assert!(merge_hooks(Some(r#"{"hooks": 1}"#), &h, "xherd", &[]).is_err());
         assert!(
-            merge_hooks(None, &h, "xherd")
+            merge_hooks(None, &h, "xherd", &[])
                 .unwrap()
                 .contains("Notification")
         );
+    }
+
+    #[test]
+    fn read_dirs_are_allowed_once() {
+        let h = claude().hooks.unwrap();
+        let user = r#"{"permissions": {"allow": ["Bash(ls)"]}}"#;
+        let dirs = ["/home/x/.claude/commands/xhspec".to_string()];
+        let once = merge_hooks(Some(user), &h, "xherd", &dirs).unwrap();
+        let twice = merge_hooks(Some(&once), &h, "xherd", &dirs).unwrap();
+        let v: Value = serde_json::from_str(&twice).unwrap();
+        assert_eq!(
+            v["permissions"]["allow"],
+            json!(["Bash(ls)", "Read(/home/x/.claude/commands/xhspec/**)"])
+        );
+        let none = merge_hooks(None, &h, "xherd", &[]).unwrap();
+        assert!(!none.contains("permissions"));
     }
 }

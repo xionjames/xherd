@@ -140,7 +140,8 @@ impl Daemon {
             }
             prepare_xherd_dir(&git, &workdir, &a).await?;
             if let Some(h) = &rt.hooks {
-                install_hooks(&git, &workdir, h, &self.xherd_bin).await?;
+                let read_dirs = pack.map(command_dirs).unwrap_or_default();
+                install_hooks(&git, &workdir, h, &self.xherd_bin, &read_dirs).await?;
             }
             self.create_agent(a).await
         }
@@ -262,6 +263,28 @@ async fn prepare_xherd_dir(git: &Git, workdir: &Path, a: &Agent) -> Result<(), A
         .map_err(|e| refuse("git", e.to_string()))
 }
 
+/// Folders the default runtime's pack commands are installed in (outside the
+/// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
+/// plan cannot be made (no HOME).
+fn command_dirs(pack: &xherd_flow::Pack) -> Vec<String> {
+    let env = |k: &str| std::env::var(k).ok();
+    let plan = pack
+        .plan_install(
+            xherd_flow::approve::DEFAULT_RUNTIME,
+            xherd_flow::install::XHSPEC_FILES,
+            &env,
+        )
+        .unwrap_or_default();
+    let mut dirs: Vec<String> = plan
+        .iter()
+        .filter_map(|f| f.path.parent())
+        .map(|d| d.to_string_lossy().into_owned())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
 /// Make the runtime report to xherd (R-005b): merge xherd's tagged hook
 /// entries into the runtime's settings file and keep that file out of git.
 async fn install_hooks(
@@ -269,10 +292,11 @@ async fn install_hooks(
     workdir: &Path,
     h: &runtime::HookFile,
     xherd_bin: &str,
+    read_dirs: &[String],
 ) -> Result<(), ActionError> {
     let f = workdir.join(&h.file);
     let existing = std::fs::read_to_string(&f).ok();
-    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin)
+    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin, read_dirs)
         .map_err(|e| refuse("runtime_hooks", e))?;
     if let Some(dir) = f.parent() {
         std::fs::create_dir_all(dir)
