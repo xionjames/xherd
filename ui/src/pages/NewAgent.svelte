@@ -1,6 +1,7 @@
 <script lang="ts">
   // New agent on a ticket (POST /agents).
-  import { post } from '../lib/api';
+  import { onMount } from 'svelte';
+  import { get, post } from '../lib/api';
   import { upsertAgent, app } from '../lib/store.svelte';
   import { go } from '../lib/router.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -12,12 +13,52 @@
   const keyOk = $derived(/^[A-Z0-9][A-Z0-9_-]*$/.test(f.ticketKey));
   const slugOk = $derived(!f.slug || /^[a-z0-9][a-z0-9-]{0,40}$/.test(f.slug));
   const name = $derived(f.ticketKey + (f.slug ? `-${f.slug}` : ''));
-  const ready = $derived(keyOk && slugOk && f.repo.startsWith('/') && (f.flow !== 'none' || f.prompt.trim() !== ''));
+
+  // Repository: a local path or a remote URL, which the daemon clones into
+  // the workspace once and fetches later (POST /repos/resolve).
+  type Resolved = { path: string; cloned: boolean; warning: string | null; branches: string[]; base: string | null };
+  let known = $state<{ path: string }[]>([]);
+  let repo = $state<{ input: string; busy: boolean; data: Resolved | null; error: string | null }>(
+    { input: '', busy: false, data: null, error: null });
+  const isUrl = (s: string) => s.includes('://') || /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:/.test(s);
+  const input = $derived(f.repo.trim());
+  const repoBad = $derived(repo.input === input && repo.error !== null);
+  onMount(async () => {
+    try { known = (await get<{ repos: { path: string }[] }>('/repos')).repos; } catch { /* the field still works */ }
+  });
+
+  let pending: Promise<Resolved | null> | null = null;
+  // One call per input: Create waits for a clone already under way.
+  function resolve(): Promise<Resolved | null> {
+    const want = input;
+    if (!want) return Promise.resolve(null);
+    if (repo.input === want && repo.data) return Promise.resolve(repo.data);
+    if (repo.input === want && repo.busy && pending) return pending;
+    repo = { input: want, busy: true, data: null, error: null };
+    pending = fetchRepo(want);
+    return pending;
+  }
+  async function fetchRepo(want: string): Promise<Resolved | null> {
+    try {
+      const d = await post<Resolved>('/repos/resolve', { repo: want });
+      if (repo.input === want) repo.data = d;
+      return d;
+    } catch (e) {
+      if (repo.input === want) repo.error = e instanceof Error ? e.message : String(e);
+      return null;
+    } finally {
+      if (repo.input === want) repo.busy = false;
+    }
+  }
+
+  const ready = $derived(keyOk && slugOk && input !== '' && !repoBad && (f.flow !== 'none' || f.prompt.trim() !== ''));
 
   async function create(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
-    const body: Record<string, string> = { ticketKey: f.ticketKey, repo: f.repo.trim(), flow: f.flow };
+    const r = await resolve();
+    if (!r) { busy = false; return; }
+    const body: Record<string, string> = { ticketKey: f.ticketKey, repo: r.path, flow: f.flow };
     if (f.slug) body.slug = f.slug;
     if (f.base.trim()) body.base = f.base.trim();
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
@@ -45,12 +86,24 @@
         {#if !slugOk}<span class="hint" style="color:var(--halt)">Lowercase letters, digits and -, up to 41.</span>
         {:else if f.ticketKey}<span class="hint">Agent, branch and session: <span class="mono">{name}</span></span>{/if}</label>
     </div>
-    <div class="g2">
-      <label class="f">Repository (absolute path)
-        <input class="mono" bind:value={f.repo} placeholder="/Users/you/src/payments-api" required /></label>
-      <label class="f">Base branch (optional)
-        <input class="mono" bind:value={f.base} placeholder="origin's default branch" /></label>
-    </div>
+    <label class="f">Repository: URL or local path
+      <input class="mono" bind:value={f.repo} list="known-repos" required onchange={resolve}
+        placeholder="https://github.com/acme/payments-api or /Users/you/xherd/payments-api" />
+      <datalist id="known-repos">{#each known as k (k.path)}<option value={k.path}></option>{/each}</datalist>
+      {#if repo.busy && repo.input === input}
+        <span class="hint">{isUrl(input) ? `Cloning or fetching ${input}…` : 'Checking…'}</span>
+      {:else if repoBad}
+        <span class="hint" style="color:var(--halt);word-break:break-word">✕ {repo.error}</span>
+      {:else if repo.data && repo.input === input}
+        <span class="hint">✓ <span class="mono">{repo.data.path}</span>{repo.data.cloned ? ' (cloned now)' : ''}</span>
+        {#if repo.data.warning}<span class="hint" style="word-break:break-word">⚠ {repo.data.warning}</span>{/if}
+      {:else}
+        <span class="hint">A URL is cloned into the workspace once and fetched before each new agent.</span>
+      {/if}</label>
+    <label class="f" style="max-width:420px">Base branch (optional)
+      <input class="mono" bind:value={f.base} list="repo-branches"
+        placeholder={repo.data?.base ?? "origin's default branch"} />
+      <datalist id="repo-branches">{#each repo.data?.branches ?? [] as b (b)}<option value={b}></option>{/each}</datalist></label>
     <div class="f">Workflow
       <div class="seg" role="group" aria-label="Workflow" style="align-self:flex-start">
         {#each [...flows, 'none'] as fl (fl)}
@@ -62,5 +115,5 @@
   </div></section>
   <div class="row"><span class="grow"></span>
     <button type="button" class="btn ghost" onclick={() => history.back()}>Cancel</button>
-    <button class="btn primary lg" disabled={!ready || busy}>Create agent</button></div>
+    <button class="btn primary lg" disabled={!ready || busy}>{busy && repo.busy ? 'Getting the repository…' : 'Create agent'}</button></div>
 </form>

@@ -357,6 +357,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 | Reports and XAP | `POST /hooks`, `POST /xap` (agent tokens) |
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
 | Settings | `GET/PUT /config`, `GET/POST/PUT/DELETE /profiles…`, `GET /profiles/export`, `POST /profiles/import` |
+| Repositories | `GET /repos` (earlier agents' repositories and xherd's clones), `POST /repos/resolve` (a path, or a URL cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use; answers the path, branches and default base) |
 | Plugins and packs | `GET /plugins`, `POST /plugins/preview`, `POST /plugins/install`, `POST /plugins/:name/{update,enable,disable,reload}`, `PUT /plugins/:name/settings`, `DELETE /plugins/:name`, same under `/flows` |
 | Git and toolchains | `GET/PUT /git/hosts`, `POST /git/doctor`, `POST /git/known-hosts`, `POST /git/login` (browser login session, `/ws/setup/git-login`), `POST /git/credential` (`xherd credential`), `GET /toolchains`, `POST /toolchains/install` |
 | Devices and access | `POST /pair`, `GET/DELETE /devices…`, `GET/PUT /lan`, `POST /token/rotate`, `GET /ca.pem` |

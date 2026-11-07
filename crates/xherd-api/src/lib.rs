@@ -42,6 +42,8 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/open", post(open_in))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/companion/next", get(companion_next))
+        .route("/api/v1/repos", get(repos))
+        .route("/api/v1/repos/resolve", post(resolve_repo))
         .route("/api/v1/install", post(install))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
@@ -348,6 +350,27 @@ async fn new_agent(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let agent = d.new_agent(req).await?;
     Ok((StatusCode::CREATED, Json(json!({"agent": agent}))))
+}
+
+/// Repositories the New agent screen offers (earlier agents', xherd's clones).
+async fn repos(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"repos": d.known_repos().await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolveReq {
+    repo: String,
+}
+
+/// A path or URL → the local repository (a URL is cloned or fetched first),
+/// its branches and default base (R-001, R-605).
+async fn resolve_repo(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<ResolveReq>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.resolve_repo(&r.repo).await?))
 }
 
 #[derive(Deserialize)]

@@ -18,7 +18,8 @@ pub struct NewAgent {
     pub ticket_key: String,
     #[serde(default)]
     pub slug: Option<String>,
-    /// Absolute path of a local git repository (URLs are refused for now).
+    /// Absolute path of a local git repository, or a remote URL that xherd
+    /// clones into the workspace (R-001, R-605).
     pub repo: String,
     #[serde(default)]
     pub base: Option<String>,
@@ -80,13 +81,9 @@ pub fn check(req: &NewAgent) -> Result<Checked, Refusal> {
         ));
     }
     let repo = req.repo.trim();
-    if repo.contains("://") || repo.starts_with("git@") {
-        return Err(refuse(
-            "repo_url",
-            "cloning from a URL is not supported yet; pass the path of a local clone",
-        ));
-    }
-    if !std::path::Path::new(repo).is_absolute() {
+    if is_url(repo) {
+        clone_path(std::path::Path::new("/"), repo)?;
+    } else if !std::path::Path::new(repo).is_absolute() {
         return Err(refuse(
             "not_a_repo",
             format!("repo {repo:?} must be an absolute path"),
@@ -98,6 +95,55 @@ pub fn check(req: &NewAgent) -> Result<Checked, Refusal> {
         flow,
         prompt,
     })
+}
+
+static SCP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:").unwrap());
+static PART: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$").unwrap());
+static HOST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9.-]*$").unwrap());
+
+/// A remote URL rather than a path: `scheme://…` or scp-like `user@host:path`.
+pub fn is_url(repo: &str) -> bool {
+    repo.contains("://") || SCP.is_match(repo)
+}
+
+/// Where xherd keeps its clone of `url`: `<workspace>/repos/<host>/<path>`
+/// (design §8.1), e.g. `repos/github.com/acme/app`. Only `https`, `http`,
+/// `ssh` and scp-like URLs are taken, and every part becomes a plain folder
+/// name, so a URL can never point the clone outside `repos/` (R-605).
+pub fn clone_path(workspace: &std::path::Path, url: &str) -> Result<std::path::PathBuf, Refusal> {
+    let bad = || {
+        refuse(
+            "bad_repo_url",
+            format!(
+                "{url:?} is not a repository URL (https://host/owner/repo or git@host:owner/repo)"
+            ),
+        )
+    };
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(bad());
+    }
+    let (authority, path) = match url.split_once("://") {
+        Some((scheme, rest)) if ["https", "http", "ssh"].contains(&scheme) => {
+            rest.split_once('/').ok_or_else(bad)?
+        }
+        Some(_) => return Err(bad()),
+        None if SCP.is_match(url) => url.split_once(':').ok_or_else(bad)?,
+        None => return Err(bad()),
+    };
+    // Drop user info and port.
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = host.split(':').next().unwrap_or("").to_ascii_lowercase();
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let parts: Vec<&str> = path.split('/').collect();
+    if !HOST.is_match(&host) || parts.len() < 2 || !parts.iter().all(|p| PART.is_match(p)) {
+        return Err(bad());
+    }
+    let mut out = workspace.join("repos").join(host);
+    out.extend(parts);
+    Ok(out)
 }
 
 /// `.xherd/agent.json` (R-005c).
@@ -202,11 +248,45 @@ mod tests {
         assert!(check(&r).is_ok());
         let mut r = req("SC-1");
         r.repo = "https://github.com/o/r".into();
-        assert_eq!(code(r.clone()), "repo_url");
+        assert!(check(&r).is_ok());
         r.repo = "git@github.com:o/r.git".into();
-        assert_eq!(code(r.clone()), "repo_url");
+        assert!(check(&r).is_ok());
+        r.repo = "ext::sh -c x".into();
+        assert_eq!(code(r.clone()), "not_a_repo");
+        r.repo = "https://github.com/../x".into();
+        assert_eq!(code(r.clone()), "bad_repo_url");
         r.repo = "relative/dir".into();
         assert_eq!(code(r), "not_a_repo");
+    }
+
+    #[test]
+    fn clone_paths() {
+        let ws = std::path::Path::new("/ws");
+        let p = |u: &str| clone_path(ws, u).map(|p| p.to_string_lossy().into_owned());
+        let app = Ok("/ws/repos/github.com/acme/app".to_string());
+        assert_eq!(p("https://github.com/acme/app"), app);
+        assert_eq!(p("https://github.com/acme/app.git/"), app);
+        assert_eq!(p("git@github.com:acme/app.git"), app);
+        assert_eq!(p("ssh://git@GitHub.com:22/acme/app"), app);
+        assert_eq!(p("https://me:tok@github.com/acme/app"), app);
+        assert_eq!(
+            p("https://gitlab.com/g/sub/app"),
+            Ok("/ws/repos/gitlab.com/g/sub/app".into())
+        );
+        assert!(is_url("org-1@ssh.dev.azure.com:v3/o/p/r"));
+        assert!(!is_url("/Users/me/src/app"));
+        for bad in [
+            "file:///tmp/a/b",
+            "ext::sh -c touch% /tmp/x",
+            "https://github.com/acme",
+            "https://github.com/acme/../etc",
+            "https://github.com/acme/.hidden",
+            "https://-oProxy/acme/app",
+            "git@github.com:acme/my app",
+            "https:///acme/app",
+        ] {
+            assert_eq!(p(bad).unwrap_err().code, "bad_repo_url", "{bad}");
+        }
     }
 
     #[test]

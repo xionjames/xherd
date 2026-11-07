@@ -364,3 +364,59 @@ async fn refuses_without_a_runtime_plugin() {
     };
     assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
 }
+
+#[tokio::test]
+async fn url_uses_and_fetches_xherds_clone() {
+    let t = setup().await;
+    // xherd's clone of the URL already exists (cloning over the network is
+    // covered by xherd-git's tests); its origin is the local test repo.
+    let clone = t.ws.path().join("repos/git.example.com/acme/app");
+    std::fs::create_dir_all(clone.parent().unwrap()).unwrap();
+    let src = t.repo.path().to_string_lossy().into_owned();
+    assert!(
+        git(
+            t.ws.path(),
+            &["clone", "-q", &src, &clone.to_string_lossy()]
+        )
+        .status
+        .success()
+    );
+    git(t.repo.path(), &["branch", "dev"]);
+
+    let clone = std::fs::canonicalize(&clone).unwrap();
+    let url = "https://git.example.com/acme/app.git";
+    let v = t.d.resolve_repo(url).await.unwrap();
+    assert_eq!(v["path"], clone.to_string_lossy().as_ref());
+    assert_eq!(
+        (v["cloned"].as_bool(), v["warning"].is_null()),
+        (Some(false), true)
+    );
+    assert_eq!(v["base"], "origin/main");
+    // Fetched: the branch made after the clone is there.
+    assert!(
+        v["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b == "origin/dev")
+    );
+
+    let mut r = req(&t, "SC-7");
+    r.repo = "git@git.example.com:acme/app".into();
+    let a = t.d.new_agent(r).await.unwrap();
+    assert_eq!(a.repo.as_deref(), Some(clone.to_string_lossy().as_ref()));
+    assert!(t.ws.path().join("worktrees/app/SC-7").is_dir());
+
+    let known = t.d.known_repos().await.unwrap();
+    assert_eq!(known.len(), 1);
+    assert_eq!(known[0].path, clone.to_string_lossy());
+    assert_eq!(known[0].last_used, Some(a.created_at));
+
+    let e =
+        t.d.resolve_repo("https://git.example.com/acme")
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "bad_repo_url");
+    let e = t.d.resolve_repo("relative/app").await.unwrap_err();
+    assert_eq!(e.code, "not_a_repo");
+}

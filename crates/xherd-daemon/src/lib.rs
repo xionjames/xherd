@@ -21,6 +21,7 @@ pub mod driver;
 pub mod git_access;
 pub mod install;
 pub mod open_in;
+pub mod repos;
 pub mod scheduler;
 pub mod settings;
 pub mod supervisor;

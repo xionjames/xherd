@@ -13,7 +13,7 @@ use xherd_plugin::runtime::{self, Terminal};
 
 use crate::{ActionError, Daemon};
 
-fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
+pub(crate) fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
     ActionError {
         code,
         message: message.into(),
@@ -59,20 +59,9 @@ impl Daemon {
             .map_err(|e| refuse("runtime_unusable", e))?;
 
         let git = Git::new("git");
-        let given = Path::new(req.repo.trim());
-        let repo = match git.toplevel(given).await {
-            Ok(r) if given.is_dir() => r,
-            _ => {
-                return Err(refuse(
-                    "not_a_repo",
-                    format!("{} is not a git repository", given.display()),
-                ));
-            }
-        };
-        if self.sandbox {
-            let extra = std::env::var("XHERD_EXTRA_PATHS").unwrap_or_default();
-            outside_mounts(&repo, &self.config.workspace_root(), &extra)?;
-        }
+        // A URL is cloned (or fetched) here, before the other checks: the
+        // clone is kept for the next agent even if a later check fails.
+        let repo = self.locate_repo(&req.repo).await?.path;
         let agents = self
             .store
             .list_agents()
@@ -199,7 +188,11 @@ impl TrustWriter {
 /// In the container only the workspace and `XHERD_EXTRA_PATHS` are mounted
 /// at the same path; a repository elsewhere is refused with the mount to add
 /// (R-605).
-fn outside_mounts(repo: &Path, workspace: &Path, extra: &str) -> Result<(), ActionError> {
+pub(crate) fn outside_mounts(
+    repo: &Path,
+    workspace: &Path,
+    extra: &str,
+) -> Result<(), ActionError> {
     let roots: Vec<PathBuf> = std::iter::once(workspace.to_path_buf())
         .chain(std::env::split_paths(extra).filter(|p| p.is_absolute()))
         .collect();
@@ -219,7 +212,11 @@ fn outside_mounts(repo: &Path, workspace: &Path, extra: &str) -> Result<(), Acti
 
 /// Given base, else the remote's default branch, else the current branch.
 /// A plain name that only exists on `origin` resolves to `origin/<name>` (R-002).
-async fn resolve_base(git: &Git, repo: &Path, given: Option<&str>) -> Result<String, ActionError> {
+pub(crate) async fn resolve_base(
+    git: &Git,
+    repo: &Path,
+    given: Option<&str>,
+) -> Result<String, ActionError> {
     let given = given.map(str::trim).filter(|b| !b.is_empty());
     let candidates: Vec<String> = match given {
         Some(b) => vec![b.to_string(), format!("origin/{b}")],

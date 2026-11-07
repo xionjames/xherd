@@ -51,7 +51,7 @@ enum Cmd {
         /// Flow of the built-in pack, or `none` (default `feature`).
         #[arg(long)]
         flow: Option<String>,
-        /// Local repository (default: the current directory).
+        /// Local repository, or a remote URL cloned into the workspace (default: the current directory).
         #[arg(long)]
         repo: Option<String>,
         #[arg(long)]
