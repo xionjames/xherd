@@ -351,7 +351,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 | Area | Routes |
 |---|---|
 | Health and state | `GET /healthz` (no auth), `GET /state` (config, platform, client kind, version, agents, profiles, plugins, todos), `GET /checks`, `POST /checks/:id/fix` |
-| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,open,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
+| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/open` (companion), `GET /companion/next` (companion long poll), `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,open,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
 | Reports and XAP | `POST /hooks`, `POST /xap` (agent tokens) |
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
 | Settings | `GET/PUT /config`, `GET/POST/PUT/DELETE /profiles…`, `GET /profiles/export`, `POST /profiles/import` |
@@ -460,7 +460,9 @@ Resolution runs at every session start: the daemon reads the version files into 
 
 1. **URL schemes** (no host software), valid thanks to same-path mounts: `vscode://file/{dir}`, `cursor://file/{dir}`, JetBrains Toolbox and Zed URLs (**verify**).
 2. **Dev Containers**: `vscode://vscode-remote/attached-container+{hex(container)}{dir}` opens VS Code inside the xherd container.
-3. **Host companion**: `xherd attach` (terminal websocket), `xherd open --app idea` (runs the configured host command), `xherd companion` (optional listener on a Unix socket or `127.0.0.1:4741` that runs only configured Open-in commands for daemon-authenticated requests).
+3. **Host companion**: `xherd attach` / `xherd shell` (local tmux, or `docker exec` into the container when xherd runs in Docker; over the terminal websocket for remote daemons later), `xherd open <agent> --app idea` (runs the configured host command), `xherd companion` (long-polls the daemon's `GET /companion/next` as the local user, so nothing listens on the host; runs only its own configured commands with `{dir}` replaced; the UI offers its apps while it polls). Apps: `~/.config/xherd/open.json` (`{"apps": {"idea": ["idea", "{dir}"]}}`), else known editors found on `PATH`.
+
+`GET /agents/:id/open-targets` lists what works from a local browser (R-671): VS Code, Cursor and Zed URLs (Zed's `zed://file` **verify**), Dev Containers in the container (the container id is its hostname), and the companion's apps. JetBrains Toolbox URLs need an open project, so JetBrains goes through the companion. openvscode-server (R-705) comes with remote devices.
 
 ### 8.8 Server and Kubernetes
 
@@ -671,7 +673,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] `xherd init` (users, SSH proxy, git config)
   - [ ] `docker init/doctor/update`
   - [x] Toolchain resolution
-  - [ ] Open-in (URL schemes, Dev Containers, companion)
+  - [x] Open-in (URL schemes, Dev Containers, companion)
   - [x] Git access setup and doctor
 - [ ] **M4 → v1.0**
   - [ ] Guardrails

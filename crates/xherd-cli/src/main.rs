@@ -12,6 +12,7 @@ use xherd_core::paths::Paths;
 mod docker;
 mod git;
 mod init;
+mod open_in;
 mod report;
 mod toolchain;
 mod xap;
@@ -89,6 +90,18 @@ enum Cmd {
     /// Git access.
     #[command(subcommand)]
     Git(GitCmd),
+    /// Open an agent's worktree in an app on this computer (apps: ~/.config/xherd/open.json, else editors on PATH).
+    Open {
+        agent: String,
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// Attach this terminal to an agent's session (in the container when xherd runs in Docker).
+    Attach { agent: String },
+    /// A shell in an agent's worktree (in the container when xherd runs in Docker).
+    Shell { agent: String },
+    /// Run Open-in requests from the browser with this computer's apps.
+    Companion,
     /// Toolchains of the current worktree (R-652).
     #[command(subcommand)]
     Toolchain(ToolchainCmd),
@@ -223,13 +236,7 @@ fn main() -> ExitCode {
             force,
         }),
         Cmd::Docker(DockerCmd::Doctor) => docker::doctor(),
-        Cmd::Docker(DockerCmd::Update { force }) => match Client::new() {
-            Ok(c) => docker::update(&c, force),
-            Err(e) => {
-                eprintln!("{e}");
-                2
-            }
-        },
+        Cmd::Docker(DockerCmd::Update { force }) => with_client(|c| docker::update(c, force)),
         Cmd::Status => status(),
         Cmd::Ls => ls(),
         Cmd::Install { runtime, pack } => install(runtime, pack),
@@ -260,13 +267,11 @@ fn main() -> ExitCode {
         Cmd::Diff { agent } => diff(&agent, json),
         Cmd::Toolchain(ToolchainCmd::Exec { argv }) => toolchain::exec(argv),
         Cmd::Credential { op } => git::credential(&op),
-        Cmd::Git(GitCmd::Doctor { host, repo }) => match Client::new() {
-            Ok(c) => git::doctor(&c, host, repo),
-            Err(e) => {
-                eprintln!("{e}");
-                2
-            }
-        },
+        Cmd::Open { agent, app } => with_client(|c| open_in::open(c, &agent, app)),
+        Cmd::Attach { agent } => with_client(|c| open_in::attach(c, &agent, false)),
+        Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),
+        Cmd::Companion => with_client(open_in::companion),
+        Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -378,6 +383,16 @@ async fn shutdown_signal() {
 }
 
 // ---- user client ----------------------------------------------------------------
+
+fn with_client(f: impl FnOnce(&Client) -> i32) -> i32 {
+    match Client::new() {
+        Ok(c) => f(&c),
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
 
 struct Client {
     url: String,

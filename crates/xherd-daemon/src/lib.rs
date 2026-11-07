@@ -20,6 +20,7 @@ mod create;
 pub mod driver;
 pub mod git_access;
 pub mod install;
+pub mod open_in;
 pub mod scheduler;
 pub mod settings;
 pub mod supervisor;
@@ -144,6 +145,8 @@ pub struct Daemon {
     pub sandbox: bool,
     /// See `Options::local_peers`.
     pub local_peers: Arc<Vec<std::net::IpAddr>>,
+    /// Open-in requests for the host companion (R-704).
+    pub companion: open_in::Companion,
 }
 
 impl Daemon {
@@ -236,6 +239,7 @@ impl Daemon {
             xherd_bin: opts.xherd_bin,
             sandbox: opts.sandbox,
             local_peers: Arc::new(opts.local_peers),
+            companion: open_in::Companion::default(),
         };
         d.import_ledgers().await;
         let replayed = d.replay_queue().await?;

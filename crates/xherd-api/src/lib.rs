@@ -38,7 +38,10 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
         .route("/api/v1/agents/{id}/file", get(file))
+        .route("/api/v1/agents/{id}/open-targets", get(open_targets))
+        .route("/api/v1/agents/{id}/open", post(open_in))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
+        .route("/api/v1/companion/next", get(companion_next))
         .route("/api/v1/install", post(install))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
@@ -102,7 +105,7 @@ impl From<ActionError> for ApiError {
             | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
             | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
-            "not_fixable" => StatusCode::NOT_FOUND,
+            "not_fixable" | "no_companion" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
@@ -389,6 +392,59 @@ async fn fix_check(
     let env = |k: &str| std::env::var(k).ok();
     d.fix_check(&id, &env).await?;
     Ok(Json(json!({"checks": d.checks(&env).await})))
+}
+
+// ---- open in ---------------------------------------------------------------------
+
+async fn open_targets(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"targets": d.open_targets(&id).await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenReq {
+    app: String,
+}
+
+async fn open_in(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(r): Json<OpenReq>,
+) -> ApiResult<Json<Value>> {
+    d.open_with_companion(&id, &r.app).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+#[derive(Deserialize)]
+struct CompanionQuery {
+    #[serde(default)]
+    apps: String,
+    #[serde(default)]
+    wait: Option<u64>,
+}
+
+/// The host companion's long poll (`xherd companion`): `{request}` or
+/// `{request: null}` after `wait` seconds (at most 30).
+async fn companion_next(
+    _: User,
+    State(d): State<Daemon>,
+    axum::extract::Query(q): axum::extract::Query<CompanionQuery>,
+) -> ApiResult<Json<Value>> {
+    let apps = q
+        .apps
+        .split(',')
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+        .collect();
+    let wait = std::time::Duration::from_secs(q.wait.unwrap_or(25).min(30));
+    let r = d.companion.next(apps, wait).await;
+    Ok(Json(json!({"request": r})))
 }
 
 // ---- git access ----------------------------------------------------------------
