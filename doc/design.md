@@ -351,7 +351,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 | Area | Routes |
 |---|---|
 | Health and state | `GET /healthz` (no auth), `GET /state` (config, platform, client kind, version, agents, profiles, plugins, todos), `GET /checks`, `POST /checks/:id/fix` |
-| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,open,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
+| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,open,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
 | Reports and XAP | `POST /hooks`, `POST /xap` (agent tokens) |
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
 | Settings | `GET/PUT /config`, `GET/POST/PUT/DELETE /profiles…`, `GET /profiles/export`, `POST /profiles/import` |
