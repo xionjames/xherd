@@ -1,11 +1,11 @@
 //! HTTP API (design §7): health, state, agents and their actions,
-//! `POST /hooks` for status reports and `POST /xap` for the agent protocol.
-//! Websockets and the UI come in M2.
+//! `POST /hooks` for status reports, `POST /xap` for the agent protocol,
+//! `GET /ws` for the live state stream, and the web UI at `/`.
 
 use std::net::SocketAddr;
 
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -18,17 +18,31 @@ use xherd_core::xap::XapCall;
 use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER};
 use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
+mod term;
+mod ui;
+mod ws;
+
 pub const BODY_LIMIT: usize = 5 * 1024 * 1024;
 
 pub fn router(d: Daemon) -> Router {
     Router::new()
+        .route("/", get(ui::index))
+        .route("/assets/{*rest}", get(ui::asset))
         .route("/api/v1/healthz", get(healthz))
+        .route("/api/v1/ws", get(ws::state_stream))
+        .route("/api/v1/ws/term/{id}", get(term::terminal))
+        .route("/api/v1/ws/setup/{id}", get(term::setup_terminal))
         .route("/api/v1/state", get(state))
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/diff", get(diff))
+        .route("/api/v1/agents/{id}/docs", get(docs))
+        .route("/api/v1/agents/{id}/file", get(file))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/install", post(install))
+        .route("/api/v1/config", get(get_config).put(put_config))
+        .route("/api/v1/checks", get(checks))
+        .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -82,6 +96,10 @@ impl From<ActionError> for ApiError {
             "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
             | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
             | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
+            "not_fixable" => StatusCode::NOT_FOUND,
+            "no_such_doc" => StatusCode::NOT_FOUND,
+            "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
             "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
@@ -139,7 +157,24 @@ async fn is_local(parts: &mut Parts, d: &Daemon) -> bool {
     ]
     .iter()
     .any(|h| parts.headers.contains_key(*h));
-    peer_local && host_local && !proxied
+    peer_local && host_local && !proxied && origin_local(&parts.headers)
+}
+
+/// A browser request from another site carries its `Origin`: only local
+/// origins may use the local user's rights (no cross-site requests or
+/// websockets against the daemon).
+fn origin_local(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let Some(rest) = origin.to_str().ok().and_then(|o| o.strip_prefix("http://")) else {
+        return false;
+    };
+    let host = match rest.rsplit_once(':') {
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => rest,
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 /// The local user: full rights.
@@ -239,8 +274,18 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         .plugins
         .all()
         .map(|p| {
+            let settings: Vec<Value> = p
+                .manifest
+                .settings
+                .iter()
+                .map(|s| {
+                    json!({"key": s.key, "label": s.label, "type": s.kind, "default": s.default,
+                           "secret": s.secret, "required": s.required})
+                })
+                .collect();
             json!({"name": p.name(), "kind": p.manifest.kind, "version": p.manifest.version,
-                   "label": p.manifest.label, "builtin": p.builtin()})
+                   "label": p.manifest.label, "description": p.manifest.description,
+                   "builtin": p.builtin(), "settings": settings})
         })
         .collect();
     Ok(Json(json!({
@@ -250,7 +295,25 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "agents": agents,
         "plugins": plugins,
         "brokenPlugins": d.plugins.broken(),
+        "flows": flows(&d),
     })))
+}
+
+/// Every pack flow with its stages, for progress lines.
+fn flows(d: &Daemon) -> Vec<Value> {
+    d.packs
+        .values()
+        .flat_map(|p| {
+            p.flows.iter().map(|(name, f)| {
+                let stages: Vec<Value> = f
+                    .stages
+                    .iter()
+                    .map(|s| json!({"id": s.id, "role": s.role, "class": s.class, "gate": s.gate.is_some()}))
+                    .collect();
+                json!({"pack": p.name, "flow": name, "stages": stages})
+            })
+        })
+        .collect()
 }
 
 async fn list_agents(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
@@ -291,6 +354,34 @@ async fn install(
     Ok(Json(json!({"installed": installed})))
 }
 
+async fn get_config(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(d.config_view()?))
+}
+
+/// Saved to `config.json`; applies at the next daemon start (`restartNeeded`).
+async fn put_config(
+    _: User,
+    State(d): State<Daemon>,
+    Json(patch): Json<xherd_daemon::settings::ConfigPatch>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.save_config(patch)?))
+}
+
+async fn checks(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    let env = |k: &str| std::env::var(k).ok();
+    Ok(Json(json!({"checks": d.checks(&env).await})))
+}
+
+async fn fix_check(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let env = |k: &str| std::env::var(k).ok();
+    d.fix_check(&id, &env).await?;
+    Ok(Json(json!({"checks": d.checks(&env).await})))
+}
+
 async fn get_agent(
     _: User,
     State(d): State<Daemon>,
@@ -315,12 +406,36 @@ async fn diff(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiRe
     Ok(Json(d.diff(&id).await?))
 }
 
+/// `GET /agents/:id/docs`: the agent's documents, open gate's first.
+async fn docs(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"docs": d.docs(&id).await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileQuery {
+    path: String,
+}
+
+/// `GET /agents/:id/file?path=spec.md`: a document with its approval hash
+/// and the text last approved (R-107).
+async fn file(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Query(q): Query<FileQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.doc(&id, &q.path).await?))
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ActionBody {
     text: Option<String>,
     reason: Option<String>,
     comment: Option<String>,
+    /// Approve: document → hash the user read.
+    expect: Option<std::collections::BTreeMap<String, String>>,
 }
 
 async fn agent_action(
@@ -346,7 +461,10 @@ async fn agent_action(
         "send" => UserAction::Send {
             text: required(b.text, "text")?,
         },
-        "approve" => UserAction::Approve { reason: b.reason },
+        "approve" => UserAction::Approve {
+            reason: b.reason,
+            expect: b.expect.unwrap_or_default(),
+        },
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
         },

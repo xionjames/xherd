@@ -1,0 +1,168 @@
+<script lang="ts">
+  // Settings: General (agents, waiting for you) and Plugins. Saved to
+  // config.json; the daemon applies them at its next start.
+  import { app } from '../lib/store.svelte';
+  import { put } from '../lib/api';
+  import { route, href } from '../lib/router.svelte';
+  import { setup, loadConfig } from '../lib/setup.svelte';
+  import { showError } from '../lib/errors.svelte';
+  import type { ConfigView, PluginInfo } from '../lib/types';
+
+  const tab = $derived(route.query.get('tab') === 'plugins' ? 'plugins' : 'general');
+  const broken = $derived(app.state?.brokenPlugins ?? []);
+
+  type Form = Record<string, string | boolean>;
+  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions'];
+  let form = $state<Form>({});
+  let plugins = $state<Record<string, Record<string, string>>>({});
+  let saving = $state(false);
+  let ready = $state(false);
+
+  function fill(v: ConfigView) {
+    const c = v.config;
+    form = Object.fromEntries(FIELDS.map((k) => [k, typeof c[k] === 'boolean' ? (c[k] as boolean) : String(c[k] ?? '')]));
+    const ps = (c.pluginSettings ?? {}) as Record<string, Record<string, unknown>>;
+    plugins = Object.fromEntries(
+      (app.state?.plugins ?? []).map((p) => [p.name, Object.fromEntries(p.settings.filter((s) => !s.secret).map((s) => [s.key, String(ps[p.name]?.[s.key] ?? '')]))]),
+    );
+    ready = true;
+  }
+  $effect(() => { if (setup.config && app.state && !ready) fill(setup.config); });
+  $effect(() => { if (!setup.config) loadConfig().catch((e) => showError('Could not load settings', e)); });
+
+  const saved = $derived.by(() => {
+    if (!setup.config) return {} as Form;
+    const c = setup.config.config;
+    return Object.fromEntries(FIELDS.map((k) => [k, typeof c[k] === 'boolean' ? (c[k] as boolean) : String(c[k] ?? '')])) as Form;
+  });
+  const changed = $derived(FIELDS.filter((k) => form[k] !== undefined && form[k] !== saved[k]));
+  const savedPlugins = (p: string, k: string) => String(((setup.config?.config.pluginSettings ?? {}) as Record<string, Record<string, unknown>>)[p]?.[k] ?? '');
+  const changedPlugins = $derived(
+    Object.entries(plugins).filter(([p, kv]) => Object.entries(kv).some(([k, v]) => v !== savedPlugins(p, k))).map(([p]) => p),
+  );
+  const dirty = $derived(changed.length + changedPlugins.length);
+
+  async function save() {
+    saving = true;
+    const body: Record<string, unknown> = {};
+    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'workspace' ? form[k] : Number(form[k]);
+    if (changedPlugins.length) {
+      body.pluginSettings = Object.fromEntries(
+        changedPlugins.map((p) => [p, Object.fromEntries(Object.entries(plugins[p]).filter(([, v]) => v !== ''))]),
+      );
+    }
+    try {
+      setup.config = await put<ConfigView>('/config', body);
+      fill(setup.config);
+    } catch (e) {
+      showError('Could not save settings', e);
+    } finally {
+      saving = false;
+    }
+  }
+  const initials = (p: PluginInfo) => (p.label || p.name).split(/[\s-]+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  const HUE: Record<string, string> = { runtime: '#b4441f', host: '#4a3a75', tracker: '#2f45c9' };
+</script>
+
+<div class="phead">
+  <div style="display:flex;flex-direction:column;gap:4px">
+    <h1>Settings</h1>
+    <p class="muted">How many agents run at once, how long xherd waits for you, and the plugins it uses.</p>
+  </div>
+  <nav class="tabs" aria-label="Settings">
+    <a class="tb" class:on={tab === 'general'} aria-current={tab === 'general' ? 'page' : undefined} href={href('/settings')}>General</a>
+    <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
+      Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
+  </nav>
+</div>
+
+<div class="stack">
+  {#if setup.config?.restartNeeded}
+    <div class="savebar" role="status" style="border-color:var(--accent)">
+      <span>Saved settings differ from the running daemon. <b>Restart the daemon</b> to apply them.</span>
+    </div>
+  {/if}
+  {#if !setup.config || !ready}
+    <p class="muted">Loading…</p>
+  {:else if tab === 'general'}
+    <section class="sec">
+      <div class="sh"><h2>Agents</h2><span class="hint">Slots, files and housekeeping.</span></div>
+      <div class="bd">
+        <div class="g3">
+          <label class="f">Max agents running at once
+            <span class="unit"><input type="number" min="1" max="64" bind:value={form.maxConcurrentAgents} /><span>agents</span></span>
+            <span class="hint">More wait in Queued.</span></label>
+          <label class="f">Pause timeout
+            <span class="unit"><input type="number" min="5" max="3600" bind:value={form.pauseTimeoutSec} /><span>sec</span></span>
+            <span class="hint">How long a pause waits for the agent to stop.</span></label>
+          <label class="f">Keep events
+            <span class="unit"><input type="number" min="1" bind:value={form.eventRetentionDays} /><span>days</span></span></label>
+        </div>
+        <label class="f">Workspace folder
+          <input class="mono" bind:value={form.workspace} placeholder="$XHERD_WORKSPACE, else ~/xherd" />
+          <span class="hint">Holds <span class="mono">worktrees/&lt;repo&gt;/&lt;agent&gt;</span>. Absolute path; empty for the default.</span></label>
+      </div>
+    </section>
+    <section class="sec">
+      <div class="sh"><h2>Waiting for you</h2><span class="hint">What happens while an agent sits at a gate.</span></div>
+      <div class="bd">
+        <div class="g3">
+          <label class="f">Idle alert after
+            <span class="unit"><input type="number" min="0" bind:value={form.idleAlertMinutes} /><span>min</span></span>
+            <span class="hint">0 turns it off.</span></label>
+          <label class="f">Park at a gate after
+            <span class="unit"><input type="number" min="0" bind:value={form.gateParkMinutes} /><span>min</span></span>
+            <span class="hint">Frees the slot; stays in Needs you. 0 never parks.</span></label>
+        </div>
+        {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.']] as [k, title, hint] (k)}
+          <div class="tog">
+            <button class="sw" class:on={form[k] === true} role="switch" aria-checked={form[k] === true} aria-label={title}
+              onclick={() => (form[k] = !form[k])}></button>
+            <div><b style="font-weight:500">{title}</b><div class="hint">{hint}</div></div>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {:else}
+    <div class="cards">
+      {#each app.state?.plugins ?? [] as p (p.name)}
+        <article class="pcard">
+          <div class="h">
+            <span class="mi" style="background:{HUE[p.kind] ?? '#5b4b80'}" aria-hidden="true">{initials(p)}</span>
+            <div style="min-width:0">
+              <h3>{p.label || p.name}</h3>
+              <div class="hint">{p.kind} · {p.version}{p.builtin ? ' · built in' : ''}</div>
+            </div>
+          </div>
+          <div class="b">
+            {#if p.description}<p class="muted">{p.description}</p>{/if}
+            {#each p.settings as s (s.key)}
+              {#if s.secret}
+                <div class="f">{s.label || s.key}<span class="hint">Secret: kept in secrets.json, not editable here yet.</span></div>
+              {:else if plugins[p.name]}
+                <label class="f">{s.label || s.key}{#if s.required} *{/if}
+                  <input bind:value={plugins[p.name][s.key]} placeholder={s.default != null ? String(s.default) : ''} /></label>
+              {/if}
+            {/each}
+          </div>
+          <div class="ft"><span class="pill live">● on</span></div>
+        </article>
+      {/each}
+      {#each broken as b (b.dir)}
+        <article class="pcard err">
+          <div class="h"><span class="mi" style="background:var(--halt)">!</span>
+            <div><h3>{b.name}</h3><div class="hint mono">{b.dir}</div></div></div>
+          <div class="b"><p style="color:var(--halt);word-break:break-word">{b.error}</p></div>
+        </article>
+      {/each}
+    </div>
+  {/if}
+  {#if setup.config && ready}
+    <div class="savebar">
+      <span class="muted">{dirty ? `${dirty} unsaved change${dirty > 1 ? 's' : ''}` : 'No unsaved changes'}</span>
+      <span class="grow"></span>
+      <button class="btn ghost" disabled={!dirty || saving} onclick={() => setup.config && fill(setup.config)}>Discard</button>
+      <button class="btn primary" disabled={!dirty || saving} onclick={save}>Save changes</button>
+    </div>
+  {/if}
+</div>

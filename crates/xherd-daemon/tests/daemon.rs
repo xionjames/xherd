@@ -164,12 +164,15 @@ async fn reports_sequence_dedupe_and_unknown_agents() {
         None
     );
 
+    // Permission prompts come mid-turn: working first, then the notification.
+    let working = rep(&a, "r3", ReportEvent::Working, 3, Value::Null);
+    assert_eq!(t.d.report(working).await, Some(ReportResult::Applied));
     let mut notes = t.d.hub.subscribe();
     let blocked = rep(
         &a,
-        "r3",
+        "r4",
         ReportEvent::Notification,
-        3,
+        4,
         json!({"message": "Allow Bash?"}),
     );
     assert_eq!(t.d.report(blocked).await, Some(ReportResult::Applied));
@@ -188,7 +191,7 @@ async fn reports_sequence_dedupe_and_unknown_agents() {
 
     // Persisted, and reloaded the same after a restart of the actor's view.
     let stored = t.d.store.get_agent(&a.id).await.unwrap().unwrap();
-    assert_eq!(stored.last_seq, 3);
+    assert_eq!(stored.last_seq, 4);
     assert_eq!(stored.status, Status::Blocked);
 }
 

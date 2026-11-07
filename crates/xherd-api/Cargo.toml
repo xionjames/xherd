@@ -5,7 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
+rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = ["net", "rt", "macros"] }
@@ -15,12 +16,15 @@ xherd-core = { version = "0.1.0", path = "../xherd-core" }
 xherd-daemon = { version = "0.1.0", path = "../xherd-daemon" }
 xherd-plugin = { version = "0.1.0", path = "../xherd-plugin" }
 xherd-store = { version = "0.1.0", path = "../xherd-store" }
+xherd-term = { version = "0.1.0", path = "../xherd-term" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+futures-util = "0.3.34"
 http-body-util = "0.1.5"
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+tokio-tungstenite = "0.30.0"
 tower = { version = "0.5.3", features = ["util"] }

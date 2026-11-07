@@ -161,7 +161,12 @@ impl Daemon {
 /// The runtime must already trust the worktrees root (or an ancestor), or it
 /// would stop every new agent at its trust dialog before any hook runs. The
 /// folder is created first so the instruction given works as written.
-fn check_trust(t: &runtime::Trust, label: &str, cmd: &str, dir: &Path) -> Result<(), ActionError> {
+pub(crate) fn check_trust(
+    t: &runtime::Trust,
+    label: &str,
+    cmd: &str,
+    dir: &Path,
+) -> Result<(), ActionError> {
     std::fs::create_dir_all(dir).map_err(|e| refuse("io", format!("{}: {e}", dir.display())))?;
     let file = xherd_flow::install::expand(&t.file, &|v| std::env::var(v).ok())
         .map_err(|e| refuse("runtime_unusable", e))?;

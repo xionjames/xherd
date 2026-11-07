@@ -1,0 +1,100 @@
+//! Setup checks and settings (`/checks`, `/config`). Never the real HOME,
+//! Claude Code config or `gh`.
+
+use std::sync::Arc;
+
+use serde_json::json;
+use xherd_core::paths::Paths;
+use xherd_daemon::*;
+
+#[tokio::test]
+async fn checks_report_and_fix_the_pack_install() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    let ws = home.path().join("ws");
+    let sock = format!("xherd-test-trust-{}", std::process::id());
+    xherd_core::config::Config {
+        workspace: Some(ws.to_string_lossy().into_owned()),
+        tmux_socket: Some(sock.clone()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    // Only the runtime, with a check that always passes and an untrusting fixture.
+    o.builtin_plugins.retain(|m| m.name == "claude-code");
+    let trust = home.path().join("claude.json");
+    std::fs::write(&trust, "{}").unwrap();
+    let rt = &mut o.builtin_plugins[0];
+    rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    // Stands in for `claude` in the trust session.
+    rt.data.get_mut("terminal").unwrap()["launch"] = json!(["sh", "-c", "sleep 30"]);
+    rt.checks =
+        serde_json::from_value(json!([{"name": "runs", "argv": ["git", "--version"]}])).unwrap();
+    let d = Daemon::start(paths, o).await.unwrap();
+
+    let h = home.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let by_id = |cs: &[checks::Check], id: &str| cs.iter().find(|c| c.id == id).cloned().unwrap();
+
+    let cs = d.checks(&env).await;
+    assert!(by_id(&cs, "git").ok);
+    let rt = by_id(&cs, "plugin:claude-code:runs");
+    assert!(rt.ok && rt.required);
+    let trust_c = by_id(&cs, "trust");
+    assert!(!trust_c.ok && trust_c.required);
+    assert!(matches!(trust_c.fix, Some(checks::Fix::Session { .. })));
+    let pack = by_id(&cs, "pack");
+    assert!(!pack.ok);
+    assert!(matches!(pack.fix, Some(checks::Fix::Action { .. })));
+
+    assert_eq!(
+        d.fix_check("git", &env).await.unwrap_err().code,
+        "not_fixable"
+    );
+
+    // The trust fix starts the runtime in the worktrees folder, once.
+    let tmux = |args: &[&str]| {
+        std::process::Command::new("tmux")
+            .args(["-L", &sock])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    d.fix_check("trust", &env).await.unwrap();
+    d.fix_check("trust", &env).await.unwrap();
+    let ls = tmux(&["ls", "-F", "#{session_name} #{pane_current_path}"]);
+    let ls = String::from_utf8_lossy(&ls.stdout).into_owned();
+    tmux(&["kill-server"]);
+    assert_eq!(ls.lines().count(), 1, "{ls}");
+    assert!(ls.starts_with("xherd-setup-trust "), "{ls}");
+    assert!(ls.trim_end().ends_with("/ws/worktrees"), "{ls}");
+
+    d.fix_check("pack", &env).await.unwrap();
+    assert!(
+        home.path()
+            .join(".claude/commands/xhspec/feature.md")
+            .exists()
+    );
+    let cs = d.checks(&env).await;
+    assert!(by_id(&cs, "pack").ok);
+
+    // Settings: saved to config.json, applied at the next start.
+    let v = d.config_view().unwrap();
+    assert_eq!(v["restartNeeded"], false);
+    assert!(v["config"].get("userToken").is_none());
+    let patch = serde_json::from_value(json!({"welcomed": true})).unwrap();
+    assert_eq!(d.save_config(patch).unwrap()["restartNeeded"], false);
+    let patch = serde_json::from_value(json!({"maxConcurrentAgents": 2})).unwrap();
+    let v = d.save_config(patch).unwrap();
+    assert_eq!(
+        (
+            v["config"]["maxConcurrentAgents"].as_u64(),
+            v["restartNeeded"].as_bool()
+        ),
+        (Some(2), Some(true))
+    );
+    assert_eq!(v["running"]["maxConcurrentAgents"], 4);
+}

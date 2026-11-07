@@ -15,10 +15,12 @@ use xherd_plugin::Registry;
 use xherd_store::Store;
 
 pub mod actor;
+pub mod checks;
 mod create;
 pub mod driver;
 pub mod install;
 pub mod scheduler;
+pub mod settings;
 pub mod supervisor;
 pub mod support;
 
@@ -65,8 +67,32 @@ impl Options {
     }
 }
 
-/// The host plugin for pull requests with its settings and secrets resolved
-/// (R-506): `github`, built in or replaced by an external plugin of that name.
+/// A plugin's context: settings and secrets resolved (R-506), its folders.
+fn plugin_context(
+    p: &xherd_plugin::Plugin,
+    paths: &Paths,
+    config: &Config,
+    secrets: &Secrets,
+    xherd_bin: &str,
+) -> xherd_plugin::Context {
+    let m = &p.manifest;
+    let global = config
+        .plugin_settings
+        .get(&m.name)
+        .and_then(serde_json::Value::as_object);
+    xherd_plugin::Context {
+        settings: xherd_plugin::resolve_settings(m, global, None),
+        secrets: xherd_plugin::resolve_secrets(m, &secrets.for_plugin(&m.name)),
+        xherd_bin: xherd_bin.to_string(),
+        xherd_url: config.url(),
+        config_dir: paths.plugin_config(&m.name),
+        state_dir: paths.plugin_state(&m.name),
+        ..xherd_plugin::Context::default()
+    }
+}
+
+/// The host plugin for pull requests: `github`, built in or replaced by an
+/// external plugin of that name.
 fn host_plugin(
     plugins: &Registry,
     paths: &Paths,
@@ -77,22 +103,9 @@ fn host_plugin(
     let p = plugins
         .get(xherd_plugin::host::GITHUB)
         .filter(|p| p.manifest.kind == xherd_plugin::Kind::Host)?;
-    let m = &p.manifest;
-    let global = config
-        .plugin_settings
-        .get(&m.name)
-        .and_then(serde_json::Value::as_object);
     Some(Arc::new(xherd_plugin::host::Host {
         plugin: p.clone(),
-        ctx: xherd_plugin::Context {
-            settings: xherd_plugin::resolve_settings(m, global, None),
-            secrets: xherd_plugin::resolve_secrets(m, &secrets.for_plugin(&m.name)),
-            xherd_bin: xherd_bin.to_string(),
-            xherd_url: config.url(),
-            config_dir: paths.plugin_config(&m.name),
-            state_dir: paths.plugin_state(&m.name),
-            ..xherd_plugin::Context::default()
-        },
+        ctx: plugin_context(p, paths, config, secrets, xherd_bin),
     }))
 }
 
@@ -218,6 +231,76 @@ impl Daemon {
 
     pub async fn action(&self, who: &str, a: UserAction) -> Result<Agent, ActionError> {
         self.sup.action(who, a).await
+    }
+
+    pub(crate) fn plugin_context(&self, p: &xherd_plugin::Plugin) -> xherd_plugin::Context {
+        plugin_context(p, &self.paths, &self.config, &self.secrets, &self.xherd_bin)
+    }
+
+    /// The agent's documents for the UI: every `*.md` in the spec folder
+    /// (`spec.md` form) plus the open gate's files, gate files first.
+    pub async fn docs(&self, who: &str) -> Result<Vec<String>, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = workdir_of(&a)?;
+        let mut out: Vec<String> = match &a.gate {
+            Some(xherd_core::domain::Gate::Docs { files, .. }) => {
+                files.iter().map(|f| f.path.clone()).collect()
+            }
+            _ => Vec::new(),
+        };
+        let dir = wd.join(xherd_flow::xap::SPEC_DIR);
+        let mut found: Vec<String> = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter(|n| n.ends_with(".md"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        for f in found {
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One document as the UI shows it (R-107): its text, the hash an
+    /// approval would record (`doc_sha256`), and the text last approved, if
+    /// any, for "changed since you reviewed". `path` as in XAP calls.
+    pub async fn doc(&self, who: &str, path: &str) -> Result<serde_json::Value, ActionError> {
+        const MAX: u64 = 2 * 1024 * 1024;
+        let fail = |code: &'static str, message: String| ActionError { code, message };
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = workdir_of(&a)?;
+        let canon = xherd_flow::xap::doc_path(path, wd).map_err(|r| fail("bad_path", r.message))?;
+        let abs = wd
+            .join(xherd_flow::xap::worktree_rel(&canon))
+            .canonicalize()
+            .ok()
+            .filter(|p| wd.canonicalize().is_ok_and(|w| p.starts_with(w)) && p.is_file())
+            .ok_or_else(|| fail("no_such_doc", format!("{path} does not exist")))?;
+        if std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0) > MAX {
+            return Err(fail("too_large", format!("{path} is larger than 2 MiB")));
+        }
+        let bytes = std::fs::read(&abs).map_err(|e| fail("io", e.to_string()))?;
+        let flow = a
+            .pack
+            .as_deref()
+            .and_then(|p| self.packs.get(p))
+            .and_then(|p| p.flow(a.flow.as_deref().unwrap_or_default()));
+        let sha = xherd_flow::approve::doc_sha256(flow, wd, &canon, &bytes);
+        let reviewed = self
+            .store
+            .reviewed(&a.id, &canon)
+            .await
+            .map_err(|e| fail("store", e.to_string()))?;
+        Ok(serde_json::json!({
+            "path": canon, "text": String::from_utf8_lossy(&bytes), "sha256": sha,
+            "reviewed": reviewed,
+        }))
     }
 
     /// What the user reviews before approving (xap.md §5, R-104): with a
@@ -361,4 +444,14 @@ impl Daemon {
             Err(e) => tracing::error!(error = %e, "event pruning failed"),
         }
     }
+}
+
+fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
+    a.workdir
+        .as_deref()
+        .map(std::path::Path::new)
+        .ok_or_else(|| ActionError {
+            code: "no_workspace",
+            message: format!("{} has no worktree", a.name),
+        })
 }

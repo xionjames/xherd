@@ -48,6 +48,9 @@ pub enum UserAction {
     /// Approve the open gate and hand on the next command (R-104).
     Approve {
         reason: Option<String>,
+        /// Document → hash the user read (UI): refused when the file changed
+        /// since, so the approval covers exactly what was shown.
+        expect: std::collections::BTreeMap<String, String>,
     },
     /// Send the agent a change request for the open gate (R-105).
     RequestChanges {
@@ -175,7 +178,35 @@ struct Actor {
 }
 
 impl Actor {
+    /// Agents from before `visited_stages`: rebuild it once from their
+    /// `stage.enter` / `gate.open` events, oldest first.
+    async fn backfill_stages(&mut self) {
+        if !self.agent.visited_stages.is_empty() || self.agent.stage.is_none() {
+            return;
+        }
+        let Ok(mut events) = self.env.store.events(&self.agent.id, 100_000).await else {
+            return;
+        };
+        events.reverse();
+        for e in events {
+            if !matches!(e.kind.as_str(), "xap.stage.enter" | "xap.gate.open") {
+                continue;
+            }
+            let stage = e.payload.as_ref().and_then(|p| p["args"]["stage"].as_str());
+            if let Some(s) = stage
+                && !self.agent.visited_stages.iter().any(|v| v == s)
+            {
+                self.agent.visited_stages.push(s.to_string());
+            }
+        }
+        self.agent.note_stage();
+        if let Err(err) = self.env.store.put_agent(&self.agent).await {
+            tracing::error!(agent = %self.agent.name, %err, "agent not stored");
+        }
+    }
+
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Msg>) {
+        self.backfill_stages().await;
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Report(r, origin, reply) => {
@@ -237,7 +268,8 @@ impl Actor {
     }
 
     /// Persist and publish; tell the supervisor when the status moved.
-    async fn commit(&self, before: Status) {
+    async fn commit(&mut self, before: Status) {
+        self.agent.note_stage();
         if let Err(err) = self.env.store.put_agent(&self.agent).await {
             tracing::error!(agent = %self.agent.name, %err, "agent not stored");
         }
@@ -671,8 +703,8 @@ impl Actor {
                     "user.send"
                 }
             }
-            UserAction::Approve { reason } => {
-                self.approve(reason.clone()).await?;
+            UserAction::Approve { reason, expect } => {
+                self.approve(reason.clone(), expect).await?;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
@@ -819,7 +851,11 @@ impl Actor {
 
     /// Approve by content hash (R-104, R-106): ledger file first (fsync),
     /// then the database, then hand on the next command.
-    async fn approve(&mut self, reason: Option<String>) -> Result<(), ActionError> {
+    async fn approve(
+        &mut self,
+        reason: Option<String>,
+        expect: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ActionError> {
         let gate = self.gate_for_user(true)?;
         let wd = self.workdir().map_err(|e| refuse(e.code, e.message))?;
         let (label, files): (String, Vec<String>) = match &gate {
@@ -853,6 +889,15 @@ impl Actor {
                     ));
                 }
             }
+        }
+        if let Some((f, _, _)) = approved
+            .iter()
+            .find(|(f, sha, _)| expect.get(f).is_some_and(|e| e != sha))
+        {
+            return Err(refuse(
+                "changed_since_read",
+                format!("{f} changed since you read it; read it again before approving"),
+            ));
         }
         let next = self.next_command(&wd, &gate)?;
         let now = self.now();

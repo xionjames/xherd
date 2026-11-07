@@ -180,6 +180,10 @@ pub fn apply_report(agent: &mut Agent, r: &Report, origin: Origin, now: Millis) 
                 effects.push(Effect::DeliveryAck);
             }
         }
+        // A runtime notification after the agent stopped is an idle reminder
+        // ("waiting for your input"), not a block: permission prompts only
+        // come mid-turn. Stopped at a gate, the agent stays approvable.
+        E::Notification if matches!(agent.status, Status::WaitingInput | Status::Idle) => {}
         E::Notification | E::Blocked => {
             if origin == Origin::Agent || agent.status != Status::Blocked {
                 let was_blocked = agent.status == Status::Blocked;
@@ -301,6 +305,36 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn idle_reminder_after_a_stop_does_not_block() {
+        let mut a = running();
+        a.gate = Some(crate::domain::Gate::Question { text: "?".into() });
+        apply_report(
+            &mut a,
+            &rep(ReportEvent::Stop, 1, Value::Null),
+            Origin::Agent,
+            1,
+        );
+        assert_eq!(a.status, Status::WaitingInput);
+        let idle = json!({"message": "Claude is waiting for your input", "notification_type": "idle_prompt"});
+        let out = apply_report(
+            &mut a,
+            &rep(ReportEvent::Notification, 2, idle),
+            Origin::Agent,
+            2,
+        );
+        assert_eq!(a.status, Status::WaitingInput);
+        assert!(matches!(out, Outcome::Applied { effects, .. } if effects.is_empty()));
+        // An explicit report still blocks.
+        apply_report(
+            &mut a,
+            &rep(ReportEvent::Blocked, 3, Value::Null),
+            Origin::Agent,
+            3,
+        );
+        assert_eq!(a.status, Status::Blocked);
     }
 
     #[test]

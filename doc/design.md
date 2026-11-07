@@ -197,7 +197,7 @@ trait Driver {
 Terminal runtime specifics (data in the runtime plugin's `data.terminal`):
 
 - **Hooks**: `hooks.file` (Claude Code: `.claude/settings.local.json`) gets xherd's tagged `xherd hook <event>` entries merged in at creation and is excluded from git.
-- **Folder trust**: a runtime that asks "trust this folder?" before running hooks would stop every new worktree at that dialog, and xherd's first command would never be typed. `trust` names where the runtime records trusted folders (Claude Code: `${CLAUDE_CONFIG_DIR:-~}/.claude.json`, `projects["<abs path>"].hasTrustDialogAccepted`). Trust covers subfolders, so it is a one-time prerequisite on the worktrees root (`<workspace>/worktrees`, §8.1), not a per-agent write: xherd only reads that file (the runtime rewrites it concurrently). `xherd new` creates the worktrees root, then refuses with `runtime_untrusted` and the exact steps (run the runtime once in that folder and accept) until it or an ancestor is trusted. Paths are compared as stored and canonicalised (`/tmp` → `/private/tmp`). Runtimes without `trust` skip the check.
+- **Folder trust**: a runtime that asks "trust this folder?" before running hooks would stop every new worktree at that dialog, and xherd's first command would never be typed. `trust` names where the runtime records trusted folders (Claude Code: `${CLAUDE_CONFIG_DIR:-~}/.claude.json`, `projects["<abs path>"].hasTrustDialogAccepted`). Trust covers subfolders, so it is a one-time prerequisite on the worktrees root (`<workspace>/worktrees`, §8.1), not a per-agent write: xherd only reads that file (the runtime rewrites it concurrently). `xherd new` creates the worktrees root, then refuses with `runtime_untrusted` and the exact steps (run the runtime once in that folder and accept) until it or an ancestor is trusted. Setup checks do those steps for the user, so no shell on the host or container is needed (Docker, Kubernetes): their trust fix starts the runtime in the worktrees root in a tmux session (`xherd-setup-trust`) shown in the browser (`GET /ws/setup/trust`); the user accepts the runtime's own dialog there and quits, and the check runs again. xherd still never writes the runtime's file. Paths are compared as stored and canonicalised (`/tmp` → `/private/tmp`). Runtimes without `trust` skip the check.
 
 ACP specifics:
 
@@ -351,7 +351,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 | Area | Routes |
 |---|---|
 | Health and state | `GET /healthz` (no auth), `GET /state` (config, platform, client kind, version, agents, profiles, plugins, todos), `GET /checks`, `POST /checks/:id/fix` |
-| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,open,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
+| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,open,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
 | Reports and XAP | `POST /hooks`, `POST /xap` (agent tokens) |
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
 | Settings | `GET/PUT /config`, `GET/POST/PUT/DELETE /profiles…`, `GET /profiles/export`, `POST /profiles/import` |
@@ -661,11 +661,11 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Ship
   - [x] Draft PR via GitHub
 - [ ] **M2 UI**
-  - [ ] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
-  - [ ] Hash approvals from the UI
-  - [ ] Websockets
-  - [ ] Terminal
-  - [ ] Diffs
+  - [x] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
+  - [x] Hash approvals from the UI
+  - [x] Websockets
+  - [x] Terminal
+  - [x] Diffs
 - [ ] **M3 Docker-first**
   - [ ] Image with version managers
   - [ ] `xherd init` (users, SSH proxy, git config)
