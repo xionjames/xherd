@@ -167,9 +167,16 @@ transition to apply to the ticket once the PR is open.
 
 ## memory.md
 
-A short state note for a fresh session: current stage, current task, decisions
-taken with the user, anything a newcomer must not redo. Rewrite it (do not
-append forever) at each gate.
+A short state note for a fresh session: every step starts in a new session that
+knows nothing but this file and the approved documents. Rewrite it (do not
+append forever) at each gate, in at most about 60 lines, with these sections:
+
+- `## State`: current stage, current task, what comes next.
+- `## Decisions`: taken with the user, and why; anything a newcomer must not redo.
+- `## Code map`: one line per file that matters, `path: its role here`, plus the
+  repository's build, test and lint commands. The next step opens these files
+  and does not explore the code again.
+- `## Watch out`: traps found (flaky tests, generated files, odd conventions).
 
 ## HANDOFF.md (`.xherd/HANDOFF.md`)
 

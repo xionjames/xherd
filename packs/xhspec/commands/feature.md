@@ -17,7 +17,7 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
    requirements, acceptance, out of scope, the design decision, open
    questions, assumptions. Set `design: skip` only when the rules for skipping
    design hold.
-5. Write `.xherd/spec/memory.md`.
+5. Write `.xherd/spec/memory.md`, with the code map of what you explored.
 6. Declare the gate with one `--question` per open question (none: plain
    `"$XHERD_BIN" gate open spec`). For example:
    `"$XHERD_BIN" gate open spec --question "Should expired sessions be kept for audit?"`

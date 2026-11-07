@@ -6,7 +6,7 @@ description: xhSpec — implement the next ready task and propose its commit
 Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
 
 1. `"$XHERD_BIN" stage enter implement`
-2. Read `.xherd/spec/tasks.md`. The next task is the first one with status
+2. Read `.xherd/spec/memory.md` and `.xherd/spec/tasks.md`. The next task is the first one with status
    `todo` whose `depends` are all `done`.
 3. If no task is left to do (all `done`), follow the review command in
    `{{dir}}/review.md` instead and stop here.
@@ -28,4 +28,5 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
    entry to `.xherd/spec/commits.md` with `status: proposed`, and propose it:
    `"$XHERD_BIN" commit propose C01 --subject "Add the session store" --files src/store.rs,src/lib.rs --tasks T01`
    Do not commit yet.
-10. Update `.xherd/spec/memory.md`, then stop and wait for the user.
+10. Rewrite `.xherd/spec/memory.md` (state, decisions, code map for the next
+    task), then stop and wait for the user.

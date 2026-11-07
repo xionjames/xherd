@@ -170,7 +170,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-008 | Reports from a session xherd already ended (paused, queued, cancelled) never revive the agent. |
 | R-009 | Every status report carries a per-agent **monotonic sequence number**; reports with a lower or equal number are logged but do not change state. Reports synthesised by the daemon (screen rules) get daemon sequence numbers and never make a real report stale. |
 | R-010 | Every change to an agent goes through one serialised path per agent; no change is lost when reports, user actions and timers arrive together. |
-| R-011 | **Reconcile** on start and every minute: a live agent whose tmux session is gone → `error` (event `session-lost`). |
+| R-011 | **Reconcile** on start and every minute: a live agent whose tmux session is gone → `error` (event `session-lost`). At daemon start (a container or terminal-server restart) such an agent is instead parked when it waits at a docs or commit gate (approving still works), or resumed like R-027. |
 
 ### 5.4 Status reporting
 
@@ -192,7 +192,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-020 | Terminal driver: text is typed into the agent's window, then Enter (runtimes may need extra Enters after slash commands). ACP driver: an ACP prompt message. |
 | R-021 | xherd never types into a `blocked` agent. |
 | R-022 | Delivery is acknowledged by the next prompt-submitted or `working` report within a timeout (default 10 s); otherwise Enter is retried once and the user is notified. |
-| R-023 | **Hand-on** after an approved gate: with fresh sessions on, only the agent window's process is replaced (`tmux respawn-window`) by a new runtime session started with the next command, so other windows (a dev server, tests) keep running; otherwise the command is typed into the current session; a parked or watching agent is started with it. |
+| R-023 | **Hand-on** after an approved gate: with fresh sessions on, only the agent window's process is replaced (`tmux respawn-window`) by a new runtime session started with the next command, so other windows (a dev server, tests) keep running; the new session knows nothing of the last one and reads `memory.md` (state, decisions, code map) and the approved documents, not the codebase; otherwise the command is typed into the current session; a parked or watching agent is started with it. |
 | R-024 | No fresh session while the agent has background tasks running (they would be killed), or for flow `none`. |
 | R-025 | A change of runtime between steps always uses a fresh session in the new runtime (status files and permissions for that runtime are written first). If the new runtime is unusable, the agent stays and the user is warned. |
 

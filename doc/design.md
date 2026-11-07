@@ -728,3 +728,4 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D20 | Desktop app in Electron, post-v1 | Accepted |
 | D21 | Drained updates and backups before updates/migrations | Accepted |
 | D22 | MIT licence | Accepted |
+| D23 | Every step is a new session fed by `memory.md` (state, decisions, code map) and the approved documents, never by conversation history; the session stays open while a gate waits so change requests keep their context | Accepted |
