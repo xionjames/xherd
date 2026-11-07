@@ -190,12 +190,7 @@ impl Daemon {
                 let label = &p.manifest.label;
                 Fix::Session {
                     label: "Trust the worktrees folder".into(),
-                    explain: format!(
-                        "Runs `{}` in {d} in the terminal below. Choose \"Yes, I trust this \
-                         folder\", then quit {label}; the check runs again when it closes. xherd \
-                         never edits {label}'s settings itself.",
-                        rt.launch.join(" ")
-                    ),
+                    explain: format!("Opens {label} here: accept the trust dialog, then quit."),
                 }
             }),
         })
