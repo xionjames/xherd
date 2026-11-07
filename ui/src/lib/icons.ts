@@ -1,0 +1,20 @@
+// Inline icon paths (24×24, stroke). Drawn for xherd.
+export const ICONS: Record<string, string> = {
+  search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.3-4.3',
+  settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
+  plus: 'M12 5v14M5 12h14',
+  hand: 'M8 13V6.5a1.5 1.5 0 0 1 3 0V12M11 11V5a1.5 1.5 0 0 1 3 0v6M14 11V6.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L3.5 15a1.5 1.5 0 0 1 2.4-1.8L8 15',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  pause: 'M9 6v12M15 6v12',
+  play: 'M8 5.5v13l10-6.5z',
+  more: 'M6 12h.01M12 12h.01M18 12h.01',
+  doc: 'M7 3h7l4 4v14H7zM14 3v4h4',
+  term: 'M4 5h16v14H4zM8 10l3 2-3 2M13 15h3',
+  tasks: 'M9 7h11M9 12h11M9 17h11M4 7h.01M4 12h.01M4 17h.01',
+  commit: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM3 12h6M15 12h6',
+  diff: 'M12 4v8M8 8h8M8 18h8',
+  pr: 'M6 4a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM6 8v12M18 16a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM18 16V9a3 3 0 0 0-3-3h-4M13 4l-2 2 2 2',
+  activity: 'M4 6h16M4 12h16M4 18h10',
+  x: 'M6 6l12 12M18 6L6 18',
+  ext: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
+};

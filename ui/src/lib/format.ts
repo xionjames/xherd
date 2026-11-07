@@ -1,0 +1,86 @@
+import type { Agent, Status } from './types';
+
+/** "now", "42m", "3h", "2d" since `ms`. */
+export function ago(ms: number, now = Date.now()): string {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  if (s < 60) return 'now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+export const STATUS_LABEL: Record<Status, string> = {
+  queued: 'queued',
+  running: 'running',
+  'waiting-input': 'your answer',
+  blocked: 'blocked',
+  idle: 'idle',
+  parked: 'parked',
+  paused: 'paused',
+  watching: 'watching PR',
+  done: 'done',
+  cancelled: 'cancelled',
+  error: 'error',
+};
+
+/** Hollow dot for agents that are not working and not waiting on you. */
+export function hollow(s: Status): boolean {
+  return ['queued', 'paused', 'watching', 'parked', 'cancelled'].includes(s);
+}
+
+/** Needs you = waiting for input, blocked, or an open gate (R-007). */
+export function needsYou(a: Agent): boolean {
+  return a.status === 'waiting-input' || a.status === 'blocked' || !!a.gate;
+}
+
+/** Short "what waits" label: "spec", "C03", "your answer"… */
+export function waitLabel(a: Agent): string {
+  const g = a.gate;
+  if (g) {
+    switch (g.kind) {
+      case 'docs': return g.stage;
+      case 'commit': return g.id;
+      case 'pr-triage': return `${g.count} comments`;
+      case 'pr-replies': return `${g.count} replies`;
+      case 'question': return 'your answer';
+    }
+  }
+  if (a.status === 'waiting-input') return 'your answer';
+  if (a.status === 'blocked') return 'blocked';
+  return STATUS_LABEL[a.status];
+}
+
+/** One-line description of what waits on the human. */
+export function waitText(a: Agent): string {
+  const g = a.gate;
+  if (!g) return a.status === 'blocked' ? 'The agent is blocked.' : 'The agent is waiting for your answer.';
+  switch (g.kind) {
+    case 'docs': return `${g.files.map((f) => f.path).join(', ') || g.stage} ready for review`;
+    case 'commit': return `${g.id} ${g.subject}`;
+    case 'pr-triage': return `${g.count} new PR review comments waiting for your decision`;
+    case 'pr-replies': return `${g.count} PR replies waiting for your approval`;
+    case 'question': return g.text;
+  }
+}
+
+/** Since when the agent waits on you (oldest first in lists). */
+export const waitingSince = (a: Agent) => a.statusSince;
+
+/** Stable per-agent hue (never in the coral range reserved for "needs you"). */
+export function agentHue(name: string): string {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  // 40..330 avoids the red/coral band around 0/360.
+  const hue = 40 + (h % 290);
+  return `hsl(${hue} 62% 48%)`;
+}
+
+export function repoName(a: Agent): string {
+  return a.repo?.split('/').filter(Boolean).pop() ?? 'folder';
+}
+
+export function shortBase(a: Agent): string {
+  return a.base?.replace(/^origin\//, '') ?? '';
+}

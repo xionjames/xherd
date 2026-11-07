@@ -41,7 +41,11 @@ impl Clock for ManualClock {
 
 /// Published on every agent change; the websocket hub (M2) forwards these.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(
+    tag = "type",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Change {
     Agent { agent: Box<Agent> },
     Notify { agent_id: String, text: String },

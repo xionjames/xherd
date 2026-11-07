@@ -374,3 +374,79 @@ async fn create_agent_endpoint() {
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(v["agent"]["name"], "SC-9");
 }
+
+#[tokio::test]
+async fn cross_site_origin_is_refused() {
+    let (_dir, d, _a) = setup().await;
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let (s, v) = call(
+        local.clone(),
+        get("/api/v1/state")
+            .header("origin", "http://evil.example")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED, "{v}");
+    let (s, v) = call(
+        local,
+        get("/api/v1/state")
+            .header("origin", "http://localhost:5173")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let feature = v["flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["flow"] == "feature")
+        .unwrap();
+    assert_eq!(feature["stages"][0]["id"], "spec");
+    assert_eq!(feature["stages"][0]["gate"], true);
+}
+
+#[tokio::test]
+async fn serves_the_ui_page() {
+    let (_dir, d, _a) = setup().await;
+    let local =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let res = local
+        .oneshot(get("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let ct = res.headers()["content-type"].to_str().unwrap().to_string();
+    assert!(ct.starts_with("text/html"), "{ct}");
+}
+
+#[tokio::test]
+async fn websocket_streams_agent_changes() {
+    use futures_util::StreamExt;
+    let (_dir, d, _a) = setup().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(xherd_api::serve(
+        d.clone(),
+        listener,
+        std::future::pending(),
+    ));
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/v1/ws"))
+        .await
+        .unwrap();
+    d.action("SC-1", UserAction::Pause).await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let m = ws.next().await.unwrap().unwrap();
+            let v: Value = serde_json::from_str(m.to_text().unwrap()).unwrap();
+            if v["type"] == "agent" && v["agent"]["status"] == "paused" {
+                return v;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(msg["agent"]["name"], "SC-1");
+}

@@ -1,6 +1,6 @@
 //! HTTP API (design §7): health, state, agents and their actions,
-//! `POST /hooks` for status reports and `POST /xap` for the agent protocol.
-//! Websockets and the UI come in M2.
+//! `POST /hooks` for status reports, `POST /xap` for the agent protocol,
+//! `GET /ws` for the live state stream, and the web UI at `/`.
 
 use std::net::SocketAddr;
 
@@ -18,11 +18,17 @@ use xherd_core::xap::XapCall;
 use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER};
 use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
+mod ui;
+mod ws;
+
 pub const BODY_LIMIT: usize = 5 * 1024 * 1024;
 
 pub fn router(d: Daemon) -> Router {
     Router::new()
+        .route("/", get(ui::index))
+        .route("/assets/{*rest}", get(ui::asset))
         .route("/api/v1/healthz", get(healthz))
+        .route("/api/v1/ws", get(ws::state_stream))
         .route("/api/v1/state", get(state))
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
@@ -139,7 +145,24 @@ async fn is_local(parts: &mut Parts, d: &Daemon) -> bool {
     ]
     .iter()
     .any(|h| parts.headers.contains_key(*h));
-    peer_local && host_local && !proxied
+    peer_local && host_local && !proxied && origin_local(&parts.headers)
+}
+
+/// A browser request from another site carries its `Origin`: only local
+/// origins may use the local user's rights (no cross-site requests or
+/// websockets against the daemon).
+fn origin_local(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    let Some(rest) = origin.to_str().ok().and_then(|o| o.strip_prefix("http://")) else {
+        return false;
+    };
+    let host = match rest.rsplit_once(':') {
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => h,
+        _ => rest,
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 /// The local user: full rights.
@@ -250,7 +273,25 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "agents": agents,
         "plugins": plugins,
         "brokenPlugins": d.plugins.broken(),
+        "flows": flows(&d),
     })))
+}
+
+/// Every pack flow with its stages, for progress lines.
+fn flows(d: &Daemon) -> Vec<Value> {
+    d.packs
+        .values()
+        .flat_map(|p| {
+            p.flows.iter().map(|(name, f)| {
+                let stages: Vec<Value> = f
+                    .stages
+                    .iter()
+                    .map(|s| json!({"id": s.id, "role": s.role, "class": s.class, "gate": s.gate.is_some()}))
+                    .collect();
+                json!({"pack": p.name, "flow": name, "stages": stages})
+            })
+        })
+        .collect()
 }
 
 async fn list_agents(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
