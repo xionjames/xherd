@@ -44,7 +44,7 @@
     </ol>
   </header>
 
-  <main class="stack" style="max-width:984px;margin:0 auto;width:100%;padding-top:40px">
+  <main class="stack" style="width:100%;padding-top:40px">
     {#if step === 1}
       <h1 style="font-size:28px">Run many coding agents, decide only what matters</h1>
       <p class="muted" style="max-width:72ch;font-size:14px">xherd starts each agent in its own git worktree and terminal session, follows it through spec, design, tasks, build, review and ship, and stops it at the gates where your call is needed. Everything else runs on its own.</p>
@@ -64,9 +64,9 @@
       <p class="muted">These plugins are on. More runtimes, trackers and hosts come as plugins.</p>
       {#each kinds as k (k)}
         <span class="lbl">{KIND[k] ?? k}</span>
-        <div class="row" style="align-items:stretch;gap:12px">
+        <div class="cards">
           {#each (app.state?.plugins ?? []).filter((p) => p.kind === k) as p (p.name)}
-            <div class="tool on" style="max-width:360px"><div class="tp"><div><h3>{p.label || p.name}</h3><p class="hint">{p.description}</p></div></div>
+            <div class="tool on"><div class="tp"><div><h3>{p.label || p.name}</h3><p class="hint">{p.description}</p></div></div>
               <div class="tf">{p.builtin ? 'Built in' : 'Installed'} · default</div></div>
           {/each}
         </div>

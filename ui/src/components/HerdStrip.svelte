@@ -14,7 +14,7 @@
 {#if agents.length}
   <nav class="herd" aria-label="Agents">
     {#if waiting.length}
-      <span class="lbl" style="color:var(--gate)">Needs you {waiting.length}</span>
+      <span class="lbl" style="color:var(--gate);white-space:nowrap;flex:none">Needs you {waiting.length}</span>
       {#each waiting as a (a.id)}
         <a class="hc need" class:on={current === a.id} href={href(`/agent/${a.name}`)}
            aria-current={current === a.id ? 'page' : undefined}>

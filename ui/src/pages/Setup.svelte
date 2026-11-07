@@ -37,7 +37,7 @@
   </div>
 {/if}
 
-<div class="stack wrap">
+<div class="stack">
   {#if !setup.checks}
     <p class="muted">Running checks…</p>
   {:else}

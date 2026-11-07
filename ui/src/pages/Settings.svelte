@@ -76,7 +76,7 @@
   </nav>
 </div>
 
-<div class="stack" style="max-width:1060px">
+<div class="stack">
   {#if setup.config?.restartNeeded}
     <div class="savebar" role="status" style="border-color:var(--accent)">
       <span>Saved settings differ from the running daemon. <b>Restart the daemon</b> to apply them.</span>

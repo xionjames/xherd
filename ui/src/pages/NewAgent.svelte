@@ -34,7 +34,7 @@
 </script>
 
 <div class="phead notabs"><h1>New agent</h1><p class="muted">One ticket, one worktree, one agent.</p></div>
-<form class="stack" style="max-width:860px" onsubmit={create}>
+<form class="stack" onsubmit={create}>
   <section class="sec"><div class="bd">
     <div class="g2">
       <label class="f">Ticket key
