@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -33,6 +33,8 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/diff", get(diff))
+        .route("/api/v1/agents/{id}/docs", get(docs))
+        .route("/api/v1/agents/{id}/file", get(file))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/install", post(install))
         .route("/api/v1/hooks", post(hooks))
@@ -88,6 +90,9 @@ impl From<ActionError> for ApiError {
             "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
             | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
             | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_path" => StatusCode::BAD_REQUEST,
+            "no_such_doc" => StatusCode::NOT_FOUND,
+            "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
             "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
@@ -356,12 +361,36 @@ async fn diff(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiRe
     Ok(Json(d.diff(&id).await?))
 }
 
+/// `GET /agents/:id/docs`: the agent's documents, open gate's first.
+async fn docs(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"docs": d.docs(&id).await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileQuery {
+    path: String,
+}
+
+/// `GET /agents/:id/file?path=spec.md`: a document with its approval hash
+/// and the text last approved (R-107).
+async fn file(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Query(q): Query<FileQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.doc(&id, &q.path).await?))
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ActionBody {
     text: Option<String>,
     reason: Option<String>,
     comment: Option<String>,
+    /// Approve: document → hash the user read.
+    expect: Option<std::collections::BTreeMap<String, String>>,
 }
 
 async fn agent_action(
@@ -387,7 +416,10 @@ async fn agent_action(
         "send" => UserAction::Send {
             text: required(b.text, "text")?,
         },
-        "approve" => UserAction::Approve { reason: b.reason },
+        "approve" => UserAction::Approve {
+            reason: b.reason,
+            expect: b.expect.unwrap_or_default(),
+        },
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
         },

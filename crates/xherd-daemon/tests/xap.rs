@@ -255,9 +255,15 @@ async fn tasks_and_commit_with_real_git() {
     assert_eq!(e.code, "commit_not_approved");
 
     stop(&t, 1).await;
-    t.d.action("SC-1", UserAction::Approve { reason: None })
-        .await
-        .unwrap();
+    t.d.action(
+        "SC-1",
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         get(&t).await.next_prompt.as_deref(),
         Some("/xhspec:commit C01")
@@ -372,20 +378,32 @@ async fn approve_docs_gate_hands_on_next_command() {
 
     // Nothing to approve yet; then not stopped yet.
     assert_eq!(
-        act(&t, UserAction::Approve { reason: None })
-            .await
-            .unwrap_err()
-            .code,
+        act(
+            &t,
+            UserAction::Approve {
+                reason: None,
+                expect: Default::default()
+            }
+        )
+        .await
+        .unwrap_err()
+        .code,
         "no_gate"
     );
     xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
         .await
         .unwrap();
     assert_eq!(
-        act(&t, UserAction::Approve { reason: None })
-            .await
-            .unwrap_err()
-            .code,
+        act(
+            &t,
+            UserAction::Approve {
+                reason: None,
+                expect: Default::default()
+            }
+        )
+        .await
+        .unwrap_err()
+        .code,
         "not_waiting"
     );
     stop(&t, 1).await;
@@ -395,6 +413,7 @@ async fn approve_docs_gate_hands_on_next_command() {
         &t,
         UserAction::Approve {
             reason: Some("lgtm".into()),
+            expect: Default::default(),
         },
     )
     .await
@@ -444,7 +463,15 @@ async fn design_skip_goes_to_tasks() {
         .await
         .unwrap();
     stop(&t, 1).await;
-    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(get(&t).await.next_prompt.as_deref(), Some("/xhspec:tasks"));
 }
 
@@ -476,10 +503,16 @@ async fn request_changes_keeps_the_gate() {
         .unwrap();
     stop(&t2, 1).await;
     assert_eq!(
-        act(&t2, UserAction::Approve { reason: None })
-            .await
-            .unwrap_err()
-            .code,
+        act(
+            &t2,
+            UserAction::Approve {
+                reason: None,
+                expect: Default::default()
+            }
+        )
+        .await
+        .unwrap_err()
+        .code,
         "no_gate"
     );
     let a = act(
@@ -505,7 +538,15 @@ async fn edited_or_undeclared_documents_open_a_gate_on_stop() {
     let a = get(&t).await;
     assert_eq!(a.status, Status::WaitingInput);
     assert!(matches!(&a.gate, Some(Gate::Docs { stage, .. }) if stage == "spec"));
-    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
 
     // Approved and unchanged: idle.
     stop(&t, 2).await;
@@ -532,7 +573,15 @@ async fn task_progress_does_not_reopen_the_tasks_gate() {
     std::fs::write(&tasks, v1).unwrap();
     stop(&t, 1).await;
     assert!(matches!(&get(&t).await.gate, Some(Gate::Docs { stage, .. }) if stage == "tasks"));
-    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
 
     // Progress recorded: still approved, nothing re-opened.
     let done = v1
@@ -566,7 +615,15 @@ async fn ledger_file_wins_after_restart() {
         .await
         .unwrap();
     stop(&t, 1).await;
-    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
     t.d.store
         .write(|c| {
             c.execute("DELETE FROM approvals", [])?;
@@ -598,7 +655,13 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let a = d
-        .action("SC-1", UserAction::Approve { reason: None })
+        .action(
+            "SC-1",
+            UserAction::Approve {
+                reason: None,
+                expect: Default::default(),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
@@ -628,7 +691,15 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
     stop(&t, 2).await;
     let generation = get(&t).await.generation;
 
-    let a = act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    let a = act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
     // The window's process is replaced; nothing is typed into the old session.
     assert!(t.drv.calls().contains(&"respawn SC-1 rt".to_string()));
     assert!(sends(&t).is_empty());
@@ -729,7 +800,15 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     assert!(v["diff"].as_str().unwrap().contains("+feature"));
 
     // Approval hands on the ship command, which pushes and opens the PR.
-    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
     session_start(&t, 2).await;
     assert_eq!(sends(&t), ["send SC-1 \"/xhspec:ship\" 1"]);
     let url = "https://github.com/acme/app/pull/42";
@@ -887,4 +966,59 @@ async fn a_failed_or_empty_pr_lookup_leaves_the_agent_idle() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let a = get(&t).await;
     assert_eq!((a.status, a.pr_url), (Status::Idle, None));
+}
+
+#[tokio::test]
+async fn ui_reads_a_document_and_approves_what_it_read() {
+    let t = setup_with(false).await;
+    let spec = t.wt.path().join(".xherd/spec/spec.md");
+    std::fs::write(&spec, "---\nticket: SC-1\n---\n# Spec\n").unwrap();
+    std::fs::write(t.wt.path().join(".xherd/spec/notes.md"), "n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+
+    assert_eq!(t.d.docs("SC-1").await.unwrap(), ["spec.md", "notes.md"]);
+    let doc = t.d.doc("SC-1", "spec.md").await.unwrap();
+    assert_eq!(doc["path"], "spec.md");
+    assert_eq!(doc["reviewed"], Value::Null);
+    let read = doc["sha256"].as_str().unwrap().to_string();
+    assert_eq!(
+        t.d.doc("SC-1", "../../etc/passwd").await.unwrap_err().code,
+        "no_such_doc"
+    );
+
+    // Edited after the user read it: refused, the gate stays.
+    std::fs::write(&spec, "---\nticket: SC-1\n---\n# Spec v2\n").unwrap();
+    let expect = [("spec.md".to_string(), read)].into();
+    let e = act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, "changed_since_read");
+    assert!(get(&t).await.gate.is_some());
+
+    let doc = t.d.doc("SC-1", "spec.md").await.unwrap();
+    let expect = [(
+        "spec.md".to_string(),
+        doc["sha256"].as_str().unwrap().into(),
+    )]
+    .into();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect,
+        },
+    )
+    .await
+    .unwrap();
+    let doc = t.d.doc("SC-1", "spec.md").await.unwrap();
+    assert_eq!(doc["reviewed"], doc["text"]);
 }

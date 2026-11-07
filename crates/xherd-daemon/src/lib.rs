@@ -220,6 +220,72 @@ impl Daemon {
         self.sup.action(who, a).await
     }
 
+    /// The agent's documents for the UI: every `*.md` in the spec folder
+    /// (`spec.md` form) plus the open gate's files, gate files first.
+    pub async fn docs(&self, who: &str) -> Result<Vec<String>, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = workdir_of(&a)?;
+        let mut out: Vec<String> = match &a.gate {
+            Some(xherd_core::domain::Gate::Docs { files, .. }) => {
+                files.iter().map(|f| f.path.clone()).collect()
+            }
+            _ => Vec::new(),
+        };
+        let dir = wd.join(xherd_flow::xap::SPEC_DIR);
+        let mut found: Vec<String> = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .filter(|n| n.ends_with(".md"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        for f in found {
+            if !out.contains(&f) {
+                out.push(f);
+            }
+        }
+        Ok(out)
+    }
+
+    /// One document as the UI shows it (R-107): its text, the hash an
+    /// approval would record (`doc_sha256`), and the text last approved, if
+    /// any, for "changed since you reviewed". `path` as in XAP calls.
+    pub async fn doc(&self, who: &str, path: &str) -> Result<serde_json::Value, ActionError> {
+        const MAX: u64 = 2 * 1024 * 1024;
+        let fail = |code: &'static str, message: String| ActionError { code, message };
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = workdir_of(&a)?;
+        let canon = xherd_flow::xap::doc_path(path, wd).map_err(|r| fail("bad_path", r.message))?;
+        let abs = wd
+            .join(xherd_flow::xap::worktree_rel(&canon))
+            .canonicalize()
+            .ok()
+            .filter(|p| wd.canonicalize().is_ok_and(|w| p.starts_with(w)) && p.is_file())
+            .ok_or_else(|| fail("no_such_doc", format!("{path} does not exist")))?;
+        if std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0) > MAX {
+            return Err(fail("too_large", format!("{path} is larger than 2 MiB")));
+        }
+        let bytes = std::fs::read(&abs).map_err(|e| fail("io", e.to_string()))?;
+        let flow = a
+            .pack
+            .as_deref()
+            .and_then(|p| self.packs.get(p))
+            .and_then(|p| p.flow(a.flow.as_deref().unwrap_or_default()));
+        let sha = xherd_flow::approve::doc_sha256(flow, wd, &canon, &bytes);
+        let reviewed = self
+            .store
+            .reviewed(&a.id, &canon)
+            .await
+            .map_err(|e| fail("store", e.to_string()))?;
+        Ok(serde_json::json!({
+            "path": canon, "text": String::from_utf8_lossy(&bytes), "sha256": sha,
+            "reviewed": reviewed,
+        }))
+    }
+
     /// What the user reviews before approving (xap.md §5, R-104): with a
     /// commit gate open, the diff of exactly the proposed files against HEAD
     /// (new and deleted files included) and the other uncommitted changes left
@@ -361,4 +427,14 @@ impl Daemon {
             Err(e) => tracing::error!(error = %e, "event pruning failed"),
         }
     }
+}
+
+fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
+    a.workdir
+        .as_deref()
+        .map(std::path::Path::new)
+        .ok_or_else(|| ActionError {
+            code: "no_workspace",
+            message: format!("{} has no worktree", a.name),
+        })
 }

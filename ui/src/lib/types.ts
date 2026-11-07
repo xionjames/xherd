@@ -88,7 +88,7 @@ export interface AppState {
 export interface DiffAnswer {
   agent: string;
   head: string;
-  commit?: string;
+  commit?: Commit;
   branch?: string;
   files: string[];
   others: string[];

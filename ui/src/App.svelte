@@ -2,13 +2,16 @@
   import GlobalBar from './components/GlobalBar.svelte';
   import HerdStrip from './components/HerdStrip.svelte';
   import Herd from './pages/Herd.svelte';
-  import { app, connect } from './lib/store.svelte';
+  import Agent from './pages/Agent.svelte';
+  import ErrorDialog from './components/ErrorDialog.svelte';
+  import { app, start } from './lib/store.svelte';
   import { route } from './lib/router.svelte';
 
-  connect();
+  start();
 
   const agentId = $derived(route.path.match(/^\/agent\/([^/]+)/)?.[1]);
-  const current = $derived(agentId ? app.state?.agents.find((a) => a.name === agentId || a.id === agentId)?.id : undefined);
+  const agent = $derived(agentId ? app.state?.agents.find((a) => a.name === agentId || a.id === agentId) : undefined);
+  const current = $derived(agent?.id);
 </script>
 
 <div class="x">
@@ -18,9 +21,14 @@
     <div class="stack"><p class="muted">{app.error ? `Cannot reach the daemon: ${app.error}` : 'Loading…'}</p></div>
   {:else if route.path === '/'}
     <Herd />
+  {:else if agentId && agent}
+    <Agent {agent} />
+  {:else if agentId}
+    <div class="stack"><p class="muted">No agent {agentId}. <a href="#/">Back to the herd</a>.</p></div>
   {:else}
     <div class="stack"><p class="muted">Nothing here. <a href="#/">Back to the herd</a>.</p></div>
   {/if}
+  <ErrorDialog />
   {#if app.state && !app.connected}
     <div class="offline" role="status">Reconnecting to the daemon…</div>
   {/if}

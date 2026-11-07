@@ -48,6 +48,9 @@ pub enum UserAction {
     /// Approve the open gate and hand on the next command (R-104).
     Approve {
         reason: Option<String>,
+        /// Document → hash the user read (UI): refused when the file changed
+        /// since, so the approval covers exactly what was shown.
+        expect: std::collections::BTreeMap<String, String>,
     },
     /// Send the agent a change request for the open gate (R-105).
     RequestChanges {
@@ -671,8 +674,8 @@ impl Actor {
                     "user.send"
                 }
             }
-            UserAction::Approve { reason } => {
-                self.approve(reason.clone()).await?;
+            UserAction::Approve { reason, expect } => {
+                self.approve(reason.clone(), expect).await?;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
@@ -819,7 +822,11 @@ impl Actor {
 
     /// Approve by content hash (R-104, R-106): ledger file first (fsync),
     /// then the database, then hand on the next command.
-    async fn approve(&mut self, reason: Option<String>) -> Result<(), ActionError> {
+    async fn approve(
+        &mut self,
+        reason: Option<String>,
+        expect: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ActionError> {
         let gate = self.gate_for_user(true)?;
         let wd = self.workdir().map_err(|e| refuse(e.code, e.message))?;
         let (label, files): (String, Vec<String>) = match &gate {
@@ -853,6 +860,15 @@ impl Actor {
                     ));
                 }
             }
+        }
+        if let Some((f, _, _)) = approved
+            .iter()
+            .find(|(f, sha, _)| expect.get(f).is_some_and(|e| e != sha))
+        {
+            return Err(refuse(
+                "changed_since_read",
+                format!("{f} changed since you read it; read it again before approving"),
+            ));
         }
         let next = self.next_command(&wd, &gate)?;
         let now = self.now();

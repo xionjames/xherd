@@ -11,6 +11,12 @@ export function ago(ms: number, now = Date.now()): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+/** "just now" or "42m ago". */
+export function agoText(ms: number, now = Date.now()): string {
+  const a = ago(ms, now);
+  return a === 'now' ? 'just now' : `${a} ago`;
+}
+
 export const STATUS_LABEL: Record<Status, string> = {
   queued: 'queued',
   running: 'running',
@@ -72,8 +78,8 @@ export const waitingSince = (a: Agent) => a.statusSince;
 export function agentHue(name: string): string {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  // 40..330 avoids the red/coral band around 0/360.
-  const hue = 40 + (h % 290);
+  // 70..320 avoids the red/orange band reserved for "needs you".
+  const hue = 70 + (h % 250);
   return `hsl(${hue} 62% 48%)`;
 }
 

@@ -33,14 +33,23 @@ export function agentByName(idOrName: string): Agent | undefined {
 type WsMsg = { type: 'agent'; agent: Agent } | { type: 'notify'; agentId: string; text: string };
 
 let retry = 500;
+let opened = false;
 
-export function connect() {
+/** Load the state now, then keep it live over the websocket. */
+export function start() {
+  reload();
+  connect();
+}
+
+function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/api/v1/ws`);
   ws.onopen = async () => {
     retry = 500;
     app.connected = true;
-    await reload();
+    // The first load is done by start(); every reconnect reloads in full.
+    if (opened) await reload();
+    opened = true;
   };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data) as WsMsg;
