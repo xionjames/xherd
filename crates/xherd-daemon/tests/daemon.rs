@@ -223,11 +223,35 @@ async fn reconcile_marks_lost_sessions() {
     wait_status(&t.d, "SC-1", Status::Running).await;
     t.d.reconcile().await;
     assert_eq!(status(&t.d, "SC-1").await, Status::Running);
+    let starts = |t: &T| {
+        t.drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start "))
+            .count()
+    };
+    // A vanished session is resumed by itself twice per hour...
+    for n in 2..=3 {
+        t.drv.alive.lock().unwrap().clear();
+        t.d.reconcile().await;
+        for _ in 0..50 {
+            if starts(&t) == n {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(starts(&t), n);
+        assert_ne!(status(&t.d, "SC-1").await, Status::Error);
+    }
+    // ...then it stays in error until the user presses Resume.
     t.drv.alive.lock().unwrap().clear();
     t.d.reconcile().await;
     wait_status(&t.d, "SC-1", Status::Error).await;
-    let ev = t.d.store.events(&a.id, 20).await.unwrap();
+    let ev = t.d.store.events(&a.id, 50).await.unwrap();
     assert!(ev.iter().any(|e| e.kind == "session-lost"));
+    assert_eq!(ev.iter().filter(|e| e.kind == "auto-resume").count(), 2);
+    t.d.action("SC-1", UserAction::Resume).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
 }
 
 #[tokio::test]

@@ -87,7 +87,7 @@
     </div>
     <div class="row">
       <StatusPill {agent} />
-      {#if agent.status === 'paused' || agent.status === 'parked'}
+      {#if agent.status === 'paused' || agent.status === 'parked' || agent.status === 'error'}
         <button class="btn" onclick={() => act('resume', 'Could not resume')}><Icon name="play" />Resume</button>
       {:else if live}
         <button class="btn" onclick={() => act('pause', 'Could not pause')}><Icon name="pause" />Pause</button>

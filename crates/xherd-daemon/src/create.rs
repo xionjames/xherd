@@ -157,6 +157,24 @@ impl Daemon {
     }
 }
 
+/// Continue the runtime's last conversation (R-027): the launch arguments for
+/// a session id, only while the runtime still has that session's transcript.
+#[derive(Debug, Clone)]
+pub struct Resumer(pub runtime::Resume);
+
+impl Resumer {
+    pub fn argv(&self, session: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<Vec<String>> {
+        let args = self.0.argv(session)?;
+        let dir = xherd_flow::install::expand(&self.0.transcripts, env).ok()?;
+        let file = self.0.file.replace("{session}", session);
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .any(|p| p.path().join(&file).is_file())
+            .then_some(args)
+    }
+}
+
 /// Marks agent worktrees as trusted in the runtime's trust file (declared by
 /// its plugin), so no agent stops at the runtime's trust dialog before any
 /// hook runs. Only folders under the worktrees root are ever written.
@@ -312,6 +330,27 @@ async fn install_hooks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_needs_the_transcript_and_a_plain_id() {
+        let home = tempfile::tempdir().unwrap();
+        let proj = home.path().join("projects/-work-TST-1");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("abc-123.jsonl"), "{}").unwrap();
+        let r = Resumer(runtime::Resume {
+            args: vec!["--resume".into(), "{session}".into()],
+            transcripts: format!("{}/projects", home.path().display()),
+            file: "{session}.jsonl".into(),
+        });
+        let env = |_: &str| None;
+        assert_eq!(
+            r.argv("abc-123", &env),
+            Some(vec!["--resume".to_string(), "abc-123".to_string()])
+        );
+        assert_eq!(r.argv("missing", &env), None);
+        assert_eq!(r.argv("../abc-123", &env), None);
+        assert_eq!(r.argv("", &env), None);
+    }
 
     #[test]
     fn repos_must_be_inside_a_mount() {

@@ -165,7 +165,13 @@ pub struct Env {
     /// Marks the worktree trusted in the runtime's file before each session
     /// (the runtime rewrites that file itself, and may drop the entry).
     pub trust: Option<Arc<crate::TrustWriter>>,
+    /// How to continue the runtime's last conversation, when it can.
+    pub resume: Option<Arc<crate::Resumer>>,
 }
+
+/// Session losses the daemon answers with a resume by itself, per window.
+const AUTO_RESUMES: usize = 2;
+const AUTO_RESUME_WINDOW_MS: i64 = 3_600_000;
 
 pub type AgentTx = mpsc::UnboundedSender<Msg>;
 
@@ -178,6 +184,9 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         delivery: None,
         next_delivery: 0,
         first_unacked: false,
+        resume_session: None,
+        resume_unconfirmed: false,
+        auto_resumes: Vec::new(),
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -196,6 +205,13 @@ struct Actor {
     /// lose typed input, so the command stays in `next_prompt` and is typed
     /// again at the next `session-start` until a prompt is submitted.
     first_unacked: bool,
+    /// Launch the next session with the runtime's own resume of this session id.
+    resume_session: Option<String>,
+    /// The last start used a runtime resume and no `session-start` came yet:
+    /// if the session dies again, the next resume starts a clean session.
+    resume_unconfirmed: bool,
+    /// When the daemon resumed this agent by itself (bounded, see above).
+    auto_resumes: Vec<i64>,
 }
 
 impl Actor {
@@ -383,6 +399,9 @@ impl Actor {
                 // Token usage, auto-approval, parking: later milestones.
                 Effect::AfterStop => self.after_ship().await,
             }
+        }
+        if result == ReportResult::Applied && r.event == ReportEvent::SessionStart {
+            self.resume_unconfirmed = false;
         }
         if result == ReportResult::Applied
             && r.event == ReportEvent::SessionStart
@@ -698,12 +717,7 @@ impl Actor {
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
-                // The runtime cannot resume its own session yet (no resume
-                // argv), so the new session reloads the state with the pack's
-                // `resume` command; a pending next prompt wins (R-027).
-                if self.agent.next_prompt.is_none() {
-                    self.agent.next_prompt = self.resume_command();
-                }
+                self.prepare_resume();
                 "user.resume"
             }
             UserAction::Cancel => {
@@ -784,6 +798,19 @@ impl Actor {
             .clone()
             .filter(|a| !a.is_empty())
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
+        let argv = match (self.resume_session.take(), &self.env.resume) {
+            (Some(id), Some(r)) => {
+                let env = |v: &str| std::env::var(v).ok();
+                match r.argv(&id, &env) {
+                    Some(extra) => {
+                        self.resume_unconfirmed = true;
+                        argv.into_iter().chain(extra).collect()
+                    }
+                    None => argv,
+                }
+            }
+            _ => argv,
+        };
         self.revoke_tokens().await;
         let token = mint_token(
             &self.env.store,
@@ -1093,6 +1120,23 @@ impl Actor {
 
     /// The pack's `resume` command for the agent's runtime; `None` for flow
     /// `none` or a pack without one.
+    /// A resumed agent gets the pack's `resume` command (a pending next prompt
+    /// wins, R-027) and, when the runtime still has the last conversation, a
+    /// session that continues it. If the last resume of that kind never
+    /// reached `session-start`, this one is a clean session instead.
+    fn prepare_resume(&mut self) {
+        if self.agent.next_prompt.is_none() {
+            self.agent.next_prompt = self.resume_command();
+        }
+        let env = |v: &str| std::env::var(v).ok();
+        self.resume_session = match (&self.env.resume, &self.agent.session) {
+            (Some(r), Some(id)) if !self.resume_unconfirmed && r.argv(id, &env).is_some() => {
+                Some(id.clone())
+            }
+            _ => None,
+        };
+    }
+
     fn resume_command(&self) -> Option<String> {
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
         let runtime = self
@@ -1223,15 +1267,37 @@ impl Actor {
                         if recover {
                             // Same as Resume: a new session reloads the state.
                             self.agent.fire(Trigger::Resume, now);
-                            if self.agent.next_prompt.is_none() {
-                                self.agent.next_prompt = self.resume_command();
-                            }
+                            self.prepare_resume();
                             self.notify(format!("{}: xherd restarted; resuming", self.agent.name));
                         } else {
-                            self.notify(format!(
-                                "{}: terminal session disappeared",
-                                self.agent.name
-                            ));
+                            // A session that vanishes while xherd runs is
+                            // resumed by itself a couple of times per hour, so
+                            // an agent is not stuck in error until someone
+                            // notices; after that the Resume button is the way.
+                            self.auto_resumes
+                                .retain(|t| now - t < AUTO_RESUME_WINDOW_MS);
+                            if self.auto_resumes.len() < AUTO_RESUMES {
+                                self.auto_resumes.push(now);
+                                self.agent.fire(Trigger::Resume, now);
+                                self.prepare_resume();
+                                self.log(
+                                    None,
+                                    "auto-resume",
+                                    Some(json!({"n": self.auto_resumes.len(), "of": AUTO_RESUMES})),
+                                )
+                                .await;
+                                self.notify(format!(
+                                    "{}: terminal session disappeared; resuming ({}/{})",
+                                    self.agent.name,
+                                    self.auto_resumes.len(),
+                                    AUTO_RESUMES
+                                ));
+                            } else {
+                                self.notify(format!(
+                                    "{}: terminal session disappeared again; press Resume",
+                                    self.agent.name
+                                ));
+                            }
                         }
                     }
                     self.commit(before).await;

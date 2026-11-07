@@ -170,7 +170,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-008 | Reports from a session xherd already ended (paused, queued, cancelled) never revive the agent. |
 | R-009 | Every status report carries a per-agent **monotonic sequence number**; reports with a lower or equal number are logged but do not change state. Reports synthesised by the daemon (screen rules) get daemon sequence numbers and never make a real report stale. |
 | R-010 | Every change to an agent goes through one serialised path per agent; no change is lost when reports, user actions and timers arrive together. |
-| R-011 | **Reconcile** on start and every minute: a live agent whose tmux session is gone → `error` (event `session-lost`). At daemon start (a container or terminal-server restart) such an agent is instead parked when it waits at a docs or commit gate (approving still works), or resumed like R-027. |
+| R-011 | **Reconcile** on start and every minute: a live agent whose tmux session is gone → `error` (event `session-lost`). At daemon start (a container or terminal-server restart) such an agent is instead parked when it waits at a docs or commit gate (approving still works), or resumed like R-027. A session that vanishes while the daemon runs is resumed by itself at most twice per hour per agent (event `auto-resume`, with a notification); after that the agent stays in `error` until the user presses Resume. |
 
 ### 5.4 Status reporting
 
@@ -201,7 +201,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | ID | Requirement |
 |---|---|
 | R-026 | **Pause**: ask the agent to write a handoff (pack `handoff` command), wait for it to stop (≤ `pauseTimeoutSec`, default 120), end the session, status `paused`. Flow `none`: end the session. |
-| R-027 | **Resume**: back into the same runtime session when the runtime can resume it, otherwise (or when a handoff was written and fresh sessions are on) a fresh session with the pack's `resume` command. A pending "next prompt" set by xherd (e.g. PR review) takes precedence. |
+| R-027 | **Resume** (the Resume button, also for an agent in `error`): back into the same runtime session when the runtime can resume it (the plugin's `data.terminal.resume`, used only while the runtime still has that session's transcript, and not twice in a row without a `session-start` in between), otherwise (or when a handoff was written and fresh sessions are on) a fresh session with the pack's `resume` command. A pending "next prompt" set by xherd (e.g. PR review) takes precedence. |
 | R-028 | **Park** (automatic, §5.3): end the session; the agent stays in Needs you. A message resumes the same session; approval starts a fresh one for the next step. |
 | R-029 | **Cancel**: end the session without handoff; keep the worktree; resumable. |
 | R-030 | **Remove worktree** (done or cancelled agents only): archive `.xherd/` to `<data>/archive/<repo>/<agent>/`, `git worktree remove`, keep the branch. |

@@ -28,7 +28,7 @@ pub mod supervisor;
 pub mod support;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
-pub use create::TrustWriter;
+pub use create::{Resumer, TrustWriter};
 pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
 pub use supervisor::SupervisorHandle;
 pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
@@ -212,6 +212,11 @@ impl Daemon {
                     root: config.workspace_root().join("worktrees"),
                 })
             });
+        let resume = plugins
+            .get(xherd_flow::approve::DEFAULT_RUNTIME)
+            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
+            .and_then(|t| t.resume)
+            .map(|r| Arc::new(Resumer(r)));
         let toolchains = plugins
             .of_kind(xherd_plugin::Kind::Toolchain)
             .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
@@ -234,6 +239,7 @@ impl Daemon {
             host,
             toolchains: Arc::new(toolchains),
             trust,
+            resume,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);

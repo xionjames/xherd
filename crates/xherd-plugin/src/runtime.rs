@@ -35,6 +35,41 @@ pub struct Terminal {
     pub hooks: Option<HookFile>,
     #[serde(default)]
     pub trust: Option<Trust>,
+    /// How to continue the runtime's last conversation (R-027).
+    #[serde(default)]
+    pub resume: Option<Resume>,
+}
+
+/// Continue a runtime conversation by its session id, when the runtime still
+/// has its transcript.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Resume {
+    /// Extra launch arguments; `{session}` is the session id.
+    pub args: Vec<String>,
+    /// Folder holding one subfolder per project; may use `${VAR}` and `~/`.
+    pub transcripts: String,
+    /// Transcript file name inside a project folder; `{session}` as above.
+    pub file: String,
+}
+
+/// Session ids come from the runtime's hook payload; only plain ids are used.
+pub fn plain_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 80
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+impl Resume {
+    /// The launch arguments for `session`; `None` for an odd id.
+    pub fn argv(&self, session: &str) -> Option<Vec<String>> {
+        plain_id(session).then(|| {
+            self.args
+                .iter()
+                .map(|a| a.replace("{session}", session))
+                .collect()
+        })
+    }
 }
 
 /// Where the runtime records the folders it trusts: a JSON file whose

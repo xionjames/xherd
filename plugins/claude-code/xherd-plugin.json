@@ -41,6 +41,14 @@
         "file": "${CLAUDE_CONFIG_DIR:-~}/.claude.json",
         "projects": "projects",
         "key": "hasTrustDialogAccepted"
+      },
+      "resume": {
+        "args": [
+          "--resume",
+          "{session}"
+        ],
+        "transcripts": "${CLAUDE_CONFIG_DIR:-~/.claude}/projects",
+        "file": "{session}.jsonl"
       }
     }
   },
