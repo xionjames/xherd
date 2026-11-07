@@ -9,6 +9,7 @@ xherd: a daemon (Rust) that runs, watches and steers many coding agents, each in
 - `doc/spec.md` — what (requirements `R-xxx`)
 - `doc/design.md` — how (crates, architecture, milestones §18, decisions §19)
 - `doc/xap.md` — agent protocol (`xherd hook|report|gate|task|commit …`)
+- `ROADMAP.md` — what is left, by theme (the milestone checklist in `doc/design.md` §18 stays the source of truth; update both)
 
 Decisions in `doc/design.md` §19 are settled; do not re-open them in code. Cite requirement ids (`R-009`) in doc comments where code implements one.
 
