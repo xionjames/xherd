@@ -649,7 +649,15 @@ impl Actor {
             }
             UserAction::Send { text } => {
                 self.send(text, 1).await?;
-                "user.send"
+                // A message while a question is open is its answer (xap.md `ask`).
+                if matches!(self.agent.gate, Some(Gate::Question { .. })) {
+                    self.agent.gate = None;
+                    self.agent.generation += 1;
+                    self.agent.fire(Trigger::UserInput, self.now());
+                    "user.answer"
+                } else {
+                    "user.send"
+                }
             }
             UserAction::Approve { reason } => {
                 self.approve(reason.clone()).await?;

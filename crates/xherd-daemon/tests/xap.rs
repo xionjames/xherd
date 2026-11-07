@@ -482,6 +482,17 @@ async fn request_changes_keeps_the_gate() {
             .code,
         "no_gate"
     );
+    let a = act(
+        &t2,
+        UserAction::Send {
+            text: "postgres".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.gate, None);
+    assert_eq!(a.status, Status::Running);
+    assert!(sends(&t2)[0].contains("postgres"));
 }
 
 #[tokio::test]

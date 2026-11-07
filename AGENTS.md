@@ -92,6 +92,7 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 - Prompts teach XAP as `"$XHERD_BIN" <call>` inside backticks on one line, with concrete example values: the CLI test `prompt_calls_parse` parses every such call with clap, and `every_template_has_a_prompt` checks each manifest command has a `commands/<name>.md`.
 - `xherd install` runs in the daemon (`POST /api/v1/install`), so commands land where the agents run (user level, per the pack's `install.<runtime>.commands.to`). Run it once before the first agent; nothing installs automatically yet. Tests call `Daemon::install` with their own `env` closure: never let a test resolve the real `HOME`.
 - `Git::diff_proposed` stages the proposed files into a temporary `GIT_INDEX_FILE` (with `--force`, so proposed ignored files show) and never touches the worktree's index; paths are literal (`--literal-pathspecs`). Output is capped at 4 MiB by `exec::run` (silently truncated).
+- A question gate (`xherd ask`) is not approved: `xherd send` while it is open is the answer, clears the gate and logs `user.answer`.
 - Supervisor messages carry `oneshot` replies straight to the caller; the supervisor never awaits an actor.
 - Tests never call the real `gh`: set `pluginSettings.github.gh` in `config.json` to a fake script (see `fake_gh` in `crates/xherd-daemon/tests/xap.rs`). The branch looked up is the agent name.
 
