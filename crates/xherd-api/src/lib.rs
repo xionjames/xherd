@@ -39,6 +39,9 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/file", get(file))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/install", post(install))
+        .route("/api/v1/config", get(get_config).put(put_config))
+        .route("/api/v1/checks", get(checks))
+        .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -92,7 +95,8 @@ impl From<ActionError> for ApiError {
             "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
             | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
             | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
-            "bad_path" => StatusCode::BAD_REQUEST,
+            "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
+            "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
@@ -269,8 +273,18 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         .plugins
         .all()
         .map(|p| {
+            let settings: Vec<Value> = p
+                .manifest
+                .settings
+                .iter()
+                .map(|s| {
+                    json!({"key": s.key, "label": s.label, "type": s.kind, "default": s.default,
+                           "secret": s.secret, "required": s.required})
+                })
+                .collect();
             json!({"name": p.name(), "kind": p.manifest.kind, "version": p.manifest.version,
-                   "label": p.manifest.label, "builtin": p.builtin()})
+                   "label": p.manifest.label, "description": p.manifest.description,
+                   "builtin": p.builtin(), "settings": settings})
         })
         .collect();
     Ok(Json(json!({
@@ -337,6 +351,34 @@ async fn install(
         .install(req.runtime.as_deref(), req.pack.as_deref(), &env)
         .await?;
     Ok(Json(json!({"installed": installed})))
+}
+
+async fn get_config(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(d.config_view()?))
+}
+
+/// Saved to `config.json`; applies at the next daemon start (`restartNeeded`).
+async fn put_config(
+    _: User,
+    State(d): State<Daemon>,
+    Json(patch): Json<xherd_daemon::settings::ConfigPatch>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.save_config(patch)?))
+}
+
+async fn checks(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    let env = |k: &str| std::env::var(k).ok();
+    Ok(Json(json!({"checks": d.checks(&env).await})))
+}
+
+async fn fix_check(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let env = |k: &str| std::env::var(k).ok();
+    d.fix_check(&id, &env).await?;
+    Ok(Json(json!({"checks": d.checks(&env).await})))
 }
 
 async fn get_agent(

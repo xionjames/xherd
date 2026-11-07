@@ -51,6 +51,8 @@ pub struct Config {
     pub fresh_sessions: bool,
     pub event_retention_days: u64,
     pub update_check: bool,
+    /// The first-run Welcome screen was completed or skipped.
+    pub welcomed: bool,
     /// Workspace root holding `worktrees/` (design §8.1). `None`:
     /// `$XHERD_WORKSPACE`, else `~/xherd`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,6 +81,7 @@ impl Default for Config {
             fresh_sessions: true,
             event_retention_days: 90,
             update_check: true,
+            welcomed: false,
             workspace: None,
             tmux_socket: None,
             plugin_settings: Map::new(),

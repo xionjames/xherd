@@ -70,7 +70,16 @@ export interface PluginInfo {
   label?: string;
   builtin: boolean;
   description?: string;
-  settings?: Record<string, unknown>;
+  settings: PluginSetting[];
+}
+
+export interface PluginSetting {
+  key: string;
+  label: string;
+  type: string;
+  default?: unknown;
+  secret: boolean;
+  required: boolean;
 }
 
 export interface AgentEvent { id: number; kind: string; payload: unknown; at: number }
@@ -81,7 +90,7 @@ export interface AppState {
   config: Record<string, unknown>;
   agents: Agent[];
   plugins: PluginInfo[];
-  brokenPlugins: { name?: string; path?: string; error: string }[];
+  brokenPlugins: { name: string; dir: string; error: string }[];
   flows: FlowInfo[];
 }
 
@@ -97,9 +106,16 @@ export interface DiffAnswer {
 
 export interface Check {
   id: string;
+  group: 'system' | 'plugins' | 'runtime';
   label: string;
   required: boolean;
   ok: boolean;
-  detail?: string;
-  fix?: string;
+  detail: string;
+  fix?: { kind: 'command'; text: string } | { kind: 'action'; label: string };
+}
+
+export interface ConfigView {
+  config: Record<string, unknown>;
+  running: Record<string, unknown>;
+  restartNeeded: boolean;
 }

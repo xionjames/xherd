@@ -661,11 +661,11 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Ship
   - [x] Draft PR via GitHub
 - [ ] **M2 UI**
-  - [ ] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
-  - [ ] Hash approvals from the UI
-  - [ ] Websockets
-  - [ ] Terminal
-  - [ ] Diffs
+  - [x] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
+  - [x] Hash approvals from the UI
+  - [x] Websockets
+  - [x] Terminal
+  - [x] Diffs
 - [ ] **M3 Docker-first**
   - [ ] Image with version managers
   - [ ] `xherd init` (users, SSH proxy, git config)
