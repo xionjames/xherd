@@ -1,6 +1,6 @@
-//! HTTP API (design §7). M0 serves health, state, agents and their basic
-//! actions, and `POST /hooks` for status reports. XAP, websockets and the UI
-//! come in later milestones.
+//! HTTP API (design §7): health, state, agents and their actions,
+//! `POST /hooks` for status reports and `POST /xap` for the agent protocol.
+//! Websockets and the UI come in M2.
 
 use std::net::SocketAddr;
 
@@ -14,7 +14,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use xherd_core::report::Report;
-use xherd_daemon::support::{SCOPE_HOOKS, TOKEN_AGENT, TOKEN_USER};
+use xherd_core::xap::XapCall;
+use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER};
 use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
 pub const BODY_LIMIT: usize = 5 * 1024 * 1024;
@@ -23,10 +24,13 @@ pub fn router(d: Daemon) -> Router {
     Router::new()
         .route("/api/v1/healthz", get(healthz))
         .route("/api/v1/state", get(state))
-        .route("/api/v1/agents", get(list_agents))
+        .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
+        .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
+        .route("/api/v1/install", post(install))
         .route("/api/v1/hooks", post(hooks))
+        .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(d)
@@ -74,7 +78,12 @@ impl From<ActionError> for ApiError {
         let status = match e.code {
             "unknown_agent" => StatusCode::NOT_FOUND,
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-            "store" | "driver" => StatusCode::INTERNAL_SERVER_ERROR,
+            "usage" => StatusCode::BAD_REQUEST,
+            "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
+            | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
+            | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
+            "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
+            "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
         };
         ApiError::new(status, e.code, e.message)
@@ -167,8 +176,25 @@ impl FromRequestParts<Daemon> for User {
     }
 }
 
-/// An agent token; `0` is the agent id it belongs to.
-pub struct AgentAuth(pub String);
+/// An agent token: the agent it belongs to and its scopes.
+pub struct AgentAuth {
+    pub agent_id: String,
+    pub scopes: Vec<String>,
+}
+
+impl AgentAuth {
+    fn require(&self, scope: &str) -> ApiResult<()> {
+        if self.scopes.iter().any(|s| s == scope) {
+            Ok(())
+        } else {
+            Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                "scope",
+                format!("token lacks the {scope} scope"),
+            ))
+        }
+    }
+}
 
 impl FromRequestParts<Daemon> for AgentAuth {
     type Rejection = ApiError;
@@ -188,13 +214,10 @@ impl FromRequestParts<Daemon> for AgentAuth {
             .await
             .map_err(ApiError::internal)?;
         match row {
-            Some(r)
-                if r.kind == TOKEN_AGENT
-                    && !r.revoked
-                    && r.scopes.iter().any(|s| s == SCOPE_HOOKS) =>
-            {
-                Ok(AgentAuth(r.subject.unwrap_or_default()))
-            }
+            Some(r) if r.kind == TOKEN_AGENT && !r.revoked => Ok(AgentAuth {
+                agent_id: r.subject.unwrap_or_default(),
+                scopes: r.scopes,
+            }),
             _ => Err(deny()),
         }
     }
@@ -235,6 +258,39 @@ async fn list_agents(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>>
     Ok(Json(json!({"agents": agents})))
 }
 
+/// Create an agent (spec §5.1). Body: `NewAgent`, unknown fields refused.
+async fn new_agent(
+    _: User,
+    State(d): State<Daemon>,
+    Json(req): Json<xherd_core::new::NewAgent>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    let agent = d.new_agent(req).await?;
+    Ok((StatusCode::CREATED, Json(json!({"agent": agent}))))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InstallReq {
+    #[serde(default)]
+    runtime: Option<String>,
+    #[serde(default)]
+    pack: Option<String>,
+}
+
+/// `xherd install`: the pack's commands for the runtimes, written where the
+/// daemon (and so the agents) run.
+async fn install(
+    _: User,
+    State(d): State<Daemon>,
+    Json(req): Json<InstallReq>,
+) -> ApiResult<Json<Value>> {
+    let env = |k: &str| std::env::var(k).ok();
+    let installed = d
+        .install(req.runtime.as_deref(), req.pack.as_deref(), &env)
+        .await?;
+    Ok(Json(json!({"installed": installed})))
+}
+
 async fn get_agent(
     _: User,
     State(d): State<Daemon>,
@@ -253,32 +309,47 @@ async fn get_agent(
     Ok(Json(json!({"agent": agent, "events": events})))
 }
 
+/// `GET /agents/:id/diff`: the open commit proposal's diff, else every
+/// uncommitted change (`Daemon::diff`).
+async fn diff(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    Ok(Json(d.diff(&id).await?))
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct SendBody {
-    text: String,
+struct ActionBody {
+    text: Option<String>,
+    reason: Option<String>,
+    comment: Option<String>,
 }
 
 async fn agent_action(
     _: User,
     State(d): State<Daemon>,
     Path((id, action)): Path<(String, String)>,
-    body: Option<Json<SendBody>>,
+    body: Option<Json<ActionBody>>,
 ) -> ApiResult<Json<Value>> {
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let required = |v: Option<String>, field: &str| {
+        v.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                format!("body {{\"{field}\": …}} required"),
+            )
+        })
+    };
     let a = match action.as_str() {
         "pause" => UserAction::Pause,
         "resume" => UserAction::Resume,
         "cancel" => UserAction::Cancel,
-        "send" => {
-            let Some(Json(b)) = body else {
-                return Err(ApiError::new(
-                    StatusCode::BAD_REQUEST,
-                    "bad_request",
-                    "body {\"text\": …} required",
-                ));
-            };
-            UserAction::Send { text: b.text }
-        }
+        "send" => UserAction::Send {
+            text: required(b.text, "text")?,
+        },
+        "approve" => UserAction::Approve { reason: b.reason },
+        "request-changes" => UserAction::RequestChanges {
+            comment: required(b.comment, "comment")?,
+        },
         _ => {
             return Err(ApiError::new(
                 StatusCode::NOT_FOUND,
@@ -292,11 +363,12 @@ async fn agent_action(
 }
 
 async fn hooks(
-    AgentAuth(subject): AgentAuth,
+    auth: AgentAuth,
     State(d): State<Daemon>,
     Json(r): Json<Report>,
 ) -> ApiResult<Json<Value>> {
-    if r.agent_id != subject {
+    auth.require(SCOPE_HOOKS)?;
+    if r.agent_id != auth.agent_id {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "wrong_agent",
@@ -310,5 +382,48 @@ async fn hooks(
             "unknown_agent",
             "no such agent",
         )),
+    }
+}
+
+/// `POST /api/v1/xap` (xap.md §8): `200 {ok, result}` or `{ok: false, code, message}`.
+async fn xap(auth: AgentAuth, State(d): State<Daemon>, body: axum::body::Bytes) -> Response {
+    let fail = |status: StatusCode, code: &str, message: String| {
+        (
+            status,
+            Json(json!({"ok": false, "code": code, "message": message})),
+        )
+            .into_response()
+    };
+    if let Err(e) = auth.require(SCOPE_XAP) {
+        return e.into_response();
+    }
+    let call: XapCall = match serde_json::from_slice(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            return fail(
+                StatusCode::BAD_REQUEST,
+                "usage",
+                format!("bad XAP call: {e}"),
+            );
+        }
+    };
+    if call.agent_id != auth.agent_id {
+        return fail(
+            StatusCode::FORBIDDEN,
+            "wrong_agent",
+            "token belongs to another agent".into(),
+        );
+    }
+    match d.xap(call).await {
+        Ok(result) => Json(json!({"ok": true, "result": result})).into_response(),
+        Err(r) => {
+            let status = match r.code {
+                "unknown_agent" => StatusCode::NOT_FOUND,
+                "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                "internal" => StatusCode::INTERNAL_SERVER_ERROR,
+                _ => StatusCode::UNPROCESSABLE_ENTITY,
+            };
+            fail(status, r.code, r.message)
+        }
     }
 }

@@ -1,0 +1,33 @@
+{
+  "name": "claude-code",
+  "kind": "runtime",
+  "version": "0.1.0",
+  "label": "Claude Code",
+  "description": "The Claude Code CLI in a tmux session (terminal driver).",
+  "data": {
+    "terminal": {
+      "launch": ["claude"],
+      "permissionModes": {
+        "ask": [],
+        "edits": ["--permission-mode", "acceptEdits"],
+        "all": ["--dangerously-skip-permissions"]
+      },
+      "hooks": {
+        "file": ".claude/settings.local.json",
+        "events": {
+          "SessionStart": "session-start",
+          "UserPromptSubmit": "user-prompt-submit",
+          "PostToolUse": "post-tool-use",
+          "Notification": "notification",
+          "Stop": "stop"
+        }
+      },
+      "trust": {
+        "file": "${CLAUDE_CONFIG_DIR:-~}/.claude.json",
+        "projects": "projects",
+        "key": "hasTrustDialogAccepted"
+      }
+    }
+  },
+  "checks": [{ "name": "claude", "argv": ["claude", "--version"] }]
+}

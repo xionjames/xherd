@@ -4,8 +4,10 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use xherd_core::report::{Origin, Report};
+use xherd_core::xap::{Refusal, XapCall, refuse};
 use xherd_core::{Agent, Millis, Status};
 
 use crate::actor::{
@@ -25,6 +27,7 @@ pub enum SupMsg {
         UserAction,
         oneshot::Sender<Result<Agent, ActionError>>,
     ),
+    Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
     /// Live session names from the driver (R-011).
     Reconcile(Vec<String>),
@@ -63,6 +66,13 @@ impl SupervisorHandle {
         self.tx
             .send(SupMsg::User(who.to_string(), a, tx))
             .map_err(|_| gone())?;
+        rx.await.map_err(|_| gone())?
+    }
+
+    pub async fn xap(&self, call: XapCall) -> Result<Value, Refusal> {
+        let gone = || refuse("unavailable", "daemon is shutting down");
+        let (tx, rx) = oneshot::channel();
+        self.tx.send(SupMsg::Xap(call, tx)).map_err(|_| gone())?;
         rx.await.map_err(|_| gone())?
     }
 
@@ -212,6 +222,14 @@ impl Supervisor {
                     }
                 }
             }
+            SupMsg::Xap(call, reply) => match self.agents.get(&call.agent_id) {
+                Some(e) => {
+                    let _ = e.tx.send(Msg::Xap(call, reply));
+                }
+                None => {
+                    let _ = reply.send(Err(refuse("unknown_agent", "no such agent")));
+                }
+            },
             SupMsg::Tick(t) => {
                 for e in self.agents.values() {
                     let _ = e.tx.send(Msg::Tick(t));

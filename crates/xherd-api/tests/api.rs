@@ -17,7 +17,29 @@ async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
     let dir = tempfile::tempdir().unwrap();
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.scheduler = None;
-    let d = Daemon::start(Paths::at(dir.path()), o).await.unwrap();
+    // Never the real Claude Code config: a fixture that trusts the workspace.
+    let trust = dir.path().join("claude.json");
+    let ws = dir.path().join("ws");
+    std::fs::write(
+        &trust,
+        json!({"projects": {ws.to_string_lossy(): {"hasTrustDialogAccepted": true}}}).to_string(),
+    )
+    .unwrap();
+    let rt = o
+        .builtin_plugins
+        .iter_mut()
+        .find(|m| m.name == "claude-code")
+        .unwrap();
+    rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    let paths = Paths::at(dir.path());
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(ws.to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let d = Daemon::start(paths, o).await.unwrap();
     let mut a = Agent::new("SC-1", "SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
     let a = d.create_agent(a).await.unwrap();
@@ -191,12 +213,31 @@ async fn agent_actions() {
     );
     let (s, _) = call(app.clone(), post("/api/v1/agents/NOPE/pause", None)).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+    // Only refusals here: a real install writes to the user's runtime folder.
+    let (s, v) = call(
+        app.clone(),
+        post("/api/v1/install", Some(json!({"runtime": "nope"}))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("unknown_runtime"))
+    );
     let (s, v) = call(
         app.clone(),
         get("/api/v1/agents/SC-1").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
+    let (s, d) = call(
+        app.clone(),
+        get("/api/v1/agents/SC-1/diff").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, d["code"].clone()),
+        (StatusCode::CONFLICT, json!("no_workspace"))
+    );
     assert!(
         v["events"]
             .as_array()
@@ -204,4 +245,132 @@ async fn agent_actions() {
             .iter()
             .any(|e| e["kind"] == "user.pause")
     );
+}
+
+#[tokio::test]
+async fn xap_endpoint() {
+    let (_dir, d, a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let token = mint_token(
+        &d.store,
+        TOKEN_AGENT,
+        Some(&a.id),
+        &[SCOPE_HOOKS, SCOPE_XAP],
+        1,
+    )
+    .await
+    .unwrap();
+    let hooks_only = mint_token(&d.store, TOKEN_AGENT, Some(&a.id), &[SCOPE_HOOKS], 1)
+        .await
+        .unwrap();
+    let post = |tok: &str, body: String| {
+        Request::post("/api/v1/xap")
+            .header("host", "127.0.0.1:4740")
+            .header("authorization", format!("Bearer {tok}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let ask =
+        json!({"id": "x1", "agentId": a.id, "cmd": "ask", "args": {"text": "which db?"}, "at": 0});
+
+    let (s, v) = call(app.clone(), post(&hooks_only, ask.to_string())).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("scope"))
+    );
+
+    let mut other = ask.clone();
+    other["agentId"] = json!("someone-else");
+    let (s, v) = call(app.clone(), post(&token, other.to_string())).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("wrong_agent"))
+    );
+
+    let (s, v) = call(app.clone(), post(&token, "{\"cmd\": 1}".into())).await;
+    assert_eq!(
+        (s, v["ok"].clone(), v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!(false), json!("usage"))
+    );
+
+    let (s, v) = call(app.clone(), post(&token, ask.to_string())).await;
+    assert_eq!((s, v["ok"].clone()), (StatusCode::OK, json!(true)), "{v}");
+    assert_eq!(v["result"]["gate"]["kind"], "question");
+
+    // The setup agent has no flow: stage calls are refused with 422.
+    let stage = json!({"id": "x2", "agentId": a.id, "cmd": "stage.enter", "args": {"stage": "spec"}, "at": 0});
+    let (s, v) = call(app.clone(), post(&token, stage.to_string())).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        (v["ok"].clone(), v["code"].clone()),
+        (json!(false), json!("no_flow"))
+    );
+    assert!(v["message"].as_str().unwrap().contains("without a flow"));
+}
+
+#[tokio::test]
+async fn create_agent_endpoint() {
+    let (dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let post = |body: Value| {
+        Request::post("/api/v1/agents")
+            .header("host", "127.0.0.1:4740")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let run = |args: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .status()
+                .unwrap()
+                .success()
+        )
+    };
+    run(&["init", "-q", "-b", "main"]);
+    run(&["commit", "-q", "--allow-empty", "-m", "base"]);
+    let repo = repo.to_string_lossy().into_owned();
+
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"ticketKey": "bad key", "repo": repo})),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("bad_key"))
+    );
+    let (s, _) = call(
+        app.clone(),
+        post(json!({"ticketKey": "SC-9", "repo": repo, "extra": 1})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"ticketKey": "SC-1", "repo": repo})),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("name_taken"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"ticketKey": "sc-9", "repo": repo})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["agent"]["name"], "SC-9");
 }

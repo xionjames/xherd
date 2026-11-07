@@ -1,5 +1,4 @@
 //! Flow domain types shared by the flow engine, actors and the API (design §6.3).
-//! M0 only defines them; the flow engine fills them from M1 on.
 
 use serde::{Deserialize, Serialize};
 
@@ -61,21 +60,44 @@ pub enum TaskStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Task {
     pub id: String,
     pub title: String,
     pub status: TaskStatus,
     #[serde(default)]
     pub depends: Vec<String>,
+    /// Binding file list (scope fence, R-116).
     #[serde(default)]
     pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommitStatus {
+    /// Waiting at the commit gate.
+    #[default]
+    Proposed,
+    /// Approved; the agent may commit it.
+    Approved,
+    Done,
+    Dropped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Commit {
     pub id: String,
     pub subject: String,
     pub files: Vec<String>,
+    #[serde(default)]
+    pub status: CommitStatus,
     #[serde(default)]
     pub tasks: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -86,7 +108,11 @@ pub struct Commit {
 
 /// An open gate. Priority when several apply: commit > PR > docs > question (R-103).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub enum Gate {
     Docs {
         stage: String,
@@ -94,6 +120,11 @@ pub enum Gate {
         files: Vec<HashedFile>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         next: Option<String>,
+        /// Tripwire set by the agent (`--needs-human`, R-112).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        needs_human: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        questions: Vec<String>,
     },
     Commit(Commit),
     PrTriage {
@@ -136,6 +167,7 @@ mod tests {
             id: "C1".into(),
             subject: "add store".into(),
             files: vec!["a.rs".into()],
+            status: CommitStatus::Proposed,
             tasks: vec![],
             sha: None,
             needs_human: None,

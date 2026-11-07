@@ -10,6 +10,7 @@ use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
 mod report;
+mod xap;
 
 #[derive(Parser)]
 #[command(
@@ -18,6 +19,9 @@ mod report;
     about = "Run, watch and steer a herd of coding agents"
 )]
 struct Cli {
+    /// Machine-readable output (XAP commands).
+    #[arg(long, global = true)]
+    json: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -28,8 +32,31 @@ enum Cmd {
     Daemon,
     /// Is the daemon up?
     Status,
+    /// Create an agent: worktree, branch and `.xherd/` for a ticket.
+    New {
+        /// Ticket key (upper-cased).
+        key: String,
+        #[arg(long)]
+        slug: Option<String>,
+        /// Flow of the built-in pack, or `none` (default `feature`).
+        #[arg(long)]
+        flow: Option<String>,
+        /// Local repository (default: the current directory).
+        #[arg(long)]
+        repo: Option<String>,
+        #[arg(long)]
+        base: Option<String>,
+        prompt: Option<String>,
+    },
     /// List agents.
     Ls,
+    /// Install a pack's commands for agent runtimes (default: xhSpec, every runtime).
+    Install {
+        #[arg(long)]
+        runtime: Option<String>,
+        #[arg(long)]
+        pack: Option<String>,
+    },
     /// Pause an agent (ends its session).
     Pause { agent: String },
     /// Resume a paused, cancelled or failed agent.
@@ -38,6 +65,16 @@ enum Cmd {
     Cancel { agent: String },
     /// Type a message into an agent's session.
     Send { agent: String, text: String },
+    /// Approve the agent's open gate (documents or commit) as they are now.
+    Approve {
+        agent: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Ask the agent to revise its open gate.
+    Changes { agent: String, comment: String },
+    /// Show the open commit proposal's diff, the branch at a ship gate, else every uncommitted change.
+    Diff { agent: String },
     /// Runtime hook (reads the hook JSON on stdin). Silent; always exits 0.
     Hook { event: String },
     /// Push status for agents or wrappers without hooks.
@@ -55,6 +92,32 @@ enum Cmd {
         #[arg(long)]
         seq: Option<u64>,
     },
+    /// XAP: mark the current stage.
+    #[command(subcommand)]
+    Stage(xap::StageCmd),
+    /// XAP: declare an approval gate.
+    #[command(subcommand)]
+    Gate(xap::GateCmd),
+    /// XAP: ask the user a question and wait.
+    Ask { text: String },
+    /// XAP: task list.
+    #[command(subcommand)]
+    Tasks(xap::TasksCmd),
+    /// XAP: task progress.
+    #[command(subcommand)]
+    Task(xap::TaskCmd),
+    /// XAP: commit gates.
+    #[command(subcommand)]
+    Commit(xap::CommitCmd),
+    /// XAP: pull request opened.
+    #[command(subcommand)]
+    Pr(xap::PrCmd),
+    /// XAP: handoff note written.
+    #[command(subcommand)]
+    Handoff(xap::HandoffCmd),
+    /// XAP: record an out-of-scope finding.
+    #[command(subcommand)]
+    Issue(xap::IssueCmd),
 }
 
 fn main() -> ExitCode {
@@ -75,16 +138,37 @@ fn main() -> ExitCode {
             return ExitCode::from(code);
         }
     };
+    let json = cli.json;
     let code = match cli.cmd {
         Cmd::Daemon => run_daemon(),
         Cmd::Status => status(),
         Cmd::Ls => ls(),
+        Cmd::Install { runtime, pack } => install(runtime, pack),
+        Cmd::New {
+            key,
+            slug,
+            flow,
+            repo,
+            base,
+            prompt,
+        } => new_agent(key, slug, flow, repo, base, prompt),
         Cmd::Pause { agent } => action(&agent, "pause", None),
         Cmd::Resume { agent } => action(&agent, "resume", None),
         Cmd::Cancel { agent } => action(&agent, "cancel", None),
         Cmd::Send { agent, text } => {
             action(&agent, "send", Some(serde_json::json!({"text": text})))
         }
+        Cmd::Approve { agent, reason } => action(
+            &agent,
+            "approve",
+            Some(serde_json::json!({"reason": reason})),
+        ),
+        Cmd::Changes { agent, comment } => action(
+            &agent,
+            "request-changes",
+            Some(serde_json::json!({"comment": comment})),
+        ),
+        Cmd::Diff { agent } => diff(&agent, json),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -101,6 +185,15 @@ fn main() -> ExitCode {
             resume_cmd,
             seq,
         }),
+        Cmd::Stage(c) => xap::run(c.into(), json),
+        Cmd::Gate(c) => xap::run(c.into(), json),
+        Cmd::Ask { text } => xap::run(xherd_core::xap::XapCmd::Ask { text }, json),
+        Cmd::Tasks(c) => xap::run(c.into(), json),
+        Cmd::Task(c) => xap::run(c.into(), json),
+        Cmd::Commit(c) => xap::run(c.into(), json),
+        Cmd::Pr(c) => xap::run(c.into(), json),
+        Cmd::Handoff(c) => xap::run(c.into(), json),
+        Cmd::Issue(c) => xap::run(c.into(), json),
     };
     ExitCode::from(code as u8)
 }
@@ -261,14 +354,179 @@ fn ls() -> i32 {
         println!("no agents");
         return 0;
     }
-    println!("{:<24} {:<14} SESSION", "NAME", "STATUS");
+    println!(
+        "{:<24} {:<14} {:<16} GATE / PR",
+        "NAME", "STATUS", "SESSION"
+    );
     for a in agents {
         println!(
-            "{:<24} {:<14} {}",
+            "{:<24} {:<14} {:<16} {}",
             a["name"].as_str().unwrap_or("?"),
             a["status"].as_str().unwrap_or("?"),
-            a["session"].as_str().unwrap_or("-")
+            a["session"].as_str().unwrap_or("-"),
+            gate_or_pr(&a)
         );
+    }
+    0
+}
+
+/// The open gate, else the pull request once there is one.
+fn gate_or_pr(a: &Value) -> String {
+    match (a["gate"].is_object(), a["prUrl"].as_str()) {
+        (false, Some(url)) => format!("pr: {url}"),
+        _ => gate_summary(&a["gate"]),
+    }
+}
+
+/// `spec: spec.md`, `commit C01: a.rs, b.rs`, `question: …`, or `-`.
+fn gate_summary(g: &Value) -> String {
+    let list = |v: &Value, key: Option<&str>| {
+        v.as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| key.map_or(x.as_str(), |k| x[k].as_str()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    match g["kind"].as_str() {
+        Some("docs") => format!(
+            "{}: {}",
+            g["stage"].as_str().unwrap_or("?"),
+            list(&g["files"], Some("path"))
+        ),
+        Some("commit") => format!(
+            "commit {}: {}",
+            g["id"].as_str().unwrap_or("?"),
+            list(&g["files"], None)
+        ),
+        Some("question") => format!("question: {}", g["text"].as_str().unwrap_or("")),
+        Some(k) => k.to_string(),
+        None => "-".into(),
+    }
+}
+
+fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
+    let body = serde_json::json!({"runtime": runtime, "pack": pack});
+    match Client::new().and_then(|c| c.call("POST", "/install", Some(body))) {
+        Ok(v) => {
+            for f in v["installed"].as_array().into_iter().flatten() {
+                let path = f["path"].as_str().unwrap_or("?");
+                match f["action"].as_str() {
+                    Some("kept") => {
+                        println!("kept     {path} (edited; new version in {path}.xherd-new)")
+                    }
+                    Some(a) => println!("{a:<8} {path}"),
+                    None => {}
+                }
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("xherd install: {e}");
+            2
+        }
+    }
+}
+
+fn new_agent(
+    key: String,
+    slug: Option<String>,
+    flow: Option<String>,
+    repo: Option<String>,
+    base: Option<String>,
+    prompt: Option<String>,
+) -> i32 {
+    // The daemon has its own working directory: send an absolute path.
+    let repo = match repo {
+        Some(r) if r.contains("://") || r.starts_with("git@") => r,
+        r => {
+            let p = r.map_or_else(std::env::current_dir, |r| std::fs::canonicalize(&r));
+            match p {
+                Ok(p) => p.to_string_lossy().into_owned(),
+                Err(e) => {
+                    eprintln!("xherd new: repository: {e}");
+                    return 2;
+                }
+            }
+        }
+    };
+    let body = serde_json::json!({
+        "ticketKey": key, "slug": slug, "repo": repo, "base": base, "flow": flow, "prompt": prompt,
+    });
+    match Client::new().and_then(|c| c.call("POST", "/agents", Some(body))) {
+        Ok(v) => {
+            let a = &v["agent"];
+            println!(
+                "{} {} in {}",
+                a["name"].as_str().unwrap_or("?"),
+                a["status"].as_str().unwrap_or("?"),
+                a["workdir"].as_str().unwrap_or("?")
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("xherd new: {e}");
+            2
+        }
+    }
+}
+
+/// The diff on stdout (pipe it to a pager); what it covers on stderr.
+fn diff(agent: &str, json: bool) -> i32 {
+    let v = match Client::new().and_then(|c| c.call("GET", &format!("/agents/{agent}/diff"), None))
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    if json {
+        println!("{v}");
+        return 0;
+    }
+    let names = |k: &str| {
+        v[k].as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    let c = &v["commit"];
+    if let Some(range) = v["branch"].as_str() {
+        eprintln!("ship: branch {range}: {}", names("files"));
+        let others = names("others");
+        if !others.is_empty() {
+            eprintln!("uncommitted, not pushed: {others}");
+        }
+    } else if c.is_object() {
+        eprintln!(
+            "commit {} \"{}\": {}",
+            c["id"].as_str().unwrap_or("?"),
+            c["subject"].as_str().unwrap_or(""),
+            names("files")
+        );
+        if let Some(r) = c["needsHuman"].as_str() {
+            eprintln!("needs a human: {r}");
+        }
+        let others = names("others");
+        if !others.is_empty() {
+            eprintln!("not in this commit: {others}");
+        }
+    } else {
+        eprintln!(
+            "no commit proposed; uncommitted changes: {}",
+            names("files")
+        );
+    }
+    let d = v["diff"].as_str().unwrap_or("");
+    if !d.is_empty() {
+        println!("{d}");
     }
     0
 }
@@ -287,5 +545,73 @@ fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
             eprintln!("{e}");
             2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shell words of a one-line command (double and single quotes only).
+    fn words(s: &str) -> Vec<String> {
+        let (mut out, mut cur, mut quote, mut any) = (Vec::new(), String::new(), None, false);
+        for c in s.chars() {
+            match (quote, c) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), c) => cur.push(c),
+                (None, '"' | '\'') => (quote, any) = (Some(c), true),
+                (None, c) if c.is_whitespace() => {
+                    if any || !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                    any = false;
+                }
+                (None, c) => cur.push(c),
+            }
+        }
+        if any || !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    /// Every `"$XHERD_BIN" …` call the xhSpec prompts teach is a valid
+    /// command line for this CLI (a call ends at the closing backtick).
+    #[test]
+    fn prompt_calls_parse() {
+        let env = |k: &str| (k == "HOME").then(|| "/home/u".to_string());
+        let plan = xherd_flow::xhspec()
+            .plan_install("claude-code", xherd_flow::install::XHSPEC_FILES, &env)
+            .unwrap();
+        let mut seen = 0;
+        for f in &plan {
+            for line in f.text.lines() {
+                for (i, _) in line.match_indices(r#""$XHERD_BIN" "#) {
+                    let rest = &line[i + r#""$XHERD_BIN" "#.len()..];
+                    let call = rest.split('`').next().unwrap();
+                    let argv = std::iter::once("xherd".to_string()).chain(words(call));
+                    if let Err(e) = Cli::try_parse_from(argv) {
+                        panic!("{}: `{call}`: {e}", f.path.display());
+                    }
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 30, "only {seen} calls found");
+        assert_eq!(words(r#"a "b c" 'd' """#), ["a", "b c", "d", ""]);
+    }
+
+    #[test]
+    fn ls_shows_the_gate_else_the_pr() {
+        let url = "https://github.com/acme/app/pull/42";
+        let gate =
+            serde_json::json!({"kind": "docs", "stage": "ship", "files": [{"path": "pr.md"}]});
+        let a = serde_json::json!({"gate": gate, "prUrl": url});
+        assert_eq!(gate_or_pr(&a), "ship: pr.md");
+        assert_eq!(
+            gate_or_pr(&serde_json::json!({"prUrl": url})),
+            format!("pr: {url}")
+        );
+        assert_eq!(gate_or_pr(&serde_json::json!({})), "-");
     }
 }

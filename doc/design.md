@@ -68,7 +68,7 @@ Cost accepted: a slower first version than Go (estimate +30–40 % daemon time).
 | Async runtime, HTTP, WebSocket | `tokio`, `axum` (with `ws`), `tower-http` | Static UI with compression, tracing middleware. |
 | Embedded UI | `rust-embed` | `ui/dist` compiled into the binary. |
 | SQLite | `rusqlite` (`bundled`), `rusqlite_migration` | One writer task, WAL. |
-| Serialisation | `serde`, `serde_json`, a maintained serde YAML crate | `serde_yaml` is archived; pick a maintained fork (**verify**). |
+| Serialisation | `serde`, `serde_json`, `yaml_serde` | `serde_yaml` is archived; `yaml_serde` is its continuation maintained by the YAML organisation. |
 | JSON Schema | `jsonschema` | Pack schemas, view schema, plugin outputs. |
 | CLI | `clap` (derive) | |
 | Fast CLI HTTP | `ureq` (rustls) | Hook/report path stays synchronous: no tokio start-up cost. |
@@ -193,6 +193,11 @@ trait Driver {
 |---|---|---|---|---|
 | `terminal` (v1) | `tmux new-session -d -s <name> -c <dir> -e XHERD_*=… <argv>` | `send-keys -l` + Enter (extra Enters per runtime) | runtime hooks, `report`, XAP, screen rules | xterm.js over PTY |
 | `acp` (post-v1) | spawn the runtime's ACP agent with stdio pipes, as the ACP client | `session/prompt` | ACP session updates + XAP | transcript; permission requests as buttons |
+
+Terminal runtime specifics (data in the runtime plugin's `data.terminal`):
+
+- **Hooks**: `hooks.file` (Claude Code: `.claude/settings.local.json`) gets xherd's tagged `xherd hook <event>` entries merged in at creation and is excluded from git.
+- **Folder trust**: a runtime that asks "trust this folder?" before running hooks would stop every new worktree at that dialog, and xherd's first command would never be typed. `trust` names where the runtime records trusted folders (Claude Code: `${CLAUDE_CONFIG_DIR:-~}/.claude.json`, `projects["<abs path>"].hasTrustDialogAccepted`). Trust covers subfolders, so it is a one-time prerequisite on the worktrees root (`<workspace>/worktrees`, §8.1), not a per-agent write: xherd only reads that file (the runtime rewrites it concurrently). `xherd new` creates the worktrees root, then refuses with `runtime_untrusted` and the exact steps (run the runtime once in that folder and accept) until it or an ancestor is trusted. Paths are compared as stored and canonicalised (`/tmp` → `/private/tmp`). Runtimes without `trust` skip the check.
 
 ACP specifics:
 
@@ -634,13 +639,63 @@ doc/                            spec.md, design.md, xap.md, integrate-your-sdd.m
 
 ## 18. Milestones
 
-1. **M0 skeleton**: Cargo workspace, config and paths, store and migrations, supervisor and actors, scheduler, plugin loader, git/tmux wrappers, `xherd hook/report` with sequence numbers and the offline queue.
-2. **M1 one agent end to end**: xhSpec v0 (prompts and formats), worktree + `.xherd/`, Claude Code in tmux, XAP gates, hash approvals from the CLI and a minimal UI, fresh sessions, commit gates, ship, draft PR via GitHub.
-3. **M2 UI**: Svelte UI on the panel registry (Overview, Agent page, Settings, Setup checks, Welcome), websockets, terminal, diffs.
-4. **M3 Docker-first**: image with version managers, `xherd init` (users, SSH proxy, git config), `docker init/doctor/update`, toolchain resolution, Open-in (URL schemes, Dev Containers, companion), git access setup and doctor.
-5. **M4 guardrails, backups, autonomy `important`, PR follow-up, notifications, phones** → **v1.0**.
-6. **v1.x**: Codex and opencode, Kanban/To review/Work log, toolchain plugins and Welcome installer, plugin install from the UI, TODOs, budgets, `never` autonomy.
-7. **Later**: ACP driver, server/Kubernetes, Electron app, panel plugins, external packs with `parse`, per-agent containers, parallel task execution.
+Tick an item when it is done (tests green on the milestone branch); tick the milestone when all its items are and it is merged to `main`.
+
+- [x] **M0 skeleton**
+  - [x] Cargo workspace
+  - [x] Config and paths
+  - [x] Store and migrations
+  - [x] Supervisor and actors
+  - [x] Scheduler
+  - [x] Plugin loader
+  - [x] git/tmux wrappers
+  - [x] `xherd hook/report` with sequence numbers and the offline queue
+- [x] **M1 one agent end to end**
+  - [x] xhSpec v0 (prompts and formats)
+  - [x] Worktree + `.xherd/`
+  - [x] Claude Code in tmux
+  - [x] XAP gates
+  - [x] Hash approvals from the CLI
+  - [x] Fresh sessions
+  - [x] Commit gates
+  - [x] Ship
+  - [x] Draft PR via GitHub
+- [ ] **M2 UI**
+  - [ ] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
+  - [ ] Hash approvals from the UI
+  - [ ] Websockets
+  - [ ] Terminal
+  - [ ] Diffs
+- [ ] **M3 Docker-first**
+  - [ ] Image with version managers
+  - [ ] `xherd init` (users, SSH proxy, git config)
+  - [ ] `docker init/doctor/update`
+  - [ ] Toolchain resolution
+  - [ ] Open-in (URL schemes, Dev Containers, companion)
+  - [ ] Git access setup and doctor
+- [ ] **M4 → v1.0**
+  - [ ] Guardrails
+  - [ ] Backups
+  - [ ] Autonomy `important`
+  - [ ] PR follow-up
+  - [ ] Notifications
+  - [ ] Phones
+- [ ] **v1.x**
+  - [ ] Codex and opencode
+  - [ ] Kanban / To review / Work log
+  - [ ] Toolchain plugins and Welcome installer
+  - [ ] Plugin install from the UI
+  - [ ] TODOs
+  - [ ] Budgets
+  - [ ] `never` autonomy
+- [ ] **Later**
+  - [ ] ACP driver
+  - [ ] Server/Kubernetes
+  - [ ] Electron app
+  - [ ] Panel plugins
+  - [ ] External packs with `parse`
+  - [ ] Per-agent containers
+  - [ ] Parallel task execution
 
 ## 19. Decision log
 

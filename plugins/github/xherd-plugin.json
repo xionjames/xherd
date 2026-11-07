@@ -1,0 +1,16 @@
+{
+  "name": "github",
+  "kind": "host",
+  "version": "0.1.0",
+  "label": "GitHub",
+  "description": "GitHub pull requests through the gh CLI.",
+  "settings": [
+    { "key": "gh", "label": "gh binary", "default": "gh" },
+    { "key": "token", "label": "Token (GH_TOKEN; empty = gh's own login)", "secret": true }
+  ],
+  "timeoutSeconds": 30,
+  "checks": [
+    { "name": "gh", "argv": ["gh", "--version"] },
+    { "name": "gh auth", "argv": ["gh", "auth", "status"], "optional": true }
+  ]
+}

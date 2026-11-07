@@ -1,0 +1,35 @@
+# xhSpec, the built-in flow pack (spec §7, design §6.2).
+# v0: the feature flow only; bug and hotfix come later.
+name: xhspec
+version: 0.1.0
+protocol: 1
+specDir: private
+requiresCommitted: false
+private: [pr-comments.json, HANDOFF.md]
+
+install:
+  claude-code:
+    prefix: "/xhspec:"
+    commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xhspec/{name}.md", format: command }
+    args: "$ARGUMENTS"
+
+commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status" }
+
+flows:
+  feature:
+    start: "{prefix}feature {key} {prompt}"
+    stages:
+      - id: spec
+        role: spec
+        class: critical
+        gate: { docs: [spec.md] }
+        next:
+          - when: { frontmatter: { file: spec.md, key: design, equals: skip } }
+            run: "{prefix}tasks"
+          - run: "{prefix}design"
+      - { id: design, role: design, class: routine, gate: { docs: [design.md] }, next: [{ run: "{prefix}tasks" }] }
+      - { id: tasks, role: tasks, class: routine, gate: { docs: [tasks.md] }, next: [{ run: "{prefix}next" }] }
+      - { id: implement, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
+      - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: ship, role: ship, class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship", autoApproved: "{prefix}ship --no-ticket-update" }] }
+      - { id: pr, role: pr, class: human-only }

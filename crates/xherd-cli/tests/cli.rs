@@ -283,6 +283,33 @@ fn end_to_end_replay_and_live_hooks() {
     xherd(home.path(), wt.path(), &["hook", "stop"], &bad, "{}");
     assert!(!home.path().join("hook-queue.jsonl").exists());
 
+    // XAP: accepted (0), refused (2), refused with --json on stdout.
+    let o = xherd(home.path(), wt.path(), &["ask", "which db?"], &env, "");
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    assert!(ls().contains("question: which db?"), "{}", ls());
+    let o = xherd(home.path(), wt.path(), &["approve", "SC-1"], &[], "");
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("answer it with"),
+        "{o:?}"
+    );
+    let o = xherd(home.path(), wt.path(), &["task", "start", "T01"], &env, "");
+    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("no_flow"));
+    let o = xherd(
+        home.path(),
+        wt.path(),
+        &["--json", "stage", "enter", "spec"],
+        &env,
+        "",
+    );
+    assert_eq!(o.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(
+        (v["ok"].as_bool(), v["code"].as_str()),
+        (Some(false), Some("no_flow"))
+    );
+
     // User actions through the CLI end the tmux session.
     let o = xherd(home.path(), wt.path(), &["pause", "SC-1"], &[], "");
     assert!(
@@ -294,4 +321,51 @@ fn end_to_end_replay_and_live_hooks() {
         .output()
         .unwrap();
     assert!(!has.status.success(), "session ended");
+}
+
+#[test]
+fn xap_exit_codes_without_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = tempfile::tempdir().unwrap();
+    let down = format!("http://127.0.0.1:{}", free_port());
+
+    // Not under xherd.
+    let o = xherd(home.path(), wt.path(), &["gate", "open", "spec"], &[], "");
+    assert_eq!(o.status.code(), Some(4));
+
+    let env = [
+        ("XHERD_AGENT_ID", "A1"),
+        ("XHERD_URL", down.as_str()),
+        ("XHERD_AGENT_TOKEN", "t"),
+    ];
+    // Needs an answer: unreachable.
+    let o = xherd(home.path(), wt.path(), &["gate", "open", "spec"], &env, "");
+    assert_eq!(o.status.code(), Some(3), "{o:?}");
+    assert!(queue_lines(home.path()).is_empty());
+    // Report-only: queued.
+    let o = xherd(
+        home.path(),
+        wt.path(),
+        &["task", "done", "T01", "--evidence", "tests pass"],
+        &env,
+        "",
+    );
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    let q = queue_lines(home.path());
+    assert_eq!(
+        (q[0]["cmd"].as_str(), q[0]["args"]["id"].as_str()),
+        (Some("task.done"), Some("T01"))
+    );
+    assert_eq!(q[0]["agentId"], "A1");
+    // Usage errors.
+    let o = xherd(home.path(), wt.path(), &["task", "done", "T01"], &env, "");
+    assert_eq!(o.status.code(), Some(64));
+    let o = xherd(
+        home.path(),
+        wt.path(),
+        &["issue", "add", "--title", "x", "--severity", "huge"],
+        &env,
+        "",
+    );
+    assert_eq!(o.status.code(), Some(64));
 }

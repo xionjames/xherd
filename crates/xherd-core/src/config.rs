@@ -46,8 +46,15 @@ pub struct Config {
     /// 0 = no idle alerts.
     pub idle_alert_minutes: u64,
     pub pause_timeout_sec: u64,
+    /// After an approved gate, replace the runtime session with a new one
+    /// started with the next command instead of typing it (R-023).
+    pub fresh_sessions: bool,
     pub event_retention_days: u64,
     pub update_check: bool,
+    /// Workspace root holding `worktrees/` (design §8.1). `None`:
+    /// `$XHERD_WORKSPACE`, else `~/xherd`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
     /// tmux socket name (`tmux -L`); `None` uses the default server.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tmux_socket: Option<String>,
@@ -69,8 +76,10 @@ impl Default for Config {
             gate_park_minutes: 30,
             idle_alert_minutes: 15,
             pause_timeout_sec: 120,
+            fresh_sessions: true,
             event_retention_days: 90,
             update_check: true,
+            workspace: None,
             tmux_socket: None,
             plugin_settings: Map::new(),
             extra: Map::new(),
@@ -123,6 +132,17 @@ impl Config {
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let bytes = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
         write_atomic(path, &bytes, Some(0o600))
+    }
+
+    pub fn workspace_root(&self) -> std::path::PathBuf {
+        let nonempty = |s: Option<String>| s.filter(|s| !s.is_empty());
+        nonempty(self.workspace.clone())
+            .or_else(|| nonempty(std::env::var("XHERD_WORKSPACE").ok()))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+                    .join("xherd")
+            })
     }
 
     pub fn url(&self) -> String {

@@ -1,17 +1,23 @@
 //! The xherd daemon core: supervisor, agent actors, drivers, scheduler.
 //! HTTP lives in `xherd-api`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use xherd_core::config::{Config, ConfigError, Secrets};
 use xherd_core::paths::Paths;
+use xherd_core::queue::Queued;
 use xherd_core::report::{Origin, Report};
+use xherd_core::xap::{Refusal, XapCall};
 use xherd_core::{Agent, queue};
+use xherd_flow::Pack;
 use xherd_plugin::Registry;
 use xherd_store::Store;
 
 pub mod actor;
+mod create;
 pub mod driver;
+pub mod install;
 pub mod scheduler;
 pub mod supervisor;
 pub mod support;
@@ -51,12 +57,43 @@ impl Options {
             driver,
             clock,
             xherd_bin: "xherd".into(),
-            builtin_plugins: Vec::new(),
+            builtin_plugins: xherd_plugin::builtins(),
             scheduler: None,
             delivery_ack: std::time::Duration::from_secs(10),
             screen_rules: None,
         }
     }
+}
+
+/// The host plugin for pull requests with its settings and secrets resolved
+/// (R-506): `github`, built in or replaced by an external plugin of that name.
+fn host_plugin(
+    plugins: &Registry,
+    paths: &Paths,
+    config: &Config,
+    secrets: &Secrets,
+    xherd_bin: &str,
+) -> Option<Arc<xherd_plugin::host::Host>> {
+    let p = plugins
+        .get(xherd_plugin::host::GITHUB)
+        .filter(|p| p.manifest.kind == xherd_plugin::Kind::Host)?;
+    let m = &p.manifest;
+    let global = config
+        .plugin_settings
+        .get(&m.name)
+        .and_then(serde_json::Value::as_object);
+    Some(Arc::new(xherd_plugin::host::Host {
+        plugin: p.clone(),
+        ctx: xherd_plugin::Context {
+            settings: xherd_plugin::resolve_settings(m, global, None),
+            secrets: xherd_plugin::resolve_secrets(m, &secrets.for_plugin(&m.name)),
+            xherd_bin: xherd_bin.to_string(),
+            xherd_url: config.url(),
+            config_dir: paths.plugin_config(&m.name),
+            state_dir: paths.plugin_state(&m.name),
+            ..xherd_plugin::Context::default()
+        },
+    }))
 }
 
 /// Cheap to clone; every field is shared.
@@ -67,10 +104,13 @@ pub struct Daemon {
     pub secrets: Arc<Secrets>,
     pub store: Store,
     pub plugins: Arc<Registry>,
+    pub packs: Arc<BTreeMap<String, Pack>>,
     pub hub: Hub,
     pub sup: SupervisorHandle,
     pub driver: Arc<dyn Driver>,
     pub clock: Arc<dyn Clock>,
+    /// Absolute path of the `xherd` binary (hook commands, `XHERD_BIN`).
+    pub xherd_bin: String,
 }
 
 impl Daemon {
@@ -108,11 +148,17 @@ impl Daemon {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
         }
 
+        let packs = Arc::new(BTreeMap::from([(
+            xherd_flow::XHSPEC.to_string(),
+            xherd_flow::xhspec(),
+        )]));
+        let host = host_plugin(&plugins, &paths, &config, &secrets, &opts.xherd_bin);
         let hub = support::hub();
         let settings = ActorSettings {
             idle_alert_minutes: config.idle_alert_minutes,
             gate_park_minutes: config.gate_park_minutes,
-            xherd_bin: opts.xherd_bin,
+            fresh_sessions: config.fresh_sessions,
+            xherd_bin: opts.xherd_bin.clone(),
             xherd_url: config.url(),
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
@@ -124,6 +170,9 @@ impl Daemon {
             clock: opts.clock.clone(),
             settings: Arc::new(settings),
             sup: tokio::sync::mpsc::unbounded_channel().0, // replaced by the supervisor
+            packs: packs.clone(),
+            git: xherd_git::Git::new("git"),
+            host,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
@@ -134,11 +183,14 @@ impl Daemon {
             secrets: Arc::new(secrets),
             store,
             plugins: Arc::new(plugins),
+            packs,
             hub,
             sup,
             driver: opts.driver,
             clock: opts.clock,
+            xherd_bin: opts.xherd_bin,
         };
+        d.import_ledgers().await;
         let replayed = d.replay_queue().await?;
         if replayed > 0 {
             tracing::info!(replayed, "replayed queued reports");
@@ -159,27 +211,137 @@ impl Daemon {
         self.sup.report(r, Origin::Agent).await
     }
 
+    /// Route an XAP call from an agent (design §6.5).
+    pub async fn xap(&self, call: XapCall) -> Result<serde_json::Value, Refusal> {
+        self.sup.xap(call).await
+    }
+
     pub async fn action(&self, who: &str, a: UserAction) -> Result<Agent, ActionError> {
         self.sup.action(who, a).await
+    }
+
+    /// What the user reviews before approving (xap.md §5, R-104): with a
+    /// commit gate open, the diff of exactly the proposed files against HEAD
+    /// (new and deleted files included) and the other uncommitted changes left
+    /// out of it; at a ship gate, the branch as it will be pushed
+    /// (`<base>...HEAD`) and the uncommitted files that would stay behind;
+    /// otherwise the diff of every uncommitted change. Read-only git work, run
+    /// here rather than in the actor.
+    pub async fn diff(&self, who: &str) -> Result<serde_json::Value, ActionError> {
+        let fail = |code: &'static str, message: String| ActionError { code, message };
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = a
+            .workdir
+            .as_deref()
+            .map(std::path::Path::new)
+            .ok_or_else(|| fail("no_workspace", format!("{} has no worktree", a.name)))?;
+        let git = xherd_git::Git::new("git");
+        let git_err = |e: xherd_git::GitError| fail("git", e.to_string());
+        let head = git.rev_parse(wd, "HEAD").await.map_err(git_err)?;
+        let changed = git.changed_files(wd, "HEAD").await.map_err(git_err)?;
+        if let (
+            Some(xherd_core::domain::Gate::Docs {
+                role: xherd_core::domain::Role::Ship,
+                ..
+            }),
+            Some(base),
+        ) = (&a.gate, &a.base)
+        {
+            let range = format!("{base}...HEAD");
+            let files: Vec<String> = git
+                .run(wd, &["diff", "--name-only", &range, "--"])
+                .await
+                .map_err(git_err)?
+                .lines()
+                .map(str::to_string)
+                .collect();
+            let diff = git.diff(wd, Some(&range), &[]).await.map_err(git_err)?;
+            return Ok(serde_json::json!({
+                "agent": a.name, "head": head, "branch": range, "files": files,
+                "others": changed, "diff": diff,
+            }));
+        }
+        let (commit, files, others) = match &a.gate {
+            Some(xherd_core::domain::Gate::Commit(c)) => {
+                let others = changed
+                    .into_iter()
+                    .filter(|f| !c.files.contains(f))
+                    .collect();
+                (Some(c), c.files.clone(), others)
+            }
+            _ => (None, changed, Vec::new()),
+        };
+        let diff = git.diff_proposed(wd, &files).await.map_err(git_err)?;
+        Ok(serde_json::json!({
+            "agent": a.name, "head": head, "commit": commit, "files": files,
+            "others": others, "diff": diff,
+        }))
     }
 
     /// Apply `hook-queue.jsonl` in order (R-014). Returns how many were applied.
     pub async fn replay_queue(&self) -> std::io::Result<usize> {
         let path = self.paths.hook_queue();
-        let reports = tokio::task::spawn_blocking({
+        let items = tokio::task::spawn_blocking({
             let p = path.clone();
             move || queue::take(&p)
         })
         .await
         .map_err(std::io::Error::other)??;
         let mut applied = 0;
-        for r in reports {
-            if self.report(r).await == Some(ReportResult::Applied) {
-                applied += 1;
+        for item in items {
+            match item {
+                Queued::Report(r) => {
+                    if self.report(r).await == Some(ReportResult::Applied) {
+                        applied += 1;
+                    }
+                }
+                Queued::Xap(call) => match self.xap(call).await {
+                    Ok(_) => applied += 1,
+                    Err(e) => {
+                        tracing::warn!(code = e.code, error = %e.message, "queued XAP call refused")
+                    }
+                },
             }
         }
         queue::done(&path)?;
         Ok(applied)
+    }
+
+    /// Re-read approval ledgers of agents with a workspace: rows missing from
+    /// the database are added, so the file wins (design §3.4).
+    async fn import_ledgers(&self) {
+        let Ok(agents) = self.store.list_agents().await else {
+            return;
+        };
+        for a in agents {
+            let Some(wd) = &a.workdir else { continue };
+            let Ok(text) = std::fs::read_to_string(
+                std::path::Path::new(wd).join(".xherd/ledger/approvals.jsonl"),
+            ) else {
+                continue;
+            };
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                    tracing::warn!(agent = %a.name, "skipping bad approval ledger line");
+                    continue;
+                };
+                let (Some(file), Some(sha)) = (v["file"].as_str(), v["sha256"].as_str()) else {
+                    continue;
+                };
+                let row = xherd_store::Approval {
+                    agent_id: a.id.clone(),
+                    file: file.into(),
+                    sha256: sha.into(),
+                    at: v["at"].as_i64().unwrap_or(0),
+                    actor: v["actor"].as_str().unwrap_or("user").into(),
+                    auto: v["auto"].as_bool().unwrap_or(false),
+                    reason: v["reason"].as_str().map(str::to_string),
+                };
+                if let Err(e) = self.store.insert_approval(row).await {
+                    tracing::error!(agent = %a.name, error = %e, "approval import failed");
+                }
+            }
+        }
     }
 
     /// Compare live agents with the driver's sessions (R-011).

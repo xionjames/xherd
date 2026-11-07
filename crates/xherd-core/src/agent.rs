@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::Gate;
+use crate::domain::{Commit, Gate, Task};
 use crate::status::{Status, Trigger, next_status};
 
 /// Milliseconds since the Unix epoch.
@@ -50,8 +50,37 @@ pub struct Agent {
     /// argv that starts the runtime; filled from the runtime plugin (M1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch: Option<Vec<String>>,
+    /// Repository root the worktree was created from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Base the branch was created from (resolved ref, e.g. `origin/main`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// Runtime plugin name (`claude-code` when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    /// Command to start the next session with (approval of a parked agent, R-028).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_prompt: Option<String>,
+    /// Flow pack and flow (`None` = flow `none`, R-033).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<String>,
+    /// Current stage id, from `stage enter` / `gate open` (XAP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Gate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<Task>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<Commit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    /// When the agent last confirmed a handoff note (`handoff written`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_at: Option<Millis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
     /// The current `blocked` status came from a screen rule, not a real report.
@@ -78,7 +107,18 @@ impl Agent {
             resume_cmd: None,
             workdir: None,
             launch: None,
+            repo: None,
+            base: None,
+            runtime: None,
+            next_prompt: None,
+            pack: None,
+            flow: None,
+            stage: None,
             gate: None,
+            tasks: Vec::new(),
+            commits: Vec::new(),
+            pr_url: None,
+            handoff_at: None,
             last_message: None,
             screen_blocked: false,
             idle_alerted: false,

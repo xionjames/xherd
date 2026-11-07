@@ -232,7 +232,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | ID | Requirement |
 |---|---|
 | R-106 | Every approval (human or automatic) appends `{gate, file, sha256, actor, auto, reason, at, commit}` to the agent's approval ledger and the daemon database. The daemon **never edits** the agent's documents. |
-| R-107 | A document is approved when the ledger has an approval whose hash equals its current content (line endings normalised). Editing an approved document re-opens its gate ("changed since approved") and the UI shows the diff against the approved version. |
+| R-107 | A document is approved when the ledger has an approval whose hash equals its current content (line endings normalised). Editing an approved document re-opens its gate ("changed since approved") and the UI shows the diff against the approved version. Exception: in the tasks document (the one the flow's `tasks` stage gates), task progress lines (`- status:` and `- evidence:` under a task heading) are not content; recording progress does not re-open the gate. |
 | R-108 | Several documents changed together form **one** gate approved together. |
 
 ### 6.3 Autonomy
@@ -736,6 +736,7 @@ xherd login [URL]                       pair this CLI with a daemon (host compan
 xherd new <KEY> [--slug s] [--flow f] [--pack p] [--repo dir|url] [--base b]
           [--runtime r] [--autonomy a] [--tool-permissions p] [--driver terminal|acp] ["prompt"]
 xherd ls | attach | open | shell | pause | resume | approve | cancel <agent>
+xherd changes <agent> "comment"         request changes at the open gate
 xherd pause --all                       kill switch
 xherd pair                              one-time pairing link
 xherd install [--runtime r | --all] [--pack p]
