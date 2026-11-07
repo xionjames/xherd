@@ -231,6 +231,40 @@ async fn reconcile_marks_lost_sessions() {
 }
 
 #[tokio::test]
+async fn a_restart_resumes_a_running_agent_instead_of_failing_it() {
+    let t = daemon(4).await;
+    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
+    // The container restarted: the session is gone.
+    t.drv.alive.lock().unwrap().clear();
+    t.d.reconcile_with(true).await;
+    // Queued again and started in a new session, not left in error.
+    for _ in 0..50 {
+        if t.drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start "))
+            .count()
+            == 2
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        t.drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start "))
+            .count(),
+        2
+    );
+    assert_ne!(status(&t.d, "SC-1").await, Status::Error);
+    let ev = t.d.store.events(&a.id, 20).await.unwrap();
+    assert!(ev.iter().any(|e| e.kind == "session-lost"));
+}
+
+#[tokio::test]
 async fn idle_alert_once_and_parking() {
     let t = daemon(4).await;
     let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();

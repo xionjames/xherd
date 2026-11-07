@@ -259,7 +259,7 @@ impl Daemon {
         if replayed > 0 {
             tracing::info!(replayed, "replayed queued reports");
         }
-        d.reconcile().await;
+        d.reconcile_with(true).await;
         if let Err(e) = d.write_gitconfig() {
             tracing::warn!(error = %e.message, "managed git config not written");
         }
@@ -494,8 +494,14 @@ impl Daemon {
 
     /// Compare live agents with the driver's sessions (R-011).
     pub async fn reconcile(&self) {
+        self.reconcile_with(false).await;
+    }
+
+    /// `recover` at daemon start: agents whose session is gone (the container
+    /// or terminal server restarted) are parked at their gate or resumed.
+    pub async fn reconcile_with(&self, recover: bool) {
         match self.driver.sessions().await {
-            Ok(alive) => self.sup.reconcile(alive),
+            Ok(alive) => self.sup.reconcile(alive, recover),
             Err(e) => tracing::warn!(error = %e, "reconcile: cannot list sessions"),
         }
     }

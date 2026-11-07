@@ -30,7 +30,7 @@ pub enum SupMsg {
     Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
     /// Live session names from the driver (R-011).
-    Reconcile(Vec<String>),
+    Reconcile(Vec<String>, bool),
 }
 
 #[derive(Clone)]
@@ -80,8 +80,8 @@ impl SupervisorHandle {
         let _ = self.tx.send(SupMsg::Tick(t));
     }
 
-    pub fn reconcile(&self, alive: Vec<String>) {
-        let _ = self.tx.send(SupMsg::Reconcile(alive));
+    pub fn reconcile(&self, alive: Vec<String>, recover: bool) {
+        let _ = self.tx.send(SupMsg::Reconcile(alive, recover));
     }
 }
 
@@ -235,10 +235,11 @@ impl Supervisor {
                     let _ = e.tx.send(Msg::Tick(t));
                 }
             }
-            SupMsg::Reconcile(alive) => {
+            SupMsg::Reconcile(alive, recover) => {
                 for e in self.agents.values().filter(|e| e.status.is_live()) {
                     let alive = alive.contains(&e.name);
-                    let _ = e.tx.send(Msg::Tick(TickKind::SessionCheck { alive }));
+                    let _ =
+                        e.tx.send(Msg::Tick(TickKind::SessionCheck { alive, recover }));
                 }
             }
         }

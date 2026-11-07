@@ -681,6 +681,42 @@ async fn session_start(t: &T, seq: u64) {
 }
 
 #[tokio::test]
+async fn a_restart_parks_an_agent_waiting_at_a_gate_and_approval_still_works() {
+    let t = setup().await;
+    session_start(&t, 1).await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 2).await;
+    assert_eq!(get(&t).await.status, Status::WaitingInput);
+
+    // The container restarted: the terminal server and the session are gone.
+    t.drv.alive.lock().unwrap().clear();
+    t.d.reconcile_with(true).await;
+    for _ in 0..50 {
+        if get(&t).await.status == Status::Parked {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let a = get(&t).await;
+    assert_eq!((a.status, a.gate.is_some()), (Status::Parked, true));
+
+    // The gate can still be approved; the next session starts with the command.
+    let a = act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
+}
+
+#[tokio::test]
 async fn approval_starts_a_fresh_session_with_the_next_command() {
     let t = setup().await;
     session_start(&t, 1).await;

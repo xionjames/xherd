@@ -66,8 +66,12 @@ pub enum TickKind {
     ScreenScan,
     IdleCheck,
     ParkCheck,
+    /// `recover`: the daemon just started, so a missing session means the
+    /// terminal server went away with a container restart, not that the
+    /// agent died; the agent is parked or resumed instead of failed.
     SessionCheck {
         alive: bool,
+        recover: bool,
     },
     /// TODO checks and PR polling arrive with those features (v1.x / M4).
     TodoTick,
@@ -1197,13 +1201,39 @@ impl Actor {
         let now = self.now();
         let minutes = |m: u64| (m as i64) * 60_000;
         match t {
-            TickKind::SessionCheck { alive } => {
+            TickKind::SessionCheck { alive, recover } => {
                 if self.agent.status.is_live() && !alive {
                     self.revoke_tokens().await;
                     self.delivery = None;
-                    self.agent.fire(Trigger::SessionLost, now);
-                    self.log(None, "session-lost", None).await;
-                    self.notify(format!("{}: terminal session disappeared", self.agent.name));
+                    // Waiting at a gate you can approve: park, which is what
+                    // a long wait does (approving starts a fresh session).
+                    let at_gate = self.agent.status == Status::WaitingInput
+                        && matches!(self.agent.gate, Some(Gate::Docs { .. } | Gate::Commit(_)));
+                    if recover && at_gate {
+                        self.agent.fire(Trigger::Park, now);
+                        self.log(None, "parked", Some(json!({"why": "interrupted"})))
+                            .await;
+                        self.notify(format!(
+                            "{}: xherd restarted; approve the gate to continue",
+                            self.agent.name
+                        ));
+                    } else {
+                        self.agent.fire(Trigger::SessionLost, now);
+                        self.log(None, "session-lost", None).await;
+                        if recover {
+                            // Same as Resume: a new session reloads the state.
+                            self.agent.fire(Trigger::Resume, now);
+                            if self.agent.next_prompt.is_none() {
+                                self.agent.next_prompt = self.resume_command();
+                            }
+                            self.notify(format!("{}: xherd restarted; resuming", self.agent.name));
+                        } else {
+                            self.notify(format!(
+                                "{}: terminal session disappeared",
+                                self.agent.name
+                            ));
+                        }
+                    }
                     self.commit(before).await;
                 }
             }
