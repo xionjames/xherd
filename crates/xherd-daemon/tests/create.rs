@@ -14,6 +14,7 @@ struct T {
     ws: tempfile::TempDir,
     repo: tempfile::TempDir,
     d: Daemon,
+    fake: Arc<FakeDriver>,
 }
 
 fn git(dir: &Path, args: &[&str]) -> std::process::Output {
@@ -52,7 +53,8 @@ async fn setup() -> T {
         ..Default::default()
     };
     cfg.save(&paths.config()).unwrap();
-    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let fake = Arc::new(FakeDriver::default());
+    let mut o = Options::new(fake.clone(), Arc::new(SystemClock));
     // Never the real Claude Code config: a fixture that trusts the workspace.
     let trust = home.path().join("claude.json");
     std::fs::write(&trust, trusting(ws.path())).unwrap();
@@ -63,7 +65,13 @@ async fn setup() -> T {
         .unwrap();
     rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
     let d = Daemon::start(paths, o).await.unwrap();
-    T { home, ws, repo, d }
+    T {
+        home,
+        ws,
+        repo,
+        d,
+        fake,
+    }
 }
 
 fn trusting(dir: &Path) -> String {
@@ -233,8 +241,43 @@ async fn starts_claude_code_with_hooks() {
     for _ in 0..200 {
         let a = t.d.action("SC-5", UserAction::Get).await.unwrap();
         if a.status == Status::Running {
+            assert!(t.fake.calls().contains(&"start SC-5 claude".to_string()));
             let ev = t.d.store.events(&a.id, 10).await.unwrap();
             assert!(ev.iter().any(|e| e.kind == "session-started"));
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("agent never started");
+}
+
+/// A worktree with version files starts through `xherd toolchain exec`, with
+/// the plan written for it (R-652); one without starts the runtime directly.
+#[tokio::test]
+async fn version_files_wrap_the_launch_in_the_toolchain_step() {
+    let t = setup().await;
+    std::fs::write(t.repo.path().join(".nvmrc"), "20\n").unwrap();
+    git(t.repo.path(), &["add", ".nvmrc"]);
+    assert!(
+        git(t.repo.path(), &["commit", "-q", "-m", "node"])
+            .status
+            .success()
+    );
+    t.d.new_agent(req(&t, "SC-7")).await.unwrap();
+    let wt =
+        t.ws.path()
+            .join("worktrees")
+            .join(repo_name(&t))
+            .join("SC-7");
+    for _ in 0..200 {
+        if let Some(c) = t.fake.calls().iter().find(|c| c.starts_with("start SC-7 ")) {
+            assert_eq!(c, "start SC-7 xherd toolchain exec -- claude");
+            let plan: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(wt.join(".xherd/toolchain.json")).unwrap())
+                    .unwrap();
+            assert_eq!(plan["install"], false);
+            assert_eq!(plan["steps"][0]["tool"], "node");
+            assert_eq!(plan["steps"][0]["version"], "20");
             return;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;

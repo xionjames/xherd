@@ -1,0 +1,42 @@
+{
+  "name": "uv",
+  "kind": "toolchain",
+  "version": "0.1.0",
+  "label": "uv",
+  "description": "Python versions from .python-version or pyproject.toml (requires-python).",
+  "data": {
+    "toolchain": {
+      "passEnv": [
+        "UV_PYTHON_INSTALL_DIR"
+      ],
+      "tools": [
+        {
+          "name": "python",
+          "files": [
+            {
+              "path": ".python-version",
+              "format": "plain"
+            },
+            {
+              "path": "pyproject.toml",
+              "format": "pyproject"
+            }
+          ],
+          "resolve": [
+            "sh",
+            "-c",
+            "p=$(uv python find --no-project \"$1\" 2>/dev/null) && dirname \"$p\"",
+            "_",
+            "{v}"
+          ],
+          "install": [
+            "uv",
+            "python",
+            "install",
+            "{v}"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -10,6 +10,7 @@ use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
 mod report;
+mod toolchain;
 mod xap;
 
 #[derive(Parser)]
@@ -75,6 +76,9 @@ enum Cmd {
     Changes { agent: String, comment: String },
     /// Show the open commit proposal's diff, the branch at a ship gate, else every uncommitted change.
     Diff { agent: String },
+    /// Toolchains of the current worktree (R-652).
+    #[command(subcommand)]
+    Toolchain(ToolchainCmd),
     /// Runtime hook (reads the hook JSON on stdin). Silent; always exits 0.
     Hook { event: String },
     /// Push status for agents or wrappers without hooks.
@@ -118,6 +122,16 @@ enum Cmd {
     /// XAP: record an out-of-scope finding.
     #[command(subcommand)]
     Issue(xap::IssueCmd),
+}
+
+#[derive(Subcommand)]
+enum ToolchainCmd {
+    /// Provide the tools `.xherd/toolchain.json` lists, then run the command
+    /// with them on PATH (the daemon starts agents this way).
+    Exec {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        argv: Vec<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -169,6 +183,7 @@ fn main() -> ExitCode {
             Some(serde_json::json!({"comment": comment})),
         ),
         Cmd::Diff { agent } => diff(&agent, json),
+        Cmd::Toolchain(ToolchainCmd::Exec { argv }) => toolchain::exec(argv),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -244,6 +259,7 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
     );
     opts.xherd_bin = std::env::current_exe()?.to_string_lossy().into_owned();
     opts.scheduler = Some(Default::default());
+    opts.sandbox = std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1");
     let d = xherd_daemon::Daemon::start(paths.clone(), opts).await?;
     tracing::info!(url = %format!("http://{addr}"), data = %paths.root.display(), version = xherd_core::VERSION, "xherd daemon listening");
     xherd_api::serve(d, listener, shutdown_signal()).await?;

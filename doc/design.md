@@ -220,7 +220,7 @@ With the container runner, tmux still runs in the daemon's container and the pan
 - **Gate detection** on stop: the declared gate (last accepted `gate.open` not yet approved) or the open commit proposal; else, if the pack's parser reports an unapproved gate document, an inferred gate (`gate-inferred`).
 - **Next command**: from the pack's `next` rules (packs) or the `--next` stored on the gate (dynamic flows).
 - **Autonomy**: the policy is `fn may_auto_approve(level, class) -> bool` over the table in spec §6.3; tripwires are evaluated as a list of `Tripwire` results, each with a reason, some async (commands).
-- **Toolchain setup** runs in a separate tmux window before the runtime starts; its resolved `PATH`/env goes into the tmux session environment (§8.6).
+- **Toolchain setup** runs in the agent's tmux window before the runtime starts: the session runs `xherd toolchain exec -- <runtime argv>`, which carries out the plan the daemon wrote to `.xherd/toolchain.json` (install output shown live in that window) and then replaces itself with the runtime, `PATH` and variables set (§8.6).
 - **Remove worktree** archives `.xherd/` to `<data>/archive/<repo>/<agent>/`.
 
 ## 6. Pluggable SDD
@@ -454,7 +454,7 @@ go:     { manager: go, files: [go.mod], env: { GOTOOLCHAIN: auto } }
 rust:   { manager: rustup, files: [rust-toolchain.toml, rust-toolchain], install: "rustup toolchain install {v}", env: { RUSTUP_TOOLCHAIN: "{v}" } }
 ```
 
-Resolution runs once per worktree start (cached by the hash of the version files). Manager scripts (`sdkman-init.sh`, `nvm.sh`) are sourced only while installing; the session gets plain `PATH` entries and env, so every agent command is fast and no global default is switched.
+Resolution runs at every session start: the daemon reads the version files into a plan (`.xherd/toolchain.json`, written fresh each time, so edited version files count), and `xherd toolchain exec` resolves each tool, installs missing versions in the container (native installs only resolve, R-653), and caches a complete result by the hash of the plan (`.xherd/toolchain.resolved.json`). Manager scripts (`sdkman-init.sh`, `nvm.sh`) are sourced only inside the plugins' resolve/install commands; the runtime gets plain `PATH` entries and env, so every agent command is fast and no global default is switched. Versions read from files must match a fixed character set and reach commands only as whole arguments (`"$1"` in scripts), never spliced into shell text.
 
 ### 8.7 Open in…
 
@@ -670,7 +670,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Image with version managers
   - [ ] `xherd init` (users, SSH proxy, git config)
   - [ ] `docker init/doctor/update`
-  - [ ] Toolchain resolution
+  - [x] Toolchain resolution
   - [ ] Open-in (URL schemes, Dev Containers, companion)
   - [ ] Git access setup and doctor
 - [ ] **M4 → v1.0**

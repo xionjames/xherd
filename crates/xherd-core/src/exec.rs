@@ -43,6 +43,9 @@ pub struct Cmd {
     pub max_output: usize,
     /// Strings replaced by `***` in captured stderr.
     pub redact: Vec<String>,
+    /// Stdout and stderr go to ours instead of being captured (a live log in
+    /// a terminal); `Output` then has them empty.
+    pub inherit_output: bool,
 }
 
 impl Cmd {
@@ -59,6 +62,7 @@ impl Cmd {
             timeout: Duration::from_secs(60),
             max_output: DEFAULT_MAX_OUTPUT,
             redact: Vec::new(),
+            inherit_output: false,
         }
     }
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Cmd {
@@ -79,6 +83,10 @@ impl Cmd {
     }
     pub fn redact(mut self, secrets: Vec<String>) -> Cmd {
         self.redact = secrets;
+        self
+    }
+    pub fn inherit_output(mut self) -> Cmd {
+        self.inherit_output = true;
         self
     }
 }
@@ -163,9 +171,12 @@ async fn run_inner(cmd: Cmd, program: String) -> Result<Output, ExecError> {
         } else {
             Stdio::null()
         })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if cmd.inherit_output {
+        c.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    } else {
+        c.stdout(Stdio::piped()).stderr(Stdio::piped());
+    }
     #[cfg(unix)]
     c.process_group(0);
     for k in ENV_ALLOWLIST {
@@ -192,14 +203,14 @@ async fn run_inner(cmd: Cmd, program: String) -> Result<Output, ExecError> {
             let _ = stdin.write_all(&bytes).await;
         });
     }
-    let out = tokio::spawn(read_capped(
-        child.stdout.take().expect("piped"),
-        cmd.max_output,
-    ));
-    let err = tokio::spawn(read_capped(
-        child.stderr.take().expect("piped"),
-        cmd.max_output,
-    ));
+    let out = child
+        .stdout
+        .take()
+        .map(|o| tokio::spawn(read_capped(o, cmd.max_output)));
+    let err = child
+        .stderr
+        .take()
+        .map(|e| tokio::spawn(read_capped(e, cmd.max_output)));
 
     let (code, timed_out) = match tokio::time::timeout(cmd.timeout, child.wait()).await {
         Ok(status) => {
@@ -216,11 +227,15 @@ async fn run_inner(cmd: Cmd, program: String) -> Result<Output, ExecError> {
         }
     };
     // After a timeout, grandchildren holding the pipes were killed with the group.
-    let join = |r: Result<std::io::Result<(Vec<u8>, bool)>, tokio::task::JoinError>| {
-        r.ok().and_then(Result::ok).unwrap_or_default()
-    };
-    let (stdout, t1) = join(out.await);
-    let (stderr, t2) = join(err.await);
+    type Reader = tokio::task::JoinHandle<std::io::Result<(Vec<u8>, bool)>>;
+    async fn join(h: Option<Reader>) -> (Vec<u8>, bool) {
+        match h {
+            Some(h) => h.await.ok().and_then(Result::ok).unwrap_or_default(),
+            None => Default::default(),
+        }
+    }
+    let (stdout, t1) = join(out).await;
+    let (stderr, t2) = join(err).await;
     let stderr = redact(&String::from_utf8_lossy(&stderr), &cmd.redact);
     if timed_out {
         tracing::warn!(program = %program, "command timed out; process group killed");

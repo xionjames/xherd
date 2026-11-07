@@ -121,6 +121,9 @@ pub struct ActorSettings {
     pub xherd_bin: String,
     pub xherd_url: String,
     pub screen_rules: Option<ScreenRules>,
+    /// Install missing toolchain versions before the runtime starts
+    /// (container); native installs only resolve (R-653).
+    pub toolchain_install: bool,
 }
 
 impl Default for ActorSettings {
@@ -133,6 +136,7 @@ impl Default for ActorSettings {
             xherd_bin: "xherd".into(),
             xherd_url: "http://127.0.0.1:4740".into(),
             screen_rules: None,
+            toolchain_install: false,
         }
     }
 }
@@ -150,6 +154,8 @@ pub struct Env {
     pub git: xherd_git::Git,
     /// Host plugin for pull-request lookups (R-302); `None` when not installed.
     pub host: Option<Arc<xherd_plugin::host::Host>>,
+    /// Toolchain plugins in registry order (R-652).
+    pub toolchains: Arc<Vec<(String, xherd_plugin::toolchain::Toolchain)>>,
 }
 
 pub type AgentTx = mpsc::UnboundedSender<Msg>;
@@ -777,9 +783,42 @@ impl Actor {
         ];
         self.env
             .driver
-            .start(&ctx, &argv)
+            .start(&ctx, &self.session_argv(argv))
             .await
             .map_err(|e| refuse("driver", e.0))
+    }
+
+    /// The argv of a new session: the runtime, wrapped in `xherd toolchain
+    /// exec` when the worktree's version files ask for tools (R-652). The plan
+    /// is written at every start, so version files edited since count.
+    fn session_argv(&self, launch: Vec<String>) -> Vec<String> {
+        use xherd_plugin::toolchain::{PLAN_FILE, plan};
+        let Some(wd) = self.agent.workdir.as_deref().map(Path::new) else {
+            return launch;
+        };
+        let p = plan(
+            wd,
+            &self.env.toolchains,
+            self.env.settings.toolchain_install,
+        );
+        let file = wd.join(PLAN_FILE);
+        if p.steps.is_empty() {
+            let _ = std::fs::remove_file(&file);
+            return launch;
+        }
+        let json = serde_json::to_vec_pretty(&p).expect("json");
+        if let Err(e) = xherd_core::paths::write_atomic(&file, &json, None) {
+            tracing::warn!(agent = %self.agent.name, error = %e, "toolchain plan not written; starting without it");
+            return launch;
+        }
+        let mut argv = vec![
+            self.env.settings.xherd_bin.clone(),
+            "toolchain".into(),
+            "exec".into(),
+            "--".into(),
+        ];
+        argv.extend(launch);
+        argv
     }
 
     async fn send(&mut self, text: &str, enters: u32) -> Result<(), ActionError> {
@@ -1013,7 +1052,7 @@ impl Actor {
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
         self.env
             .driver
-            .respawn(&self.ctx(), &argv)
+            .respawn(&self.ctx(), &self.session_argv(argv))
             .await
             .map_err(|e| refuse("driver", e.0))?;
         self.delivery = None;

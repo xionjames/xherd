@@ -51,6 +51,9 @@ pub struct Options {
     pub delivery_ack: std::time::Duration,
     /// Screen rules for every agent, until runtime plugins supply them per runtime (M1).
     pub screen_rules: Option<xherd_term::ScreenRules>,
+    /// Running in the xherd container (`XHERD_SANDBOX=1`): toolchains are
+    /// installed, not only resolved (R-653).
+    pub sandbox: bool,
 }
 
 impl Options {
@@ -63,6 +66,7 @@ impl Options {
             scheduler: None,
             delivery_ack: std::time::Duration::from_secs(10),
             screen_rules: None,
+            sandbox: false,
         }
     }
 }
@@ -175,7 +179,18 @@ impl Daemon {
             xherd_url: config.url(),
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
+            toolchain_install: opts.sandbox,
         };
+        let toolchains = plugins
+            .of_kind(xherd_plugin::Kind::Toolchain)
+            .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
+                Ok(t) => Some((p.manifest.name.clone(), t)),
+                Err(error) => {
+                    tracing::warn!(plugin = %p.manifest.name, %error, "toolchain plugin unusable");
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         let env = actor::Env {
             store: store.clone(),
             driver: opts.driver.clone(),
@@ -186,6 +201,7 @@ impl Daemon {
             packs: packs.clone(),
             git: xherd_git::Git::new("git"),
             host,
+            toolchains: Arc::new(toolchains),
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);

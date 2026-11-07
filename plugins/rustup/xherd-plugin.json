@@ -1,0 +1,46 @@
+{
+  "name": "rustup",
+  "kind": "toolchain",
+  "version": "0.1.0",
+  "label": "rustup",
+  "description": "Rust toolchains from rust-toolchain.toml or rust-toolchain.",
+  "data": {
+    "toolchain": {
+      "passEnv": [
+        "RUSTUP_HOME",
+        "CARGO_HOME"
+      ],
+      "tools": [
+        {
+          "name": "rust",
+          "files": [
+            {
+              "path": "rust-toolchain.toml",
+              "format": "rust-toolchain"
+            },
+            {
+              "path": "rust-toolchain",
+              "format": "rust-toolchain"
+            }
+          ],
+          "resolve": [
+            "rustup",
+            "run",
+            "{v}",
+            "rustc",
+            "--version"
+          ],
+          "install": [
+            "rustup",
+            "toolchain",
+            "install",
+            "{v}"
+          ],
+          "env": {
+            "RUSTUP_TOOLCHAIN": "{v}"
+          }
+        }
+      ]
+    }
+  }
+}

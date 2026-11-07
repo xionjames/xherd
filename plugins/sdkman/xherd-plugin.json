@@ -1,0 +1,125 @@
+{
+  "name": "sdkman",
+  "kind": "toolchain",
+  "version": "0.1.0",
+  "label": "SDKMAN",
+  "description": "Java, Maven, Gradle and Kotlin versions from .sdkmanrc.",
+  "data": {
+    "toolchain": {
+      "passEnv": [
+        "SDKMAN_DIR"
+      ],
+      "tools": [
+        {
+          "name": "java",
+          "files": [
+            {
+              "path": ".sdkmanrc",
+              "format": "sdkmanrc"
+            }
+          ],
+          "resolve": [
+            "sh",
+            "-c",
+            "d=\"${SDKMAN_DIR:-$HOME/.sdkman}/candidates/$1/$2\"; test -x \"$d/bin\" && echo \"$d/bin\"",
+            "_",
+            "java",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "export sdkman_auto_answer=true; . \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\" && sdk install \"$1\" \"$2\" </dev/null",
+            "_",
+            "java",
+            "{v}"
+          ],
+          "env": {
+            "JAVA_HOME": "{home}"
+          }
+        },
+        {
+          "name": "maven",
+          "files": [
+            {
+              "path": ".sdkmanrc",
+              "format": "sdkmanrc"
+            }
+          ],
+          "resolve": [
+            "sh",
+            "-c",
+            "d=\"${SDKMAN_DIR:-$HOME/.sdkman}/candidates/$1/$2\"; test -x \"$d/bin\" && echo \"$d/bin\"",
+            "_",
+            "maven",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "export sdkman_auto_answer=true; . \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\" && sdk install \"$1\" \"$2\" </dev/null",
+            "_",
+            "maven",
+            "{v}"
+          ],
+          "env": {
+            "MAVEN_HOME": "{home}"
+          }
+        },
+        {
+          "name": "gradle",
+          "files": [
+            {
+              "path": ".sdkmanrc",
+              "format": "sdkmanrc"
+            }
+          ],
+          "resolve": [
+            "sh",
+            "-c",
+            "d=\"${SDKMAN_DIR:-$HOME/.sdkman}/candidates/$1/$2\"; test -x \"$d/bin\" && echo \"$d/bin\"",
+            "_",
+            "gradle",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "export sdkman_auto_answer=true; . \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\" && sdk install \"$1\" \"$2\" </dev/null",
+            "_",
+            "gradle",
+            "{v}"
+          ],
+          "env": {
+            "GRADLE_HOME": "{home}"
+          }
+        },
+        {
+          "name": "kotlin",
+          "files": [
+            {
+              "path": ".sdkmanrc",
+              "format": "sdkmanrc"
+            }
+          ],
+          "resolve": [
+            "sh",
+            "-c",
+            "d=\"${SDKMAN_DIR:-$HOME/.sdkman}/candidates/$1/$2\"; test -x \"$d/bin\" && echo \"$d/bin\"",
+            "_",
+            "kotlin",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "export sdkman_auto_answer=true; . \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\" && sdk install \"$1\" \"$2\" </dev/null",
+            "_",
+            "kotlin",
+            "{v}"
+          ]
+        }
+      ]
+    }
+  }
+}
