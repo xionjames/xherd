@@ -18,6 +18,7 @@ pub mod actor;
 pub mod checks;
 mod create;
 pub mod driver;
+pub mod git_access;
 pub mod install;
 pub mod scheduler;
 pub mod settings;
@@ -27,7 +28,7 @@ pub mod support;
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
 pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
 pub use supervisor::SupervisorHandle;
-pub use support::{Change, Clock, Hub, ManualClock, SystemClock, hash_token};
+pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
@@ -111,9 +112,16 @@ fn host_plugin(
     let p = plugins
         .get(xherd_plugin::host::GITHUB)
         .filter(|p| p.manifest.kind == xherd_plugin::Kind::Host)?;
+    let mut ctx = plugin_context(p, paths, config, secrets, xherd_bin);
+    // Host plugins reuse the token of Settings → Git access (R-685).
+    if !ctx.secrets.contains_key("token")
+        && let Some(t) = secrets.git_token("github.com")
+    {
+        ctx.secrets.insert("token".into(), t.into());
+    }
     Some(Arc::new(xherd_plugin::host::Host {
         plugin: p.clone(),
-        ctx: plugin_context(p, paths, config, secrets, xherd_bin),
+        ctx,
     }))
 }
 
@@ -235,6 +243,9 @@ impl Daemon {
             tracing::info!(replayed, "replayed queued reports");
         }
         d.reconcile().await;
+        if let Err(e) = d.write_gitconfig() {
+            tracing::warn!(error = %e.message, "managed git config not written");
+        }
         if d.sandbox {
             // The container is set up without a shell: commands go where the
             // agents find them at every start (user-edited files are kept).

@@ -73,6 +73,10 @@ impl Daemon {
                 ));
             }
         };
+        if self.sandbox {
+            let extra = std::env::var("XHERD_EXTRA_PATHS").unwrap_or_default();
+            outside_mounts(&repo, &self.config.workspace_root(), &extra)?;
+        }
         let agents = self
             .store
             .list_agents()
@@ -185,6 +189,27 @@ pub(crate) fn check_trust(
     ))
 }
 
+/// In the container only the workspace and `XHERD_EXTRA_PATHS` are mounted
+/// at the same path; a repository elsewhere is refused with the mount to add
+/// (R-605).
+fn outside_mounts(repo: &Path, workspace: &Path, extra: &str) -> Result<(), ActionError> {
+    let roots: Vec<PathBuf> = std::iter::once(workspace.to_path_buf())
+        .chain(std::env::split_paths(extra).filter(|p| p.is_absolute()))
+        .collect();
+    if roots.iter().any(|r| repo.starts_with(r)) {
+        return Ok(());
+    }
+    Err(refuse(
+        "repo_outside_workspace",
+        format!(
+            "{} is not inside the workspace {}: clone it there, or mount its folder at the \
+             same path with `xherd docker init --force --extra-path <folder>` and restart the container",
+            repo.display(),
+            workspace.display()
+        ),
+    ))
+}
+
 /// Given base, else the remote's default branch, else the current branch.
 /// A plain name that only exists on `origin` resolves to `origin/<name>` (R-002).
 async fn resolve_base(git: &Git, repo: &Path, given: Option<&str>) -> Result<String, ActionError> {
@@ -253,4 +278,21 @@ async fn install_hooks(
     git.add_excludes(workdir, &[&h.file])
         .await
         .map_err(|e| refuse("git", e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repos_must_be_inside_a_mount() {
+        let ws = Path::new("/Users/me/xherd");
+        assert!(outside_mounts(Path::new("/Users/me/xherd/repos/app"), ws, "").is_ok());
+        assert!(outside_mounts(Path::new("/Volumes/code/app"), ws, "/Volumes/code").is_ok());
+        let e = outside_mounts(Path::new("/Users/me/src/app"), ws, "/Volumes/code").unwrap_err();
+        assert_eq!(e.code, "repo_outside_workspace");
+        assert!(e.message.contains("--extra-path"));
+        // A sibling with a common prefix is not inside.
+        assert!(outside_mounts(Path::new("/Users/me/xherd2/app"), ws, "").is_err());
+    }
 }

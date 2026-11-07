@@ -9,6 +9,8 @@ use serde_json::Value;
 use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
+mod docker;
+mod git;
 mod init;
 mod report;
 mod toolchain;
@@ -34,6 +36,9 @@ enum Cmd {
     Daemon,
     /// Container entrypoint (root): prepare the user, home, SSH and git, then run the daemon.
     Init,
+    /// Run xherd in Docker: write the compose file, check the setup, update.
+    #[command(subcommand)]
+    Docker(DockerCmd),
     /// Is the daemon up?
     Status,
     /// Create an agent: worktree, branch and `.xherd/` for a ticket.
@@ -79,6 +84,11 @@ enum Cmd {
     Changes { agent: String, comment: String },
     /// Show the open commit proposal's diff, the branch at a ship gate, else every uncommitted change.
     Diff { agent: String },
+    /// git credential helper: answers `get` with the token of Settings → Git access.
+    Credential { op: String },
+    /// Git access.
+    #[command(subcommand)]
+    Git(GitCmd),
     /// Toolchains of the current worktree (R-652).
     #[command(subcommand)]
     Toolchain(ToolchainCmd),
@@ -128,6 +138,46 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum GitCmd {
+    /// Check SSH and HTTPS access to a host, in order, with the fix for the first failure.
+    Doctor {
+        /// Host (default: the --repo host, else github.com).
+        host: Option<String>,
+        /// Also check API and git access to this repository.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DockerCmd {
+    /// Write ~/.config/xherd/compose.yaml and .env for the detected engine.
+    Init {
+        /// Workspace folder, mounted at the same path (default ~/xherd).
+        #[arg(long)]
+        workspace: Option<std::path::PathBuf>,
+        #[arg(long)]
+        image: Option<String>,
+        #[arg(long, default_value_t = 4740)]
+        port: u16,
+        /// Another host folder with repositories, mounted at the same path (repeatable).
+        #[arg(long = "extra-path")]
+        extra_paths: Vec<std::path::PathBuf>,
+        /// Rewrite an existing compose file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Check engine, mounts, ownership, SSH agent and port binding, each with a fix.
+    Doctor,
+    /// Pause live agents, pull and restart the container, resume them.
+    Update {
+        /// Update even when the daemon does not answer.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ToolchainCmd {
     /// Provide the tools `.xherd/toolchain.json` lists, then run the command
     /// with them on PATH (the daemon starts agents this way).
@@ -159,6 +209,27 @@ fn main() -> ExitCode {
     let code = match cli.cmd {
         Cmd::Daemon => run_daemon(),
         Cmd::Init => init::init(),
+        Cmd::Docker(DockerCmd::Init {
+            workspace,
+            image,
+            port,
+            extra_paths,
+            force,
+        }) => docker::init(docker::InitArgs {
+            workspace,
+            image,
+            port,
+            extra_paths,
+            force,
+        }),
+        Cmd::Docker(DockerCmd::Doctor) => docker::doctor(),
+        Cmd::Docker(DockerCmd::Update { force }) => match Client::new() {
+            Ok(c) => docker::update(&c, force),
+            Err(e) => {
+                eprintln!("{e}");
+                2
+            }
+        },
         Cmd::Status => status(),
         Cmd::Ls => ls(),
         Cmd::Install { runtime, pack } => install(runtime, pack),
@@ -188,6 +259,14 @@ fn main() -> ExitCode {
         ),
         Cmd::Diff { agent } => diff(&agent, json),
         Cmd::Toolchain(ToolchainCmd::Exec { argv }) => toolchain::exec(argv),
+        Cmd::Credential { op } => git::credential(&op),
+        Cmd::Git(GitCmd::Doctor { host, repo }) => match Client::new() {
+            Ok(c) => git::doctor(&c, host, repo),
+            Err(e) => {
+                eprintln!("{e}");
+                2
+            }
+        },
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,

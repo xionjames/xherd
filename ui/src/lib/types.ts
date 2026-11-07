@@ -94,6 +94,8 @@ export interface AppState {
   plugins: PluginInfo[];
   brokenPlugins: { name: string; dir: string; error: string }[];
   flows: FlowInfo[];
+  /** Running in the xherd container. */
+  sandbox: boolean;
 }
 
 export interface DiffAnswer {
@@ -108,7 +110,7 @@ export interface DiffAnswer {
 
 export interface Check {
   id: string;
-  group: 'system' | 'plugins' | 'runtime';
+  group: 'system' | 'plugins' | 'runtime' | 'security';
   label: string;
   required: boolean;
   ok: boolean;
@@ -123,4 +125,32 @@ export interface ConfigView {
   config: Record<string, unknown>;
   running: Record<string, unknown>;
   restartNeeded: boolean;
+}
+
+export type CheckFix = NonNullable<Check['fix']>;
+
+export interface GitHost {
+  host: string;
+  protocols: ('https' | 'ssh')[];
+  credential: 'none' | 'gh' | 'glab' | 'xherd';
+  username?: string;
+  caFile?: string;
+  preferHttps: boolean;
+  preferSsh: boolean;
+  /** A token is stored in secrets.json (never sent). */
+  hasToken?: boolean;
+}
+
+export interface GitHostsView {
+  hosts: GitHost[];
+  sandbox: boolean;
+  gitconfig: string | null;
+}
+
+export interface GitFinding {
+  id: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+  fix?: CheckFix;
 }

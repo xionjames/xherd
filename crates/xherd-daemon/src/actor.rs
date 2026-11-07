@@ -22,7 +22,9 @@ use xherd_store::{Event, Store};
 use xherd_term::ScreenRules;
 
 use crate::driver::{AgentCtx, Driver};
-use crate::support::{Change, Clock, Hub, SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, mint_token};
+use crate::support::{
+    Change, Clock, Hub, SCOPE_CREDENTIAL, SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, mint_token,
+};
 
 #[derive(Debug)]
 pub enum Msg {
@@ -766,7 +768,7 @@ impl Actor {
             &self.env.store,
             TOKEN_AGENT,
             Some(&self.agent.id),
-            &[SCOPE_HOOKS, SCOPE_XAP],
+            &[SCOPE_HOOKS, SCOPE_XAP, SCOPE_CREDENTIAL],
             self.now(),
         )
         .await

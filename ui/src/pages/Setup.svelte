@@ -13,6 +13,7 @@
     ['system', 'This computer', 'needed by every agent'],
     ['runtime', 'Coding agent', 'how agents start'],
     ['plugins', 'Plugins', 'their own checks'],
+    ['security', 'Security', 'limits you should know about'],
   ];
   async function rerun() {
     try { await loadChecks(); } catch (e) { showError('Could not run the checks', e); }

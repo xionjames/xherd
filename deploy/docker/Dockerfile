@@ -2,7 +2,8 @@
 # openssh, the agent CLIs and the version managers. Languages are not in the
 # image: they are installed into the xherd-home volume on first use.
 #
-#   docker buildx build -f deploy/docker/Dockerfile -t ghcr.io/xherd/xherd:dev .
+#   docker build -f deploy/docker/Dockerfile -t ghcr.io/xherd/xherd:dev .
+# (plain `docker build` works; releases use `docker buildx` for amd64 + arm64)
 
 ARG RUST_VERSION=1.99
 ARG NODE_MAJOR=24
@@ -22,9 +23,7 @@ FROM rust:${RUST_VERSION}-trixie AS build
 WORKDIR /src
 COPY . .
 COPY --from=ui /src/ui/dist ui/dist
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    cargo build --release --locked -p xherd-cli \
+RUN cargo build --release --locked -p xherd-cli \
     && cp target/release/xherd /usr/local/bin/xherd
 
 # ---- runtime --------------------------------------------------------------------
@@ -32,7 +31,6 @@ FROM node:${NODE_MAJOR}-trixie-slim AS node
 FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
 
 FROM debian:trixie-slim
-ARG TARGETARCH
 ARG GO_VERSION=1.27.3
 ARG GLAB_VERSION=1.128.0
 ARG NVM_VERSION=0.41.0
@@ -50,7 +48,7 @@ RUN apt-get update \
        > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && curl -fsSL -o /tmp/glab.deb \
-       "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/${GLAB_VERSION}/glab_${GLAB_VERSION}_linux_${TARGETARCH}.deb" \
+       "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/${GLAB_VERSION}/glab_${GLAB_VERSION}_linux_$(dpkg --print-architecture).deb" \
     && apt-get install -y --no-install-recommends /tmp/glab.deb \
     && rm -rf /tmp/glab.deb /var/lib/apt/lists/*
 
@@ -65,7 +63,7 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # Version managers (R-532). uv and go are single binaries; SDKMAN, nvm and
 # rustup are seeds that `xherd init` copies into the home volume once.
 COPY --from=uv /uv /uvx /usr/local/bin/
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xz
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-$(dpkg --print-architecture).tar.gz" | tar -C /usr/local -xz
 ENV SEED=/opt/xherd/seed
 RUN git clone -q --depth 1 -b "v${NVM_VERSION}" https://github.com/nvm-sh/nvm "$SEED/.nvm" \
     && rm -rf "$SEED/.nvm/.git" \

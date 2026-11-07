@@ -43,6 +43,11 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
+        .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
+        .route("/api/v1/git/doctor", post(git_doctor))
+        .route("/api/v1/git/known-hosts", post(git_known_host))
+        .route("/api/v1/git/login", post(git_login))
+        .route("/api/v1/git/credential", post(git_credential))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -299,6 +304,7 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "plugins": plugins,
         "brokenPlugins": d.plugins.broken(),
         "flows": flows(&d),
+        "sandbox": d.sandbox,
     })))
 }
 
@@ -383,6 +389,97 @@ async fn fix_check(
     let env = |k: &str| std::env::var(k).ok();
     d.fix_check(&id, &env).await?;
     Ok(Json(json!({"checks": d.checks(&env).await})))
+}
+
+// ---- git access ----------------------------------------------------------------
+
+async fn git_hosts(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(d.git_hosts()))
+}
+
+async fn put_git_hosts(
+    _: User,
+    State(d): State<Daemon>,
+    Json(u): Json<xherd_daemon::git_access::HostsUpdate>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.set_git_hosts(u)?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DoctorReq {
+    host: String,
+    #[serde(default)]
+    repo: Option<String>,
+}
+
+async fn git_doctor(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<DoctorReq>,
+) -> ApiResult<Json<Value>> {
+    let findings = d.git_doctor(r.host.trim(), r.repo.as_deref()).await;
+    Ok(Json(json!({"host": r.host, "findings": findings})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KnownHostReq {
+    host: String,
+    fingerprint: String,
+}
+
+async fn git_known_host(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<KnownHostReq>,
+) -> ApiResult<Json<Value>> {
+    d.accept_host_key(r.host.trim(), r.fingerprint.trim())
+        .await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginReq {
+    host: String,
+}
+
+/// Start the browser login (`/ws/setup/git-login` shows it).
+async fn git_login(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<LoginReq>,
+) -> ApiResult<Json<Value>> {
+    d.start_git_login(r.host.trim()).await?;
+    Ok(Json(json!({"session": xherd_daemon::git_access::LOGIN_ID})))
+}
+
+#[derive(Deserialize)]
+struct CredentialReq {
+    protocol: String,
+    host: String,
+}
+
+/// `xherd credential get` (R-684): the user, or an agent token with the
+/// `credential` scope. 404 = no answer (git asks its next helper).
+async fn git_credential(
+    user: Result<User, ApiError>,
+    agent: Result<AgentAuth, ApiError>,
+    State(d): State<Daemon>,
+    Json(r): Json<CredentialReq>,
+) -> ApiResult<Json<Value>> {
+    if user.is_err() {
+        agent?.require(xherd_daemon::SCOPE_CREDENTIAL)?;
+    }
+    match d.credential(&r.protocol, &r.host) {
+        Some((username, password)) => Ok(Json(json!({"username": username, "password": password}))),
+        None => Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "no_credential",
+            format!("xherd holds no credential for {}", r.host),
+        )),
+    }
 }
 
 async fn get_agent(

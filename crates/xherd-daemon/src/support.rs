@@ -61,6 +61,8 @@ pub const TOKEN_USER: &str = "user";
 pub const TOKEN_AGENT: &str = "agent";
 pub const SCOPE_HOOKS: &str = "hooks";
 pub const SCOPE_XAP: &str = "xap";
+/// `xherd credential` from the agent's session (R-684).
+pub const SCOPE_CREDENTIAL: &str = "credential";
 
 /// A new random token (`xh_` + 64 hex chars).
 pub fn generate_token() -> String {
