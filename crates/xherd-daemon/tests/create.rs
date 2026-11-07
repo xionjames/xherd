@@ -240,6 +240,21 @@ async fn starts_claude_code_with_hooks() {
         settings["hooks"]["Stop"][0]["hooks"][0]["command"],
         "'xherd' hook stop # xherd"
     );
+    // The XAP calls go through plain `xherd`, allowed by name (a variable in
+    // the command would make the runtime ask every time).
+    let allow = settings["permissions"]["allow"].as_array().unwrap();
+    for rule in [
+        "Bash(xherd stage *)",
+        "Bash(xherd gate *)",
+        "Bash(xherd commit *)",
+    ] {
+        assert!(allow.iter().any(|r| r == rule), "{rule} in {allow:?}");
+    }
+    assert!(
+        allow
+            .iter()
+            .any(|r| r.as_str().is_some_and(|r| r.starts_with("Read(//")))
+    );
     let status = git(&wt, &["status", "--porcelain", "--untracked-files=all"]);
     assert!(status.stdout.is_empty(), "hook file is excluded from git");
     for _ in 0..200 {

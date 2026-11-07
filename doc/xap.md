@@ -13,7 +13,7 @@ Every agent session runs with:
 | Variable | Meaning |
 |---|---|
 | `XHERD_ENV` | `1` when running under xherd. SDDs skip XAP calls when it is not `1`. |
-| `XHERD_BIN` | Absolute path of the `xherd` binary. Call XAP as `"$XHERD_BIN" …`. |
+| `XHERD_BIN` | Absolute path of the `xherd` binary. Call XAP as plain `xherd …` (its folder is first on the session `PATH`; prefer it over the variable, which runtimes cannot check and ask about every time). |
 | `XHERD_AGENT_ID` | The agent's id. |
 | `XHERD_AGENT_TOKEN` | Agent-scoped token; valid only for this agent's reports and XAP calls. |
 | `XHERD_URL` | Daemon URL (default `http://127.0.0.1:4740`). |

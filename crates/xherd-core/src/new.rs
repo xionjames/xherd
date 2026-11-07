@@ -176,7 +176,7 @@ content: editing an approved document re-opens its gate.
 
 ## Telling xherd what happens (XAP)
 
-Call `\"$XHERD_BIN\" …` (skip these calls when `XHERD_ENV` is not `1`):
+Call `xherd …` (skip these calls when `XHERD_ENV` is not `1`):
 
 - `gate open <stage>` when documents are ready for approval, then stop.
 - `ask \"<question>\"` when you need the user, then stop.

@@ -415,7 +415,7 @@ Example block for a prompt-based SDD command:
 ```markdown
 ## When running under xherd
 If the environment variable `XHERD_ENV` is `1`, after writing the spec run
-`"$XHERD_BIN" gate open spec --role spec --doc <spec path> --next "/sdd-task <spec path>"`
+`xherd gate open spec --role spec --doc <spec path> --next "/sdd-task <spec path>"`
 then stop and wait. If it exits with code 2, fix what it says and run it again.
 ```
 

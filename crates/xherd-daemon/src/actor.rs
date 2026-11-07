@@ -831,6 +831,17 @@ impl Actor {
             ("XHERD_AGENT_TOKEN".into(), token),
             ("XHERD_PORT_BASE".into(), port_base.to_string()),
         ];
+        // The prompts call plain `xherd …`: a command with a variable in it
+        // cannot be checked by the runtime and asks every time.
+        if let Some(dir) = Path::new(&s.xherd_bin).parent().filter(|d| d.is_absolute()) {
+            let old = std::env::var("PATH").unwrap_or_default();
+            ctx.env.push((
+                "PATH".into(),
+                format!("{}:{old}", dir.display())
+                    .trim_end_matches(':')
+                    .to_string(),
+            ));
+        }
         self.env
             .driver
             .start(&ctx, &self.session_argv(argv))

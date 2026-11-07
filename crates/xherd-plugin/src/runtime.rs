@@ -194,14 +194,14 @@ fn shell_quote(s: &str) -> String {
 
 /// The hook file's new content: `existing` with xherd's tagged entries
 /// replaced and everything else kept. Invalid existing JSON is refused (R-005b).
-/// `read_dirs` (folders xherd installed, outside the worktree) get a
-/// `Read(//<dir>/**)` allow rule unless already there, so the agent does not
-/// stop to ask before reading its own commands.
+/// `allow` rules (what xherd's own commands need: reading the folder it
+/// installed, calling `xherd`) are added to `permissions.allow` unless already
+/// there, so the agent does not stop to ask for them.
 pub fn merge_hooks(
     existing: Option<&str>,
     h: &HookFile,
     xherd_bin: &str,
-    read_dirs: &[String],
+    allow_rules: &[String],
 ) -> Result<String, String> {
     let mut root: Map<String, Value> = match existing.map(str::trim) {
         None | Some("") => Map::new(),
@@ -245,7 +245,7 @@ pub fn merge_hooks(
             _ => return Err(format!("{}: hooks.{event} is not a list", h.file)),
         }
     }
-    if !read_dirs.is_empty() {
+    if !allow_rules.is_empty() {
         let perms = root
             .entry("permissions")
             .or_insert_with(|| Value::Object(Map::new()));
@@ -256,10 +256,8 @@ pub fn merge_hooks(
             .or_insert_with(|| Value::Array(Vec::new()))
             .as_array_mut()
             .ok_or_else(|| format!("{}: permissions.allow is not a list", h.file))?;
-        for d in read_dirs {
-            // `//` marks an absolute path; a single `/` is relative to the
-            // project root and would never match a folder outside it.
-            let rule = Value::String(format!("Read(//{}/**)", d.trim_matches('/')));
+        for rule in allow_rules {
+            let rule = Value::String(rule.clone());
             if !allow.contains(&rule) {
                 allow.push(rule);
             }
@@ -397,9 +395,9 @@ mod tests {
     fn read_dirs_are_allowed_once() {
         let h = claude().hooks.unwrap();
         let user = r#"{"permissions": {"allow": ["Bash(ls)"]}}"#;
-        let dirs = ["/home/x/.claude/commands/xhspec".to_string()];
-        let once = merge_hooks(Some(user), &h, "xherd", &dirs).unwrap();
-        let twice = merge_hooks(Some(&once), &h, "xherd", &dirs).unwrap();
+        let rules = ["Read(//home/x/.claude/commands/xhspec/**)".to_string()];
+        let once = merge_hooks(Some(user), &h, "xherd", &rules).unwrap();
+        let twice = merge_hooks(Some(&once), &h, "xherd", &rules).unwrap();
         let v: Value = serde_json::from_str(&twice).unwrap();
         assert_eq!(
             v["permissions"]["allow"],

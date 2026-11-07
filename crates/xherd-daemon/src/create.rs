@@ -140,8 +140,16 @@ impl Daemon {
             }
             prepare_xherd_dir(&git, &workdir, &a).await?;
             if let Some(h) = &rt.hooks {
-                let read_dirs = pack.map(command_dirs).unwrap_or_default();
-                install_hooks(&git, &workdir, h, &self.xherd_bin, &read_dirs).await?;
+                let mut rules: Vec<String> = pack
+                    .map(command_dirs)
+                    .unwrap_or_default()
+                    .iter()
+                    // `//` marks an absolute path; a single `/` is relative to
+                    // the project root and would never match this folder.
+                    .map(|d| format!("Read(//{}/**)", d.trim_matches('/')))
+                    .collect();
+                rules.extend(XAP_ALLOW.iter().map(|s| s.to_string()));
+                install_hooks(&git, &workdir, h, &self.xherd_bin, &rules).await?;
             }
             self.create_agent(a).await
         }
@@ -281,6 +289,21 @@ async fn prepare_xherd_dir(git: &Git, workdir: &Path, a: &Agent) -> Result<(), A
         .map_err(|e| refuse("git", e.to_string()))
 }
 
+/// The XAP calls an agent makes, as runtime allow rules. The prompts call
+/// plain `xherd` (on the session's PATH), which the runtime can match; a
+/// `$XHERD_BIN` variable cannot be checked and asks every time.
+const XAP_ALLOW: &[&str] = &[
+    "Bash(xherd stage *)",
+    "Bash(xherd gate *)",
+    "Bash(xherd ask *)",
+    "Bash(xherd tasks *)",
+    "Bash(xherd task *)",
+    "Bash(xherd commit *)",
+    "Bash(xherd pr *)",
+    "Bash(xherd handoff *)",
+    "Bash(xherd issue *)",
+];
+
 /// Folders the default runtime's pack commands are installed in (outside the
 /// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
 /// plan cannot be made (no HOME).
@@ -310,11 +333,11 @@ async fn install_hooks(
     workdir: &Path,
     h: &runtime::HookFile,
     xherd_bin: &str,
-    read_dirs: &[String],
+    allow_rules: &[String],
 ) -> Result<(), ActionError> {
     let f = workdir.join(&h.file);
     let existing = std::fs::read_to_string(&f).ok();
-    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin, read_dirs)
+    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin, allow_rules)
         .map_err(|e| refuse("runtime_hooks", e))?;
     if let Some(dir) = f.parent() {
         std::fs::create_dir_all(dir)

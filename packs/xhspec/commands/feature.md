@@ -8,7 +8,7 @@ Arguments: `{{args}}` (a ticket key, then a description of the feature).
 
 Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
 
-1. Mark the stage: `"$XHERD_BIN" stage enter spec`.
+1. Mark the stage: `xherd stage enter spec`.
 2. Read the ticket with the tracker tools you have (MCP server or CLI). If
    you have none, use the description given above. Write
    `.xherd/spec/ticket.md` (create the folder if needed).
@@ -19,6 +19,6 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
    design hold.
 5. Write `.xherd/spec/memory.md`, with the code map of what you explored.
 6. Declare the gate with one `--question` per open question (none: plain
-   `"$XHERD_BIN" gate open spec`). For example:
-   `"$XHERD_BIN" gate open spec --question "Should expired sessions be kept for audit?"`
+   `xherd gate open spec`). For example:
+   `xherd gate open spec --question "Should expired sessions be kept for audit?"`
 7. Stop and wait for the user.

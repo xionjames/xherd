@@ -14,7 +14,7 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
    ones) and nothing else, then `git commit -m "<subject>"`. Use the
    repository's commit message conventions if it has any.
 3. Get the sha with `git rev-parse HEAD`, then report it:
-   `"$XHERD_BIN" commit done C01 --sha 3f2a9c1`
+   `xherd commit done C01 --sha 3f2a9c1`
 4. Record the sha and `status: done` in `commits.md`.
 5. Continue: follow the command in `{{dir}}/next.md` (next task, or the review
    when every task is done).
