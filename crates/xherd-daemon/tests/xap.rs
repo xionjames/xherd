@@ -813,7 +813,7 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
     std::fs::write(wt.join("a.txt"), "new a\n").unwrap();
     std::fs::write(wt.join("other.txt"), "left out\n").unwrap();
 
-    let v = t.d.diff("SC-1").await.unwrap();
+    let v = t.d.diff("SC-1", None, None).await.unwrap();
     assert!(v["commit"].is_null());
     assert_eq!(v["files"], json!(["a.txt", "gone.txt", "other.txt"]));
     assert!(v["diff"].as_str().unwrap().contains("+left out"));
@@ -826,7 +826,7 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
     )
     .await
     .unwrap();
-    let v = t.d.diff("SC-1").await.unwrap();
+    let v = t.d.diff("SC-1", None, None).await.unwrap();
     assert_eq!(v["commit"]["id"], "C01");
     assert_eq!(v["files"], json!(["a.txt", "gone.txt"]));
     assert_eq!(v["others"], json!(["other.txt"]));
@@ -837,7 +837,10 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
     // Viewing changes nothing the agent will commit from.
     assert_eq!(git(wt, &["diff", "--cached", "--name-only"]), "");
 
-    assert_eq!(t.d.diff("nobody").await.unwrap_err().code, "unknown_agent");
+    assert_eq!(
+        t.d.diff("nobody", None, None).await.unwrap_err().code,
+        "unknown_agent"
+    );
 }
 
 #[tokio::test]
@@ -858,7 +861,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     assert_eq!(get(&t).await.status, Status::WaitingInput);
 
     // At the ship gate the user reviews what will be pushed.
-    let v = t.d.diff("SC-1").await.unwrap();
+    let v = t.d.diff("SC-1", None, None).await.unwrap();
     assert_eq!(v["branch"], "main...HEAD");
     assert_eq!(v["files"], json!(["feature.rs"]));
     assert_eq!(v["others"], json!(["stray.txt"]));
@@ -1233,4 +1236,54 @@ async fn a_refused_commit_goes_to_the_agent_with_gits_output() {
     assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:commit C01"));
     let events = t.d.store.events(&t.a.id, 50).await.unwrap();
     assert!(events.iter().any(|e| e.kind == "commit-failed"));
+}
+
+#[tokio::test]
+async fn diff_views_uncommitted_branch_and_commit() {
+    let t = setup().await;
+    // Work on a branch off `main`, the agent's base.
+    git(t.wt.path(), &["checkout", "-q", "-b", "feature"]);
+    // As in a real worktree, `.xherd/` is excluded from git.
+    std::fs::write(t.wt.path().join(".git/info/exclude"), ".xherd/\n").unwrap();
+    commit_gate(&t).await;
+    let files = |v: &Value| -> Vec<String> {
+        v["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Before approval: the proposal shows what would be committed.
+    let v = t.d.diff("SC-1", Some("commit"), Some("C01")).await.unwrap();
+    assert_eq!(
+        (v["view"].as_str(), files(&v)),
+        (Some("commit"), vec!["a.txt".to_string()])
+    );
+    assert_eq!(v["commit"]["message"], "Add a\n\nBecause T01 needs it.");
+    assert!(v["diff"].as_str().unwrap().contains("+a"));
+    let v = t.d.diff("SC-1", Some("uncommitted"), None).await.unwrap();
+    assert_eq!(files(&v), ["a.txt", "b.txt"]);
+
+    t.d.action("SC-1", approve(None)).await.unwrap();
+
+    // After: the commit is a real one; uncommitted keeps only b.txt; the
+    // branch view has both (committed a.txt, untracked b.txt) against `main`.
+    let v = t.d.diff("SC-1", Some("commit"), Some("C01")).await.unwrap();
+    assert_eq!(files(&v), ["a.txt"]);
+    assert!(v["diff"].as_str().unwrap().contains("+a"));
+    let v = t.d.diff("SC-1", Some("uncommitted"), None).await.unwrap();
+    assert_eq!(files(&v), ["b.txt"]);
+    let v = t.d.diff("SC-1", Some("branch"), None).await.unwrap();
+    assert_eq!(files(&v), ["a.txt", "b.txt"]);
+    assert_eq!(v["branch"], "main...HEAD");
+
+    for (view, commit, code) in [
+        (Some("nope"), None, "bad_request"),
+        (Some("commit"), None, "bad_request"),
+        (Some("commit"), Some("C99"), "commit_unknown"),
+    ] {
+        assert_eq!(t.d.diff("SC-1", view, commit).await.unwrap_err().code, code);
+    }
 }

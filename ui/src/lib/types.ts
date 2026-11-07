@@ -23,6 +23,8 @@ export interface Task {
 export interface Commit {
   id: string;
   subject: string;
+  /** The full commit message (as proposed, or as the user edited it). */
+  message?: string;
   files: string[];
   status: 'proposed' | 'approved' | 'done' | 'dropped';
   tasks: string[];
@@ -106,6 +108,7 @@ export interface DiffAnswer {
   agent: string;
   head: string;
   commit?: Commit;
+  view?: 'uncommitted' | 'branch' | 'commit';
   branch?: string;
   files: string[];
   others: string[];

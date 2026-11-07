@@ -600,10 +600,25 @@ async fn get_agent(
     Ok(Json(json!({"agent": agent, "events": events})))
 }
 
+#[derive(Deserialize)]
+struct DiffQuery {
+    /// `uncommitted`, `branch` or `commit` (with `commit=<id>`); none: what the
+    /// open gate shows.
+    view: Option<String>,
+    commit: Option<String>,
+}
+
 /// `GET /agents/:id/diff`: the open commit proposal's diff, else every
 /// uncommitted change (`Daemon::diff`).
-async fn diff(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    Ok(Json(d.diff(&id).await?))
+async fn diff(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Query(q): Query<DiffQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        d.diff(&id, q.view.as_deref(), q.commit.as_deref()).await?,
+    ))
 }
 
 /// `GET /agents/:id/docs`: the agent's documents, open gate's first.

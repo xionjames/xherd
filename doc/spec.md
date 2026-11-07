@@ -234,6 +234,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-106 | Every approval (human or automatic) appends `{gate, file, sha256, actor, auto, reason, at, commit}` to the agent's approval ledger and the daemon database. The daemon **never edits** the agent's documents. |
 | R-107 | A document is approved when the ledger has an approval whose hash equals its current content (line endings normalised). Editing an approved document re-opens its gate ("changed since approved") and the UI shows the diff against the approved version. Exception: in the tasks document (the one the flow's `tasks` stage gates), task progress lines (`- status:` and `- evidence:` under a task heading) are not content; recording progress does not re-open the gate. |
 | R-108 | Several documents changed together form **one** gate approved together. |
+| R-108a | **Commit gates**: the agent proposes the files and the full commit message (`commit propose --message`). The Changes view shows the diff of exactly those files and the user may edit the message. On approval **xherd makes the commit** (stages exactly the proposed files, commits with the message, hooks included, never `--no-verify`) and records the sha. If git refuses, the approval stands and the agent fixes and commits with git's output. The Commits view lists every commit with its message and files; the Changes view has tabs for uncommitted changes, all changes against the base, and any one commit. |
 
 ### 6.3 Autonomy
 

@@ -16,6 +16,7 @@ by theme; update it together with them.
 - [x] Svelte UI on the panel registry: Herd, Agent page, Settings, Setup checks, Welcome
 - [x] Hash approvals from the UI, websockets, terminal, diffs
 - [x] Welcome: plugins switched on/off and configured, with a Claude login step; at least one of each kind
+- [x] Commits: xherd runs the approved commit (editable message, agent fixes it if git refuses); Commits view with message and files; Changes tabs: uncommitted / all changes / one commit
 - [x] Agent page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked agents
 - [ ] Screens still hidden: Board, Review, TODOs, Time, notification bell
 - [ ] Live reload of the daemon config (most settings apply at the next start)
@@ -42,6 +43,7 @@ by theme; update it together with them.
 - [ ] Pause with a handoff (R-026); background-task guard (R-024); runtime change between steps (R-025)
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
 - [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)
+- [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the agent's until guardrails)
 - [ ] Per-agent permission mode (`ask` / `edits` / `auto` / `all` exist; new agents always use `edits`)
 
 ## Context and flow quality

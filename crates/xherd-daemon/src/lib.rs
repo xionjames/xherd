@@ -381,7 +381,12 @@ impl Daemon {
     /// (`<base>...HEAD`) and the uncommitted files that would stay behind;
     /// otherwise the diff of every uncommitted change. Read-only git work, run
     /// here rather than in the actor.
-    pub async fn diff(&self, who: &str) -> Result<serde_json::Value, ActionError> {
+    pub async fn diff(
+        &self,
+        who: &str,
+        view: Option<&str>,
+        commit: Option<&str>,
+    ) -> Result<serde_json::Value, ActionError> {
         let fail = |code: &'static str, message: String| ActionError { code, message };
         let a = self.action(who, UserAction::Get).await?;
         let wd = a
@@ -393,6 +398,87 @@ impl Daemon {
         let git_err = |e: xherd_git::GitError| fail("git", e.to_string());
         let head = git.rev_parse(wd, "HEAD").await.map_err(git_err)?;
         let changed = git.changed_files(wd, "HEAD").await.map_err(git_err)?;
+        // Explicit views (the Changes tabs): everything uncommitted; the whole
+        // branch against its base, committed and not; one commit.
+        match view {
+            None => {}
+            Some("uncommitted") => {
+                let diff = git.diff_proposed(wd, &changed).await.map_err(git_err)?;
+                return Ok(serde_json::json!({
+                    "agent": a.name, "head": head, "view": "uncommitted", "files": changed,
+                    "others": Vec::<String>::new(), "diff": diff,
+                }));
+            }
+            Some("branch") => {
+                let base = a
+                    .base
+                    .as_deref()
+                    .ok_or_else(|| fail("no_base", format!("{} has no base branch", a.name)))?;
+                let mb = git
+                    .run(wd, &["merge-base", base, "HEAD"])
+                    .await
+                    .map_err(git_err)?;
+                // Tracked changes since the merge base (committed or not),
+                // then the files git does not know yet.
+                let mut files: Vec<String> = git
+                    .run(wd, &["diff", "--name-only", &mb, "--"])
+                    .await
+                    .map_err(git_err)?
+                    .lines()
+                    .map(str::to_string)
+                    .collect();
+                let mut diff = git.diff(wd, Some(&mb), &[]).await.map_err(git_err)?;
+                let untracked: Vec<String> = git
+                    .run(wd, &["ls-files", "--others", "--exclude-standard"])
+                    .await
+                    .map_err(git_err)?
+                    .lines()
+                    .map(str::to_string)
+                    .collect();
+                if !untracked.is_empty() {
+                    diff.push_str(&git.diff_proposed(wd, &untracked).await.map_err(git_err)?);
+                    files.extend(untracked);
+                }
+                files.sort();
+                files.dedup();
+                return Ok(serde_json::json!({
+                    "agent": a.name, "head": head, "view": "branch", "branch": format!("{base}...HEAD"),
+                    "files": files, "others": Vec::<String>::new(), "diff": diff,
+                }));
+            }
+            Some("commit") => {
+                let id =
+                    commit.ok_or_else(|| fail("bad_request", "commit=<id> is needed".into()))?;
+                let c = a
+                    .commits
+                    .iter()
+                    .find(|c| c.id == id)
+                    .ok_or_else(|| fail("commit_unknown", format!("no commit {id}")))?;
+                let (files, diff) = match &c.sha {
+                    Some(sha) => (
+                        git.commit_files(wd, sha).await.map_err(git_err)?,
+                        git.run(
+                            wd,
+                            &["show", "--no-color", "--no-ext-diff", "--format=", sha],
+                        )
+                        .await
+                        .map_err(git_err)?,
+                    ),
+                    // Not committed yet: what would be committed.
+                    None => (
+                        c.files.clone(),
+                        git.diff_proposed(wd, &c.files).await.map_err(git_err)?,
+                    ),
+                };
+                return Ok(serde_json::json!({
+                    "agent": a.name, "head": head, "view": "commit", "commit": c,
+                    "files": files, "others": Vec::<String>::new(), "diff": diff,
+                }));
+            }
+            Some(v) => {
+                return Err(fail("bad_request", format!("unknown view {v:?}")));
+            }
+        }
         if let (
             Some(xherd_core::domain::Gate::Docs {
                 role: xherd_core::domain::Role::Ship,

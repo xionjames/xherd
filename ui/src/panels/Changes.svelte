@@ -3,6 +3,7 @@
   // the proposed commit, the branch at a ship gate, else every uncommitted change.
   import type { Agent, DiffAnswer } from '../lib/types';
   import { get } from '../lib/api';
+  import { route, go } from '../lib/router.svelte';
   import { parseUnified } from '../lib/diff';
   import DiffLines from '../components/DiffLines.svelte';
 
@@ -14,26 +15,56 @@
   let loading = $state(false);
   let collapsed = $state<Record<string, boolean>>({});
 
+  // Tabs: Uncommitted · All changes (branch against its base) · one commit.
+  // Without a `view` in the URL the open gate decides, as before.
+  type View = 'uncommitted' | 'branch' | 'commit';
+  const gate = $derived(agent.gate);
+  const defaultView = $derived<View>(
+    gate?.kind === 'commit' ? 'commit' : gate?.kind === 'docs' && gate.role === 'ship' ? 'branch' : 'uncommitted',
+  );
+  const explicit = $derived(route.query.get('view') as View | null);
+  const view = $derived<View>(explicit ?? defaultView);
+  const commitId = $derived(
+    route.query.get('commit') ?? (gate?.kind === 'commit' ? gate.id : agent.commits?.[agent.commits.length - 1]?.id ?? ''),
+  );
+  const pick = (v: View, c?: string) => go(`/agent/${agent.name}`, { s: 'changes', view: v, ...(c ? { commit: c } : {}) });
+  const query = $derived(
+    explicit ? `?view=${explicit}${explicit === 'commit' ? `&commit=${encodeURIComponent(commitId)}` : ''}` : '',
+  );
+
   async function load() {
     loading = true;
-    try { d = await get<DiffAnswer>(`/agents/${id}/diff`); error = null; }
+    try { d = await get<DiffAnswer>(`/agents/${id}/diff${query}`); error = null; }
     catch (e) { error = (e as Error).message; }
     finally { loading = false; }
   }
   // Reload when what is reviewed changes (gate, commits, activity).
-  const key = $derived(`${id}|${JSON.stringify(agent.gate ?? null)}|${agent.lastActivity}`);
+  const key = $derived(`${id}|${query}|${JSON.stringify(agent.gate ?? null)}|${agent.lastActivity}`);
   $effect(() => { void key; load(); });
 
   const files = $derived(d ? parseUnified(d.diff) : []);
   const what = $derived(
-    !d ? '' : d.commit ? `Commit ${d.commit.id}: the proposed files against HEAD`
-      : d.branch ? `The branch as it will be pushed (${d.branch})`
+    !d ? '' : d.commit ? (d.commit.sha ? `Commit ${d.commit.id} (${d.commit.sha.slice(0, 8)})` : `Commit ${d.commit.id}: the proposed files against HEAD`)
+      : d.branch ? (d.view === 'branch' ? `Everything changed since the base (${d.branch})` : `The branch as it will be pushed (${d.branch})`)
       : 'Every uncommitted change',
   );
 </script>
 
 <div class="body">
   <div class="colmain">
+    <div class="row" role="tablist" aria-label="What to show" style="gap:8px">
+      <button class="btn sm" class:primary={view === 'uncommitted'} role="tab" aria-selected={view === 'uncommitted'}
+        onclick={() => pick('uncommitted')}>Uncommitted</button>
+      <button class="btn sm" class:primary={view === 'branch'} role="tab" aria-selected={view === 'branch'}
+        onclick={() => pick('branch')} disabled={!agent.base} title={agent.base ? '' : 'No base branch'}>All changes</button>
+      {#if agent.commits?.length}
+        <select aria-label="A commit" class:primary={view === 'commit'} value={view === 'commit' ? commitId : ''}
+          onchange={(e) => e.currentTarget.value && pick('commit', e.currentTarget.value)} style="width:auto">
+          <option value="" disabled>A commit…</option>
+          {#each agent.commits as c (c.id)}<option value={c.id}>{c.id} · {c.subject} ({c.status})</option>{/each}
+        </select>
+      {/if}
+    </div>
     {#if error}
       <div class="card cb muted">{error}</div>
     {:else if d}
@@ -62,8 +93,14 @@
       <div class="card cb muted">Loading…</div>
     {/if}
   </div>
-  {#if d && (d.files.length || d.others.length)}
+  {#if d && (d.files.length || d.others.length || d.commit)}
     <aside class="colside">
+      {#if d.commit}
+        <section class="card cb">
+          <span class="lbl">Commit message</span>
+          <pre class="mono" style="white-space:pre-wrap;margin:6px 0 0;font-size:12.5px;line-height:1.45">{d.commit.message ?? d.commit.subject}</pre>
+        </section>
+      {/if}
       {#if d.files.length}
         <section class="card cb">
           <span class="lbl">{d.commit ? 'In this commit' : 'Files'} · {d.files.length}</span>

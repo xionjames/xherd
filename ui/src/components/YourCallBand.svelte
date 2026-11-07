@@ -18,6 +18,14 @@
   let open = $state(false);
 
   const g = $derived(agent.gate);
+  // Commit gate: the message xherd commits with, editable before approving.
+  let msg = $state('');
+  let msgFor = '';
+  const proposed = $derived(g?.kind === 'commit' ? (g.message ?? g.subject) : '');
+  $effect(() => {
+    const key = g?.kind === 'commit' ? `${g.id}|${proposed}` : '';
+    if (key !== msgFor) { msgFor = key; msg = proposed; }
+  });
   const fresh = $derived(app.state?.config.freshSessions !== false);
   const nextStage = $derived.by(() => {
     if (!flow || !g || g.kind !== 'docs') return undefined;
@@ -85,7 +93,9 @@
         if (sha) expect[f.path] = sha;
       }
     }
-    run('approve', { expect }, 'Could not approve');
+    const body: Record<string, unknown> = { expect };
+    if (g?.kind === 'commit' && msg.trim() && msg.trim() !== proposed.trim()) body.message = msg.trim();
+    run('approve', body, 'Could not approve');
   }
 </script>
 
@@ -119,6 +129,16 @@
       {/if}
     </div>
   </div>
+  {#if g?.kind === 'commit' && reviewing}
+    <div class="gmore">
+      <label class="gbox" style="flex:1 1 100%">
+        <span class="lbl">Commit message · xherd commits {g.files.length} {g.files.length === 1 ? 'file' : 'files'} with it when you approve</span>
+        <textarea class="mono" rows="4" bind:value={msg} aria-label="Commit message"
+          style="font-size:13px;line-height:1.45;resize:vertical;background:var(--pen)"></textarea>
+        {#if msg.trim() !== proposed.trim()}<span class="hint">Edited: your text replaces the agent's.</span>{/if}
+      </label>
+    </div>
+  {/if}
   {#if g?.kind === 'docs' && g.questions?.length}
     <div class="gmore">
       <div class="gbox">
