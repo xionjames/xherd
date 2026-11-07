@@ -6,6 +6,9 @@ use std::time::Duration;
 use regex::Regex;
 use xherd_core::exec::{Cmd, ExecError, run};
 
+/// Pause between typed text and each Enter.
+const ENTER_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
+
 #[derive(Debug, thiserror::Error)]
 pub enum TermError {
     #[error(transparent)]
@@ -133,6 +136,9 @@ impl Tmux {
             self.run(&["send-keys", "-t", &t, "-l", "--", text]).await?;
         }
         for _ in 0..enters {
+            // Without a pause a TUI can take the keys as one paste and drop
+            // the Enter (seen with Claude Code 2.1.319).
+            tokio::time::sleep(ENTER_PAUSE).await;
             self.run(&["send-keys", "-t", &t, "Enter"]).await?;
         }
         Ok(())
