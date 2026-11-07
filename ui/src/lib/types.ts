@@ -111,7 +111,10 @@ export interface Check {
   required: boolean;
   ok: boolean;
   detail: string;
-  fix?: { kind: 'command'; text: string } | { kind: 'action'; label: string };
+  fix?:
+    | { kind: 'command'; text: string }
+    | { kind: 'action'; label: string }
+    | { kind: 'session'; label: string; explain: string };
 }
 
 export interface ConfigView {

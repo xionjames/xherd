@@ -1,5 +1,6 @@
 //! `GET /ws/term/:id?cols=&rows=`: the agent's tmux session in the browser
-//! (spec §17.2). Binary frames carry terminal bytes both ways; a text frame
+//! (spec §17.2). `GET /ws/setup/:id`: the session a setup fix started (the
+//! runtime's trust dialog), so setup needs no shell on the host. Binary frames carry terminal bytes both ways; a text frame
 //! `{"type":"resize","cols":…,"rows":…}` resizes. Closing the socket detaches
 //! the tmux client; the session keeps running.
 
@@ -45,16 +46,38 @@ pub async fn terminal(
         Ok(a) => a,
         Err(e) => return ApiError::from(e).into_response(),
     };
-    let tmux = Tmux::new(d.config.tmux_socket.clone());
-    if !tmux.has_session(&agent.name).await {
+    attach(&d, &agent.name, size, ws).await
+}
+
+pub async fn setup_terminal(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Query(size): Query<Size>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if id != xherd_daemon::checks::TRUST_CHECK {
         return ApiError::new(
-            StatusCode::CONFLICT,
+            StatusCode::NOT_FOUND,
             "no_session",
-            format!("{} has no running session", agent.name),
+            format!("no setup session {id}"),
         )
         .into_response();
     }
-    let argv = tmux.attach_argv(&agent.name);
+    attach(&d, xherd_daemon::checks::TRUST_SESSION, size, ws).await
+}
+
+async fn attach(d: &Daemon, session: &str, size: Size, ws: WebSocketUpgrade) -> Response {
+    let tmux = Tmux::new(d.config.tmux_socket.clone());
+    if !tmux.has_session(session).await {
+        return ApiError::new(
+            StatusCode::CONFLICT,
+            "no_session",
+            format!("{session} has no running session"),
+        )
+        .into_response();
+    }
+    let argv = tmux.attach_argv(session);
     ws.on_upgrade(move |socket| bridge(socket, argv, size))
 }
 

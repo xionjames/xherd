@@ -31,6 +31,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/healthz", get(healthz))
         .route("/api/v1/ws", get(ws::state_stream))
         .route("/api/v1/ws/term/{id}", get(term::terminal))
+        .route("/api/v1/ws/setup/{id}", get(term::setup_terminal))
         .route("/api/v1/state", get(state))
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
