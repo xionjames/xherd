@@ -118,6 +118,35 @@ async fn auth_rules() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(call(remote, req).await.0, StatusCode::UNAUTHORIZED);
+    // Locally an unknown token (another install's) changes nothing; an
+    // agent's token never becomes the user's.
+    let req = get("/api/v1/agents")
+        .header("authorization", "Bearer xh_other_install")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local.clone(), req).await.0, StatusCode::OK);
+    let agent_t = xherd_daemon::support::mint_token(
+        &d.store,
+        xherd_daemon::support::TOKEN_AGENT,
+        Some("x"),
+        &["hooks"],
+        1,
+    )
+    .await
+    .unwrap();
+    let req = get("/api/v1/agents")
+        .header("authorization", format!("Bearer {agent_t}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local.clone(), req).await.0, StatusCode::UNAUTHORIZED);
+
+    // In the container, the gateway the published port arrives from is local.
+    let mut d2 = d.clone();
+    d2.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
+    let gw =
+        xherd_api::router(d2).layer(MockConnectInfo(SocketAddr::from(([172, 17, 0, 1], 5555))));
+    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    assert_eq!(call(gw, req).await.0, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -522,4 +551,92 @@ async fn terminal_websocket_attaches_to_the_session() {
     tmux(&["kill-server"]);
     assert!(found, "no echo in {seen:?}");
     assert!(alive);
+}
+
+/// Settings → Git access and `xherd credential` (R-684, R-685): the token is
+/// stored but never sent back; the credential endpoint answers the local
+/// user or an agent token with the `credential` scope only.
+#[tokio::test]
+async fn git_access_and_credentials() {
+    let (dir, d, a) = setup().await;
+    let local =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let remote =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 9], 1))));
+    let body = json!({
+        "hosts": [{"host": "git.example.test", "credential": "xherd", "protocols": ["https"]}],
+        "tokens": {"git.example.test": "tok_SECRET_9"},
+    });
+    let req = Request::put("/api/v1/git/hosts")
+        .header("host", "127.0.0.1:4740")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (s, v) = call(local.clone(), req).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["hosts"][0]["hasToken"], true);
+    assert!(
+        !v.to_string().contains("tok_SECRET_9"),
+        "token never sent back"
+    );
+    // Natively the managed config sits in the data root, never in $HOME.
+    let gc = std::fs::read_to_string(dir.path().join("gitconfig")).unwrap();
+    assert!(gc.contains("[credential \"https://git.example.test\"]"));
+
+    let cred = |host: &str, auth: Option<&str>| {
+        let mut r = Request::post("/api/v1/git/credential")
+            .header("host", "127.0.0.1:4740")
+            .header("content-type", "application/json");
+        if let Some(t) = auth {
+            r = r.header("authorization", format!("Bearer {t}"));
+        }
+        r.body(Body::from(
+            json!({"protocol": "https", "host": host}).to_string(),
+        ))
+        .unwrap()
+    };
+    let (s, v) = call(local.clone(), cred("git.example.test", None)).await;
+    assert_eq!(
+        (s, v["password"].clone()),
+        (StatusCode::OK, json!("tok_SECRET_9"))
+    );
+    assert_eq!(
+        call(local, cred("other.test", None)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(remote.clone(), cred("git.example.test", None)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // An agent's token carries the credential scope.
+    let t = xherd_daemon::support::mint_token(
+        &d.store,
+        xherd_daemon::support::TOKEN_AGENT,
+        Some(&a.id),
+        &[xherd_daemon::SCOPE_CREDENTIAL],
+        1,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        call(remote.clone(), cred("git.example.test", Some(&t)))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let hooks_only = xherd_daemon::support::mint_token(
+        &d.store,
+        xherd_daemon::support::TOKEN_AGENT,
+        Some(&a.id),
+        &["hooks"],
+        1,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        call(remote, cred("git.example.test", Some(&hooks_only)))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
 }

@@ -9,7 +9,12 @@ use serde_json::Value;
 use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
+mod docker;
+mod git;
+mod init;
+mod open_in;
 mod report;
+mod toolchain;
 mod xap;
 
 #[derive(Parser)]
@@ -30,6 +35,11 @@ struct Cli {
 enum Cmd {
     /// Run the daemon in the foreground.
     Daemon,
+    /// Container entrypoint (root): prepare the user, home, SSH and git, then run the daemon.
+    Init,
+    /// Run xherd in Docker: write the compose file, check the setup, update.
+    #[command(subcommand)]
+    Docker(DockerCmd),
     /// Is the daemon up?
     Status,
     /// Create an agent: worktree, branch and `.xherd/` for a ticket.
@@ -41,7 +51,7 @@ enum Cmd {
         /// Flow of the built-in pack, or `none` (default `feature`).
         #[arg(long)]
         flow: Option<String>,
-        /// Local repository (default: the current directory).
+        /// Local repository, or a remote URL cloned into the workspace (default: the current directory).
         #[arg(long)]
         repo: Option<String>,
         #[arg(long)]
@@ -75,6 +85,26 @@ enum Cmd {
     Changes { agent: String, comment: String },
     /// Show the open commit proposal's diff, the branch at a ship gate, else every uncommitted change.
     Diff { agent: String },
+    /// git credential helper: answers `get` with the token of Settings → Git access.
+    Credential { op: String },
+    /// Git access.
+    #[command(subcommand)]
+    Git(GitCmd),
+    /// Open an agent's worktree in an app on this computer (apps: ~/.config/xherd/open.json, else editors on PATH).
+    Open {
+        agent: String,
+        #[arg(long)]
+        app: Option<String>,
+    },
+    /// Attach this terminal to an agent's session (in the container when xherd runs in Docker).
+    Attach { agent: String },
+    /// A shell in an agent's worktree (in the container when xherd runs in Docker).
+    Shell { agent: String },
+    /// Run Open-in requests from the browser with this computer's apps.
+    Companion,
+    /// Toolchains of the current worktree (R-652).
+    #[command(subcommand)]
+    Toolchain(ToolchainCmd),
     /// Runtime hook (reads the hook JSON on stdin). Silent; always exits 0.
     Hook { event: String },
     /// Push status for agents or wrappers without hooks.
@@ -120,6 +150,59 @@ enum Cmd {
     Issue(xap::IssueCmd),
 }
 
+#[derive(Subcommand)]
+enum GitCmd {
+    /// Check SSH and HTTPS access to a host, in order, with the fix for the first failure.
+    Doctor {
+        /// Host (default: the --repo host, else github.com).
+        host: Option<String>,
+        /// Also check API and git access to this repository.
+        #[arg(long)]
+        repo: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DockerCmd {
+    /// Write ~/.config/xherd/compose.yaml and .env for the detected engine.
+    Init {
+        /// Workspace folder, mounted at the same path (default ~/xherd).
+        #[arg(long)]
+        workspace: Option<std::path::PathBuf>,
+        #[arg(long)]
+        image: Option<String>,
+        #[arg(long, default_value_t = 4740)]
+        port: u16,
+        /// Another host folder with repositories, mounted at the same path (repeatable).
+        #[arg(long = "extra-path")]
+        extra_paths: Vec<std::path::PathBuf>,
+        /// Rewrite an existing compose file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Check engine, mounts, ownership, SSH agent and port binding, each with a fix.
+    Doctor,
+    /// Pause live agents, pull and restart the container, resume them.
+    Update {
+        /// Update even when the daemon does not answer.
+        #[arg(long)]
+        force: bool,
+        /// Restart with the image already here (a local build) instead of pulling.
+        #[arg(long)]
+        no_pull: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ToolchainCmd {
+    /// Provide the tools `.xherd/toolchain.json` lists, then run the command
+    /// with them on PATH (the daemon starts agents this way).
+    Exec {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        argv: Vec<String>,
+    },
+}
+
 fn main() -> ExitCode {
     // Hot path first: no argument parser errors, no panics, nothing on stdout (R-012).
     let args: Vec<String> = std::env::args().collect();
@@ -141,6 +224,24 @@ fn main() -> ExitCode {
     let json = cli.json;
     let code = match cli.cmd {
         Cmd::Daemon => run_daemon(),
+        Cmd::Init => init::init(),
+        Cmd::Docker(DockerCmd::Init {
+            workspace,
+            image,
+            port,
+            extra_paths,
+            force,
+        }) => docker::init(docker::InitArgs {
+            workspace,
+            image,
+            port,
+            extra_paths,
+            force,
+        }),
+        Cmd::Docker(DockerCmd::Doctor) => docker::doctor(),
+        Cmd::Docker(DockerCmd::Update { force, no_pull }) => {
+            with_client(|c| docker::update(c, force, !no_pull))
+        }
         Cmd::Status => status(),
         Cmd::Ls => ls(),
         Cmd::Install { runtime, pack } => install(runtime, pack),
@@ -169,6 +270,13 @@ fn main() -> ExitCode {
             Some(serde_json::json!({"comment": comment})),
         ),
         Cmd::Diff { agent } => diff(&agent, json),
+        Cmd::Toolchain(ToolchainCmd::Exec { argv }) => toolchain::exec(argv),
+        Cmd::Credential { op } => git::credential(&op),
+        Cmd::Open { agent, app } => with_client(|c| open_in::open(c, &agent, app)),
+        Cmd::Attach { agent } => with_client(|c| open_in::attach(c, &agent, false)),
+        Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),
+        Cmd::Companion => with_client(open_in::companion),
+        Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -232,7 +340,13 @@ fn run_daemon() -> i32 {
 async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
     let paths = Paths::from_env();
     let (cfg, _) = Config::load(&paths.config())?;
-    let addr = format!("{}:{}", cfg.bind, cfg.port);
+    // In the container the daemon binds every interface (`XHERD_BIND`), and
+    // the published port's gateway counts as the local host (`XHERD_LOCAL_PEERS`).
+    let bind = std::env::var("XHERD_BIND")
+        .ok()
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| cfg.bind.clone());
+    let addr = format!("{bind}:{}", cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("cannot listen on {addr}: {e} (is another daemon running?)"))?;
@@ -244,6 +358,12 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
     );
     opts.xherd_bin = std::env::current_exe()?.to_string_lossy().into_owned();
     opts.scheduler = Some(Default::default());
+    opts.sandbox = std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1");
+    opts.local_peers = std::env::var("XHERD_LOCAL_PEERS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
     let d = xherd_daemon::Daemon::start(paths.clone(), opts).await?;
     tracing::info!(url = %format!("http://{addr}"), data = %paths.root.display(), version = xherd_core::VERSION, "xherd daemon listening");
     xherd_api::serve(d, listener, shutdown_signal()).await?;
@@ -268,6 +388,16 @@ async fn shutdown_signal() {
 }
 
 // ---- user client ----------------------------------------------------------------
+
+fn with_client(f: impl FnOnce(&Client) -> i32) -> i32 {
+    match Client::new() {
+        Ok(c) => f(&c),
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
 
 struct Client {
     url: String,

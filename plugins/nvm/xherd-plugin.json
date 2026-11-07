@@ -1,0 +1,43 @@
+{
+  "name": "nvm",
+  "kind": "toolchain",
+  "version": "0.1.0",
+  "label": "nvm",
+  "description": "Node.js versions from .nvmrc or .node-version, with corepack (pnpm, yarn).",
+  "data": {
+    "toolchain": {
+      "passEnv": [
+        "NVM_DIR"
+      ],
+      "tools": [
+        {
+          "name": "node",
+          "files": [
+            {
+              "path": ".nvmrc",
+              "format": "plain"
+            },
+            {
+              "path": ".node-version",
+              "format": "plain"
+            }
+          ],
+          "resolve": [
+            "bash",
+            "-c",
+            ". \"${NVM_DIR:-$HOME/.nvm}/nvm.sh\" --no-use && n=$(nvm which \"$1\" 2>/dev/null) && test -x \"$n\" && dirname \"$n\"",
+            "_",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            ". \"${NVM_DIR:-$HOME/.nvm}/nvm.sh\" --no-use && nvm install \"$1\" </dev/null && PATH=\"$(dirname \"$(nvm which \"$1\")\"):$PATH\" corepack enable 2>/dev/null; true",
+            "_",
+            "{v}"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -62,6 +62,9 @@ pub struct Config {
     pub tmux_socket: Option<String>,
     /// Plugin settings by plugin name (non-secret).
     pub plugin_settings: Map<String, Value>,
+    /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub git_hosts: Vec<GitHost>,
     /// Keys this version does not know, kept on save.
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -85,9 +88,53 @@ impl Default for Config {
             workspace: None,
             tmux_socket: None,
             plugin_settings: Map::new(),
+            git_hosts: Vec::new(),
             extra: Map::new(),
         }
     }
+}
+
+/// Where git gets an HTTPS password for a host (R-684). Never a URL or
+/// `.git/config`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Credential {
+    /// git's own configuration decides.
+    #[default]
+    None,
+    /// `gh auth git-credential` (its own login).
+    Gh,
+    /// `glab auth git-credential`.
+    Glab,
+    /// `xherd credential`: the token stored in xherd's secrets.
+    Xherd,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitHost {
+    /// `github.com`, `gitlab.example.com:8443`.
+    pub host: String,
+    /// `https`, `ssh`: what the doctor checks.
+    #[serde(default = "both_protocols")]
+    pub protocols: Vec<String>,
+    #[serde(default)]
+    pub credential: Credential,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// CA bundle for this host's HTTPS (`http.<url>.sslCAInfo`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_file: Option<String>,
+    /// Rewrite SSH remotes of this host to HTTPS (off by default).
+    #[serde(default)]
+    pub prefer_https: bool,
+    /// Rewrite HTTPS remotes of this host to SSH (off by default).
+    #[serde(default)]
+    pub prefer_ssh: bool,
+}
+
+fn both_protocols() -> Vec<String> {
+    vec!["https".into(), "ssh".into()]
 }
 
 /// Migrations from version N to N+1, applied to the raw JSON. Index 0 = 0 → 1.
@@ -153,6 +200,9 @@ impl Config {
     }
 }
 
+/// Key of git host tokens in `secrets.json` (host → token).
+pub const GIT_SECRETS: &str = "git";
+
 /// `secrets.json`: plugin secrets by plugin name, then key. Never sent to the UI.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Secrets(pub Map<String, Value>);
@@ -177,6 +227,15 @@ impl Secrets {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// The HTTPS token stored for a git host (Settings → Git access).
+    pub fn git_token(&self, host: &str) -> Option<String> {
+        self.for_plugin(GIT_SECRETS)
+            .get(host)
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
     }
 
     /// Every secret value, for redaction of captured output.

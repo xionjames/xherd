@@ -4,3 +4,4 @@
 /ui/dist/
 /desktop/node_modules/
 *.xherd-new
+/deploy/compose/.env

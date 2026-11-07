@@ -18,6 +18,16 @@ pub enum GitError {
 
 pub type Result<T> = std::result::Result<T, GitError>;
 
+/// For calls that reach a remote: SSH fails instead of asking (host key,
+/// passphrase), like `GIT_TERMINAL_PROMPT=0` does for HTTPS.
+const NO_PROMPT: &[(&str, &str)] = &[
+    (
+        "GIT_SSH_COMMAND",
+        "ssh -o BatchMode=yes -o ConnectTimeout=20",
+    ),
+    ("GCM_INTERACTIVE", "never"),
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
     pub path: PathBuf,
@@ -47,6 +57,11 @@ impl Git {
             bin: bin.into(),
             ..Git::default()
         }
+    }
+
+    pub fn with_timeout(mut self, t: Duration) -> Git {
+        self.timeout = t;
+        self
     }
 
     /// Run git in `dir`; returns stdout with the trailing newline trimmed.
@@ -144,9 +159,39 @@ impl Git {
     }
 
     pub async fn fetch(&self, dir: &Path, remote: &str) -> Result<()> {
-        self.run(dir, &["fetch", "--quiet", "--prune", remote])
+        self.run_env(dir, NO_PROMPT, &["fetch", "--quiet", "--prune", remote])
             .await
             .map(drop)
+    }
+
+    /// `git clone <url> <dest>`, run in `dest`'s parent (which must exist).
+    pub async fn clone_repo(&self, url: &str, dest: &Path) -> Result<()> {
+        let parent = dest.parent().unwrap_or(Path::new("/"));
+        let dest = dest.to_string_lossy();
+        self.run_env(parent, NO_PROMPT, &["clone", "--quiet", "--", url, &dest])
+            .await
+            .map(drop)
+    }
+
+    /// Local branches and `origin`'s, by short name (`main`, `origin/main`),
+    /// without `origin/HEAD`.
+    pub async fn branches(&self, dir: &Path) -> Result<Vec<String>> {
+        let out = self
+            .run(
+                dir,
+                &[
+                    "for-each-ref",
+                    "--format=%(refname:short)",
+                    "refs/heads",
+                    "refs/remotes/origin",
+                ],
+            )
+            .await?;
+        Ok(out
+            .lines()
+            .filter(|b| *b != "origin" && *b != "origin/HEAD")
+            .map(str::to_string)
+            .collect())
     }
 
     /// `git worktree add --no-track -b <branch> <path> <base>` (R-004): no upstream,

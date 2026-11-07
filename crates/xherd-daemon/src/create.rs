@@ -13,7 +13,7 @@ use xherd_plugin::runtime::{self, Terminal};
 
 use crate::{ActionError, Daemon};
 
-fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
+pub(crate) fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
     ActionError {
         code,
         message: message.into(),
@@ -57,22 +57,11 @@ impl Daemon {
         let launch = rt
             .argv(runtime::DEFAULT_PERMISSION_MODE)
             .map_err(|e| refuse("runtime_unusable", e))?;
-        if let Some(t) = &rt.trust {
-            let root = self.config.workspace_root().join("worktrees");
-            check_trust(t, &label, &rt.launch.join(" "), &root)?;
-        }
 
         let git = Git::new("git");
-        let given = Path::new(req.repo.trim());
-        let repo = match git.toplevel(given).await {
-            Ok(r) if given.is_dir() => r,
-            _ => {
-                return Err(refuse(
-                    "not_a_repo",
-                    format!("{} is not a git repository", given.display()),
-                ));
-            }
-        };
+        // A URL is cloned (or fetched) here, before the other checks: the
+        // clone is kept for the next agent even if a later check fails.
+        let repo = self.locate_repo(&req.repo).await?.path;
         let agents = self
             .store
             .list_agents()
@@ -140,6 +129,14 @@ impl Daemon {
         }
 
         let res = async {
+            if let Some(t) = &rt.trust {
+                let w = TrustWriter {
+                    trust: t.clone(),
+                    root: self.config.workspace_root().join("worktrees"),
+                };
+                w.ensure(&workdir)
+                    .map_err(|e| refuse("runtime_trust", format!("{label}: {e}")))?;
+            }
             prepare_xherd_dir(&git, &workdir, &a).await?;
             if let Some(h) = &rt.hooks {
                 install_hooks(&git, &workdir, h, &self.xherd_bin).await?;
@@ -158,36 +155,68 @@ impl Daemon {
     }
 }
 
-/// The runtime must already trust the worktrees root (or an ancestor), or it
-/// would stop every new agent at its trust dialog before any hook runs. The
-/// folder is created first so the instruction given works as written.
-pub(crate) fn check_trust(
-    t: &runtime::Trust,
-    label: &str,
-    cmd: &str,
-    dir: &Path,
+/// Marks agent worktrees as trusted in the runtime's trust file (declared by
+/// its plugin), so no agent stops at the runtime's trust dialog before any
+/// hook runs. Only folders under the worktrees root are ever written.
+#[derive(Debug, Clone)]
+pub struct TrustWriter {
+    pub trust: runtime::Trust,
+    /// `<workspace>/worktrees`.
+    pub root: PathBuf,
+}
+
+impl TrustWriter {
+    pub fn ensure(&self, dir: &Path) -> Result<(), String> {
+        if !dir.starts_with(&self.root) || dir == self.root {
+            return Err(format!(
+                "{} is not an agent worktree under {}",
+                dir.display(),
+                self.root.display()
+            ));
+        }
+        let file = xherd_flow::install::expand(&self.trust.file, &|v| std::env::var(v).ok())?;
+        let text = std::fs::read_to_string(&file).ok();
+        match self.trust.with_trusted(text.as_deref(), dir) {
+            Ok(Some(new)) => write_atomic(Path::new(&file), new.as_bytes(), Some(0o600))
+                .map_err(|e| format!("{file}: {e}")),
+            Ok(None) => Ok(()),
+            Err(e) => Err(format!("{file}: {e}")),
+        }
+    }
+}
+
+/// In the container only the workspace and `XHERD_EXTRA_PATHS` are mounted
+/// at the same path; a repository elsewhere is refused with the mount to add
+/// (R-605).
+pub(crate) fn outside_mounts(
+    repo: &Path,
+    workspace: &Path,
+    extra: &str,
 ) -> Result<(), ActionError> {
-    std::fs::create_dir_all(dir).map_err(|e| refuse("io", format!("{}: {e}", dir.display())))?;
-    let file = xherd_flow::install::expand(&t.file, &|v| std::env::var(v).ok())
-        .map_err(|e| refuse("runtime_unusable", e))?;
-    let text = std::fs::read_to_string(&file).unwrap_or_default();
-    if t.covers(&text, dir) {
+    let roots: Vec<PathBuf> = std::iter::once(workspace.to_path_buf())
+        .chain(std::env::split_paths(extra).filter(|p| p.is_absolute()))
+        .collect();
+    if roots.iter().any(|r| repo.starts_with(r)) {
         return Ok(());
     }
-    let d = dir.display();
     Err(refuse(
-        "runtime_untrusted",
+        "repo_outside_workspace",
         format!(
-            "{label} does not trust {d} yet, so every new agent would stop at its \
-             trust dialog. Do this once: `mkdir -p \"{d}\" && cd \"{d}\" && {cmd}`, choose \
-             \"Yes, I trust this folder\", quit {label}, then retry (trust is read from {file})."
+            "{} is not inside the workspace {}: clone it there, or mount its folder at the \
+             same path with `xherd docker init --force --extra-path <folder>` and restart the container",
+            repo.display(),
+            workspace.display()
         ),
     ))
 }
 
 /// Given base, else the remote's default branch, else the current branch.
 /// A plain name that only exists on `origin` resolves to `origin/<name>` (R-002).
-async fn resolve_base(git: &Git, repo: &Path, given: Option<&str>) -> Result<String, ActionError> {
+pub(crate) async fn resolve_base(
+    git: &Git,
+    repo: &Path,
+    given: Option<&str>,
+) -> Result<String, ActionError> {
     let given = given.map(str::trim).filter(|b| !b.is_empty());
     let candidates: Vec<String> = match given {
         Some(b) => vec![b.to_string(), format!("origin/{b}")],
@@ -253,4 +282,21 @@ async fn install_hooks(
     git.add_excludes(workdir, &[&h.file])
         .await
         .map_err(|e| refuse("git", e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repos_must_be_inside_a_mount() {
+        let ws = Path::new("/Users/me/xherd");
+        assert!(outside_mounts(Path::new("/Users/me/xherd/repos/app"), ws, "").is_ok());
+        assert!(outside_mounts(Path::new("/Volumes/code/app"), ws, "/Volumes/code").is_ok());
+        let e = outside_mounts(Path::new("/Users/me/src/app"), ws, "/Volumes/code").unwrap_err();
+        assert_eq!(e.code, "repo_outside_workspace");
+        assert!(e.message.contains("--extra-path"));
+        // A sibling with a common prefix is not inside.
+        assert!(outside_mounts(Path::new("/Users/me/xherd2/app"), ws, "").is_err());
+    }
 }

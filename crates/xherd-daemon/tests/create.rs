@@ -14,6 +14,7 @@ struct T {
     ws: tempfile::TempDir,
     repo: tempfile::TempDir,
     d: Daemon,
+    fake: Arc<FakeDriver>,
 }
 
 fn git(dir: &Path, args: &[&str]) -> std::process::Output {
@@ -52,7 +53,8 @@ async fn setup() -> T {
         ..Default::default()
     };
     cfg.save(&paths.config()).unwrap();
-    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let fake = Arc::new(FakeDriver::default());
+    let mut o = Options::new(fake.clone(), Arc::new(SystemClock));
     // Never the real Claude Code config: a fixture that trusts the workspace.
     let trust = home.path().join("claude.json");
     std::fs::write(&trust, trusting(ws.path())).unwrap();
@@ -63,7 +65,13 @@ async fn setup() -> T {
         .unwrap();
     rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
     let d = Daemon::start(paths, o).await.unwrap();
-    T { home, ws, repo, d }
+    T {
+        home,
+        ws,
+        repo,
+        d,
+        fake,
+    }
 }
 
 fn trusting(dir: &Path) -> String {
@@ -220,7 +228,11 @@ async fn starts_claude_code_with_hooks() {
             .join(repo_name(&t))
             .join("SC-5");
     let a = t.d.new_agent(req(&t, "SC-5")).await.unwrap();
-    assert_eq!(a.launch, Some(vec!["claude".to_string()]));
+    // Ask mode passed explicitly, never the runtime's own default.
+    assert_eq!(
+        a.launch.as_deref().map(|l| l.join(" ")).as_deref(),
+        Some("claude --permission-mode manual")
+    );
     let settings: serde_json::Value =
         serde_json::from_slice(&std::fs::read(wt.join(".claude/settings.local.json")).unwrap())
             .unwrap();
@@ -233,6 +245,11 @@ async fn starts_claude_code_with_hooks() {
     for _ in 0..200 {
         let a = t.d.action("SC-5", UserAction::Get).await.unwrap();
         if a.status == Status::Running {
+            assert!(
+                t.fake
+                    .calls()
+                    .contains(&"start SC-5 claude --permission-mode manual".to_string())
+            );
             let ev = t.d.store.events(&a.id, 10).await.unwrap();
             assert!(ev.iter().any(|e| e.kind == "session-started"));
             return;
@@ -242,31 +259,92 @@ async fn starts_claude_code_with_hooks() {
     panic!("agent never started");
 }
 
+/// A worktree with version files starts through `xherd toolchain exec`, with
+/// the plan written for it (R-652); one without starts the runtime directly.
 #[tokio::test]
-async fn refuses_until_the_runtime_trusts_the_worktrees_folder() {
+async fn version_files_wrap_the_launch_in_the_toolchain_step() {
     let t = setup().await;
-    let trust = t.home.path().join("claude.json");
-    let root = t.ws.path().join("worktrees");
-    std::fs::write(&trust, trusting(&root.join("other"))).unwrap();
-    let e = t.d.new_agent(req(&t, "SC-7")).await.unwrap_err();
-    assert_eq!(e.code, "runtime_untrusted");
-    let d = root.display();
+    std::fs::write(t.repo.path().join(".nvmrc"), "20\n").unwrap();
+    git(t.repo.path(), &["add", ".nvmrc"]);
     assert!(
-        e.message
-            .contains(&format!("mkdir -p \"{d}\" && cd \"{d}\" && claude")),
-        "{}",
-        e.message
-    );
-    assert!(root.is_dir(), "created so the instruction works");
-    assert!(
-        !git(t.repo.path(), &["rev-parse", "--verify", "SC-7"])
+        git(t.repo.path(), &["commit", "-q", "-m", "node"])
             .status
             .success()
     );
-
-    // Trusting the folder itself (as Claude Code stores it) is enough.
-    std::fs::write(&trust, trusting(&root.canonicalize().unwrap())).unwrap();
     t.d.new_agent(req(&t, "SC-7")).await.unwrap();
+    let wt =
+        t.ws.path()
+            .join("worktrees")
+            .join(repo_name(&t))
+            .join("SC-7");
+    for _ in 0..200 {
+        if let Some(c) = t.fake.calls().iter().find(|c| c.starts_with("start SC-7 ")) {
+            assert_eq!(
+                c,
+                "start SC-7 xherd toolchain exec -- claude --permission-mode manual"
+            );
+            let plan: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(wt.join(".xherd/toolchain.json")).unwrap())
+                    .unwrap();
+            assert_eq!(plan["install"], false);
+            assert_eq!(plan["steps"][0]["tool"], "node");
+            assert_eq!(plan["steps"][0]["version"], "20");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("agent never started");
+}
+
+/// Each new worktree is marked trusted in the runtime's file, other entries
+/// kept, so no agent stops at the trust dialog (design §4.1).
+#[tokio::test]
+async fn trusts_each_new_worktree_in_the_runtime_file() {
+    let t = setup().await;
+    let trust = t.home.path().join("claude.json");
+    std::fs::write(
+        &trust,
+        r#"{"userID": "u", "projects": {"/elsewhere": {"x": 1}}}"#,
+    )
+    .unwrap();
+    let a = t.d.new_agent(req(&t, "SC-8")).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&trust).unwrap()).unwrap();
+    assert_eq!(v["userID"], "u");
+    assert_eq!(v["projects"]["/elsewhere"]["x"], 1);
+    let wd = a.workdir.unwrap();
+    assert_eq!(v["projects"][&wd]["hasTrustDialogAccepted"], true);
+    // The worktree as stored and canonicalised (`/var` → `/private/var`), nothing else.
+    assert!(v["projects"].as_object().unwrap().len() <= 3);
+
+    // A trust file that is not JSON is never overwritten: creation refuses.
+    std::fs::write(&trust, "{oops").unwrap();
+    let e = t.d.new_agent(req(&t, "SC-9")).await.unwrap_err();
+    assert_eq!(e.code, "runtime_trust");
+    assert_eq!(std::fs::read_to_string(&trust).unwrap(), "{oops");
+    assert!(
+        !git(t.repo.path(), &["rev-parse", "--verify", "SC-9"])
+            .status
+            .success(),
+        "nothing left behind"
+    );
+}
+
+#[test]
+fn trust_is_written_only_under_the_worktrees_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = TrustWriter {
+        trust: serde_json::from_value(serde_json::json!({
+            "file": tmp.path().join("t.json").to_string_lossy(),
+            "projects": "projects", "key": "ok"
+        }))
+        .unwrap(),
+        root: tmp.path().join("worktrees"),
+    };
+    assert!(w.ensure(tmp.path()).is_err());
+    assert!(w.ensure(&tmp.path().join("worktrees")).is_err());
+    assert!(w.ensure(&tmp.path().join("worktrees/r/SC-1")).is_ok());
+    let text = std::fs::read_to_string(tmp.path().join("t.json")).unwrap();
+    assert!(text.contains("worktrees/r/SC-1"), "{text}");
 }
 
 #[tokio::test]
@@ -285,4 +363,60 @@ async fn refuses_without_a_runtime_plugin() {
         prompt: None,
     };
     assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
+}
+
+#[tokio::test]
+async fn url_uses_and_fetches_xherds_clone() {
+    let t = setup().await;
+    // xherd's clone of the URL already exists (cloning over the network is
+    // covered by xherd-git's tests); its origin is the local test repo.
+    let clone = t.ws.path().join("repos/git.example.com/acme/app");
+    std::fs::create_dir_all(clone.parent().unwrap()).unwrap();
+    let src = t.repo.path().to_string_lossy().into_owned();
+    assert!(
+        git(
+            t.ws.path(),
+            &["clone", "-q", &src, &clone.to_string_lossy()]
+        )
+        .status
+        .success()
+    );
+    git(t.repo.path(), &["branch", "dev"]);
+
+    let clone = std::fs::canonicalize(&clone).unwrap();
+    let url = "https://git.example.com/acme/app.git";
+    let v = t.d.resolve_repo(url).await.unwrap();
+    assert_eq!(v["path"], clone.to_string_lossy().as_ref());
+    assert_eq!(
+        (v["cloned"].as_bool(), v["warning"].is_null()),
+        (Some(false), true)
+    );
+    assert_eq!(v["base"], "origin/main");
+    // Fetched: the branch made after the clone is there.
+    assert!(
+        v["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b == "origin/dev")
+    );
+
+    let mut r = req(&t, "SC-7");
+    r.repo = "git@git.example.com:acme/app".into();
+    let a = t.d.new_agent(r).await.unwrap();
+    assert_eq!(a.repo.as_deref(), Some(clone.to_string_lossy().as_ref()));
+    assert!(t.ws.path().join("worktrees/app/SC-7").is_dir());
+
+    let known = t.d.known_repos().await.unwrap();
+    assert_eq!(known.len(), 1);
+    assert_eq!(known[0].path, clone.to_string_lossy());
+    assert_eq!(known[0].last_used, Some(a.created_at));
+
+    let e =
+        t.d.resolve_repo("https://git.example.com/acme")
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "bad_repo_url");
+    let e = t.d.resolve_repo("relative/app").await.unwrap_err();
+    assert_eq!(e.code, "not_a_repo");
 }

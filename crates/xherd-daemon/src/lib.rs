@@ -18,16 +18,20 @@ pub mod actor;
 pub mod checks;
 mod create;
 pub mod driver;
+pub mod git_access;
 pub mod install;
+pub mod open_in;
+pub mod repos;
 pub mod scheduler;
 pub mod settings;
 pub mod supervisor;
 pub mod support;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
+pub use create::TrustWriter;
 pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
 pub use supervisor::SupervisorHandle;
-pub use support::{Change, Clock, Hub, ManualClock, SystemClock, hash_token};
+pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
@@ -51,6 +55,12 @@ pub struct Options {
     pub delivery_ack: std::time::Duration,
     /// Screen rules for every agent, until runtime plugins supply them per runtime (M1).
     pub screen_rules: Option<xherd_term::ScreenRules>,
+    /// Running in the xherd container (`XHERD_SANDBOX=1`): toolchains are
+    /// installed, not only resolved (R-653).
+    pub sandbox: bool,
+    /// Peer addresses treated like loopback: the container's gateway, through
+    /// which the port published on the host's 127.0.0.1 arrives.
+    pub local_peers: Vec<std::net::IpAddr>,
 }
 
 impl Options {
@@ -63,6 +73,8 @@ impl Options {
             scheduler: None,
             delivery_ack: std::time::Duration::from_secs(10),
             screen_rules: None,
+            sandbox: false,
+            local_peers: Vec::new(),
         }
     }
 }
@@ -103,9 +115,16 @@ fn host_plugin(
     let p = plugins
         .get(xherd_plugin::host::GITHUB)
         .filter(|p| p.manifest.kind == xherd_plugin::Kind::Host)?;
+    let mut ctx = plugin_context(p, paths, config, secrets, xherd_bin);
+    // Host plugins reuse the token of Settings → Git access (R-685).
+    if !ctx.secrets.contains_key("token")
+        && let Some(t) = secrets.git_token("github.com")
+    {
+        ctx.secrets.insert("token".into(), t.into());
+    }
     Some(Arc::new(xherd_plugin::host::Host {
         plugin: p.clone(),
-        ctx: plugin_context(p, paths, config, secrets, xherd_bin),
+        ctx,
     }))
 }
 
@@ -124,6 +143,12 @@ pub struct Daemon {
     pub clock: Arc<dyn Clock>,
     /// Absolute path of the `xherd` binary (hook commands, `XHERD_BIN`).
     pub xherd_bin: String,
+    /// Running in the xherd container (`XHERD_SANDBOX=1`).
+    pub sandbox: bool,
+    /// See `Options::local_peers`.
+    pub local_peers: Arc<Vec<std::net::IpAddr>>,
+    /// Open-in requests for the host companion (R-704).
+    pub companion: open_in::Companion,
 }
 
 impl Daemon {
@@ -175,7 +200,28 @@ impl Daemon {
             xherd_url: config.url(),
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
+            toolchain_install: opts.sandbox,
         };
+        let trust = plugins
+            .get(xherd_flow::approve::DEFAULT_RUNTIME)
+            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
+            .and_then(|t| t.trust)
+            .map(|trust| {
+                Arc::new(TrustWriter {
+                    trust,
+                    root: config.workspace_root().join("worktrees"),
+                })
+            });
+        let toolchains = plugins
+            .of_kind(xherd_plugin::Kind::Toolchain)
+            .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
+                Ok(t) => Some((p.manifest.name.clone(), t)),
+                Err(error) => {
+                    tracing::warn!(plugin = %p.manifest.name, %error, "toolchain plugin unusable");
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         let env = actor::Env {
             store: store.clone(),
             driver: opts.driver.clone(),
@@ -186,6 +232,8 @@ impl Daemon {
             packs: packs.clone(),
             git: xherd_git::Git::new("git"),
             host,
+            toolchains: Arc::new(toolchains),
+            trust,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
@@ -202,6 +250,9 @@ impl Daemon {
             driver: opts.driver,
             clock: opts.clock,
             xherd_bin: opts.xherd_bin,
+            sandbox: opts.sandbox,
+            local_peers: Arc::new(opts.local_peers),
+            companion: open_in::Companion::default(),
         };
         d.import_ledgers().await;
         let replayed = d.replay_queue().await?;
@@ -209,6 +260,20 @@ impl Daemon {
             tracing::info!(replayed, "replayed queued reports");
         }
         d.reconcile().await;
+        if let Err(e) = d.write_gitconfig() {
+            tracing::warn!(error = %e.message, "managed git config not written");
+        }
+        if d.sandbox {
+            // The container is set up without a shell: commands go where the
+            // agents find them at every start (user-edited files are kept).
+            let env = |v: &str| std::env::var(v).ok();
+            if let Err(e) = d
+                .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, &env)
+                .await
+            {
+                tracing::warn!(error = %e.message, "installing the xhSpec commands failed");
+            }
+        }
         if let Some(iv) = opts.scheduler {
             scheduler::spawn(d.clone(), iv);
         }

@@ -13,12 +13,28 @@
   import { PANELS, agentTabs } from '../lib/panels';
   import { flowOf } from '../lib/flow';
   import { agoText, needsYou, repoName, shortBase } from '../lib/format';
-  import { post } from '../lib/api';
+  import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
 
   let { agent }: { agent: Agent } = $props();
   let confirmCancel = $state(false);
   let menu = $state(false);
+  // Open in… (R-701, R-702, R-704): links that work because the workspace
+  // has the same path on this computer, and the host companion's apps.
+  type Target = { id: string; label: string; kind: 'url' | 'companion'; url?: string };
+  let openMenu = $state(false);
+  let targets = $state<Target[] | null>(null);
+  async function toggleOpen() {
+    openMenu = !openMenu;
+    if (!openMenu) return;
+    try { targets = (await get<{ targets: Target[] }>(`/agents/${agent.id}/open-targets`)).targets; }
+    catch (e) { openMenu = false; showError('Could not list editors', e); }
+  }
+  async function openWith(t: Target) {
+    openMenu = false;
+    try { await post(`/agents/${agent.id}/open`, { app: t.id.replace(/^companion:/, '') }); }
+    catch (e) { showError(`Could not open in ${t.label}`, e); }
+  }
 
   const flow = $derived(flowOf(agent, app.state?.flows ?? []));
   const tabs = $derived(agentTabs(agent));
@@ -75,6 +91,26 @@
         <button class="btn" onclick={() => act('resume', 'Could not resume')}><Icon name="play" />Resume</button>
       {:else if live}
         <button class="btn" onclick={() => act('pause', 'Could not pause')}><Icon name="pause" />Pause</button>
+      {/if}
+      {#if agent.workdir}
+        <div style="position:relative">
+          <button class="btn" aria-haspopup="menu" aria-expanded={openMenu} onclick={toggleOpen}>Open in…</button>
+          {#if openMenu}
+            <div class="menu card" role="menu">
+              {#if !targets}<span class="muted" style="padding:6px 10px">Loading…</span>{/if}
+              {#each targets ?? [] as t (t.id)}
+                {#if t.kind === 'url'}
+                  <a role="menuitem" class="btn ghost" href={t.url} onclick={() => (openMenu = false)}>{t.label}</a>
+                {:else}
+                  <button role="menuitem" class="btn ghost" onclick={() => openWith(t)}>{t.label}</button>
+                {/if}
+              {/each}
+              {#if targets && !targets.some((t) => t.kind === 'companion')}
+                <span class="hint" style="padding:6px 10px">Run <span class="mono">xherd companion</span> on this computer to offer its apps here.</span>
+              {/if}
+            </div>
+          {/if}
+        </div>
       {/if}
       <div style="position:relative">
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>

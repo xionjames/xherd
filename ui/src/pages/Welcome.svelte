@@ -7,9 +7,10 @@
   import { route, go } from '../lib/router.svelte';
   import { setup, loadChecks, failingRequired } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
+  import GitAccess from '../components/GitAccess.svelte';
   import type { ConfigView } from '../lib/types';
 
-  const STEPS = ['Welcome', 'Where it runs', 'Your tools', 'Connect & check', 'Ready'];
+  const STEPS = ['Welcome', 'Where it runs', 'Your tools', 'Git access', 'Connect & check', 'Ready'];
   const step = $derived(Math.min(Math.max(Number(route.query.get('step') ?? 1), 1), STEPS.length));
   const to = (n: number) => go('/welcome', { step: String(n) });
   const blocked = $derived(failingRequired().length > 0);
@@ -17,7 +18,7 @@
   const KIND: Record<string, string> = { runtime: 'Coding agents', host: 'Git hosts', tracker: 'Issue trackers' };
   const kinds = $derived([...new Set((app.state?.plugins ?? []).map((p) => p.kind))]);
 
-  $effect(() => { if (step === 4 && !setup.checks) loadChecks(); });
+  $effect(() => { if (step === 5 && !setup.checks) loadChecks(); });
 
   async function finish(next: string) {
     try {
@@ -53,11 +54,15 @@
       <h1>Where xherd runs</h1>
       <section class="sec"><div class="bd">
         <dl class="kv">
-          <dt>Mode</dt><dd>Native on <b>{app.state?.platform}</b>, version {app.state?.version}</dd>
+          <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.version}</dd>
           <dt>Workspace</dt><dd class="mono">{workspace}</dd>
           <dt>Worktrees</dt><dd class="muted">One folder per repo, one worktree per agent, under the workspace.</dd>
         </dl>
-        <p class="hint">Running in Docker comes later. Change the workspace in Settings.</p>
+        {#if app.state?.sandbox}
+          <p class="hint">The workspace is mounted at the same path on your computer, so your editor opens worktrees directly. Languages your repositories ask for are installed in the container on first use.</p>
+        {:else}
+          <p class="hint">To run xherd in Docker instead, run <span class="mono">xherd docker init</span> on this computer. Change the workspace in Settings.</p>
+        {/if}
       </div></section>
     {:else if step === 3}
       <h1>Your tools</h1>
@@ -72,6 +77,10 @@
         </div>
       {/each}
     {:else if step === 4}
+      <h1>Git access</h1>
+      <p class="muted">How agents fetch and push: your SSH agent, a browser login to GitHub or GitLab, or a token. Check each host before you go on; you can skip this and come back in Settings.</p>
+      <GitAccess />
+    {:else if step === 5}
       <h1>Connect &amp; check</h1>
       <p class="muted">Required checks must pass before agents can start.</p>
       <section class="card">

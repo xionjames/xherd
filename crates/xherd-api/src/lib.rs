@@ -38,11 +38,21 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
         .route("/api/v1/agents/{id}/file", get(file))
+        .route("/api/v1/agents/{id}/open-targets", get(open_targets))
+        .route("/api/v1/agents/{id}/open", post(open_in))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
+        .route("/api/v1/companion/next", get(companion_next))
+        .route("/api/v1/repos", get(repos))
+        .route("/api/v1/repos/resolve", post(resolve_repo))
         .route("/api/v1/install", post(install))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
+        .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
+        .route("/api/v1/git/doctor", post(git_doctor))
+        .route("/api/v1/git/known-hosts", post(git_known_host))
+        .route("/api/v1/git/login", post(git_login))
+        .route("/api/v1/git/credential", post(git_credential))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
@@ -97,7 +107,7 @@ impl From<ActionError> for ApiError {
             | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
             | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
-            "not_fixable" => StatusCode::NOT_FOUND,
+            "not_fixable" | "no_companion" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
@@ -135,7 +145,10 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 async fn is_local(parts: &mut Parts, d: &Daemon) -> bool {
     let peer_local = ConnectInfo::<SocketAddr>::from_request_parts(parts, d)
         .await
-        .is_ok_and(|ConnectInfo(a)| a.ip().is_loopback());
+        .is_ok_and(|ConnectInfo(a)| {
+            let ip = a.ip().to_canonical();
+            ip.is_loopback() || d.local_peers.contains(&ip)
+        });
     let host = parts
         .headers
         .get(header::HOST)
@@ -190,9 +203,16 @@ impl FromRequestParts<Daemon> for User {
                 .find_token(&hash_token(t))
                 .await
                 .map_err(ApiError::internal)?;
-            if let Some(row) = row.filter(|r| r.kind == TOKEN_USER && !r.revoked) {
-                let _ = d.store.touch_token(&row.id, d.clock.now()).await;
-                return Ok(User);
+            match row {
+                Some(row) if row.kind == TOKEN_USER && !row.revoked => {
+                    let _ = d.store.touch_token(&row.id, d.clock.now()).await;
+                    return Ok(User);
+                }
+                // A token this daemon never issued (e.g. the host CLI's token
+                // of a native install talking to the container) adds nothing
+                // to a local request, which needs none.
+                None if is_local(parts, d).await => return Ok(User),
+                _ => {}
             }
             return Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,
@@ -296,6 +316,7 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "plugins": plugins,
         "brokenPlugins": d.plugins.broken(),
         "flows": flows(&d),
+        "sandbox": d.sandbox,
     })))
 }
 
@@ -329,6 +350,27 @@ async fn new_agent(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let agent = d.new_agent(req).await?;
     Ok((StatusCode::CREATED, Json(json!({"agent": agent}))))
+}
+
+/// Repositories the New agent screen offers (earlier agents', xherd's clones).
+async fn repos(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"repos": d.known_repos().await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResolveReq {
+    repo: String,
+}
+
+/// A path or URL → the local repository (a URL is cloned or fetched first),
+/// its branches and default base (R-001, R-605).
+async fn resolve_repo(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<ResolveReq>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.resolve_repo(&r.repo).await?))
 }
 
 #[derive(Deserialize)]
@@ -380,6 +422,150 @@ async fn fix_check(
     let env = |k: &str| std::env::var(k).ok();
     d.fix_check(&id, &env).await?;
     Ok(Json(json!({"checks": d.checks(&env).await})))
+}
+
+// ---- open in ---------------------------------------------------------------------
+
+async fn open_targets(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"targets": d.open_targets(&id).await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenReq {
+    app: String,
+}
+
+async fn open_in(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(r): Json<OpenReq>,
+) -> ApiResult<Json<Value>> {
+    d.open_with_companion(&id, &r.app).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+#[derive(Deserialize)]
+struct CompanionQuery {
+    #[serde(default)]
+    apps: String,
+    #[serde(default)]
+    wait: Option<u64>,
+}
+
+/// The host companion's long poll (`xherd companion`): `{request}` or
+/// `{request: null}` after `wait` seconds (at most 30).
+async fn companion_next(
+    _: User,
+    State(d): State<Daemon>,
+    axum::extract::Query(q): axum::extract::Query<CompanionQuery>,
+) -> ApiResult<Json<Value>> {
+    let apps = q
+        .apps
+        .split(',')
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+        .collect();
+    let wait = std::time::Duration::from_secs(q.wait.unwrap_or(25).min(30));
+    let r = d.companion.next(apps, wait).await;
+    Ok(Json(json!({"request": r})))
+}
+
+// ---- git access ----------------------------------------------------------------
+
+async fn git_hosts(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(d.git_hosts()))
+}
+
+async fn put_git_hosts(
+    _: User,
+    State(d): State<Daemon>,
+    Json(u): Json<xherd_daemon::git_access::HostsUpdate>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.set_git_hosts(u)?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DoctorReq {
+    host: String,
+    #[serde(default)]
+    repo: Option<String>,
+}
+
+async fn git_doctor(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<DoctorReq>,
+) -> ApiResult<Json<Value>> {
+    let findings = d.git_doctor(r.host.trim(), r.repo.as_deref()).await;
+    Ok(Json(json!({"host": r.host, "findings": findings})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KnownHostReq {
+    host: String,
+    fingerprint: String,
+}
+
+async fn git_known_host(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<KnownHostReq>,
+) -> ApiResult<Json<Value>> {
+    d.accept_host_key(r.host.trim(), r.fingerprint.trim())
+        .await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginReq {
+    host: String,
+}
+
+/// Start the browser login (`/ws/setup/git-login` shows it).
+async fn git_login(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<LoginReq>,
+) -> ApiResult<Json<Value>> {
+    d.start_git_login(r.host.trim()).await?;
+    Ok(Json(json!({"session": xherd_daemon::git_access::LOGIN_ID})))
+}
+
+#[derive(Deserialize)]
+struct CredentialReq {
+    protocol: String,
+    host: String,
+}
+
+/// `xherd credential get` (R-684): the user, or an agent token with the
+/// `credential` scope. 404 = no answer (git asks its next helper).
+async fn git_credential(
+    user: Result<User, ApiError>,
+    agent: Result<AgentAuth, ApiError>,
+    State(d): State<Daemon>,
+    Json(r): Json<CredentialReq>,
+) -> ApiResult<Json<Value>> {
+    if user.is_err() {
+        agent?.require(xherd_daemon::SCOPE_CREDENTIAL)?;
+    }
+    match d.credential(&r.protocol, &r.host) {
+        Some((username, password)) => Ok(Json(json!({"username": username, "password": password}))),
+        None => Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "no_credential",
+            format!("xherd holds no credential for {}", r.host),
+        )),
+    }
 }
 
 async fn get_agent(

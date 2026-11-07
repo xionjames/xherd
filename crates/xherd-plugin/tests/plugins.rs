@@ -196,3 +196,48 @@ esac
         Err(PluginError::Shape { .. })
     ));
 }
+
+#[test]
+fn builtin_toolchains_parse_and_match_the_plugins_folder() {
+    let tcs: Vec<_> = builtins()
+        .into_iter()
+        .filter(|m| m.kind == Kind::Toolchain)
+        .map(|m| {
+            (
+                m.name.clone(),
+                xherd_plugin::toolchain::Toolchain::of(&m).unwrap(),
+            )
+        })
+        .collect();
+    let names: Vec<&str> = tcs.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["sdkman", "nvm", "uv", "go", "rustup"]);
+    // Every folder under plugins/ is a built-in.
+    let mut dirs: Vec<String> =
+        std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+    dirs.sort();
+    let mut all: Vec<String> = builtins().into_iter().map(|m| m.name).collect();
+    all.sort();
+    assert_eq!(dirs, all);
+
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join(".sdkmanrc"), "java=21.0.2-tem\n").unwrap();
+    std::fs::write(d.path().join(".nvmrc"), "20\n").unwrap();
+    std::fs::write(
+        d.path().join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.80.0\"\n",
+    )
+    .unwrap();
+    let plan = xherd_plugin::toolchain::plan(d.path(), &tcs, true);
+    let got: Vec<(&str, &str)> = plan
+        .steps
+        .iter()
+        .map(|s| (s.tool.as_str(), s.version.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [("java", "21.0.2-tem"), ("node", "20"), ("rust", "1.80.0")]
+    );
+}

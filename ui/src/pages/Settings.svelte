@@ -6,9 +6,11 @@
   import { route, href } from '../lib/router.svelte';
   import { setup, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
+  import GitAccess from '../components/GitAccess.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const tab = $derived(route.query.get('tab') === 'plugins' ? 'plugins' : 'general');
+  const TABS = ['general', 'git', 'plugins'];
+  const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
   type Form = Record<string, string | boolean>;
@@ -67,10 +69,11 @@
 <div class="phead">
   <div style="display:flex;flex-direction:column;gap:4px">
     <h1>Settings</h1>
-    <p class="muted">How many agents run at once, how long xherd waits for you, and the plugins it uses.</p>
+    <p class="muted">How many agents run at once, how long xherd waits for you, git access, and the plugins it uses.</p>
   </div>
   <nav class="tabs" aria-label="Settings">
     <a class="tb" class:on={tab === 'general'} aria-current={tab === 'general' ? 'page' : undefined} href={href('/settings')}>General</a>
+    <a class="tb" class:on={tab === 'git'} aria-current={tab === 'git' ? 'page' : undefined} href={href('/settings', { tab: 'git' })}>Git access</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
   </nav>
@@ -82,7 +85,9 @@
       <span>Saved settings differ from the running daemon. <b>Restart the daemon</b> to apply them.</span>
     </div>
   {/if}
-  {#if !setup.config || !ready}
+  {#if tab === 'git'}
+    <GitAccess />
+  {:else if !setup.config || !ready}
     <p class="muted">Loading…</p>
   {:else if tab === 'general'}
     <section class="sec">
@@ -157,7 +162,7 @@
       {/each}
     </div>
   {/if}
-  {#if setup.config && ready}
+  {#if setup.config && ready && tab !== 'git'}
     <div class="savebar">
       <span class="muted">{dirty ? `${dirty} unsaved change${dirty > 1 ? 's' : ''}` : 'No unsaved changes'}</span>
       <span class="grow"></span>

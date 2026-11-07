@@ -153,3 +153,27 @@ async fn diff_proposed_covers_new_deleted_and_leaves_the_index_alone() {
         ""
     );
 }
+
+#[tokio::test]
+async fn clone_and_branches() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    let g = init_repo(&src).await;
+    g.run(&src, &["branch", "dev"]).await.unwrap();
+
+    let dest = d.path().join("clone");
+    g.clone_repo(&src.to_string_lossy(), &dest).await.unwrap();
+    assert!(g.is_repo(&dest).await);
+    let mut b = g.branches(&dest).await.unwrap();
+    b.sort();
+    assert_eq!(b, ["main", "origin/dev", "origin/main"]);
+    assert_eq!(
+        g.remote_default_branch(&dest, "origin").await.as_deref(),
+        Some("origin/main")
+    );
+    g.fetch(&dest, "origin").await.unwrap();
+    // Cloning onto an existing repository fails and leaves it alone.
+    assert!(g.clone_repo(&src.to_string_lossy(), &dest).await.is_err());
+    assert!(g.is_repo(&dest).await);
+}

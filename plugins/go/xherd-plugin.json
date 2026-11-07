@@ -1,0 +1,25 @@
+{
+  "name": "go",
+  "kind": "toolchain",
+  "version": "0.1.0",
+  "label": "Go",
+  "description": "Go toolchain switching from go.mod (GOTOOLCHAIN=auto downloads the version go.mod asks for).",
+  "data": {
+    "toolchain": {
+      "tools": [
+        {
+          "name": "go",
+          "files": [
+            {
+              "path": "go.mod",
+              "format": "go-mod"
+            }
+          ],
+          "env": {
+            "GOTOOLCHAIN": "auto"
+          }
+        }
+      ]
+    }
+  }
+}
