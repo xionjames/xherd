@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use xherd_core::config::{Config, Credential, GIT_SECRETS, GitHost, Secrets};
+use xherd_core::config::{Config, Credential, GIT_SECRETS, GitHost, GitIdentity, Secrets};
 use xherd_core::exec::{Cmd, run};
 use xherd_core::paths::write_atomic;
 
@@ -35,6 +35,23 @@ fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+fn user_section(name: &str, email: &str) -> String {
+    let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "[user]\n\tname = \"{}\"\n\temail = \"{}\"\n",
+        q(name),
+        q(email)
+    )
+}
+
+/// Folder next to the managed gitconfig that holds one file per identity rule
+/// (`includeIf` paths are relative to the including file).
+pub const IDENTITIES_DIR: &str = "identities";
+
+fn identity_file_name(n: usize) -> String {
+    format!("{IDENTITIES_DIR}/{n}.gitconfig")
+}
+
 /// The managed git config (`~/.config/xherd/gitconfig`, included from
 /// `~/.gitconfig` in the container). Pure, so it is tested directly.
 pub fn managed_gitconfig(
@@ -42,6 +59,7 @@ pub fn managed_gitconfig(
     xherd_bin: &str,
     sandbox: bool,
     identity: Option<(&str, &str)>,
+    rules: &[GitIdentity],
 ) -> String {
     let mut out =
         String::from("# Managed by xherd (Settings → Git access); rewritten on every change.\n");
@@ -50,12 +68,26 @@ pub fn managed_gitconfig(
         out.push_str("[safe]\n\tdirectory = *\n");
     }
     if let Some((name, email)) = identity {
-        let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
-        out.push_str(&format!(
-            "[user]\n\tname = \"{}\"\n\temail = \"{}\"\n",
-            q(name),
-            q(email)
-        ));
+        out.push_str(&user_section(name, email));
+    }
+    // After the global identity, so a matching rule wins. The patterns cover
+    // HTTPS, scp-like SSH and ssh:// remotes (git 2.36 or newer).
+    for (n, r) in rules.iter().enumerate() {
+        let (host, owner) = match r.scope.split_once('/') {
+            Some((h, o)) => (h, format!("{o}/")),
+            None => (r.scope.as_str(), String::new()),
+        };
+        let bare_host = host.split(':').next().unwrap_or(host);
+        for pattern in [
+            format!("https://{}/**", r.scope),
+            format!("git@{bare_host}:{owner}**"),
+            format!("ssh://git@{}/**", r.scope),
+        ] {
+            out.push_str(&format!(
+                "[includeIf \"hasconfig:remote.*.url:{pattern}\"]\n\tpath = {}\n",
+                identity_file_name(n)
+            ));
+        }
     }
     for h in hosts {
         let helper = match h.credential {
@@ -214,7 +246,23 @@ impl Daemon {
             (Some(n), Some(e)) => Some((n.as_str(), e.as_str())),
             _ => None,
         };
-        let text = managed_gitconfig(&c.git_hosts, &self.xherd_bin, self.sandbox, identity);
+        let text = managed_gitconfig(
+            &c.git_hosts,
+            &self.xherd_bin,
+            self.sandbox,
+            identity,
+            &c.git_identities,
+        );
+        // The rule files first, so the config never points at a missing one.
+        let dir = p.parent().unwrap_or(Path::new(".")).join(IDENTITIES_DIR);
+        if dir.exists() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        for (n, r) in c.git_identities.iter().enumerate() {
+            let f = dir.join(format!("{n}.gitconfig"));
+            write_atomic(&f, user_section(&r.name, &r.email).as_bytes(), Some(0o644))
+                .map_err(|e| fail("io", format!("{}: {e}", f.display())))?;
+        }
         write_atomic(&p, text.as_bytes(), Some(0o644))
             .map_err(|e| fail("io", format!("{}: {e}", p.display())))
     }
@@ -799,6 +847,7 @@ mod tests {
             "/usr/local/bin/xherd",
             true,
             Some(("Ada \"A\" L", "ada@example.com")),
+            &[],
         );
         assert!(
             t.contains("[user]\n\tname = \"Ada \\\"A\\\" L\"\n\temail = \"ada@example.com\"\n")
@@ -816,8 +865,8 @@ mod tests {
         ));
         assert!(t.contains("[url \"git@bitbucket.org:\"]\n\tinsteadOf = https://bitbucket.org/\n"));
         assert!(!t.contains("[credential \"https://bitbucket.org\"]"));
-        assert!(!managed_gitconfig(&[], "x", false, None).contains("[safe]"));
-        assert!(!managed_gitconfig(&[], "x", false, None).contains("[user]"));
+        assert!(!managed_gitconfig(&[], "x", false, None, &[]).contains("[safe]"));
+        assert!(!managed_gitconfig(&[], "x", false, None, &[]).contains("[user]"));
     }
 
     #[test]

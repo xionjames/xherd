@@ -45,23 +45,27 @@
   // has no identity of its own.
   let idName = $state('');
   let idEmail = $state('');
+  let idRules = $state<{ scope: string; name: string; email: string }[]>([]);
   let idSaved = $state('');
+  const idSnapshot = () => `${idName}\n${idEmail}\n${JSON.stringify(idRules)}`;
   let idBusy = $state(false);
-  const idDirty = $derived(`${idName}\n${idEmail}` !== idSaved);
+  const idDirty = $derived(idSnapshot() !== idSaved);
   async function loadIdentity() {
     try {
       const c = (await get<ConfigView>('/config')).config;
       idName = String(c.gitUserName ?? '');
       idEmail = String(c.gitUserEmail ?? '');
-      idSaved = `${idName}\n${idEmail}`;
+      idRules = ((c.gitIdentities ?? []) as typeof idRules).map((r) => ({ ...r }));
+      idSaved = idSnapshot();
     } catch (e) { showError('Could not load the commit identity', e); }
   }
   $effect(() => { loadIdentity(); });
   async function saveIdentity() {
     idBusy = true;
     try {
-      await put('/config', { gitUserName: idName, gitUserEmail: idEmail });
-      idSaved = `${idName}\n${idEmail}`;
+      await put('/config', { gitUserName: idName, gitUserEmail: idEmail, gitIdentities: idRules });
+      idRules = idRules.map((r) => ({ ...r, scope: r.scope.trim().replace(/\/+$/, ''), name: r.name.trim(), email: r.email.trim() }));
+      idSaved = idSnapshot();
     } catch (e) { showError('Could not save the commit identity', e); }
     finally { idBusy = false; }
   }
@@ -151,6 +155,17 @@
       <label class="f">Name <input bind:value={idName} placeholder="Your Name" autocomplete="off" /></label>
       <label class="f">Email <input type="email" bind:value={idEmail} placeholder="you@example.com" autocomplete="off" /></label>
     </div>
+    <span class="lbl">Other identities, by repository owner</span>
+    <p class="hint">For repositories under an owner or a host, use a different identity (for example work on the same github.com). Matched on the remote URL, HTTPS or SSH.</p>
+    {#each idRules as r, i (i)}
+      <div class="g3">
+        <label class="f">Owner <input class="mono" bind:value={r.scope} placeholder="github.com/my-company" autocomplete="off" /></label>
+        <label class="f">Name <input bind:value={r.name} autocomplete="off" /></label>
+        <label class="f">Email <input type="email" bind:value={r.email} autocomplete="off" /></label>
+        <div><button class="btn ghost sm" onclick={() => idRules.splice(i, 1)}>Remove</button></div>
+      </div>
+    {/each}
+    <div><button class="btn" onclick={() => idRules.push({ scope: '', name: '', email: '' })}>+ Add an identity</button></div>
     <div><button class="btn" disabled={idBusy || !idDirty} onclick={saveIdentity}>{idBusy ? 'Saving…' : 'Save identity'}</button>
       {#if !idDirty && idName && idEmail}<span class="hint">Saved; applies to new commits at once.</span>{/if}</div>
   </div></section>
