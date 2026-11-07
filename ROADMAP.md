@@ -1,68 +1,89 @@
 # Roadmap
 
-High-level view of what is left. The sources of truth stay where they were:
-the milestone checklist in [`doc/design.md`](doc/design.md) §18, the roadmap in
-[`doc/spec.md`](doc/spec.md) §21 and the status notes in [`AGENTS.md`](AGENTS.md).
-This file groups the pending work by theme; it does not replace them.
+High-level view of the work, done and pending. `[x]` = done, `[ ]` = pending.
+The sources of truth stay where they were: the milestone checklist in
+[`doc/design.md`](doc/design.md) §18, the roadmap in [`doc/spec.md`](doc/spec.md)
+§21 and the status notes in [`AGENTS.md`](AGENTS.md). This file groups the work
+by theme; update it together with them.
 
-## Finish what is started (M2 UI, M3 Docker-first)
+## Foundations (M0, M1)
 
-- **UI screens still hidden:** Board, Review, TODOs, Time and the notification bell.
-- **Settings:** live reload of the daemon config (most settings apply at the next start); plugin secrets and plugin install from the UI.
-- **Docker/Colima:** SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`.
-- **Git access:** block an agent on git auth failures (R-688).
-- **Toolchains:** profile `toolchain:` / `setup:` (R-654, needs profiles) and the Welcome/Settings toolchain pickers (R-653).
+- [x] Skeleton: workspace, config and paths, store and migrations, supervisor and actors, scheduler, plugin loader, git/tmux wrappers, `xherd hook/report` with the offline queue
+- [x] One agent end to end: xhSpec v0, worktree + `.xherd/`, Claude Code in tmux, XAP gates, hash approvals, fresh sessions, commit gates, ship, draft PR via GitHub
+
+## M2 UI
+
+- [x] Svelte UI on the panel registry: Herd, Agent page, Settings, Setup checks, Welcome
+- [x] Hash approvals from the UI, websockets, terminal, diffs
+- [x] Welcome: plugins switched on/off and configured, with a Claude login step; at least one of each kind
+- [x] Agent page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked agents
+- [ ] Screens still hidden: Board, Review, TODOs, Time, notification bell
+- [ ] Live reload of the daemon config (most settings apply at the next start)
+- [ ] Plugin secrets and plugin install from the UI
+
+## M3 Docker-first
+
+- [x] Image with version managers, `xherd init`, `docker init/doctor/update`, toolchain resolution
+- [x] Open-in (URL schemes, Dev Containers, companion)
+- [x] Git access setup and doctor
+- [x] Commit identity: global, and by repository owner (personal and work on the same host)
+- [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`
+- [ ] Block an agent on git auth failures (R-688)
+- [ ] Profile `toolchain:` / `setup:` (R-654, needs profiles) and the toolchain pickers (R-653)
 
 ## Agents that survive and recover
 
-- **Plugins switched off live:** the toolchain list, the host plugin and the trust writer are still built at daemon start.
-- **Pause with a handoff** (R-026): pause currently just ends the session.
-- **Background-task guard** before a fresh session (R-024) and **runtime change between steps** (R-025).
-- **Recovery beyond a lost session:** a failed start stays in `error` (no auto-retry); optionally a "diagnosing" session that is told what failed.
-- **Check the Resume button on `parked` agents:** the lifecycle table has no Resume transition from `parked` (approving is the way out).
-- **Per-agent permission mode:** `ask` / `edits` / `auto` / `all` are defined, but new agents always use `edits`.
+- [x] First command typed again until the runtime accepts a prompt
+- [x] Container restart: agents are parked at their gate or resumed, not failed
+- [x] Resume button (also from `error`): continues the last Claude conversation when its transcript exists, else a new session
+- [x] Auto-resume a vanished session, at most twice per hour
+- [x] Fewer permission prompts: pack commands readable, plain `xherd` calls with allow rules, `edits` as the default mode
+- [ ] Plugins switched off apply live to toolchains, the host plugin and the trust writer (today: at daemon start)
+- [ ] Pause with a handoff (R-026); background-task guard (R-024); runtime change between steps (R-025)
+- [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
+- [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)
+- [ ] Per-agent permission mode (`ask` / `edits` / `auto` / `all` exist; new agents always use `edits`)
 
 ## Context and flow quality
 
-- **`memory.md` code map:** nothing checks its size or accuracy; measure the token savings per step and consider validating it.
-- **Packs:** JSON schemas for gate documents (R-204), `views`, `extends` and `parse` for external packs.
-- **More flows:** PR-review flow pack, research/design flow pack, multi-repo tickets.
-- **Memory:** `xherd memory propose` and the memory panel.
+- [x] Each step starts from `memory.md` (state, decisions, code map) instead of re-exploring the code
+- [ ] Measure the token savings per step; validate the size and accuracy of the code map
+- [ ] Pack JSON schemas for gate documents (R-204); `views`, `extends`, `parse` for external packs
+- [ ] More flow packs: PR review, research/design; multi-repo tickets
+- [ ] `xherd memory propose` and the memory panel
 
 ## Git, accounts and credentials
 
-- **Second account on the same host:** commit identity can follow the repository owner today, but credentials are still one per host; pushing as the work account needs a token per owner.
-- **Identity helper:** a "Use my GitHub account" button that fills name and email from `gh`.
-- **Native installs:** the managed gitconfig must be included from `~/.gitconfig` by the user.
+- [ ] A token per owner for a second account on the same host (credentials are one per host today)
+- [ ] "Use my GitHub account" button that fills name and email from `gh`
+- [ ] Native installs: include the managed gitconfig from `~/.gitconfig` automatically or guide it
 
 ## M4 → v1.0
 
-- **Guardrails:** the daemon/agent user split (single user in the container today), the pre-push guard (R-1204), code tripwires on commits (R-115…R-117, secret tripwire), `diff_viewed` marks.
-- **Backups.**
-- **Autonomy `important`** and the ship stage's auto-approved variant.
-- **PR follow-up:** PR polling, comments triage and replies, CI status in the UI, pause/resume on new comments.
-- **Notifications:** browser, desktop, ntfy; phones.
+- [ ] Guardrails: daemon/agent user split, pre-push guard (R-1204), code tripwires on commits (R-115…R-117), `diff_viewed` marks
+- [ ] Backups
+- [ ] Autonomy `important` and the ship stage's auto-approved variant
+- [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI
+- [ ] Notifications (browser, desktop, ntfy) and phones
 
 ## v1.x
 
-- Codex and opencode runtimes.
-- Kanban, To review and Work log views.
-- Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue.
-- TODOs, budgets, `never` autonomy.
+- [ ] Codex and opencode runtimes
+- [ ] Kanban, To review and Work log views
+- [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
+- [ ] TODOs, budgets, `never` autonomy
 
 ## Later
 
-- ACP driver per runtime, selectable per agent.
-- Server / Kubernetes deployment; VS Code Remote-SSH entries.
-- Electron desktop app (tray, notifications, built-in host companion).
-- Panel plugins; per-agent containers with egress allowlists; parallel task execution inside one agent.
-- `xherd mcp`.
+- [ ] ACP driver per runtime, selectable per agent
+- [ ] Server / Kubernetes deployment; VS Code Remote-SSH entries
+- [ ] Electron desktop app (tray, notifications, built-in host companion)
+- [ ] Panel plugins; per-agent containers with egress allowlists; parallel task execution inside one agent
+- [ ] `xherd mcp`
 
 ## Verify before relying on it
 
-Things this work assumed and could not confirm:
-
-- `claude auth status` exits non-zero when logged out (only run logged in).
-- Claude Code first-run flags in the container's `~/.claude.json`, and whether `claude --resume` finds its transcript after a container recreate (assumes the home volume persists).
-- The new UI layout (one-row band, vertical menu) in a browser at several widths.
-- A full agent run (spec → ship) with the plain-`xherd` prompts, the allow rules and the `edits` default.
+- [ ] `claude auth status` exits non-zero when logged out (only run logged in)
+- [ ] `claude --resume` finds its transcript after a container recreate (assumes the home volume persists)
+- [ ] The new UI layout in a browser at several widths
+- [ ] A full agent run (spec → ship) with the plain-`xherd` prompts, the allow rules and the `edits` default
