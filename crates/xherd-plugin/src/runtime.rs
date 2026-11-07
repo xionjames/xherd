@@ -153,7 +153,7 @@ fn shell_quote(s: &str) -> String {
 /// The hook file's new content: `existing` with xherd's tagged entries
 /// replaced and everything else kept. Invalid existing JSON is refused (R-005b).
 /// `read_dirs` (folders xherd installed, outside the worktree) get a
-/// `Read(<dir>/**)` allow rule unless already there, so the agent does not
+/// `Read(//<dir>/**)` allow rule unless already there, so the agent does not
 /// stop to ask before reading its own commands.
 pub fn merge_hooks(
     existing: Option<&str>,
@@ -215,7 +215,9 @@ pub fn merge_hooks(
             .as_array_mut()
             .ok_or_else(|| format!("{}: permissions.allow is not a list", h.file))?;
         for d in read_dirs {
-            let rule = Value::String(format!("Read({}/**)", d.trim_end_matches('/')));
+            // `//` marks an absolute path; a single `/` is relative to the
+            // project root and would never match a folder outside it.
+            let rule = Value::String(format!("Read(//{}/**)", d.trim_matches('/')));
             if !allow.contains(&rule) {
                 allow.push(rule);
             }
@@ -353,7 +355,7 @@ mod tests {
         let v: Value = serde_json::from_str(&twice).unwrap();
         assert_eq!(
             v["permissions"]["allow"],
-            json!(["Bash(ls)", "Read(/home/x/.claude/commands/xhspec/**)"])
+            json!(["Bash(ls)", "Read(//home/x/.claude/commands/xhspec/**)"])
         );
         let none = merge_hooks(None, &h, "xherd", &[]).unwrap();
         assert!(!none.contains("permissions"));
