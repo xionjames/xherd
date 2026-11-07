@@ -42,7 +42,7 @@
     const g = agent.gate;
     if (g?.kind === 'commit' || (g?.kind === 'docs' && g.role === 'ship')) return 'changes';
     if (g?.kind === 'docs') return 'spec';
-    return agent.flow ? 'spec' : 'terminal';
+    return 'terminal';
   });
   const tabId = $derived(tabs.find((t) => t.id === route.query.get('s'))?.id ?? fallback);
   const tab = $derived(tabs.find((t) => t.id === tabId) ?? tabs[0]);
@@ -68,7 +68,7 @@
   }
 </script>
 
-{#if needsYou(agent)}<YourCallBand {agent} {flow} />{/if}
+{#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
 
 <header class="hero">
   <div class="htop">

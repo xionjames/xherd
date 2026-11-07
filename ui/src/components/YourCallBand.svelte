@@ -11,7 +11,7 @@
   import { stageLabel } from '../lib/flow';
   import { href } from '../lib/router.svelte';
 
-  let { agent, flow }: { agent: Agent; flow?: FlowInfo } = $props();
+  let { agent, flow, tabId }: { agent: Agent; flow?: FlowInfo; tabId?: string } = $props();
   let text = $state('');
   let busy = $state(false);
 
@@ -24,6 +24,16 @@
   });
   const answering = $derived(!g || g.kind === 'question');
   const approvable = $derived(g?.kind === 'docs' || g?.kind === 'commit');
+  // The user approves what they read: the controls show on the tab that
+  // holds it; elsewhere the band offers a button that goes there.
+  const reviewTab = $derived(g?.kind === 'docs' && g.role !== 'ship' ? 'spec' : g?.kind === 'docs' || g?.kind === 'commit' ? 'changes' : undefined);
+  const reviewing = $derived(!approvable || tabId === reviewTab);
+  const openLabel = $derived(
+    g?.kind === 'docs' && g.role !== 'ship' ? `Open ${g.files[0]?.path.split('/').pop() ?? 'the document'}` : 'Review the changes',
+  );
+  const reviewHref = $derived(
+    href(`/agent/${agent.name}`, g?.kind === 'docs' && g.role !== 'ship' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
+  );
 
   const title = $derived.by(() => {
     if (!g) return agent.status === 'blocked' ? 'the agent is blocked' : 'the agent asks you';
@@ -90,7 +100,9 @@
       {#if agent.status === 'blocked'}
         <a class="btn gate lg" href={href(`/agent/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
       {/if}
-      {#if approvable}
+      {#if approvable && !reviewing}
+        <a class="btn gate lg" href={reviewHref}><Icon name={reviewTab === 'spec' ? 'doc' : 'diff'} />{openLabel}</a>
+      {:else if approvable}
         <textarea bind:value={text} placeholder="Or tell the agent what to change…" aria-label="What to change"></textarea>
         <button class="btn lg" disabled={busy || !text.trim()}
           onclick={() => run('request-changes', { comment: text.trim() }, 'Could not request changes')}>Request changes</button>
@@ -112,8 +124,5 @@
         <span class="hint">Answer them in your change request.</span>
       </div>
     </div>
-  {/if}
-  {#if g?.kind === 'commit'}
-    <div class="gmore"><a href={href(`/agent/${agent.name}`, { s: 'changes' })}>Review the changes before approving →</a></div>
   {/if}
 </section>
