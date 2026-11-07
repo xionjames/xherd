@@ -121,6 +121,10 @@ stage: tasks
 
 Keep tasks small: one task is one commit.
 
+Update `status` and `evidence` as you work: those two lines are progress,
+not content, so changing them does not re-open the approved tasks gate.
+Changing anything else (titles, files, depends, new tasks) does.
+
 ## commits.md
 
 One entry per commit proposal, in order:

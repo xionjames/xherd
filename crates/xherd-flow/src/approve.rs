@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use xherd_core::Agent;
-use xherd_core::domain::{Gate, HashedFile, Task, TaskStatus};
+use xherd_core::domain::{Gate, HashedFile, Role, Task, TaskStatus};
 
 use crate::{Facts, Flow, Pack, frontmatter};
 
@@ -106,6 +106,25 @@ pub fn changes_message(gate: &Gate, comment: &str) -> String {
         }
         _ => comment.to_string(),
     }
+}
+
+/// Hash of a gate document for approvals (R-104, R-107): the content hash,
+/// except that in the document gated by the flow's tasks stage the task
+/// progress lines do not count ([`crate::tasks::without_progress`]).
+/// `path` is canonical ([`crate::xap::doc_path`]).
+pub fn doc_sha256(flow: Option<&Flow>, workdir: &Path, path: &str, bytes: &[u8]) -> String {
+    let tasks_doc = flow.is_some_and(|f| {
+        f.stages
+            .iter()
+            .filter(|s| s.role == Role::Tasks)
+            .flat_map(|s| s.docs())
+            .any(|d| crate::xap::doc_path(d, workdir).is_ok_and(|p| p == path))
+    });
+    if !tasks_doc {
+        return xherd_core::hash::content_sha256(bytes);
+    }
+    let text = crate::tasks::without_progress(&String::from_utf8_lossy(bytes));
+    xherd_core::hash::content_sha256(text.as_bytes())
 }
 
 /// One of a flow's gate documents as found on disk at a stop.
@@ -253,6 +272,25 @@ mod tests {
         assert!(m.contains("spec gate (spec.md): split R3") && m.contains("xherd gate open spec"));
         let m = changes_message(&commit(), "no unwrap");
         assert!(m.contains("commit C02 (a.rs): no unwrap"));
+    }
+
+    #[test]
+    fn task_progress_is_not_content() {
+        let f = crate::xhspec().flow("feature").unwrap().clone();
+        let wd = Path::new("/w");
+        let a = b"## T01: a\n- status: todo\n- files: a.rs\n";
+        let b = b"## T01: a\n- status: done\n- files: a.rs\n- evidence: ok\n";
+        let h = |p: &str, x: &[u8]| doc_sha256(Some(&f), wd, p, x);
+        assert_eq!(h("tasks.md", a), h("tasks.md", b));
+        assert_ne!(h("spec.md", a), h("spec.md", b));
+        assert_ne!(
+            h("tasks.md", a),
+            h("tasks.md", b"## T01: b\n- status: todo\n- files: a.rs\n")
+        );
+        assert_eq!(
+            doc_sha256(None, wd, "tasks.md", a),
+            xherd_core::hash::content_sha256(a)
+        );
     }
 
     fn seen(stage: &str, sha: Option<&str>, approved: bool, ever: bool) -> DocSeen {

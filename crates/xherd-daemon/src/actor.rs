@@ -532,13 +532,25 @@ impl Actor {
         })
     }
 
+    /// Hash of a gate document as approvals see it (task progress in the
+    /// tasks document does not count, R-107).
+    fn doc_sha256(&self, wd: &Path, path: &str, bytes: &[u8]) -> String {
+        let flow = self
+            .agent
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))
+            .and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()));
+        xherd_flow::approve::doc_sha256(flow, wd, path, bytes)
+    }
+
     async fn doc_fact(&self, wd: &Path, path: String) -> DocFact {
         let rel = xherd_flow::xap::worktree_rel(&path);
         let state = match (wd.join(&rel).canonicalize(), wd.canonicalize()) {
             (Ok(abs), Ok(root)) if !abs.starts_with(&root) => DocState::Outside,
             (Ok(abs), Ok(_)) if abs.is_file() => match std::fs::read(&abs) {
                 Ok(bytes) => {
-                    let sha256 = xherd_core::hash::content_sha256(&bytes);
+                    let sha256 = self.doc_sha256(wd, &path, &bytes);
                     let frontmatter_error = path
                         .ends_with(".md")
                         .then(|| {
@@ -827,7 +839,7 @@ impl Actor {
             match inside(&wd, f).map(std::fs::read) {
                 Some(Ok(bytes)) => approved.push((
                     f.clone(),
-                    xherd_core::hash::content_sha256(&bytes),
+                    self.doc_sha256(&wd, f, &bytes),
                     Some(String::from_utf8_lossy(&bytes).into_owned()),
                 )),
                 // A commit may delete files.
@@ -1037,7 +1049,7 @@ impl Actor {
                 };
                 let sha = inside(&wd, &path)
                     .and_then(|p| std::fs::read(p).ok())
-                    .map(|b| xherd_core::hash::content_sha256(&b));
+                    .map(|b| xherd_flow::approve::doc_sha256(Some(flow), &wd, &path, &b));
                 let approved = match &sha {
                     Some(h) => self
                         .env

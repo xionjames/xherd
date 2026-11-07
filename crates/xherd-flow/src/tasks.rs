@@ -54,6 +54,32 @@ fn status(v: &str) -> Option<TaskStatus> {
     }
 }
 
+/// `text` without the progress lines of task sections (`- status:` and
+/// `- evidence:` under a task heading), byte for byte otherwise. Recording
+/// progress is not a content change of the tasks document (R-107).
+pub fn without_progress(text: &str) -> String {
+    let mut in_task = false;
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        if bare.starts_with('#') {
+            in_task = heading(bare).is_some();
+        } else if in_task {
+            let item = bare.trim_start();
+            let key = item
+                .strip_prefix("- ")
+                .or_else(|| item.strip_prefix("* "))
+                .and_then(|i| i.split_once(':'))
+                .map(|(k, _)| k.trim().to_ascii_lowercase());
+            if matches!(key.as_deref(), Some("status" | "evidence")) {
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
 pub fn parse(text: &str) -> Result<Vec<Task>, String> {
     let mut tasks: Vec<Task> = Vec::new();
     for (i, line) in text.lines().enumerate() {
@@ -158,6 +184,34 @@ ticket: SC-1
         assert_eq!(t[1].title, "Wire the API");
         assert_eq!(t[1].depends, ["T01"]);
         assert_eq!(t[1].verify.as_deref(), Some("cargo test -p api"));
+    }
+
+    #[test]
+    fn progress_lines_dropped() {
+        let base = without_progress(SAMPLE);
+        assert!(!base.contains("status:") && !base.contains("evidence:"));
+        assert!(
+            base.contains("- files: src/api.rs\n") && base.contains("## Assumptions\n- none\n")
+        );
+        let progressed = SAMPLE
+            .replace(
+                "- status: todo",
+                "- status: done\n- evidence: api tests pass",
+            )
+            .replace(
+                "- status: done\n- files: `src/store",
+                "* Status: `doing`\n- files: `src/store",
+            );
+        assert_eq!(without_progress(&progressed), base);
+        // Outside task sections, and other fields, are content.
+        assert_eq!(
+            without_progress("# Notes\n- status: x\n"),
+            "# Notes\n- status: x\n"
+        );
+        assert_ne!(
+            without_progress(&SAMPLE.replace("src/api.rs", "src/x.rs")),
+            base
+        );
     }
 
     #[test]

@@ -525,6 +525,40 @@ async fn edited_or_undeclared_documents_open_a_gate_on_stop() {
 }
 
 #[tokio::test]
+async fn task_progress_does_not_reopen_the_tasks_gate() {
+    let t = setup().await;
+    let tasks = t.wt.path().join(".xherd/spec/tasks.md");
+    let v1 = "# Tasks\n\n## T01: Store\n- status: todo\n- files: `a.rs`\n- evidence:\n";
+    std::fs::write(&tasks, v1).unwrap();
+    stop(&t, 1).await;
+    assert!(matches!(&get(&t).await.gate, Some(Gate::Docs { stage, .. }) if stage == "tasks"));
+    act(&t, UserAction::Approve { reason: None }).await.unwrap();
+
+    // Progress recorded: still approved, nothing re-opened.
+    let done = v1
+        .replace("status: todo", "status: done")
+        .replace("- evidence:", "- evidence: cargo test passes");
+    std::fs::write(&tasks, &done).unwrap();
+    let e = xap(&t, "c1", "gate.open", json!({"stage": "tasks"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "already_approved");
+    stop(&t, 2).await;
+    let a = get(&t).await;
+    assert_eq!((a.status, a.gate.is_none()), (Status::Idle, true));
+
+    // A changed task is content: re-opened.
+    std::fs::write(&tasks, done.replace("`a.rs`", "`a.rs`, `b.rs`")).unwrap();
+    t.d.action("SC-1", UserAction::Send { text: "go".into() })
+        .await
+        .unwrap();
+    stop(&t, 3).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::WaitingInput);
+    assert!(matches!(&a.gate, Some(Gate::Docs { stage, .. }) if stage == "tasks"));
+}
+
+#[tokio::test]
 async fn ledger_file_wins_after_restart() {
     let t = setup().await;
     std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
