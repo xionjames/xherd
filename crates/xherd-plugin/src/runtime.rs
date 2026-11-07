@@ -9,8 +9,13 @@ use serde_json::{Map, Value, json};
 
 use crate::Manifest;
 
-/// Tool-permission mode used until agents can choose one (spec §13 T1: ask by default).
-pub const DEFAULT_PERMISSION_MODE: &str = "ask";
+/// Tool-permission mode used until agents can choose one: file edits in the
+/// worktree are accepted, anything else (shell commands that change things)
+/// still asks and shows as `blocked`. `ask` stays available (spec §13 T1).
+pub const DEFAULT_PERMISSION_MODE: &str = "edits";
+
+/// Every runtime must offer this mode, the strictest.
+pub const STRICT_PERMISSION_MODE: &str = "ask";
 
 /// The permission modes shared by every runtime (design §4.1): `ask` asks
 /// before every tool use that needs permission, `edits` accepts file edits,
@@ -162,11 +167,13 @@ impl Terminal {
                 ));
             }
         }
-        if !t.permission_modes.contains_key(DEFAULT_PERMISSION_MODE) {
-            return Err(format!(
-                "runtime {}: permission mode {DEFAULT_PERMISSION_MODE} is required",
-                m.name
-            ));
+        for required in [STRICT_PERMISSION_MODE, DEFAULT_PERMISSION_MODE] {
+            if !t.permission_modes.contains_key(required) {
+                return Err(format!(
+                    "runtime {}: permission mode {required} is required",
+                    m.name
+                ));
+            }
         }
         Ok(t)
     }
@@ -294,6 +301,8 @@ mod tests {
         set(&mut m, json!({"edits": ["-e"]}));
         assert!(Terminal::of(&m).unwrap_err().contains("ask is required"));
         set(&mut m, json!({"ask": ["-a"]}));
+        assert!(Terminal::of(&m).unwrap_err().contains("edits is required"));
+        set(&mut m, json!({"ask": ["-a"], "edits": ["-e"]}));
         assert!(Terminal::of(&m).is_ok());
     }
 
@@ -301,7 +310,11 @@ mod tests {
     fn builtin_claude_code() {
         let t = claude();
         let mode = |m: &str| t.argv(m).unwrap()[1..].join(" ");
-        assert_eq!(mode(DEFAULT_PERMISSION_MODE), "--permission-mode manual");
+        assert_eq!(mode(STRICT_PERMISSION_MODE), "--permission-mode manual");
+        assert_eq!(
+            mode(DEFAULT_PERMISSION_MODE),
+            "--permission-mode acceptEdits"
+        );
         assert_eq!(mode("edits"), "--permission-mode acceptEdits");
         assert_eq!(mode("auto"), "--permission-mode auto");
         assert_eq!(mode("all"), "--permission-mode bypassPermissions");
