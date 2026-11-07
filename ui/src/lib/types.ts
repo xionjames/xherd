@@ -52,6 +52,8 @@ export interface Agent {
   pack?: string;
   flow?: string;
   stage?: string;
+  /** Stages entered, in order; earlier ones missing were skipped. */
+  visitedStages?: string[];
   gate?: Gate;
   tasks?: Task[];
   commits?: Commit[];

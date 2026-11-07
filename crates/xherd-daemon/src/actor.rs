@@ -178,7 +178,35 @@ struct Actor {
 }
 
 impl Actor {
+    /// Agents from before `visited_stages`: rebuild it once from their
+    /// `stage.enter` / `gate.open` events, oldest first.
+    async fn backfill_stages(&mut self) {
+        if !self.agent.visited_stages.is_empty() || self.agent.stage.is_none() {
+            return;
+        }
+        let Ok(mut events) = self.env.store.events(&self.agent.id, 100_000).await else {
+            return;
+        };
+        events.reverse();
+        for e in events {
+            if !matches!(e.kind.as_str(), "xap.stage.enter" | "xap.gate.open") {
+                continue;
+            }
+            let stage = e.payload.as_ref().and_then(|p| p["args"]["stage"].as_str());
+            if let Some(s) = stage
+                && !self.agent.visited_stages.iter().any(|v| v == s)
+            {
+                self.agent.visited_stages.push(s.to_string());
+            }
+        }
+        self.agent.note_stage();
+        if let Err(err) = self.env.store.put_agent(&self.agent).await {
+            tracing::error!(agent = %self.agent.name, %err, "agent not stored");
+        }
+    }
+
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Msg>) {
+        self.backfill_stages().await;
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Report(r, origin, reply) => {
@@ -240,7 +268,8 @@ impl Actor {
     }
 
     /// Persist and publish; tell the supervisor when the status moved.
-    async fn commit(&self, before: Status) {
+    async fn commit(&mut self, before: Status) {
+        self.agent.note_stage();
         if let Err(err) = self.env.store.put_agent(&self.agent).await {
             tracing::error!(agent = %self.agent.name, %err, "agent not stored");
         }

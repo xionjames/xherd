@@ -70,6 +70,10 @@ pub struct Agent {
     /// Current stage id, from `stage enter` / `gate open` (XAP).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
+    /// Stages the agent has been in, in order; earlier stages missing here
+    /// were skipped (R-213: stage status `skipped`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visited_stages: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Gate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -114,6 +118,7 @@ impl Agent {
             pack: None,
             flow: None,
             stage: None,
+            visited_stages: Vec::new(),
             gate: None,
             tasks: Vec::new(),
             commits: Vec::new(),
@@ -122,6 +127,15 @@ impl Agent {
             last_message: None,
             screen_blocked: false,
             idle_alerted: false,
+        }
+    }
+
+    /// Add the current stage to `visited_stages` if it is new.
+    pub fn note_stage(&mut self) {
+        if let Some(s) = &self.stage
+            && !self.visited_stages.contains(s)
+        {
+            self.visited_stages.push(s.clone());
         }
     }
 

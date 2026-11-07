@@ -1022,3 +1022,38 @@ async fn ui_reads_a_document_and_approves_what_it_read() {
     let doc = t.d.doc("SC-1", "spec.md").await.unwrap();
     assert_eq!(doc["reviewed"], doc["text"]);
 }
+
+#[tokio::test]
+async fn visited_stages_show_skipped_ones_and_are_rebuilt_from_events() {
+    let t = setup().await;
+    xap(&t, "c1", "stage.enter", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    // Design skipped: straight to tasks.
+    xap(&t, "c2", "stage.enter", json!({"stage": "tasks"}))
+        .await
+        .unwrap();
+    assert_eq!(get(&t).await.visited_stages, ["spec", "tasks"]);
+
+    // An agent saved before the field existed: rebuilt at the next start.
+    let mut a = get(&t).await;
+    a.visited_stages.clear();
+    t.d.store.put_agent(&a).await.unwrap();
+    let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
+    let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..100 {
+        seen = d
+            .store
+            .get_agent(&t.a.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .visited_stages;
+        if !seen.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(seen, ["spec", "tasks"]);
+}

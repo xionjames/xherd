@@ -7,11 +7,11 @@
 {#if flow}
   <ol class="stepper" aria-label="Progress">
     {#each steps(agent, flow) as s, i (s.stage.id)}
-      {#if i > 0}<li class="wire" class:ok={s.state === 'ok' || s.state === 'now' || s.state === 'cur'} aria-hidden="true"></li>{/if}
+      {#if i > 0}<li class="wire" class:ok={s.state !== 'todo'} aria-hidden="true"></li>{/if}
       <li class="st {s.state === 'todo' ? '' : s.state}" aria-current={s.state === 'now' || s.state === 'cur' ? 'step' : undefined}>
-        <i>{#if s.state === 'ok'}✓{:else if s.state === 'now'}✋{:else}{i + 1}{/if}</i>
+        <i>{#if s.state === 'ok'}✓{:else if s.state === 'now'}✋{:else if s.state === 'skip'}–{:else}{i + 1}{/if}</i>
         {stageLabel(s.stage)}
-        {#if s.state === 'now'}<span class="t">waiting for you</span>{:else if s.state === 'cur'}<span class="t">running</span>{/if}
+        {#if s.state === 'now'}<span class="t">waiting for you</span>{:else if s.state === 'cur' && agent.status === 'running'}<span class="t">running</span>{:else if s.state === 'skip'}<span class="t">skipped</span>{/if}
       </li>
     {/each}
   </ol>
