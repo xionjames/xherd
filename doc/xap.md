@@ -111,12 +111,12 @@ xherd task block <ID> --reason TEXT
 ## 5. Commits
 
 ```
-xherd commit propose <ID> --subject TEXT --files PATH[,PATH...] [--tasks T01,T02] [--needs-human REASON]
+xherd commit propose <ID> --subject TEXT [--message TEXT] --files PATH[,PATH...] [--tasks T01,T02] [--needs-human REASON]
 xherd commit done <ID> --sha SHA
 xherd commit drop <ID> [--reason TEXT]
 ```
 
-`propose` opens a commit gate; xherd computes the diff of exactly these files for review and runs the code tripwires. `done` is accepted only after the proposal was approved, and checks that the commit exists on the agent's branch and touches exactly the proposed files. Proposing the same id again while it waits for approval replaces the proposal (after a change request). Commit ids are never reused once committed or dropped. Refusals: `commit_open` (another proposal is open), `docs_gate_open` (a document gate waits for approval), `commit_id_used`, `files_empty`, `task_unknown`, `files_outside_scope` (not in the `files:` of the listed tasks; no check when `--tasks` is absent or a listed task declares no files), `commit_unknown`, `commit_not_approved`, `commit_done` (already committed), `sha_unknown` (no such commit, or not on the agent's branch), `sha_files_mismatch`.
+`propose` opens a commit gate; xherd computes the diff of exactly these files for review and runs the code tripwires. `--message` is the full commit message (`git commit -m`; the subject is used without it); the user can edit it at approval. **On approval xherd makes the commit itself** (stages exactly the proposed files, commits with the message, hooks included, never `--no-verify`), records its sha and marks the proposal done; the next command (`commit`) only records it in `commits.md`. If git refuses, the approval stands, git's output is written to `.xherd/commit-error.txt` and the agent fixes and commits (then `done`). `done` is accepted only after the proposal was approved, and checks that the commit exists on the agent's branch and touches exactly the proposed files. Proposing the same id again while it waits for approval replaces the proposal (after a change request). Commit ids are never reused once committed or dropped. Refusals: `commit_open` (another proposal is open), `docs_gate_open` (a document gate waits for approval), `commit_id_used`, `files_empty`, `task_unknown`, `files_outside_scope` (not in the `files:` of the listed tasks; no check when `--tasks` is absent or a listed task declares no files), `commit_unknown`, `commit_not_approved`, `commit_done` (already committed), `sha_unknown` (no such commit, or not on the agent's branch), `sha_files_mismatch`.
 
 ## 6. Pull requests, handoff, issues, memory
 

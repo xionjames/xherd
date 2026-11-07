@@ -74,8 +74,8 @@ The calls this flow uses:
 - `xherd ask "Which database should the cache use?"` for a question without documents; then stop.
 - `xherd tasks sync` after writing or changing `tasks.md`.
 - `xherd task start T01`, `xherd task done T01 --evidence "cargo test: 40 passed"`, `xherd task block T01 --reason "Waiting for the API key"`.
-- `xherd commit propose C01 --subject "Add the cache" --files src/cache.rs,src/lib.rs --tasks T01`; then stop.
-- `xherd commit done C01 --sha 3f2a9c1` after committing an approved proposal; `xherd commit drop C01 --reason "Folded into C02"` to abandon one.
+- `xherd commit propose C01 --subject "Add the cache" --message "Add the cache: …" --files src/cache.rs,src/lib.rs --tasks T01`; then stop. xherd commits it once the user approves, with that message.
+- `xherd commit done C01 --sha 3f2a9c1` to record a commit (xherd's, or yours after git refused it); `xherd commit drop C01 --reason "Folded into C02"` to abandon one.
 - `xherd pr opened --url https://github.com/acme/app/pull/42`, `xherd handoff written`.
 - `xherd issue add --title "Retry loop ignores the timeout" --severity major` for problems outside the task."#;
 

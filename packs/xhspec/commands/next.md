@@ -26,7 +26,9 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
    and set `status: done` and `evidence:` in `tasks.md`.
 9. Choose the next unused commit id (`C01`, `C02`… see `commits.md`), add the
    entry to `.xherd/spec/commits.md` with `status: proposed`, and propose it:
-   `xherd commit propose C01 --subject "Add the session store" --files src/store.rs,src/lib.rs --tasks T01`
-   Do not commit yet.
+   `xherd commit propose C01 --subject "Add the session store" --message "Add the session store: sessions live in SQLite, one row per login (T01)" --files src/store.rs,src/lib.rs --tasks T01`
+   The message is the full commit message, in the repository's conventions;
+   the user can edit it, and xherd commits with it once approved. Do not
+   commit yourself.
 10. Rewrite `.xherd/spec/memory.md` (state, decisions, code map for the next
     task), then stop and wait for the user.

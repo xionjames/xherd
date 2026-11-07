@@ -65,6 +65,9 @@ pub enum XapCmd {
     CommitPropose {
         id: String,
         subject: String,
+        /// Full commit message; xherd commits with it once approved.
+        #[serde(default)]
+        message: Option<String>,
         files: Vec<String>,
         #[serde(default)]
         tasks: Vec<String>,

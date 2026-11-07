@@ -260,6 +260,7 @@ async fn tasks_and_commit_with_real_git() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -382,7 +383,8 @@ async fn approve_docs_gate_hands_on_next_command() {
             &t,
             UserAction::Approve {
                 reason: None,
-                expect: Default::default()
+                expect: Default::default(),
+                message: None,
             }
         )
         .await
@@ -398,7 +400,8 @@ async fn approve_docs_gate_hands_on_next_command() {
             &t,
             UserAction::Approve {
                 reason: None,
-                expect: Default::default()
+                expect: Default::default(),
+                message: None,
             }
         )
         .await
@@ -414,6 +417,7 @@ async fn approve_docs_gate_hands_on_next_command() {
         UserAction::Approve {
             reason: Some("lgtm".into()),
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -468,6 +472,7 @@ async fn design_skip_goes_to_tasks() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -507,7 +512,8 @@ async fn request_changes_keeps_the_gate() {
             &t2,
             UserAction::Approve {
                 reason: None,
-                expect: Default::default()
+                expect: Default::default(),
+                message: None,
             }
         )
         .await
@@ -543,6 +549,7 @@ async fn edited_or_undeclared_documents_open_a_gate_on_stop() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -578,6 +585,7 @@ async fn task_progress_does_not_reopen_the_tasks_gate() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -620,6 +628,7 @@ async fn ledger_file_wins_after_restart() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -660,6 +669,7 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
             UserAction::Approve {
                 reason: None,
                 expect: Default::default(),
+                message: None,
             },
         )
         .await
@@ -709,6 +719,7 @@ async fn a_restart_parks_an_agent_waiting_at_a_gate_and_approval_still_works() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -732,6 +743,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -858,6 +870,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -1050,6 +1063,7 @@ async fn ui_reads_a_document_and_approves_what_it_read() {
         UserAction::Approve {
             reason: None,
             expect,
+            message: None,
         },
     )
     .await
@@ -1068,6 +1082,7 @@ async fn ui_reads_a_document_and_approves_what_it_read() {
         UserAction::Approve {
             reason: None,
             expect,
+            message: None,
         },
     )
     .await
@@ -1109,4 +1124,113 @@ async fn visited_stages_show_skipped_ones_and_are_rebuilt_from_events() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(seen, ["spec", "tasks"]);
+}
+
+/// Open a commit gate for `a.txt` (message proposed by the agent), with an
+/// unrelated untracked `b.txt` lying around, and stop at it.
+async fn commit_gate(t: &T) {
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/tasks.md"),
+        "## T01: add a\n- files: a.txt\n",
+    )
+    .unwrap();
+    xap(t, "g1", "tasks.sync", json!({})).await.unwrap();
+    xap(t, "g2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    std::fs::write(t.wt.path().join("b.txt"), "b\n").unwrap();
+    xap(
+        t,
+        "g3",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "message": "Add a\n\nBecause T01 needs it.",
+               "files": ["a.txt"], "tasks": ["T01"]}),
+    )
+    .await
+    .unwrap();
+    stop(t, 1).await;
+}
+
+fn approve(message: Option<&str>) -> UserAction {
+    UserAction::Approve {
+        reason: None,
+        expect: Default::default(),
+        message: message.map(str::to_string),
+    }
+}
+
+#[tokio::test]
+async fn approving_a_commit_makes_the_commit_with_the_edited_message() {
+    let t = setup().await;
+    commit_gate(&t).await;
+    assert_eq!(
+        get(&t).await.commits[0].message.as_deref(),
+        Some("Add a\n\nBecause T01 needs it.")
+    );
+
+    t.d.action("SC-1", approve(Some("Add a, as edited by the user")))
+        .await
+        .unwrap();
+    let a = get(&t).await;
+    let sha = git(t.wt.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+    assert_eq!(a.commits[0].sha.as_deref(), Some(sha.as_str()));
+    assert_eq!(
+        git(t.wt.path(), &["log", "-1", "--format=%B"]),
+        "Add a, as edited by the user"
+    );
+    // Exactly the proposed file; the other one stays untouched.
+    assert_eq!(
+        git(t.wt.path(), &["show", "--name-only", "--format=", "HEAD"]),
+        "a.txt"
+    );
+    assert!(git(t.wt.path(), &["status", "--porcelain"]).contains("?? b.txt"));
+    // The agent only records it, in a fresh session.
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:commit C01"));
+    assert!(!t.wt.path().join(".xherd/commit-error.txt").exists());
+    // Reporting the same sha later is harmless.
+    xap(
+        &t,
+        "g4",
+        "commit.done",
+        json!({"id": "C01", "sha": &sha[..8]}),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_refused_commit_goes_to_the_agent_with_gits_output() {
+    let t = setup().await;
+    commit_gate(&t).await;
+    let hook = t.wt.path().join(".git/hooks/pre-commit");
+    // A worktree keeps hooks in the common dir.
+    let hook = if hook.parent().unwrap().exists() {
+        hook
+    } else {
+        let common = git(t.wt.path(), &["rev-parse", "--git-common-dir"]);
+        let dir = std::path::Path::new(&common).join("hooks");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("pre-commit")
+    };
+    std::fs::write(&hook, "#!/bin/sh\necho 'lint failed: a.txt' >&2\nexit 1\n").unwrap();
+    std::process::Command::new("chmod")
+        .args(["+x"])
+        .arg(&hook)
+        .status()
+        .unwrap();
+
+    t.d.action("SC-1", approve(None)).await.unwrap();
+    let a = get(&t).await;
+    // The approval stands, nothing was committed, the agent gets the error.
+    assert_eq!(a.commits[0].status, CommitStatus::Approved);
+    assert_eq!(a.commits[0].sha, None);
+    let err = std::fs::read_to_string(t.wt.path().join(".xherd/commit-error.txt")).unwrap();
+    assert!(err.contains("lint failed"), "{err}");
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:commit C01"));
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "commit-failed"));
 }

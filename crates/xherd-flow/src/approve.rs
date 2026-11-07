@@ -222,6 +222,7 @@ mod tests {
         Gate::Commit(Commit {
             id: "C02".into(),
             subject: "s".into(),
+            message: None,
             files: vec!["a.rs".into()],
             status: CommitStatus::Proposed,
             tasks: vec![],

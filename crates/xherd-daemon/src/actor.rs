@@ -53,6 +53,9 @@ pub enum UserAction {
         /// Document → hash the user read (UI): refused when the file changed
         /// since, so the approval covers exactly what was shown.
         expect: std::collections::BTreeMap<String, String>,
+        /// Commit gate: the commit message as the user edited it (else the
+        /// agent's proposal is used).
+        message: Option<String>,
     },
     /// Send the agent a change request for the open gate (R-105).
     RequestChanges {
@@ -746,8 +749,13 @@ impl Actor {
                     "user.send"
                 }
             }
-            UserAction::Approve { reason, expect } => {
-                self.approve(reason.clone(), expect).await?;
+            UserAction::Approve {
+                reason,
+                expect,
+                message,
+            } => {
+                self.approve(reason.clone(), expect, message.clone())
+                    .await?;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
@@ -960,6 +968,7 @@ impl Actor {
         &mut self,
         reason: Option<String>,
         expect: &std::collections::BTreeMap<String, String>,
+        message: Option<String>,
     ) -> Result<(), ActionError> {
         let gate = self.gate_for_user(true)?;
         let wd = self.workdir().map_err(|e| refuse(e.code, e.message))?;
@@ -1050,6 +1059,11 @@ impl Actor {
             Some(json!({"gate": label, "files": files, "reason": reason, "next": next.as_ref().map(|n| &n.0)})),
         )
         .await;
+        // xherd makes the approved commit itself; the agent only records it
+        // (and fixes it when git refuses).
+        if let Gate::Commit(c) = &gate {
+            self.commit_for_user(&wd, &c.id, message).await;
+        }
         match (self.agent.status, next) {
             (Status::Parked, next) => {
                 // The next session starts with it once a slot is free (R-028).
@@ -1096,6 +1110,51 @@ impl Actor {
             (_, None) => {}
         }
         Ok(())
+    }
+
+    /// Commit the approved proposal with git: exactly its files and its
+    /// message (as edited by the user), hooks included. On success the commit
+    /// is `done` with its sha; on failure git's output goes to
+    /// `.xherd/commit-error.txt` and the agent, which gets `/xhspec:commit`
+    /// next, fixes it. The approval stands either way.
+    async fn commit_for_user(&mut self, wd: &Path, id: &str, edited: Option<String>) {
+        let Some(i) = self.agent.commits.iter().position(|c| c.id == id) else {
+            return;
+        };
+        if let Some(m) = edited
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+        {
+            self.agent.commits[i].message = Some(m);
+        }
+        let c = self.agent.commits[i].clone();
+        let message = c.message.clone().unwrap_or_else(|| c.subject.clone());
+        // Hooks (lint, tests) can take a while.
+        let git = self.env.git.clone().with_timeout(Duration::from_secs(300));
+        let error_file = wd.join(".xherd/commit-error.txt");
+        match git.commit_paths(wd, &c.files, &message).await {
+            Ok(sha) => {
+                let _ = std::fs::remove_file(&error_file);
+                self.agent.commits[i].sha = Some(sha.clone());
+                self.agent.commits[i].status = CommitStatus::Done;
+                self.log(None, "commit-made", Some(json!({"id": id, "sha": sha})))
+                    .await;
+            }
+            Err(e) => {
+                let text = e.to_string();
+                let _ = xherd_core::paths::write_atomic(&error_file, text.as_bytes(), None);
+                self.log(
+                    None,
+                    "commit-failed",
+                    Some(json!({"id": id, "error": text})),
+                )
+                .await;
+                self.notify(format!(
+                    "{}: git refused commit {id}; the agent will fix it",
+                    self.agent.name
+                ));
+            }
+        }
     }
 
     /// Whether an approval replaces the session (R-023): fresh sessions are

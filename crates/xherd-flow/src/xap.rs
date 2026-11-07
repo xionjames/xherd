@@ -411,6 +411,7 @@ pub fn apply(
         XapCmd::CommitPropose {
             id,
             subject,
+            message,
             files,
             tasks,
             needs_human,
@@ -428,6 +429,11 @@ pub fn apply(
             let proposal = Commit {
                 id: id.clone(),
                 subject: subject.clone(),
+                message: message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_string),
                 files,
                 status: CommitStatus::Proposed,
                 tasks: tasks.clone(),
@@ -968,6 +974,7 @@ mod tests {
         XapCmd::CommitPropose {
             id: id.into(),
             subject: "s".into(),
+            message: None,
             files: files.iter().map(|s| s.to_string()).collect(),
             tasks: tasks.iter().map(|s| s.to_string()).collect(),
             needs_human: None,

@@ -177,3 +177,57 @@ async fn clone_and_branches() {
     assert!(g.clone_repo(&src.to_string_lossy(), &dest).await.is_err());
     assert!(g.is_repo(&dest).await);
 }
+
+#[tokio::test]
+async fn commit_paths_takes_exactly_the_given_files() {
+    let d = tempfile::tempdir().unwrap();
+    let g = init_repo(d.path()).await;
+    std::fs::write(d.path().join("keep.txt"), "k\n").unwrap();
+    g.run(d.path(), &["add", "keep.txt"]).await.unwrap();
+    g.run(d.path(), &["commit", "--quiet", "-m", "keep"])
+        .await
+        .unwrap();
+    // changed, new, deleted: all proposed; `other.txt` is staged but not.
+    std::fs::write(d.path().join("a.txt"), "two\n").unwrap();
+    std::fs::write(d.path().join("new.txt"), "n\n").unwrap();
+    std::fs::remove_file(d.path().join("keep.txt")).unwrap();
+    std::fs::write(d.path().join("other.txt"), "o\n").unwrap();
+    g.run(d.path(), &["add", "other.txt"]).await.unwrap();
+
+    let files = ["a.txt", "new.txt", "keep.txt"].map(String::from);
+    let sha = g
+        .commit_paths(d.path(), &files, "Subject\n\nBody line")
+        .await
+        .unwrap();
+    assert_eq!(g.rev_parse(d.path(), "HEAD").await.unwrap(), sha);
+    let mut got = g.commit_files(d.path(), &sha).await.unwrap();
+    got.sort();
+    assert_eq!(got, ["a.txt", "keep.txt", "new.txt"]);
+    let msg = g
+        .run(d.path(), &["log", "-1", "--format=%B"])
+        .await
+        .unwrap();
+    assert_eq!(msg, "Subject\n\nBody line");
+    // The unrelated staged file is still staged, not committed.
+    let staged = g
+        .run(d.path(), &["diff", "--cached", "--name-only"])
+        .await
+        .unwrap();
+    assert_eq!(staged, "other.txt");
+
+    // A failing hook is an error carrying its output; nothing is committed.
+    let hook = d.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho 'nope: formatter' >&2\nexit 1\n").unwrap();
+    std::process::Command::new("chmod")
+        .arg("+x")
+        .arg(&hook)
+        .status()
+        .unwrap();
+    std::fs::write(d.path().join("a.txt"), "three\n").unwrap();
+    let e = g
+        .commit_paths(d.path(), &["a.txt".to_string()], "x")
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("nope: formatter"), "{e}");
+    assert_eq!(g.rev_parse(d.path(), "HEAD").await.unwrap(), sha);
+}

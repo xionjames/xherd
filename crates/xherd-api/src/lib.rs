@@ -636,6 +636,8 @@ struct ActionBody {
     comment: Option<String>,
     /// Approve: document → hash the user read.
     expect: Option<std::collections::BTreeMap<String, String>>,
+    /// Approve (commit gate): the commit message as edited.
+    message: Option<String>,
 }
 
 async fn agent_action(
@@ -664,6 +666,7 @@ async fn agent_action(
         "approve" => UserAction::Approve {
             reason: b.reason,
             expect: b.expect.unwrap_or_default(),
+            message: b.message,
         },
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
