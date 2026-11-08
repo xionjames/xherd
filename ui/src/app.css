@@ -28,6 +28,11 @@
   --ease: cubic-bezier(.23, 1, .32, 1);
 }
 
+/* Native controls, scrollbars and form popups follow the chosen theme. */
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --pasture: #0e0c1d; --pen: #17142b; --pen-2: #211d3b; --well: #0b0a18;

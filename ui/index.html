@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>xherd</title>
+    <!-- The saved theme, before the first paint (see src/lib/theme.svelte.ts). -->
+    <script>
+      try {
+        var t = localStorage.getItem('xherd.theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>
