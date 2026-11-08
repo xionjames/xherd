@@ -18,6 +18,8 @@ by theme; update it together with them.
 - [x] Welcome: plugins switched on/off and configured, with a Claude login step; at least one of each kind
 - [x] Commits: xherd runs the approved commit (editable message, agent fixes it if git refuses); Commits view with message and files; Changes tabs: uncommitted / all changes / one commit
 - [x] Agent page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked agents
+- [x] Gate documents: highlight what changed after a change request (spec, design, tasks…), without keeping version history
+- [x] Open questions: a text box per question to answer them inline
 - [ ] Screens still hidden: Board, Review, TODOs, Time, notification bell
 - [ ] Live reload of the daemon config (most settings apply at the next start)
 - [ ] Plugin secrets and plugin install from the UI

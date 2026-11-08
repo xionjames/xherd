@@ -671,7 +671,9 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Websockets
   - [x] Terminal
   - [x] Diffs
-- [ ] **M3 Docker-first**
+  - [x] Highlight what changed in gate documents (spec, design, tasks…) after a change request; no version history kept
+  - [x] Open questions answered inline: one text box per question
+- [x] **M3 Docker-first**
   - [x] Image with version managers
   - [x] `xherd init` (users, SSH proxy, git config)
   - [x] `docker init/doctor/update`
