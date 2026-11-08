@@ -121,20 +121,22 @@ stage: tasks
 
 Keep tasks small: one task is one commit.
 
-Update `status` and `evidence` as you work: those two lines are progress,
-not content, so changing them does not re-open the approved tasks gate.
-Changing anything else (titles, files, depends, new tasks) does.
+`status` and `evidence` are progress, not content: xherd writes them when you
+start, finish or block a task, so do not edit them, and they never
+re-open the approved tasks gate. Changing anything else (titles, files,
+depends, new tasks) does.
 
 ## commits.md
 
-One entry per commit proposal, in order:
+One entry per commit proposal, in order. You write the heading, `tasks` and
+`files`; xherd writes `status` and `sha` as the proposal moves on:
 
 ```markdown
 ## C01: Add the session store
 - tasks: T01
 - files: `src/store.rs`, `src/lib.rs`
-- status: proposed      # proposed, done or dropped
-- sha:
+- status: proposed      # written by xherd: proposed, done or dropped
+- sha:                  # written by xherd
 ```
 
 Ids are `C01`, `C02`… and never reused, even when a proposal is dropped.

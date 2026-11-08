@@ -54,6 +54,8 @@ where a gate would be, telling the user what to review.
   `sed -i`, `tee`, `>` or `>>` redirects, `mv` over a document. The edit tools
   work in this worktree without asking; a shell write asks the user every time.
   This includes `.xherd/spec/*.md` (`tasks.md`, `commits.md`, `memory.md`).
+  Never edit the `status:` / `evidence:` lines of tasks or the `status:` / `sha:`
+  lines of commits: xherd writes them.
 - Use the repository's own commands to build, test and lint, and say which
   ones you ran in each task's evidence.
 

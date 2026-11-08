@@ -13,8 +13,8 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
 4. If tasks remain but none is ready (blocked ones), say why with
    `xherd ask "T03 waits for T02, which is blocked: how should I proceed?"`
    and stop.
-5. Start it: `xherd task start T01` (with the real id), and set its
-   status to `doing` in `tasks.md`.
+5. Start it: `xherd task start T01` (with the real id). xherd writes the
+   `status:` and `evidence:` lines of `tasks.md` itself; do not edit them.
 6. Implement it, changing only the files listed in its `files`. If it needs
    another file, add it to `files`, run `xherd tasks sync`, and say so
    in the commit proposal. If the task cannot be done, run
@@ -22,10 +22,12 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
    and stop.
 7. Verify: run its `verify` command and the relevant tests. Fix until green.
 8. Mark it done with what proved it:
-   `xherd task done T01 --evidence "cargo test -p store: 12 passed"`,
-   and set `status: done` and `evidence:` in `tasks.md`.
+   `xherd task done T01 --evidence "cargo test -p store: 12 passed"`.
+   If the task has a `verify`, xherd runs it too and refuses the call while
+   it fails: fix and call again.
 9. Choose the next unused commit id (`C01`, `C02`… see `commits.md`), add the
-   entry to `.xherd/spec/commits.md` with `status: proposed`, and propose it:
+   entry (heading, `tasks`, `files`) to `.xherd/spec/commits.md`, and propose
+   it (xherd writes its `status:` and `sha:` lines):
    `xherd commit propose C01 --subject "Add the session store" --message "Add the session store: sessions live in SQLite, one row per login (T01)" --files src/store.rs,src/lib.rs --tasks T01`
    The message is the full commit message, in the repository's conventions;
    the user can edit it, and xherd commits with it once approved. Do not

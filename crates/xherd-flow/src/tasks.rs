@@ -33,6 +33,11 @@ fn heading(line: &str) -> Option<(String, String)> {
     Some((id, title))
 }
 
+/// The `T01` of a task heading.
+pub(crate) fn heading_id(line: &str) -> Option<String> {
+    heading(line).map(|(id, _)| id)
+}
+
 fn list(v: &str) -> Vec<String> {
     let v = v.trim();
     if matches!(v.to_ascii_lowercase().as_str(), "" | "none" | "-" | "—") {

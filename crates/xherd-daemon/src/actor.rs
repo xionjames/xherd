@@ -558,10 +558,72 @@ impl Actor {
             Some(json!({"args": args, "changed": changed})),
         )
         .await;
+        self.write_progress(&call.cmd);
         if changed {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
+    }
+
+    /// Write the progress lines xherd owns (D11) into `tasks.md` / `commits.md`
+    /// after a task or commit call succeeded. A missing file or entry is
+    /// skipped; this never fails the call.
+    fn write_progress(&self, cmd: &XapCmd) {
+        match cmd {
+            XapCmd::TaskStart { id }
+            | XapCmd::TaskDone { id, .. }
+            | XapCmd::TaskBlock { id, .. } => {
+                let Some(t) = self.agent.tasks.iter().find(|t| &t.id == id) else {
+                    return;
+                };
+                let evidence = (t.status == TaskStatus::Done)
+                    .then_some(t.evidence.as_deref())
+                    .flatten();
+                self.edit_spec_file("tasks.md", |text| {
+                    xherd_flow::progress::set_task(text, id, t.status, evidence)
+                });
+            }
+            XapCmd::CommitPropose { id, .. }
+            | XapCmd::CommitDone { id, .. }
+            | XapCmd::CommitDrop { id, .. } => self.write_commit_progress(id),
+            _ => {}
+        }
+    }
+
+    /// `status:` and `sha:` of a commit entry in `commits.md`.
+    fn write_commit_progress(&self, id: &str) {
+        let Some(c) = self.agent.commits.iter().find(|c| c.id == id) else {
+            return;
+        };
+        let status = match c.status {
+            CommitStatus::Proposed | CommitStatus::Approved => "proposed",
+            CommitStatus::Done => "done",
+            CommitStatus::Dropped => "dropped",
+        };
+        let sha = c.sha.as_deref().unwrap_or("");
+        self.edit_spec_file("commits.md", |text| {
+            xherd_flow::progress::set_commit(text, id, status, sha)
+        });
+    }
+
+    fn edit_spec_file(&self, name: &str, edit: impl FnOnce(&str) -> Option<String>) {
+        let Ok(wd) = self.workdir() else { return };
+        let path = wd.join(xherd_flow::xap::SPEC_DIR).join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            tracing::debug!(agent = %self.agent.name, name, "no file for progress lines");
+            return;
+        };
+        match edit(&text) {
+            Some(new) if new != text => {
+                if let Err(e) = xherd_core::paths::write_atomic(&path, new.as_bytes(), None) {
+                    tracing::warn!(agent = %self.agent.name, name, %e, "progress lines not written");
+                }
+            }
+            Some(_) => {}
+            None => {
+                tracing::debug!(agent = %self.agent.name, name, "entry not found for progress lines")
+            }
+        }
     }
 
     fn workdir(&self) -> Result<PathBuf, Refusal> {
@@ -1188,6 +1250,7 @@ impl Actor {
                 let _ = std::fs::remove_file(&error_file);
                 self.agent.commits[i].sha = Some(sha.clone());
                 self.agent.commits[i].status = CommitStatus::Done;
+                self.write_commit_progress(id);
                 self.log(None, "commit-made", Some(json!({"id": id, "sha": sha})))
                     .await;
             }

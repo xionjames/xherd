@@ -716,7 +716,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D8 | Scoped tokens (user, device, agent, plugin) | Accepted |
 | D9 | Default port 4740 | Accepted |
 | D10 | Spec documents private by default; committed opt-in | Accepted |
-| D11 | Approvals by content hash; the daemon never edits documents | Accepted |
+| D11 | Approvals by content hash; the daemon never edits agent documents except the progress lines it owns (task `status`/`evidence` in tasks.md, commit `status`/`sha` in commits.md; hashes ignore them) | Accepted |
 | D12 | One shared container; version managers; two users inside (fallback single user; single user until the guardrails milestone) | Accepted |
 | D13 | Single user per daemon | Accepted |
 | D14 | Runtimes declare models with tiers and effort | Accepted |

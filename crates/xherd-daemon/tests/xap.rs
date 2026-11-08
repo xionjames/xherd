@@ -1476,3 +1476,80 @@ async fn memory_is_not_checked_without_a_flow() {
             .unwrap_err();
     assert_eq!(e.code, "no_flow");
 }
+
+#[tokio::test]
+async fn xherd_writes_the_progress_lines_of_tasks_and_commits() {
+    let t = setup().await;
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    let spec = t.wt.path().join(".xherd/spec");
+    let tasks = "# Tasks\n\n## T01: add a\n- status: todo\n- files: a.txt\n- verify: echo ok\n- evidence:\n\n## T02: later\n- files: b.txt\n- depends: T01\n\n## Assumptions\n- None.\n";
+    std::fs::write(spec.join("tasks.md"), tasks).unwrap();
+    xap(&t, "p0", "tasks.sync", json!({})).await.unwrap();
+    let read = |name: &str| std::fs::read_to_string(spec.join(name)).unwrap();
+
+    xap(&t, "p1", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        read("tasks.md"),
+        tasks.replace("status: todo", "status: doing")
+    );
+    xap(
+        &t,
+        "p2",
+        "task.done",
+        json!({"id": "T01", "evidence": "by hand"}),
+    )
+    .await
+    .unwrap();
+    let done = read("tasks.md");
+    assert!(done.contains("- status: done\n"), "{done}");
+    assert!(
+        done.contains("- evidence: by hand | [verify exit 0] ok\n"),
+        "{done}"
+    );
+    // Nothing else changed: approvals ignore exactly these lines.
+    assert_eq!(
+        xherd_flow::tasks::without_progress(&done),
+        xherd_flow::tasks::without_progress(tasks)
+    );
+
+    // The agent writes the entry; xherd keeps status and sha.
+    std::fs::write(
+        spec.join("commits.md"),
+        "## C01: Add a\n- tasks: T01\n- files: `a.txt`\n",
+    )
+    .unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    xap(
+        &t,
+        "p3",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "files": ["a.txt"], "tasks": ["T01"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read("commits.md"),
+        "## C01: Add a\n- status: proposed\n- sha:\n- tasks: T01\n- files: `a.txt`\n"
+    );
+    stop(&t, 1).await;
+    t.d.action("SC-1", approve(None)).await.unwrap();
+    let sha = git(t.wt.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(
+        read("commits.md"),
+        format!("## C01: Add a\n- status: done\n- sha: {sha}\n- tasks: T01\n- files: `a.txt`\n")
+    );
+
+    // Missing entry or file: skipped, the call still succeeds.
+    std::fs::remove_file(spec.join("commits.md")).unwrap();
+    xap(&t, "p4", "task.start", json!({"id": "T02"}))
+        .await
+        .unwrap();
+    std::fs::remove_file(spec.join("tasks.md")).unwrap();
+    xap(&t, "p5", "task.block", json!({"id": "T02", "reason": "r"}))
+        .await
+        .unwrap();
+    assert!(!spec.join("tasks.md").exists());
+}
