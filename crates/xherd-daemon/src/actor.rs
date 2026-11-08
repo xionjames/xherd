@@ -1391,6 +1391,20 @@ impl Actor {
             return Err(refuse("usage", "say what to change"));
         }
         let gate = self.gate_for_user(false)?;
+        // Remember the documents as the user read them, so the UI can show
+        // what the agent changed in answer (no version history is kept).
+        if let (Gate::Docs { files, .. }, Ok(wd)) = (&gate, self.workdir()) {
+            for f in files {
+                if let Some(Ok(bytes)) = inside(&wd, &f.path).map(std::fs::read) {
+                    let text = String::from_utf8_lossy(&bytes);
+                    self.env
+                        .store
+                        .put_reviewed(&self.agent.id, &f.path, &text)
+                        .await
+                        .map_err(|e| refuse("store", e.to_string()))?;
+                }
+            }
+        }
         let text = xherd_flow::approve::changes_message(&gate, comment);
         self.send(&text, 1).await?;
         self.agent.fire(Trigger::UserInput, self.now());

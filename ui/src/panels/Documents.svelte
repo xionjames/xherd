@@ -17,6 +17,8 @@
   let docs = $state<string[]>([]);
   let doc = $state<Doc | null>(null);
   let error = $state<string | null>(null);
+  // When the document changed since the user read it, the changes are marked
+  // in the page; "Show changes" switches to a line diff.
   let showDiff = $state(false);
 
   const gateFiles = $derived(agent.gate?.kind === 'docs' ? agent.gate.files.map((f) => f.path) : []);
@@ -39,8 +41,15 @@
   });
 
   const parsed = $derived(doc ? frontmatter(doc.text) : null);
-  const rendered = $derived(parsed ? render(parsed.body) : null);
   const changed = $derived(!!doc?.reviewed && doc.reviewed !== doc.text);
+  const added = $derived(
+    new Set(
+      changed && doc?.reviewed != null
+        ? lineDiff(doc.reviewed, doc.text).filter((l) => l.kind === 'a').map((l) => l.text.trim()).filter(Boolean)
+        : [],
+    ),
+  );
+  const rendered = $derived(parsed ? render(parsed.body, added) : null);
 </script>
 
 <div class="body">
@@ -55,10 +64,10 @@
         {/each}
         <span class="grow"></span>
         {#if changed}
-          <span style="color:var(--accent)">Changed since you approved</span>
+          <span style="color:var(--accent)">Changed since you last reviewed it</span>
           <button class="btn sm" onclick={() => (showDiff = !showDiff)}>{showDiff ? 'Show document' : 'Show changes'}</button>
         {:else if doc?.reviewed}
-          <span class="pill live">✓ approved version</span>
+          <span class="pill live">✓ as you last reviewed it</span>
         {/if}
       </div>
     {/if}
@@ -99,5 +108,6 @@
   .md :global(table) { border-collapse: collapse; }
   .md :global(th), .md :global(td) { border: 1px solid var(--fence); padding: 4px 8px; }
   .md :global(h3) { font-size: 13px; margin: 6px 0 0; }
+  .md :global(.chg) { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); padding-left: 10px; margin-left: -13px; border-radius: 2px; }
   .md :global(p), .md :global(ul), .md :global(ol) { margin: 0; }
 </style>

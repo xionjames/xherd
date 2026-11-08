@@ -511,6 +511,11 @@ async fn request_changes_keeps_the_gate() {
     assert!(a.gate.is_some());
     let s = sends(&t);
     assert!(s[0].contains("spec gate (spec.md): split R3"), "{s:?}");
+    // The text the user read is kept, to highlight what the agent changes.
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v2\n").unwrap();
+    let doc = t.d.doc("SC-1", "spec.md").await.unwrap();
+    assert_eq!(doc["reviewed"], "# v1\n");
+    assert_eq!(doc["text"], "# v2\n");
 
     // Questions are answered with send, not approved.
     let t2 = setup().await;
