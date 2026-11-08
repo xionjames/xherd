@@ -199,7 +199,7 @@ mod tests {
 
     fn agent() -> Agent {
         let mut a = Agent::new("SC-1", "SC-1", 0);
-        a.pack = Some("xhspec".into());
+        a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         a
     }
@@ -233,28 +233,28 @@ mod tests {
 
     #[test]
     fn next_commands() {
-        let p = crate::xhspec();
+        let p = crate::builtin();
         let a = agent();
         let n = |g: &Gate, f: &F, auto| next_command(&p, &a, g, f, auto).unwrap();
         assert_eq!(
             n(&docs("spec"), &F(false), false),
-            Some(("/xhspec:design".into(), 1))
+            Some(("/xherd:design".into(), 1))
         );
         assert_eq!(
             n(&docs("spec"), &F(true), false),
-            Some(("/xhspec:tasks".into(), 1))
+            Some(("/xherd:tasks".into(), 1))
         );
         assert_eq!(
             n(&docs("tasks"), &F(false), false),
-            Some(("/xhspec:next".into(), 1))
+            Some(("/xherd:next".into(), 1))
         );
         assert_eq!(
             n(&commit(), &F(false), false),
-            Some(("/xhspec:commit C02".into(), 1))
+            Some(("/xherd:commit C02".into(), 1))
         );
         assert_eq!(
             n(&docs("ship"), &F(false), true),
-            Some(("/xhspec:ship --no-ticket-update".into(), 1))
+            Some(("/xherd:ship --no-ticket-update".into(), 1))
         );
         assert_eq!(
             n(&Gate::Question { text: "?".into() }, &F(false), false),
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn task_progress_is_not_content() {
-        let f = crate::xhspec().flow("feature").unwrap().clone();
+        let f = crate::builtin().flow("feature").unwrap().clone();
         let wd = Path::new("/w");
         let a = b"## T01: a\n- status: todo\n- files: a.rs\n";
         let b = b"## T01: a\n- status: done\n- files: a.rs\n- evidence: ok\n";
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn inference() {
-        let f = crate::xhspec().flow("feature").unwrap().clone();
+        let f = crate::builtin().flow("feature").unwrap().clone();
         assert_eq!(
             infer_gate(
                 &f,

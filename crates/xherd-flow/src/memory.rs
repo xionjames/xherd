@@ -1,4 +1,4 @@
-//! xhSpec `memory.md` (FORMAT.md): only its structure is checked, so a fresh
+//! xherd `memory.md` (FORMAT.md): only its structure is checked, so a fresh
 //! session never starts from a missing or empty note.
 
 use xherd_core::xap::{Refusal, refuse};

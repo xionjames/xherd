@@ -1,9 +1,9 @@
 ---
-description: xhSpec — review the whole branch against the spec
+description: xherd — review the whole branch against the spec
 ---
 # Review
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 Review as if you had not written the code: judge the branch by the approved
 documents and the diff, not by what you remember of the work. When you can

@@ -1,6 +1,6 @@
-# xhSpec, the built-in flow pack (spec §7, design §6.2).
+# xherd, the built-in flow pack (spec §7, design §6.2).
 # v0: the feature flow only; bug and hotfix come later.
-name: xhspec
+name: xherd
 version: 0.1.0
 protocol: 1
 specDir: private
@@ -9,8 +9,8 @@ private: [pr-comments.json, HANDOFF.md]
 
 install:
   claude-code:
-    prefix: "/xhspec:"
-    commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xhspec/{name}.md", format: command }
+    prefix: "/xherd:"
+    commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xherd/{name}.md", format: command }
     args: "$ARGUMENTS"
 
 commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status" }

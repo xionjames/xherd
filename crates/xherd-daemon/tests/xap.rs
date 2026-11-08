@@ -71,7 +71,7 @@ async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
     let mut a = Agent::new("SC-1", "SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(wt.path().to_string_lossy().into_owned());
-    a.pack = Some("xhspec".into());
+    a.pack = Some("xherd".into());
     a.flow = Some("feature".into());
     a.base = Some("main".into());
     let a = d.create_agent(a).await.unwrap();
@@ -278,7 +278,7 @@ async fn tasks_and_commit_with_real_git() {
     .unwrap();
     assert_eq!(
         get(&t).await.next_prompt.as_deref(),
-        Some("/xhspec:commit C01")
+        Some("/xherd:commit C01")
     );
     assert_eq!(get(&t).await.commits[0].status, CommitStatus::Approved);
 
@@ -434,7 +434,7 @@ async fn approve_docs_gate_hands_on_next_command() {
     .await
     .unwrap();
     assert_eq!((a.status, a.gate.is_none()), (Status::Running, true));
-    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
+    assert_eq!(sends(&t), ["send SC-1 \"/xherd:design\" 1"]);
 
     let sha = content_sha256(&std::fs::read(&spec).unwrap());
     let ledger =
@@ -488,7 +488,7 @@ async fn design_skip_goes_to_tasks() {
     )
     .await
     .unwrap();
-    assert_eq!(get(&t).await.next_prompt.as_deref(), Some("/xhspec:tasks"));
+    assert_eq!(get(&t).await.next_prompt.as_deref(), Some("/xherd:tasks"));
 }
 
 #[tokio::test]
@@ -685,7 +685,7 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
         )
         .await
         .unwrap();
-    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:design"));
     assert_ne!(a.status, Status::Parked);
 }
 
@@ -735,7 +735,7 @@ async fn a_restart_parks_an_agent_waiting_at_a_gate_and_approval_still_works() {
     )
     .await
     .unwrap();
-    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:design"));
 }
 
 #[tokio::test]
@@ -763,7 +763,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
     assert!(t.drv.calls().contains(&"respawn SC-1 rt".to_string()));
     assert!(sends(&t).is_empty());
     assert_eq!(a.status, Status::Running);
-    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:design"));
     assert_eq!(a.session, None);
     assert!(a.generation > generation);
     let events = t.d.store.events(&t.a.id, 50).await.unwrap();
@@ -771,13 +771,13 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
 
     // The new session is ready: the command is typed once.
     session_start(&t, 3).await;
-    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
+    assert_eq!(sends(&t), ["send SC-1 \"/xherd:design\" 1"]);
     let a = get(&t).await;
     // Kept until a prompt is accepted: a session start that loses the typed
     // text types it again.
     assert_eq!(
         (a.next_prompt.as_deref(), a.session.as_deref()),
-        (Some("/xhspec:design"), Some("s-3"))
+        (Some("/xherd:design"), Some("s-3"))
     );
     session_start(&t, 4).await;
     assert_eq!(sends(&t).len(), 2);
@@ -785,7 +785,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
         id: "submit-5".into(),
         agent_id: t.a.id.clone(),
         event: ReportEvent::UserPromptSubmit,
-        payload: json!({"prompt": "/xhspec:design"}),
+        payload: json!({"prompt": "/xherd:design"}),
         seq: 5,
         at: 0,
     };
@@ -800,16 +800,16 @@ async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
     let t = setup().await;
     act(&t, UserAction::Pause).await.unwrap();
     let a = act(&t, UserAction::Resume).await.unwrap();
-    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:resume"));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:resume"));
 
     let mut a = get(&t).await;
     a.status = Status::Paused;
-    a.next_prompt = Some("/xhspec:pr-review".into());
+    a.next_prompt = Some("/xherd:pr-review".into());
     t.d.store.put_agent(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let a = d.action("SC-1", UserAction::Resume).await.unwrap();
-    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:pr-review"));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:pr-review"));
 }
 
 #[tokio::test]
@@ -890,7 +890,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     .await
     .unwrap();
     session_start(&t, 2).await;
-    assert_eq!(sends(&t), ["send SC-1 \"/xhspec:ship\" 1"]);
+    assert_eq!(sends(&t), ["send SC-1 \"/xherd:ship\" 1"]);
     let url = "https://github.com/acme/app/pull/42";
     xap(&t, "c2", "pr.opened", json!({"url": url}))
         .await
@@ -1206,7 +1206,7 @@ async fn approving_a_commit_makes_the_commit_with_the_edited_message() {
     );
     assert!(git(t.wt.path(), &["status", "--porcelain"]).contains("?? b.txt"));
     // The agent only records it, in a fresh session.
-    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:commit C01"));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:commit C01"));
     assert!(!t.wt.path().join(".xherd/commit-error.txt").exists());
     // Reporting the same sha later is harmless.
     xap(
@@ -1247,7 +1247,7 @@ async fn a_refused_commit_goes_to_the_agent_with_gits_output() {
     assert_eq!(a.commits[0].sha, None);
     let err = std::fs::read_to_string(t.wt.path().join(".xherd/commit-error.txt")).unwrap();
     assert!(err.contains("lint failed"), "{err}");
-    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:commit C01"));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:commit C01"));
     let events = t.d.store.events(&t.a.id, 50).await.unwrap();
     assert!(events.iter().any(|e| e.kind == "commit-failed"));
 }

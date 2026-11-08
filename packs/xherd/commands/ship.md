@@ -1,12 +1,12 @@
 ---
-description: xhSpec — draft the pull request; once approved, push and open it as a draft
+description: xherd — draft the pull request; once approved, push and open it as a draft
 argument-hint: "[--no-ticket-update]"
 ---
 # Ship
 
 Arguments: `{{args}}`
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 1. `xherd stage enter ship`
 2. If `.xherd/spec/pr.md` exists, try `xherd gate open ship`.

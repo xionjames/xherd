@@ -15,7 +15,7 @@ async fn installs_keeps_edits_and_upgrades() {
     let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
     let h = user.path().to_string_lossy().into_owned();
     let env = move |k: &str| (k == "HOME").then(|| h.clone());
-    let dir = user.path().join(".claude/commands/xhspec");
+    let dir = user.path().join(".claude/commands/xherd");
 
     let first = d.install(None, None, &env).await.unwrap();
     assert!(first.len() >= 10);
@@ -33,7 +33,7 @@ async fn installs_keeps_edits_and_upgrades() {
     d.store
         .put_install(
             "claude-code",
-            "xhspec",
+            "xherd",
             &status,
             &content_sha256(old.as_bytes()),
         )

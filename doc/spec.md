@@ -14,7 +14,7 @@
 4. Scenarios
 5. Agents
 6. Gates, approvals and autonomy
-7. xhSpec: the built-in SDD
+7. xherd: the built-in SDD
 8. Pluggable SDD: flow packs, step roles, dynamic flows
 9. Pull-request follow-up
 10. Plugins
@@ -43,7 +43,7 @@ Key properties:
 
 - **Many agents in parallel**, each in its own worktree and branch, with a concurrency cap and a queue.
 - **Agents outlive the daemon**: they run in tmux; the daemon can restart without stopping them.
-- **The SDD is pluggable**: xhSpec ships built in; other SDDs plug in as flow packs or by calling the xherd agent protocol (XAP) from their own commands.
+- **The SDD is pluggable**: xherd ships built in; other SDDs plug in as flow packs or by calling the xherd agent protocol (XAP) from their own commands.
 - **You stay in control** through gates, autonomy levels with tripwires, and an audit trail of what was approved.
 - **Docker-first**, single Rust binary, MIT licensed.
 
@@ -53,7 +53,7 @@ Key properties:
 
 - G1. Run several coding agents on separate tickets at once, each isolated in its own worktree and branch.
 - G2. Keep a human in the loop at the points that matter (spec, design, commits, PR), with adjustable autonomy.
-- G3. Make the SDD replaceable: xhSpec built in, other methodologies through packs or the XAP contract.
+- G3. Make the SDD replaceable: xherd built in, other methodologies through packs or the XAP contract.
 - G4. One binary, no runtime dependencies apart from `git`, `tmux` and the agent CLIs; the status hook starts in milliseconds.
 - G5. Docker is the easiest way to run xherd, without losing "open this worktree in my IDE".
 - G6. Runtime-agnostic: Claude Code, Codex CLI, opencode and others through runtime plugins; live terminal or ACP driver per configuration.
@@ -75,7 +75,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 | Area | v1.0 | Later |
 |---|---|---|
 | Runtimes | Claude Code (terminal driver) | Codex, opencode, ACP driver |
-| SDD | xhSpec built in; dynamic flows (§8.6) | External packs with `parse`, panel plugins |
+| SDD | xherd built in; dynamic flows (§8.6) | External packs with `parse`, panel plugins |
 | Hosts / trackers | GitHub; tracker `none` and Jira (link only) | GitLab, Linear… |
 | Deployment | Local Docker, native binary (Linux, macOS) | Server/Kubernetes, Electron app |
 | UI | Overview, Agent page, Settings, Setup checks, Welcome | Kanban, To review page, Work log, command palette |
@@ -95,7 +95,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 | **ACP** | Agent Client Protocol: open JSON-RPC-over-stdio protocol between a client and a coding agent (prompts, streamed messages, tool calls, plans, permission requests). |
 | **Tracker / Host** | Plugins for the ticket system (link format, key pattern, prompt fragment) and the git host (PR commands, templates). |
 | **SDD** | Spec-driven development: a method that moves work through written documents and approvals before and while coding. |
-| **xhSpec** | xherd's built-in SDD. Commands `/xhspec:*`. |
+| **xherd** | xherd's built-in SDD. Commands `/xherd:*`. |
 | **Flow pack** | A versioned bundle that defines an SDD for xherd: manifest, prompts per runtime, optional schemas, parser and views. |
 | **Flow** | A path through a pack's stages (`feature`, `bug`, `hotfix`), or `none` (no SDD). |
 | **Stage / step role** | A pack's step (its own id) and the canonical role it maps to: `explore`, `spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`, `custom`. |
@@ -118,7 +118,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 - **S1. Laptop.** `docker compose up -d`, open `http://127.0.0.1:4740`, start three tickets, approve specs from the phone, open a worktree in IntelliJ with one click.
 - **S2. Home server.** Daemon on a server behind HTTPS, browser paired as a device, VS Code in the browser or Remote-SSH for edits.
 - **S3. Team SDD.** A team adds the XAP calls to its own SDD commands; xherd shows its gates and tasks without a pack (§8.6).
-- **S4. Mixed SDDs.** Ticket SC-1 runs with xhSpec, SC-2 with another SDD, in the same repo; neither leaves files in the repo; the "why" is in each PR description.
+- **S4. Mixed SDDs.** Ticket SC-1 runs with xherd, SC-2 with another SDD, in the same repo; neither leaves files in the repo; the "why" is in each PR description.
 - **S5. Mostly unattended.** Autonomy `important`, a stage hook runs e2e tests before ship, a draft PR appears; the user reviews the auto-approved steps afterwards.
 
 ## 5. Agents
@@ -240,7 +240,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 
 Each stage has an **autonomy class**. The level decides which classes xherd may approve:
 
-| Class | `ask` | `important` | `never` | xhSpec stages |
+| Class | `ask` | `important` | `never` | xherd stages |
 |---|---|---|---|---|
 | `critical` | wait | wait | approve | spec, ship |
 | `routine` | wait | approve | approve | design, tasks, review |
@@ -270,9 +270,9 @@ A gate waits for a human, with the reason shown, when any of these hold:
 | R-120 | **Run limits** reached: more than `maxAutoApprovalsInRow` (default 10) consecutive auto-approvals, more than `maxReviewLoops` (default 3) review→fix rounds, or the agent's token **budget** is used up. |
 | R-121 | The flow is `hotfix` and the stage is ship. |
 
-## 7. xhSpec: the built-in SDD
+## 7. xherd: the built-in SDD
 
-xhSpec is xherd's own SDD, written for xherd: documents for each step, approval gates, one commit per task, review in a fresh context, and PR rounds. Its prompts and formats ship as the built-in pack `xhspec`; their exact text lives in `packs/xhspec/` with `FORMAT.md` and JSON schemas (to be written).
+xherd is xherd's own SDD, written for xherd: documents for each step, approval gates, one commit per task, review in a fresh context, and PR rounds. Its prompts and formats ship as the built-in pack `xherd`; their exact text lives in `packs/xherd/` with `FORMAT.md` and JSON schemas (to be written).
 
 ### 7.1 Flows
 
@@ -287,16 +287,16 @@ Design may be skipped only when the change is small and local, has no data/API/c
 
 | Command | Does | XAP calls |
 |---|---|---|
-| `/xhspec:feature <KEY> <prompt>` | Read the ticket, explore, write `ticket.md` and `spec.md` | `gate open --role spec` |
-| `/xhspec:bug <KEY> <prompt>` | Investigate without changing production code, write the bug `spec.md` | `gate open --role spec` |
-| `/xhspec:design` | Write `design.md` | `gate open --role design` |
-| `/xhspec:tasks` | Write `tasks.md` | `tasks sync`, `gate open --role tasks` |
-| `/xhspec:next` | Implement the next ready task, verify, propose a commit; when all are done, start the review | `task start/done`, `commit propose` |
-| `/xhspec:commit <Cnn>` | Commit exactly the proposed files, continue | `commit done` |
-| `/xhspec:review` | Review the branch in a fresh context; findings become tasks; propose memory updates | `gate open --role review` |
-| `/xhspec:ship` | Draft `pr.md` following the repo's PR template; after approval push, open a **draft** PR, apply the approved ticket update | `gate open --role ship`, `pr opened` |
-| `/xhspec:pr-review` / `pr-apply` / `pr-fetch` / `pr-post` | PR rounds (fetch/post only for hosts without those plugin commands) | `gate open pr-triage / pr-replies` |
-| `/xhspec:handoff` / `resume` / `status` / `rules` | Handoff note; reload and continue; print state; shared rules | `handoff written` |
+| `/xherd:feature <KEY> <prompt>` | Read the ticket, explore, write `ticket.md` and `spec.md` | `gate open --role spec` |
+| `/xherd:bug <KEY> <prompt>` | Investigate without changing production code, write the bug `spec.md` | `gate open --role spec` |
+| `/xherd:design` | Write `design.md` | `gate open --role design` |
+| `/xherd:tasks` | Write `tasks.md` | `tasks sync`, `gate open --role tasks` |
+| `/xherd:next` | Implement the next ready task, verify, propose a commit; when all are done, start the review | `task start/done`, `commit propose` |
+| `/xherd:commit <Cnn>` | Commit exactly the proposed files, continue | `commit done` |
+| `/xherd:review` | Review the branch in a fresh context; findings become tasks; propose memory updates | `gate open --role review` |
+| `/xherd:ship` | Draft `pr.md` following the repo's PR template; after approval push, open a **draft** PR, apply the approved ticket update | `gate open --role ship`, `pr opened` |
+| `/xherd:pr-review` / `pr-apply` / `pr-fetch` / `pr-post` | PR rounds (fetch/post only for hosts without those plugin commands) | `gate open pr-triage / pr-replies` |
+| `/xherd:handoff` / `resume` / `status` / `rules` | Handoff note; reload and continue; print state; shared rules | `handoff written` |
 
 ### 7.3 Documents
 
@@ -333,9 +333,9 @@ Documents live in the agent's spec folder (§7.5): `ticket.md`, `spec.md`, `desi
 |---|---|
 | R-151 | By default SDD documents and ledgers live in `.xherd/` and are never committed. One agent uses one pack, recorded in `agent.json`. |
 | R-152 | **The "why" travels in the PR**: at ship, the PR description carries the essentials (summary, requirements covered, key decisions, assumptions). |
-| R-153 | **The repo's PR template comes first.** The host plugin's `pr-template` command returns the repo's templates (GitHub `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE/*.md`, `docs/`, root; GitLab `.gitlab/merge_request_templates/*.md`; organisation defaults via the API, **verify**). `pr.md` keeps every heading of the template, places the essentials in fitting sections, ticks checklist items only when true, and puts anything left over in a short `## Spec summary` at the end. With several templates the agent picks one and names it in frontmatter. Only without a template does xhSpec use its own layout. Optional per profile: a collapsed full copy of spec and design. |
+| R-153 | **The repo's PR template comes first.** The host plugin's `pr-template` command returns the repo's templates (GitHub `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE/*.md`, `docs/`, root; GitLab `.gitlab/merge_request_templates/*.md`; organisation defaults via the API, **verify**). `pr.md` keeps every heading of the template, places the essentials in fitting sections, ticks checklist items only when true, and puts anything left over in a short `## Spec summary` at the end. With several templates the agent picks one and names it in frontmatter. Only without a template does xherd use its own layout. Optional per profile: a collapsed full copy of spec and design. |
 | R-154 | Archived `.xherd/` folders stay viewable in the UI after the worktree is removed; optional pruning after N days (off by default). |
-| R-155 | **Opt-in committed mode** per profile (`specDir: xhspec/{agent}`): documents and ledgers are written there and committed with the agent's normal commits; the scope fence allows the agent's own folder and rejects other agents' folders; private files stay in `.xherd/`. Folder names are agent names, so parallel agents never collide. xherd may suggest a `.gitattributes` line that collapses these files in PR diffs (never added silently). |
+| R-155 | **Opt-in committed mode** per profile (`specDir: xherd/{agent}`): documents and ledgers are written there and committed with the agent's normal commits; the scope fence allows the agent's own folder and rejects other agents' folders; private files stay in `.xherd/`. Folder names are agent names, so parallel agents never collide. xherd may suggest a `.gitattributes` line that collapses these files in PR diffs (never added silently). |
 
 ## 8. Pluggable SDD: flow packs, step roles, dynamic flows
 
@@ -351,7 +351,7 @@ The daemon knows **stages, gates, tasks, commits and PR rounds** in the abstract
 | R-202 | The manifest declares: name, version, XAP protocol version, flows, each flow's stages with **role**, gate, autonomy class and **next** command (with a small fixed set of conditions), and the `start`, `resume`, `handoff`, `status` commands. |
 | R-203 | Install targets per runtime (paths, command prefix, format: command, skill, workflow, agent). xherd records the hash of each installed file; upgrades replace unchanged files and keep files the user edited (writing the new version next to them and warning). |
 | R-204 | Optional JSON schemas for document frontmatter, checked by `xherd gate open`. |
-| R-205 | Optional `parse` command that turns the pack's files into the normalised state (R-213). Without it, the pack keeps state current through XAP calls or uses xhSpec formats. |
+| R-205 | Optional `parse` command that turns the pack's files into the normalised state (R-213). Without it, the pack keeps state current through XAP calls or uses xherd formats. |
 | R-206 | Docs location: private by default; a profile may opt in to a committed path; a pack that only works with committed files declares `requiresCommitted: true` and xherd warns when the repo has not opted in. |
 | R-207 | `xherd flow test <dir>`: manifest schema, prompt rendering per runtime, parser output on fixtures, and a fake-runtime run of each flow through its XAP calls. |
 | R-208 | Conformance levels unlock UI features: L0 status only, L1 gates, L2 tasks + commits, L3 PR rounds, L4 stage hooks + ledgers. |
@@ -442,7 +442,7 @@ then stop and wait. If it exits with code 2, fix what it says and run it again.
 | R-501 | Kinds: `runtime`, `tracker`, `host`, `flow`, `notifier`, `toolchain`, `panel`. |
 | R-502 | Manifest `xherd-plugin.json` (packs: `xherd-flow.yaml`) with `name`, `kind`, `version`, `min_xherd_version`, `label`, `description`, `settings` (key, label, type, default, secret, required), kind-specific `data`, prompt `instructions` fragments, `commands`, `hooks`, `checks` (argv, fix, optional; pass = exit 0 within 10 s), `build` (install-time), `timeoutSeconds` (default 60). |
 | R-503 | Commands are argv in any language (no shell); `./x` resolves inside the plugin folder. stdin carries `{command, input, settings, secrets, agent}`; stdout returns JSON. Non-zero exit, timeout (process tree killed), bad JSON or wrong shape = failure, shown on the agent and in Setup checks; stderr goes to the log with secrets redacted. |
-| R-504 | Built-in plugins (GitHub, GitLab; Claude Code, Codex, opencode; SDKMAN, nvm, uv, Go, rustup; xhSpec) are compiled into the binary behind the same interface; an external plugin with the same name overrides one. |
+| R-504 | Built-in plugins (GitHub, GitLab; Claude Code, Codex, opencode; SDKMAN, nvm, uv, Go, rustup; xherd) are compiled into the binary behind the same interface; an external plugin with the same name overrides one. |
 | R-505 | **The CLI is the plugin API**: commands run with `XHERD_BIN`, `XHERD_URL`, a plugin-scoped `XHERD_PLUGIN_TOKEN`, `XHERD_PLUGIN_ID`, `XHERD_PLUGIN_ROOT`, `XHERD_PLUGIN_CONFIG_DIR`, `XHERD_PLUGIN_STATE_DIR` and `XHERD_CONTEXT_JSON`, and may call any `xherd` command their token allows. No SDK. |
 | R-506 | Settings resolution: manifest default → Settings → profile override (non-secret only). Secrets are global, stored in `secrets.json` (mode 0600), never sent to the UI (it only learns which are set), passed only on stdin to that plugin. |
 | R-507 | A broken plugin is listed with its error but cannot be chosen. |
@@ -488,7 +488,7 @@ Host commands: `pr-for-branch {branch} → {url|null}`, `pr-status {url} → {st
 
 ## 11. Declarative views
 
-Screens are built from **panels** arranged by declarations. xhSpec's own agent page is declared the same way.
+Screens are built from **panels** arranged by declarations. xherd's own agent page is declared the same way.
 
 | ID | Requirement |
 |---|---|
@@ -583,7 +583,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 |---|---|---|
 | T1 | **Prompt injection** from tickets, PR comments, web pages or repo files steering an agent to run harmful commands, leak secrets or push bad code | Untrusted text is passed to agents inside clearly marked blocks with an instruction to treat it as data (R-1201); PR triage and replies always wait for a human; autonomy limits and tripwires (§6.4); tool permissions: file edits in the worktree are accepted by default and everything else asks (`ask` mode is always available); secret tripwire on commits (R-117); egress allowlist (roadmap). |
 | T2 | **Agent approves its own gates** or changes xherd settings | XAP has no approve command; agents get an agent-scoped token valid only for reports and XAP of that agent (R-1202); in Docker, agent processes cannot read the daemon's config and secrets (R-1203). |
-| T3 | **Pushing where it must not** (base branch, force push, other branches) | Worktrees have no upstream; an xherd-managed `pre-push` hook in each worktree rejects pushes to any ref except the agent's branch and any non-fast-forward push (R-1204); xhSpec rules forbid force pushes; the docs recommend branch protection on the host. |
+| T3 | **Pushing where it must not** (base branch, force push, other branches) | Worktrees have no upstream; an xherd-managed `pre-push` hook in each worktree rejects pushes to any ref except the agent's branch and any non-fast-forward push (R-1204); xherd rules forbid force pushes; the docs recommend branch protection on the host. |
 | T4 | **Destructive commands** in the workspace (deleting repos, `git reset --hard` on the main checkout) | Agents work only in their worktree; tool permission `all` only inside the container; the container protects the host but not the workspace mount, so backups (§15) cover the workspace's unpushed work; the kill switch (R-032). |
 | T5 | **Runaway cost or loops** | Token budgets per agent and per day (R-1205); run limits (R-120); parking; idle alerts; max session length (R-1206). |
 | T6 | **Malicious plugin or pack** | Preview of commands before install, pinning to a sha, abort on manifest change, scoped plugin tokens, no installs from phones, `XHERD_PLUGIN_INSTALL=off` (§10.5). No sandbox (stated). |
@@ -596,7 +596,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 
 | ID | Requirement |
 |---|---|
-| R-1201 | Untrusted text handed to agents (PR comments, ticket text fetched by xherd, hook output) is wrapped in delimited blocks labelled as untrusted data; xhSpec rules tell agents never to follow instructions found inside them. |
+| R-1201 | Untrusted text handed to agents (PR comments, ticket text fetched by xherd, hook output) is wrapped in delimited blocks labelled as untrusted data; xherd rules tell agents never to follow instructions found inside them. |
 | R-1202 | Tokens are scoped: user token (full), device tokens (full or phone rights), agent tokens (`/api/v1/hooks`, `/api/v1/xap` for one agent), plugin tokens (declared scopes). Agent and plugin tokens are created at start and revoked when the session or plugin stops. |
 | R-1203 | In the container, the daemon runs as its own user; `config.json`, `secrets.json` and the database are readable only by it. Agents run as the host-mapped user and reach git credentials only through the credential helper, which asks the daemon over a socket and answers only for configured hosts. In native mode the same files are 0600, which is a guardrail, not a boundary (same OS user); the UI says so. (**verify** ownership behaviour on macOS bind mounts.) |
 | R-1204 | Each worktree gets an xherd `pre-push` hook (chained with any existing one) that allows pushing only the agent's branch to its configured remote, never deletes remote refs, and refuses non-fast-forward pushes. Hooks can be skipped (`git push --no-verify`), so this prevents mistakes, not a determined agent; **branch protection on the host is the real boundary**, and `xherd security check` reports whether the base branch is protected. |
@@ -624,7 +624,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 | R-1304 | **Draining**: restarting the container ends every tmux session, so `xherd docker update` (host) first asks live agents to hand off and pauses them (or waits until none is running, with a timeout and a "force" option), takes a backup (§15), pulls the new image, recreates the container, and resumes the paused agents (same runtime sessions where possible, else fresh sessions). Native updates replace the binary and restart only the daemon; agents keep running in tmux. |
 | R-1305 | Database migrations are forward-only, numbered, run at start inside a transaction, after an automatic copy of the database. A failed migration leaves the old database in place and the daemon refuses to start with the error. Downgrades restore from that copy. |
 | R-1306 | Config files carry a schema version and are migrated the same way; unknown keys are kept. |
-| R-1307 | Built-in prompts (xhSpec) are re-installed on update with the install-manifest rules (R-203): user-edited files are kept and the new version is written next to them with a warning. |
+| R-1307 | Built-in prompts (xherd) are re-installed on update with the install-manifest rules (R-203): user-edited files are kept and the new version is written next to them with a warning. |
 | R-1308 | **In-flight agents keep their pack version**: an agent records the pack version it started with and uses it until done, unless the user upgrades it explicitly. |
 | R-1309 | Plugins: updates are explicit (R-543); an update that requires a newer xherd is refused with the needed version. |
 | R-1310 | Release notes list breaking changes, migrations and any manual step; the UI shows them after an update. |

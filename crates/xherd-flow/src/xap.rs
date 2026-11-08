@@ -711,13 +711,13 @@ mod tests {
 
     fn agent() -> Agent {
         let mut a = Agent::new("SC-1", "SC-1", 0);
-        a.pack = Some("xhspec".into());
+        a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         a
     }
 
     fn pack() -> Pack {
-        crate::xhspec()
+        crate::builtin()
     }
 
     fn present(path: &str, sha: &str, approved: bool) -> DocFact {

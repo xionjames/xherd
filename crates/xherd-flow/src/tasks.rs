@@ -1,4 +1,4 @@
-//! xhSpec `tasks.md` (spec §7.3). Each task is a heading with a stable id and
+//! xherd `tasks.md` (spec §7.3). Each task is a heading with a stable id and
 //! a bullet list of fields:
 //!
 //! ```markdown

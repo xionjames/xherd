@@ -643,9 +643,9 @@ impl Actor {
     /// done inline: the agent waits for the answer anyway.
     async fn observe(&self, pack: Option<&Pack>, cmd: &XapCmd) -> Result<Observed, Refusal> {
         use xherd_flow::xap::{HANDOFF, SPEC_DIR, doc_path, gate_docs};
-        // Every gate and commit proposal of an xhSpec flow leaves a valid memory.md.
+        // Every gate and commit proposal of an xherd flow leaves a valid memory.md.
         if matches!(cmd, XapCmd::GateOpen { .. } | XapCmd::CommitPropose { .. })
-            && pack.is_some_and(|p| p.name == xherd_flow::XHSPEC)
+            && pack.is_some_and(|p| p.name == xherd_flow::BUILTIN)
             && xherd_flow::xap::flow_of(&self.agent, pack).is_ok()
         {
             let file = self.workdir()?.join(SPEC_DIR).join("memory.md");
@@ -1264,7 +1264,7 @@ impl Actor {
     /// Commit the approved proposal with git: exactly its files and its
     /// message (as edited by the user), hooks included. On success the commit
     /// is `done` with its sha; on failure git's output goes to
-    /// `.xherd/commit-error.txt` and the agent, which gets `/xhspec:commit`
+    /// `.xherd/commit-error.txt` and the agent, which gets `/xherd:commit`
     /// next, fixes it. The approval stands either way.
     async fn commit_for_user(&mut self, wd: &Path, id: &str, edited: Option<String>) {
         let Some(i) = self.agent.commits.iter().position(|c| c.id == id) else {

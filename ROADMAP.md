@@ -9,7 +9,7 @@ by theme; update it together with them.
 ## Foundations (M0, M1)
 
 - [x] Skeleton: workspace, config and paths, store and migrations, supervisor and actors, scheduler, plugin loader, git/tmux wrappers, `xherd hook/report` with the offline queue
-- [x] One agent end to end: xhSpec v0, worktree + `.xherd/`, Claude Code in tmux, XAP gates, hash approvals, fresh sessions, commit gates, ship, draft PR via GitHub
+- [x] One agent end to end: xherd v0, worktree + `.xherd/`, Claude Code in tmux, XAP gates, hash approvals, fresh sessions, commit gates, ship, draft PR via GitHub
 
 ## M2 UI
 

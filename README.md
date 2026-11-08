@@ -10,7 +10,7 @@ xherd gives each ticket its own git worktree and terminal session and starts a c
 
 - Many agents in parallel, each isolated in a worktree, with a concurrency cap.
 - Approval gates for spec, design, tasks, commits and PR replies, with adjustable autonomy and tripwires.
-- Pluggable spec-driven development: **xhSpec** built in; your own SDD through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
+- Pluggable spec-driven development: **xherd** built in; your own SDD through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
 - Docker-first, with "Open in" your IDE through same-path workspace mounts; native binary too.
 - A runtime, model and effort per step; live terminal or ACP driver.
 - Plugins in any language (the CLI is the plugin API), declarative views, guardrails, backups.

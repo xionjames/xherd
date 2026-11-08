@@ -428,7 +428,7 @@ mod tests {
             &rep(
                 ReportEvent::UserPromptSubmit,
                 1,
-                json!({"prompt": "/xhspec:next"}),
+                json!({"prompt": "/xherd:next"}),
             ),
             Origin::Agent,
             1,

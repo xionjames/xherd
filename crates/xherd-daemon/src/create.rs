@@ -38,12 +38,12 @@ impl Daemon {
     pub async fn new_agent(&self, req: NewAgent) -> Result<Agent, ActionError> {
         let c = new::check(&req)?;
         let pack = (c.flow != FLOW_NONE)
-            .then(|| self.packs.get(xherd_flow::XHSPEC))
+            .then(|| self.packs.get(xherd_flow::BUILTIN))
             .flatten();
         if c.flow != FLOW_NONE && pack.and_then(|p| p.flow(&c.flow)).is_none() {
             return Err(refuse(
                 "unknown_flow",
-                format!("pack {} has no flow {:?}", xherd_flow::XHSPEC, c.flow),
+                format!("pack {} has no flow {:?}", xherd_flow::BUILTIN, c.flow),
             ));
         }
 
@@ -125,7 +125,7 @@ impl Daemon {
             None => c.prompt.clone(),
         });
         if pack.is_some() {
-            a.pack = Some(xherd_flow::XHSPEC.into());
+            a.pack = Some(xherd_flow::BUILTIN.into());
             a.flow = Some(c.flow.clone());
         }
 
@@ -320,7 +320,7 @@ fn command_dirs(pack: &xherd_flow::Pack) -> Vec<String> {
     let plan = pack
         .plan_install(
             xherd_flow::approve::DEFAULT_RUNTIME,
-            xherd_flow::install::XHSPEC_FILES,
+            xherd_flow::install::BUILTIN_FILES,
             &env,
         )
         .unwrap_or_default();
@@ -366,7 +366,7 @@ mod tests {
     fn permission_rules_are_the_command_reads_then_the_xap_calls() {
         let xap: Vec<String> = XAP_ALLOW.iter().map(|s| s.to_string()).collect();
         assert_eq!(permission_rules(None), xap);
-        let pack = xherd_flow::xhspec();
+        let pack = xherd_flow::builtin();
         let dirs = command_dirs(&pack);
         let rules = permission_rules(Some(&pack));
         assert_eq!(rules.len(), dirs.len() + xap.len());

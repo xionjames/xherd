@@ -1,4 +1,4 @@
-# xhSpec document formats (v0)
+# xherd document formats (v0)
 
 All documents live in the agent's spec folder, `.xherd/spec/` in the worktree
 (never committed). They are Markdown with a YAML frontmatter block. Approval is
@@ -10,7 +10,7 @@ by content: xherd records the hash of what the user approved, so there is no
 ```yaml
 ---
 ticket: SC-12          # ticket key
-flow: feature          # xhSpec flow
+flow: feature          # xherd flow
 stage: spec            # stage that wrote the document
 needs-human: false     # optional; true + reason forces a human approval
 reason: ""             # why a human must look, when needs-human is true
@@ -155,7 +155,7 @@ it, or why it is left), `## Tests` (what ran), `## Assumptions`.
 ticket: SC-12
 flow: feature
 stage: ship
-template: .github/pull_request_template.md   # the repo template used, or "xhspec"
+template: .github/pull_request_template.md   # the repo template used, or "xherd"
 ---
 ```
 

@@ -1,9 +1,9 @@
 ---
-description: xhSpec shared rules and document formats
+description: xherd shared rules and document formats
 ---
-# xhSpec rules
+# xherd rules
 
-xhSpec is a spec-driven flow: spec, design, tasks, one commit per task,
+xherd is a spec-driven flow: spec, design, tasks, one commit per task,
 review, ship. Every step ends at a gate where the user approves or asks for
 changes. These rules apply to every `{{prefix}}` command.
 
