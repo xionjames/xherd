@@ -57,8 +57,10 @@ pub const XHSPEC_FILES: &[(&str, &str)] = &[
 /// What `{{xap}}` expands to when the runtime calls XAP through the shell.
 pub const XAP_SHELL: &str = r#"## Calling xherd (XAP)
 
-Run the calls with the shell, exactly as shown (`"$XHERD_BIN"` is the path of
-the xherd binary). Document paths are relative to `.xherd/spec/`.
+Run the calls with the shell, exactly as shown, each one as its own command
+(`xherd` is on your `PATH`; do not replace it with a variable, do not chain it
+with `;` or `&&`, and do not append `echo $?`: the exit status comes back with
+the result, and a command with a variable asks the user every time). Document paths are relative to `.xherd/spec/`.
 
 | Exit | Meaning | Do |
 |---|---|---|
@@ -69,15 +71,15 @@ the xherd binary). Document paths are relative to `.xherd/spec/`.
 
 The calls this flow uses:
 
-- `"$XHERD_BIN" stage enter spec` when a step starts.
-- `"$XHERD_BIN" gate open spec` when its documents are ready; then stop.
-- `"$XHERD_BIN" ask "Which database should the cache use?"` for a question without documents; then stop.
-- `"$XHERD_BIN" tasks sync` after writing or changing `tasks.md`.
-- `"$XHERD_BIN" task start T01`, `"$XHERD_BIN" task done T01 --evidence "cargo test: 40 passed"`, `"$XHERD_BIN" task block T01 --reason "Waiting for the API key"`.
-- `"$XHERD_BIN" commit propose C01 --subject "Add the cache" --files src/cache.rs,src/lib.rs --tasks T01`; then stop.
-- `"$XHERD_BIN" commit done C01 --sha 3f2a9c1` after committing an approved proposal; `"$XHERD_BIN" commit drop C01 --reason "Folded into C02"` to abandon one.
-- `"$XHERD_BIN" pr opened --url https://github.com/acme/app/pull/42`, `"$XHERD_BIN" handoff written`.
-- `"$XHERD_BIN" issue add --title "Retry loop ignores the timeout" --severity major` for problems outside the task."#;
+- `xherd stage enter spec` when a step starts.
+- `xherd gate open spec` when its documents are ready; then stop.
+- `xherd ask "Which database should the cache use?"` for a question without documents; then stop.
+- `xherd tasks sync` after writing or changing `tasks.md`.
+- `xherd task start T01`, `xherd task done T01 --evidence "cargo test: 40 passed"`, `xherd task block T01 --reason "Waiting for the API key"`.
+- `xherd commit propose C01 --subject "Add the cache" --message "Add the cache: …" --files src/cache.rs,src/lib.rs --tasks T01`; then stop. xherd commits it once the user approves, with that message.
+- `xherd commit done C01 --sha 3f2a9c1` to record a commit (xherd's, or yours after git refused it); `xherd commit drop C01 --reason "Folded into C02"` to abandon one.
+- `xherd pr opened --url https://github.com/acme/app/pull/42`, `xherd handoff written`.
+- `xherd issue add --title "Retry loop ignores the timeout" --severity major` for problems outside the task."#;
 
 /// One rendered file and where it goes.
 #[derive(Debug, Clone, PartialEq, Eq)]

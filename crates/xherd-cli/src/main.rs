@@ -705,7 +705,7 @@ mod tests {
         out
     }
 
-    /// Every `"$XHERD_BIN" …` call the xhSpec prompts teach is a valid
+    /// Every `` `xherd …` `` call the xhSpec prompts teach is a valid
     /// command line for this CLI (a call ends at the closing backtick).
     #[test]
     fn prompt_calls_parse() {
@@ -716,8 +716,8 @@ mod tests {
         let mut seen = 0;
         for f in &plan {
             for line in f.text.lines() {
-                for (i, _) in line.match_indices(r#""$XHERD_BIN" "#) {
-                    let rest = &line[i + r#""$XHERD_BIN" "#.len()..];
+                for (i, _) in line.match_indices("`xherd ") {
+                    let rest = &line[i + "`xherd ".len()..];
                     let call = rest.split('`').next().unwrap();
                     let argv = std::iter::once("xherd".to_string()).chain(words(call));
                     if let Err(e) = Cli::try_parse_from(argv) {

@@ -10,6 +10,9 @@ use serde_json::{Map, Value};
 
 pub const MANIFEST_FILE: &str = "xherd-plugin.json";
 
+/// Name of the check that says whether a plugin with a `login` is logged in.
+pub const LOGIN_CHECK: &str = "login";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
@@ -83,6 +86,10 @@ pub struct Manifest {
     pub hooks: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub checks: Vec<Check>,
+    /// Interactive login (runs in a terminal the UI shows). Its status is a
+    /// check named [`LOGIN_CHECK`].
+    #[serde(default)]
+    pub login: Option<Vec<String>>,
     /// Install-time build argv.
     #[serde(default)]
     pub build: Option<Vec<String>>,

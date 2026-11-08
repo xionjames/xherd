@@ -113,7 +113,7 @@ stage: tasks
 | `refs` | requirement ids from `spec.md` |
 | `files` | comma-separated paths the task may change; the commit for the task must touch exactly files from this list |
 | `depends` | task ids that must be done first, or `none` |
-| `verify` | optional command that proves the task works |
+| `verify` | optional: **one runnable shell command** that proves the task works (xherd runs it as written in the worktree when the task is done; exit 0 passes). Never a description: leave it out, and put notes in `contract` or below the fields |
 | `evidence` | filled when done: what was run and what it showed |
 | `tier` | optional model hint: `high`, `medium` or `low` |
 | `source` | `spec` or `review` |
@@ -121,20 +121,22 @@ stage: tasks
 
 Keep tasks small: one task is one commit.
 
-Update `status` and `evidence` as you work: those two lines are progress,
-not content, so changing them does not re-open the approved tasks gate.
-Changing anything else (titles, files, depends, new tasks) does.
+`status` and `evidence` are progress, not content: xherd writes them when you
+start, finish or block a task, so do not edit them, and they never
+re-open the approved tasks gate. Changing anything else (titles, files,
+depends, new tasks) does.
 
 ## commits.md
 
-One entry per commit proposal, in order:
+One entry per commit proposal, in order. You write the heading, `tasks` and
+`files`; xherd writes `status` and `sha` as the proposal moves on:
 
 ```markdown
 ## C01: Add the session store
 - tasks: T01
 - files: `src/store.rs`, `src/lib.rs`
-- status: proposed      # proposed, done or dropped
-- sha:
+- status: proposed      # written by xherd: proposed, done or dropped
+- sha:                  # written by xherd
 ```
 
 Ids are `C01`, `C02`… and never reused, even when a proposal is dropped.
@@ -167,9 +169,17 @@ transition to apply to the ticket once the PR is open.
 
 ## memory.md
 
-A short state note for a fresh session: current stage, current task, decisions
-taken with the user, anything a newcomer must not redo. Rewrite it (do not
-append forever) at each gate.
+A short state note for a fresh session: every step starts in a new session that
+knows nothing but this file and the approved documents. Rewrite it (do not
+append forever) at each gate, in about 60 lines (xherd refuses a gate or commit proposal when it is missing,
+lacks a section or passes 80 lines), with these sections:
+
+- `## State`: current stage, current task, what comes next.
+- `## Decisions`: taken with the user, and why; anything a newcomer must not redo.
+- `## Code map`: one line per file that matters, `path: its role here`, plus the
+  repository's build, test and lint commands. The next step opens these files
+  and does not explore the code again.
+- `## Watch out`: traps found (flaky tests, generated files, odd conventions).
 
 ## HANDOFF.md (`.xherd/HANDOFF.md`)
 

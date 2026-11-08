@@ -42,7 +42,7 @@
     const g = agent.gate;
     if (g?.kind === 'commit' || (g?.kind === 'docs' && g.role === 'ship')) return 'changes';
     if (g?.kind === 'docs') return 'spec';
-    return agent.flow ? 'spec' : 'terminal';
+    return 'terminal';
   });
   const tabId = $derived(tabs.find((t) => t.id === route.query.get('s'))?.id ?? fallback);
   const tab = $derived(tabs.find((t) => t.id === tabId) ?? tabs[0]);
@@ -68,7 +68,7 @@
   }
 </script>
 
-{#if needsYou(agent)}<YourCallBand {agent} {flow} />{/if}
+{#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
 
 <header class="hero">
   <div class="htop">
@@ -87,7 +87,7 @@
     </div>
     <div class="row">
       <StatusPill {agent} />
-      {#if agent.status === 'paused' || agent.status === 'parked'}
+      {#if agent.status === 'paused' || agent.status === 'parked' || agent.status === 'error'}
         <button class="btn" onclick={() => act('resume', 'Could not resume')}><Icon name="play" />Resume</button>
       {:else if live}
         <button class="btn" onclick={() => act('pause', 'Could not pause')}><Icon name="pause" />Pause</button>
@@ -124,20 +124,24 @@
     </div>
   </div>
   <Stepper {agent} {flow} />
-  <nav class="tabs" aria-label="Agent">
+</header>
+
+<div class="aview">
+  <nav class="vnav" aria-label="Agent">
     {#each tabs as t (t.id)}
       {@const b = badge(t.id)}
-      <a class="tb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
+      <a class="vtb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
         href={href(`/agent/${agent.name}`, { s: t.id })}>
         <Icon name={t.icon} />{t.label}{#if b}<span class="tc {b.tone}">{b.n}</span>{/if}
       </a>
     {/each}
   </nav>
-</header>
-
-{#if Panel}
-  {#key agent.id}<Panel {agent} />{/key}
-{/if}
+  <div class="apanel">
+    {#if Panel}
+      {#key agent.id}<Panel {agent} />{/key}
+    {/if}
+  </div>
+</div>
 
 {#if confirmCancel}
   <Dialog title="Cancel {agent.name}?" onclose={() => (confirmCancel = false)}>

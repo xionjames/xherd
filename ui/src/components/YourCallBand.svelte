@@ -11,11 +11,21 @@
   import { stageLabel } from '../lib/flow';
   import { href } from '../lib/router.svelte';
 
-  let { agent, flow }: { agent: Agent; flow?: FlowInfo } = $props();
+  let { agent, flow, tabId }: { agent: Agent; flow?: FlowInfo; tabId?: string } = $props();
   let text = $state('');
   let busy = $state(false);
+  // The band stays one line high; long text opens on demand.
+  let open = $state(false);
 
   const g = $derived(agent.gate);
+  // Commit gate: the message xherd commits with, editable before approving.
+  let msg = $state('');
+  let msgFor = '';
+  const proposed = $derived(g?.kind === 'commit' ? (g.message ?? g.subject) : '');
+  $effect(() => {
+    const key = g?.kind === 'commit' ? `${g.id}|${proposed}` : '';
+    if (key !== msgFor) { msgFor = key; msg = proposed; }
+  });
   const fresh = $derived(app.state?.config.freshSessions !== false);
   const nextStage = $derived.by(() => {
     if (!flow || !g || g.kind !== 'docs') return undefined;
@@ -24,6 +34,16 @@
   });
   const answering = $derived(!g || g.kind === 'question');
   const approvable = $derived(g?.kind === 'docs' || g?.kind === 'commit');
+  // The user approves what they read: the controls show on the tab that
+  // holds it; elsewhere the band offers a button that goes there.
+  const reviewTab = $derived(g?.kind === 'docs' && g.role !== 'ship' ? 'spec' : g?.kind === 'docs' || g?.kind === 'commit' ? 'changes' : undefined);
+  const reviewing = $derived(!approvable || tabId === reviewTab);
+  const openLabel = $derived(
+    g?.kind === 'docs' && g.role !== 'ship' ? `Open ${g.files[0]?.path.split('/').pop() ?? 'the document'}` : 'Review the changes',
+  );
+  const reviewHref = $derived(
+    href(`/agent/${agent.name}`, g?.kind === 'docs' && g.role !== 'ship' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
+  );
 
   const title = $derived.by(() => {
     if (!g) return agent.status === 'blocked' ? 'the agent is blocked' : 'the agent asks you';
@@ -73,21 +93,29 @@
         if (sha) expect[f.path] = sha;
       }
     }
-    run('approve', { expect }, 'Could not approve');
+    const body: Record<string, unknown> = { expect };
+    if (g?.kind === 'commit' && msg.trim() && msg.trim() !== proposed.trim()) body.message = msg.trim();
+    run('approve', body, 'Could not approve');
   }
 </script>
 
 <section class="gband" aria-label="Your call">
   <div class="gtop">
     <div class="ghand" aria-hidden="true"><Icon name="hand" size={20} /></div>
-    <div class="gtitle">
+    <div class="gtitle" class:open class:more={true}>
       <h2>Your call — {title}</h2>
       <p class="muted">{line}</p>
       {#if held}<p class="gwhy">Held: {held}</p>{/if}
       {#if answering && question}<p class="gwhy">“{question}”</p>{/if}
+      <button class="gtoggle" aria-expanded={open} onclick={() => (open = !open)}>{open ? 'Show less' : 'Show more'}</button>
     </div>
     <div class="gact">
-      {#if approvable}
+      {#if agent.status === 'blocked'}
+        <a class="btn gate lg" href={href(`/agent/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
+      {/if}
+      {#if approvable && !reviewing}
+        <a class="btn gate lg" href={reviewHref}><Icon name={reviewTab === 'spec' ? 'doc' : 'diff'} />{openLabel}</a>
+      {:else if approvable}
         <textarea bind:value={text} placeholder="Or tell the agent what to change…" aria-label="What to change"></textarea>
         <button class="btn lg" disabled={busy || !text.trim()}
           onclick={() => run('request-changes', { comment: text.trim() }, 'Could not request changes')}>Request changes</button>
@@ -101,6 +129,16 @@
       {/if}
     </div>
   </div>
+  {#if g?.kind === 'commit' && reviewing}
+    <div class="gmore">
+      <label class="gbox" style="flex:1 1 100%">
+        <span class="lbl">Commit message · xherd commits {g.files.length} {g.files.length === 1 ? 'file' : 'files'} with it when you approve</span>
+        <textarea class="mono" rows="4" bind:value={msg} aria-label="Commit message"
+          style="font-size:13px;line-height:1.45;resize:vertical;background:var(--pen)"></textarea>
+        {#if msg.trim() !== proposed.trim()}<span class="hint">Edited: your text replaces the agent's.</span>{/if}
+      </label>
+    </div>
+  {/if}
   {#if g?.kind === 'docs' && g.questions?.length}
     <div class="gmore">
       <div class="gbox">
@@ -109,8 +147,5 @@
         <span class="hint">Answer them in your change request.</span>
       </div>
     </div>
-  {/if}
-  {#if g?.kind === 'commit'}
-    <div class="gmore"><a href={href(`/agent/${agent.name}`, { s: 'changes' })}>Review the changes before approving →</a></div>
   {/if}
 </section>

@@ -9,8 +9,13 @@ use serde_json::{Map, Value, json};
 
 use crate::Manifest;
 
-/// Tool-permission mode used until agents can choose one (spec §13 T1: ask by default).
-pub const DEFAULT_PERMISSION_MODE: &str = "ask";
+/// Tool-permission mode used until agents can choose one: file edits in the
+/// worktree are accepted, anything else (shell commands that change things)
+/// still asks and shows as `blocked`. `ask` stays available (spec §13 T1).
+pub const DEFAULT_PERMISSION_MODE: &str = "edits";
+
+/// Every runtime must offer this mode, the strictest.
+pub const STRICT_PERMISSION_MODE: &str = "ask";
 
 /// The permission modes shared by every runtime (design §4.1): `ask` asks
 /// before every tool use that needs permission, `edits` accepts file edits,
@@ -35,6 +40,41 @@ pub struct Terminal {
     pub hooks: Option<HookFile>,
     #[serde(default)]
     pub trust: Option<Trust>,
+    /// How to continue the runtime's last conversation (R-027).
+    #[serde(default)]
+    pub resume: Option<Resume>,
+}
+
+/// Continue a runtime conversation by its session id, when the runtime still
+/// has its transcript.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Resume {
+    /// Extra launch arguments; `{session}` is the session id.
+    pub args: Vec<String>,
+    /// Folder holding one subfolder per project; may use `${VAR}` and `~/`.
+    pub transcripts: String,
+    /// Transcript file name inside a project folder; `{session}` as above.
+    pub file: String,
+}
+
+/// Session ids come from the runtime's hook payload; only plain ids are used.
+pub fn plain_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 80
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+impl Resume {
+    /// The launch arguments for `session`; `None` for an odd id.
+    pub fn argv(&self, session: &str) -> Option<Vec<String>> {
+        plain_id(session).then(|| {
+            self.args
+                .iter()
+                .map(|a| a.replace("{session}", session))
+                .collect()
+        })
+    }
 }
 
 /// Where the runtime records the folders it trusts: a JSON file whose
@@ -127,11 +167,13 @@ impl Terminal {
                 ));
             }
         }
-        if !t.permission_modes.contains_key(DEFAULT_PERMISSION_MODE) {
-            return Err(format!(
-                "runtime {}: permission mode {DEFAULT_PERMISSION_MODE} is required",
-                m.name
-            ));
+        for required in [STRICT_PERMISSION_MODE, DEFAULT_PERMISSION_MODE] {
+            if !t.permission_modes.contains_key(required) {
+                return Err(format!(
+                    "runtime {}: permission mode {required} is required",
+                    m.name
+                ));
+            }
         }
         Ok(t)
     }
@@ -152,10 +194,14 @@ fn shell_quote(s: &str) -> String {
 
 /// The hook file's new content: `existing` with xherd's tagged entries
 /// replaced and everything else kept. Invalid existing JSON is refused (R-005b).
+/// `allow` rules (what xherd's own commands need: reading the folder it
+/// installed, calling `xherd`) are added to `permissions.allow` unless already
+/// there, so the agent does not stop to ask for them.
 pub fn merge_hooks(
     existing: Option<&str>,
     h: &HookFile,
     xherd_bin: &str,
+    allow_rules: &[String],
 ) -> Result<String, String> {
     let mut root: Map<String, Value> = match existing.map(str::trim) {
         None | Some("") => Map::new(),
@@ -199,6 +245,24 @@ pub fn merge_hooks(
             _ => return Err(format!("{}: hooks.{event} is not a list", h.file)),
         }
     }
+    if !allow_rules.is_empty() {
+        let perms = root
+            .entry("permissions")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let allow = perms
+            .as_object_mut()
+            .ok_or_else(|| format!("{}: \"permissions\" is not an object", h.file))?
+            .entry("allow")
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| format!("{}: permissions.allow is not a list", h.file))?;
+        for rule in allow_rules {
+            let rule = Value::String(rule.clone());
+            if !allow.contains(&rule) {
+                allow.push(rule);
+            }
+        }
+    }
     let mut out = serde_json::to_string_pretty(&Value::Object(root)).expect("json");
     out.push('\n');
     Ok(out)
@@ -235,6 +299,8 @@ mod tests {
         set(&mut m, json!({"edits": ["-e"]}));
         assert!(Terminal::of(&m).unwrap_err().contains("ask is required"));
         set(&mut m, json!({"ask": ["-a"]}));
+        assert!(Terminal::of(&m).unwrap_err().contains("edits is required"));
+        set(&mut m, json!({"ask": ["-a"], "edits": ["-e"]}));
         assert!(Terminal::of(&m).is_ok());
     }
 
@@ -242,7 +308,11 @@ mod tests {
     fn builtin_claude_code() {
         let t = claude();
         let mode = |m: &str| t.argv(m).unwrap()[1..].join(" ");
-        assert_eq!(mode(DEFAULT_PERMISSION_MODE), "--permission-mode manual");
+        assert_eq!(mode(STRICT_PERMISSION_MODE), "--permission-mode manual");
+        assert_eq!(
+            mode(DEFAULT_PERMISSION_MODE),
+            "--permission-mode acceptEdits"
+        );
         assert_eq!(mode("edits"), "--permission-mode acceptEdits");
         assert_eq!(mode("auto"), "--permission-mode auto");
         assert_eq!(mode("all"), "--permission-mode bypassPermissions");
@@ -293,8 +363,8 @@ mod tests {
         let h = claude().hooks.unwrap();
         let user = r#"{"permissions": {"allow": ["Bash(ls)"]},
             "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}}"#;
-        let once = merge_hooks(Some(user), &h, "/opt/x herd/xherd").unwrap();
-        let twice = merge_hooks(Some(&once), &h, "/usr/bin/xherd").unwrap();
+        let once = merge_hooks(Some(user), &h, "/opt/x herd/xherd", &[]).unwrap();
+        let twice = merge_hooks(Some(&once), &h, "/usr/bin/xherd", &[]).unwrap();
         let v: Value = serde_json::from_str(&twice).unwrap();
         assert_eq!(v["permissions"]["allow"][0], "Bash(ls)");
         let stop = v["hooks"]["Stop"].as_array().unwrap();
@@ -311,13 +381,29 @@ mod tests {
     #[test]
     fn hooks_merge_refuses_bad_json() {
         let h = claude().hooks.unwrap();
-        assert!(merge_hooks(Some("{oops"), &h, "xherd").is_err());
-        assert!(merge_hooks(Some("[]"), &h, "xherd").is_err());
-        assert!(merge_hooks(Some(r#"{"hooks": 1}"#), &h, "xherd").is_err());
+        assert!(merge_hooks(Some("{oops"), &h, "xherd", &[]).is_err());
+        assert!(merge_hooks(Some("[]"), &h, "xherd", &[]).is_err());
+        assert!(merge_hooks(Some(r#"{"hooks": 1}"#), &h, "xherd", &[]).is_err());
         assert!(
-            merge_hooks(None, &h, "xherd")
+            merge_hooks(None, &h, "xherd", &[])
                 .unwrap()
                 .contains("Notification")
         );
+    }
+
+    #[test]
+    fn read_dirs_are_allowed_once() {
+        let h = claude().hooks.unwrap();
+        let user = r#"{"permissions": {"allow": ["Bash(ls)"]}}"#;
+        let rules = ["Read(//home/x/.claude/commands/xhspec/**)".to_string()];
+        let once = merge_hooks(Some(user), &h, "xherd", &rules).unwrap();
+        let twice = merge_hooks(Some(&once), &h, "xherd", &rules).unwrap();
+        let v: Value = serde_json::from_str(&twice).unwrap();
+        assert_eq!(
+            v["permissions"]["allow"],
+            json!(["Bash(ls)", "Read(//home/x/.claude/commands/xhspec/**)"])
+        );
+        let none = merge_hooks(None, &h, "xherd", &[]).unwrap();
+        assert!(!none.contains("permissions"));
     }
 }

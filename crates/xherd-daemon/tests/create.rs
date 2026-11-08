@@ -228,10 +228,10 @@ async fn starts_claude_code_with_hooks() {
             .join(repo_name(&t))
             .join("SC-5");
     let a = t.d.new_agent(req(&t, "SC-5")).await.unwrap();
-    // Ask mode passed explicitly, never the runtime's own default.
+    // The default mode (accept edits) is passed explicitly, never the runtime's own default.
     assert_eq!(
         a.launch.as_deref().map(|l| l.join(" ")).as_deref(),
-        Some("claude --permission-mode manual")
+        Some("claude --permission-mode acceptEdits")
     );
     let settings: serde_json::Value =
         serde_json::from_slice(&std::fs::read(wt.join(".claude/settings.local.json")).unwrap())
@@ -239,6 +239,21 @@ async fn starts_claude_code_with_hooks() {
     assert_eq!(
         settings["hooks"]["Stop"][0]["hooks"][0]["command"],
         "'xherd' hook stop # xherd"
+    );
+    // The XAP calls go through plain `xherd`, allowed by name (a variable in
+    // the command would make the runtime ask every time).
+    let allow = settings["permissions"]["allow"].as_array().unwrap();
+    for rule in [
+        "Bash(xherd stage *)",
+        "Bash(xherd gate *)",
+        "Bash(xherd commit *)",
+    ] {
+        assert!(allow.iter().any(|r| r == rule), "{rule} in {allow:?}");
+    }
+    assert!(
+        allow
+            .iter()
+            .any(|r| r.as_str().is_some_and(|r| r.starts_with("Read(//")))
     );
     let status = git(&wt, &["status", "--porcelain", "--untracked-files=all"]);
     assert!(status.stdout.is_empty(), "hook file is excluded from git");
@@ -248,7 +263,7 @@ async fn starts_claude_code_with_hooks() {
             assert!(
                 t.fake
                     .calls()
-                    .contains(&"start SC-5 claude --permission-mode manual".to_string())
+                    .contains(&"start SC-5 claude --permission-mode acceptEdits".to_string())
             );
             let ev = t.d.store.events(&a.id, 10).await.unwrap();
             assert!(ev.iter().any(|e| e.kind == "session-started"));
@@ -281,7 +296,7 @@ async fn version_files_wrap_the_launch_in_the_toolchain_step() {
         if let Some(c) = t.fake.calls().iter().find(|c| c.starts_with("start SC-7 ")) {
             assert_eq!(
                 c,
-                "start SC-7 xherd toolchain exec -- claude --permission-mode manual"
+                "start SC-7 xherd toolchain exec -- claude --permission-mode acceptEdits"
             );
             let plan: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(wt.join(".xherd/toolchain.json")).unwrap())

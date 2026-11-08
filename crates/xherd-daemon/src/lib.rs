@@ -28,7 +28,7 @@ pub mod supervisor;
 pub mod support;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
-pub use create::TrustWriter;
+pub use create::{Resumer, TrustWriter};
 pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
 pub use supervisor::SupervisorHandle;
 pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
@@ -61,6 +61,8 @@ pub struct Options {
     /// Peer addresses treated like loopback: the container's gateway, through
     /// which the port published on the host's 127.0.0.1 arrives.
     pub local_peers: Vec<std::net::IpAddr>,
+    /// Limit for a task's `verify:` command (tests shorten it).
+    pub verify_timeout: std::time::Duration,
 }
 
 impl Options {
@@ -75,6 +77,7 @@ impl Options {
             screen_rules: None,
             sandbox: false,
             local_peers: Vec::new(),
+            verify_timeout: actor::VERIFY_TIMEOUT,
         }
     }
 }
@@ -201,6 +204,7 @@ impl Daemon {
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
             toolchain_install: opts.sandbox,
+            verify_timeout: opts.verify_timeout,
         };
         let trust = plugins
             .get(xherd_flow::approve::DEFAULT_RUNTIME)
@@ -212,6 +216,11 @@ impl Daemon {
                     root: config.workspace_root().join("worktrees"),
                 })
             });
+        let resume = plugins
+            .get(xherd_flow::approve::DEFAULT_RUNTIME)
+            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
+            .and_then(|t| t.resume)
+            .map(|r| Arc::new(Resumer(r)));
         let toolchains = plugins
             .of_kind(xherd_plugin::Kind::Toolchain)
             .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
@@ -234,6 +243,7 @@ impl Daemon {
             host,
             toolchains: Arc::new(toolchains),
             trust,
+            resume,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
@@ -259,7 +269,7 @@ impl Daemon {
         if replayed > 0 {
             tracing::info!(replayed, "replayed queued reports");
         }
-        d.reconcile().await;
+        d.reconcile_with(true).await;
         if let Err(e) = d.write_gitconfig() {
             tracing::warn!(error = %e.message, "managed git config not written");
         }
@@ -375,7 +385,12 @@ impl Daemon {
     /// (`<base>...HEAD`) and the uncommitted files that would stay behind;
     /// otherwise the diff of every uncommitted change. Read-only git work, run
     /// here rather than in the actor.
-    pub async fn diff(&self, who: &str) -> Result<serde_json::Value, ActionError> {
+    pub async fn diff(
+        &self,
+        who: &str,
+        view: Option<&str>,
+        commit: Option<&str>,
+    ) -> Result<serde_json::Value, ActionError> {
         let fail = |code: &'static str, message: String| ActionError { code, message };
         let a = self.action(who, UserAction::Get).await?;
         let wd = a
@@ -387,6 +402,87 @@ impl Daemon {
         let git_err = |e: xherd_git::GitError| fail("git", e.to_string());
         let head = git.rev_parse(wd, "HEAD").await.map_err(git_err)?;
         let changed = git.changed_files(wd, "HEAD").await.map_err(git_err)?;
+        // Explicit views (the Changes tabs): everything uncommitted; the whole
+        // branch against its base, committed and not; one commit.
+        match view {
+            None => {}
+            Some("uncommitted") => {
+                let diff = git.diff_proposed(wd, &changed).await.map_err(git_err)?;
+                return Ok(serde_json::json!({
+                    "agent": a.name, "head": head, "view": "uncommitted", "files": changed,
+                    "others": Vec::<String>::new(), "diff": diff,
+                }));
+            }
+            Some("branch") => {
+                let base = a
+                    .base
+                    .as_deref()
+                    .ok_or_else(|| fail("no_base", format!("{} has no base branch", a.name)))?;
+                let mb = git
+                    .run(wd, &["merge-base", base, "HEAD"])
+                    .await
+                    .map_err(git_err)?;
+                // Tracked changes since the merge base (committed or not),
+                // then the files git does not know yet.
+                let mut files: Vec<String> = git
+                    .run(wd, &["diff", "--name-only", &mb, "--"])
+                    .await
+                    .map_err(git_err)?
+                    .lines()
+                    .map(str::to_string)
+                    .collect();
+                let mut diff = git.diff(wd, Some(&mb), &[]).await.map_err(git_err)?;
+                let untracked: Vec<String> = git
+                    .run(wd, &["ls-files", "--others", "--exclude-standard"])
+                    .await
+                    .map_err(git_err)?
+                    .lines()
+                    .map(str::to_string)
+                    .collect();
+                if !untracked.is_empty() {
+                    diff.push_str(&git.diff_proposed(wd, &untracked).await.map_err(git_err)?);
+                    files.extend(untracked);
+                }
+                files.sort();
+                files.dedup();
+                return Ok(serde_json::json!({
+                    "agent": a.name, "head": head, "view": "branch", "branch": format!("{base}...HEAD"),
+                    "files": files, "others": Vec::<String>::new(), "diff": diff,
+                }));
+            }
+            Some("commit") => {
+                let id =
+                    commit.ok_or_else(|| fail("bad_request", "commit=<id> is needed".into()))?;
+                let c = a
+                    .commits
+                    .iter()
+                    .find(|c| c.id == id)
+                    .ok_or_else(|| fail("commit_unknown", format!("no commit {id}")))?;
+                let (files, diff) = match &c.sha {
+                    Some(sha) => (
+                        git.commit_files(wd, sha).await.map_err(git_err)?,
+                        git.run(
+                            wd,
+                            &["show", "--no-color", "--no-ext-diff", "--format=", sha],
+                        )
+                        .await
+                        .map_err(git_err)?,
+                    ),
+                    // Not committed yet: what would be committed.
+                    None => (
+                        c.files.clone(),
+                        git.diff_proposed(wd, &c.files).await.map_err(git_err)?,
+                    ),
+                };
+                return Ok(serde_json::json!({
+                    "agent": a.name, "head": head, "view": "commit", "commit": c,
+                    "files": files, "others": Vec::<String>::new(), "diff": diff,
+                }));
+            }
+            Some(v) => {
+                return Err(fail("bad_request", format!("unknown view {v:?}")));
+            }
+        }
         if let (
             Some(xherd_core::domain::Gate::Docs {
                 role: xherd_core::domain::Role::Ship,
@@ -494,8 +590,14 @@ impl Daemon {
 
     /// Compare live agents with the driver's sessions (R-011).
     pub async fn reconcile(&self) {
+        self.reconcile_with(false).await;
+    }
+
+    /// `recover` at daemon start: agents whose session is gone (the container
+    /// or terminal server restarted) are parked at their gate or resumed.
+    pub async fn reconcile_with(&self, recover: bool) {
         match self.driver.sessions().await {
-            Ok(alive) => self.sup.reconcile(alive),
+            Ok(alive) => self.sup.reconcile(alive, recover),
             Err(e) => tracing::warn!(error = %e, "reconcile: cannot list sessions"),
         }
     }

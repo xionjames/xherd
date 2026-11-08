@@ -13,7 +13,7 @@ Every agent session runs with:
 | Variable | Meaning |
 |---|---|
 | `XHERD_ENV` | `1` when running under xherd. SDDs skip XAP calls when it is not `1`. |
-| `XHERD_BIN` | Absolute path of the `xherd` binary. Call XAP as `"$XHERD_BIN" …`. |
+| `XHERD_BIN` | Absolute path of the `xherd` binary. Call XAP as plain `xherd …` (its folder is first on the session `PATH`; prefer it over the variable, which runtimes cannot check and ask about every time). |
 | `XHERD_AGENT_ID` | The agent's id. |
 | `XHERD_AGENT_TOKEN` | Agent-scoped token; valid only for this agent's reports and XAP calls. |
 | `XHERD_URL` | Daemon URL (default `http://127.0.0.1:4740`). |
@@ -91,7 +91,7 @@ Special stages: `pr-triage` and `pr-replies` (PR rounds, no documents).
 
 Without `--doc`/`--artifact`, the stage's documents from the pack are used.
 
-Refusals: `unknown_stage`, `no_docs_gate` (the stage gates commits or has no documents), `doc_missing`, `doc_schema` (frontmatter does not parse or fails the pack's schema; message names the field), `already_approved` (same content already approved), `path_outside_workspace` (also through symlinks), `next_not_allowed` (`--next` on a pack flow: the pack decides), `gate_open_commit` (a commit proposal is still open).
+Refusals: `unknown_stage`, `no_docs_gate` (the stage gates commits or has no documents), `doc_missing`, `doc_schema` (frontmatter does not parse or fails the pack's schema; message names the field), `already_approved` (same content already approved), `path_outside_workspace` (also through symlinks), `next_not_allowed` (`--next` on a pack flow: the pack decides), `gate_open_commit` (a commit proposal is still open), `memory_invalid` (xhSpec flows: `.xherd/spec/memory.md` is missing, lacks one of the sections State, Decisions, Code map, Watch out, or has more than 80 lines; only structure is checked; `commit propose` refuses it too).
 
 ### `xherd ask <text>`
 
@@ -106,17 +106,19 @@ xherd task done <ID> --evidence TEXT
 xherd task block <ID> --reason TEXT
 ```
 
-`tasks sync` re-reads the task list (built-in parser or the pack's `parse`); default file `tasks.md`. The file is the source of tasks; a status already reported through XAP is kept when the file still says `todo`. Refusals: `doc_missing`, `doc_schema` (the list does not parse), `task_unknown`, `task_not_ready` (dependencies not done), `task_already_doing` (another task is in progress), `evidence_missing`.
+`tasks sync` re-reads the task list (built-in parser or the pack's `parse`); default file `tasks.md`. The file is the source of tasks; a status already reported through XAP is kept when the file still says `todo`. Refusals: `doc_missing`, `doc_schema` (the list does not parse), `task_unknown`, `task_not_ready` (dependencies not done), `task_already_doing` (another task is in progress), `evidence_missing`, `verify_failed` (`task done` only: see below), `verify_invalid` (`tasks sync` and `task done`: a `verify:` that does not parse as one shell command, checked with `sh -n` before the tasks are approved; write a single runnable command or none).
+
+When the task has a `verify:` command, `task done` makes the daemon run it (`sh -c`, in the worktree, 10 minutes at most) before accepting. Exit 0: the task is done and its evidence is the agent's `--evidence` followed by `[verify exit 0]` and the last 20 lines of output. Non-zero exit or timeout: refused with `verify_failed` (one line: the command, how it ended, the last lines of output) and the task stays `doing`. A replayed call (same call id) does not run it again.
 
 ## 5. Commits
 
 ```
-xherd commit propose <ID> --subject TEXT --files PATH[,PATH...] [--tasks T01,T02] [--needs-human REASON]
+xherd commit propose <ID> --subject TEXT [--message TEXT] --files PATH[,PATH...] [--tasks T01,T02] [--needs-human REASON]
 xherd commit done <ID> --sha SHA
 xherd commit drop <ID> [--reason TEXT]
 ```
 
-`propose` opens a commit gate; xherd computes the diff of exactly these files for review and runs the code tripwires. `done` is accepted only after the proposal was approved, and checks that the commit exists on the agent's branch and touches exactly the proposed files. Proposing the same id again while it waits for approval replaces the proposal (after a change request). Commit ids are never reused once committed or dropped. Refusals: `commit_open` (another proposal is open), `docs_gate_open` (a document gate waits for approval), `commit_id_used`, `files_empty`, `task_unknown`, `files_outside_scope` (not in the `files:` of the listed tasks; no check when `--tasks` is absent or a listed task declares no files), `commit_unknown`, `commit_not_approved`, `commit_done` (already committed), `sha_unknown` (no such commit, or not on the agent's branch), `sha_files_mismatch`.
+`propose` opens a commit gate; xherd computes the diff of exactly these files for review and runs the code tripwires. `--message` is the full commit message (`git commit -m`; the subject is used without it); the user can edit it at approval. **On approval xherd makes the commit itself** (stages exactly the proposed files, commits with the message, hooks included, never `--no-verify`), records its sha and marks the proposal done; the next command (`commit`) only records it in `commits.md`. If git refuses, the approval stands, git's output is written to `.xherd/commit-error.txt` and the agent fixes and commits (then `done`). `done` is accepted only after the proposal was approved, and checks that the commit exists on the agent's branch and touches exactly the proposed files. Proposing the same id again while it waits for approval replaces the proposal (after a change request). Commit ids are never reused once committed or dropped. Refusals: `commit_open` (another proposal is open), `docs_gate_open` (a document gate waits for approval), `commit_id_used`, `files_empty`, `task_unknown`, `files_outside_scope` (not in the `files:` of the listed tasks; no check when `--tasks` is absent or a listed task declares no files), `commit_unknown`, `commit_not_approved`, `commit_done` (already committed), `sha_unknown` (no such commit, or not on the agent's branch), `sha_files_mismatch`, `memory_invalid` (as for `gate open`).
 
 ## 6. Pull requests, handoff, issues, memory
 

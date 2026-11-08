@@ -95,6 +95,10 @@ pub enum CommitStatus {
 pub struct Commit {
     pub id: String,
     pub subject: String,
+    /// The full commit message the agent proposes (`git commit -m`); the
+    /// user may edit it at approval. Empty: the subject is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     pub files: Vec<String>,
     #[serde(default)]
     pub status: CommitStatus,
@@ -166,6 +170,7 @@ mod tests {
         let c = Gate::Commit(Commit {
             id: "C1".into(),
             subject: "add store".into(),
+            message: None,
             files: vec!["a.rs".into()],
             status: CommitStatus::Proposed,
             tasks: vec![],

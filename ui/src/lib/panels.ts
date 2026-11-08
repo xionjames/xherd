@@ -31,8 +31,8 @@ export interface TabDef {
 
 /** The built-in agent view (labels as in the design). */
 export const AGENT_VIEW: TabDef[] = [
-  { id: 'spec', panel: 'documents', label: 'Spec', icon: 'doc', noFlow: false },
   { id: 'terminal', panel: 'terminal', label: 'Terminal', icon: 'term', noFlow: true },
+  { id: 'spec', panel: 'documents', label: 'Spec', icon: 'doc', noFlow: false },
   { id: 'tasks', panel: 'tasks', label: 'Tasks', icon: 'tasks', noFlow: false },
   { id: 'commits', panel: 'commits', label: 'Commits', icon: 'commit', noFlow: false },
   { id: 'changes', panel: 'diff', label: 'Changes', icon: 'diff', noFlow: true },

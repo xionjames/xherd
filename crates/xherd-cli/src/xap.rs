@@ -86,6 +86,10 @@ pub enum CommitCmd {
         id: String,
         #[arg(long)]
         subject: String,
+        /// The full commit message (`git commit -m`); xherd commits with it
+        /// after approval, and the user may edit it first.
+        #[arg(long)]
+        message: Option<String>,
         #[arg(long, value_delimiter = ',', required = true)]
         files: Vec<String>,
         #[arg(long, value_delimiter = ',')]
@@ -189,12 +193,14 @@ impl From<CommitCmd> for XapCmd {
             CommitCmd::Propose {
                 id,
                 subject,
+                message,
                 files,
                 tasks,
                 needs_human,
             } => XapCmd::CommitPropose {
                 id,
                 subject,
+                message,
                 files,
                 tasks,
                 needs_human,

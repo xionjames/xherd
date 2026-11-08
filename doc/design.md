@@ -196,7 +196,7 @@ trait Driver {
 
 Terminal runtime specifics (data in the runtime plugin's `data.terminal`):
 
-- **Permission modes**: one vocabulary for every runtime: `ask` (asks before every tool use that needs permission; the default, spec T1), `edits` (accepts file edits), `auto` (the runtime's own safety checks decide, where it has such a mode), `all` (asks nothing; container only, T4). `permissionModes` maps each mode the runtime offers to **explicit** flags (Claude Code: `--permission-mode manual|acceptEdits|auto|bypassPermissions`); a mode with no flags is refused, so xherd never inherits a default the runtime may change (Claude Code 2.1 switched its default to auto). `ask` is required; runtimes without a mode simply do not offer it.
+- **Permission modes**: one vocabulary for every runtime: `ask` (asks before every tool use that needs permission; always offered, the strictest), `edits` (accepts file edits; **the default**: shell commands that change things still ask and show as `blocked`, so a file write alone never stops an agent), `auto` (the runtime's own safety checks decide, where it has such a mode), `all` (asks nothing; container only, T4). `permissionModes` maps each mode the runtime offers to **explicit** flags (Claude Code: `--permission-mode manual|acceptEdits|auto|bypassPermissions`); a mode with no flags is refused, so xherd never inherits a default the runtime may change (Claude Code 2.1 switched its default to auto). `ask` and `edits` are required; runtimes without another mode simply do not offer it.
 
 - **Hooks**: `hooks.file` (Claude Code: `.claude/settings.local.json`) gets xherd's tagged `xherd hook <event>` entries merged in at creation and is excluded from git.
 - **Folder trust**: a runtime that asks "trust this folder?" before running hooks would stop every new agent at that dialog, and xherd's first command would never be typed. `trust` names where the runtime records trusted folders (Claude Code: `${CLAUDE_CONFIG_DIR:-~}/.claude.json`, `projects["<abs path>"].hasTrustDialogAccepted`). Trusting a parent folder does not cover the folders below it (Claude Code 2.1), so xherd sets that key for each agent's own worktree, and only for paths under the worktrees root: when the agent is created and again before every session start (the runtime rewrites the file itself). The path is written as stored and canonicalised (`/tmp` → `/private/tmp`); every other key is kept, and a file that is not a JSON object is never overwritten (creation is refused with `runtime_trust`). Runtimes without `trust` skip this.
@@ -716,7 +716,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D8 | Scoped tokens (user, device, agent, plugin) | Accepted |
 | D9 | Default port 4740 | Accepted |
 | D10 | Spec documents private by default; committed opt-in | Accepted |
-| D11 | Approvals by content hash; the daemon never edits documents | Accepted |
+| D11 | Approvals by content hash; the daemon never edits agent documents except the progress lines it owns (task `status`/`evidence` in tasks.md, commit `status`/`sha` in commits.md; hashes ignore them) | Accepted |
 | D12 | One shared container; version managers; two users inside (fallback single user; single user until the guardrails milestone) | Accepted |
 | D13 | Single user per daemon | Accepted |
 | D14 | Runtimes declare models with tiers and effort | Accepted |
@@ -728,3 +728,4 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D20 | Desktop app in Electron, post-v1 | Accepted |
 | D21 | Drained updates and backups before updates/migrations | Accepted |
 | D22 | MIT licence | Accepted |
+| D23 | Every step is a new session fed by `memory.md` (state, decisions, code map) and the approved documents, never by conversation history; the session stays open while a gate waits so change requests keep their context | Accepted |

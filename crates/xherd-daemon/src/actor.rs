@@ -11,13 +11,13 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
-use xherd_core::domain::{CommitStatus, Gate};
+use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
 use xherd_core::xap::{Refusal, XapCall, XapCmd, refuse as refusal};
 use xherd_core::{Agent, Status, Trigger};
 use xherd_flow::Pack;
-use xherd_flow::xap::{CommitFact, DocFact, DocState, Observed};
+use xherd_flow::xap::{CommitFact, DocFact, DocState, Observed, VerifyFact};
 use xherd_store::{Event, Store};
 use xherd_term::ScreenRules;
 
@@ -53,6 +53,9 @@ pub enum UserAction {
         /// Document → hash the user read (UI): refused when the file changed
         /// since, so the approval covers exactly what was shown.
         expect: std::collections::BTreeMap<String, String>,
+        /// Commit gate: the commit message as the user edited it (else the
+        /// agent's proposal is used).
+        message: Option<String>,
     },
     /// Send the agent a change request for the open gate (R-105).
     RequestChanges {
@@ -66,8 +69,12 @@ pub enum TickKind {
     ScreenScan,
     IdleCheck,
     ParkCheck,
+    /// `recover`: the daemon just started, so a missing session means the
+    /// terminal server went away with a container restart, not that the
+    /// agent died; the agent is parked or resumed instead of failed.
     SessionCheck {
         alive: bool,
+        recover: bool,
     },
     /// TODO checks and PR polling arrive with those features (v1.x / M4).
     TodoTick,
@@ -126,6 +133,8 @@ pub struct ActorSettings {
     /// Install missing toolchain versions before the runtime starts
     /// (container); native installs only resolve (R-653).
     pub toolchain_install: bool,
+    /// Longest a task's `verify:` command may run.
+    pub verify_timeout: Duration,
 }
 
 impl Default for ActorSettings {
@@ -139,6 +148,7 @@ impl Default for ActorSettings {
             xherd_url: "http://127.0.0.1:4740".into(),
             screen_rules: None,
             toolchain_install: false,
+            verify_timeout: VERIFY_TIMEOUT,
         }
     }
 }
@@ -161,7 +171,16 @@ pub struct Env {
     /// Marks the worktree trusted in the runtime's file before each session
     /// (the runtime rewrites that file itself, and may drop the entry).
     pub trust: Option<Arc<crate::TrustWriter>>,
+    /// How to continue the runtime's last conversation, when it can.
+    pub resume: Option<Arc<crate::Resumer>>,
 }
+
+/// Default limit for a task's `verify:` command.
+pub const VERIFY_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Session losses the daemon answers with a resume by itself, per window.
+const AUTO_RESUMES: usize = 2;
+const AUTO_RESUME_WINDOW_MS: i64 = 3_600_000;
 
 pub type AgentTx = mpsc::UnboundedSender<Msg>;
 
@@ -173,6 +192,10 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         tx: tx.clone(),
         delivery: None,
         next_delivery: 0,
+        first_unacked: false,
+        resume_session: None,
+        resume_unconfirmed: false,
+        auto_resumes: Vec::new(),
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -186,6 +209,18 @@ struct Actor {
     /// Delivery waiting for acknowledgement: (id, retried).
     delivery: Option<(u64, bool)>,
     next_delivery: u64,
+    /// The first command was typed but no prompt was accepted yet. Claude Code
+    /// can start a second session right after the first `session-start` and
+    /// lose typed input, so the command stays in `next_prompt` and is typed
+    /// again at the next `session-start` until a prompt is submitted.
+    first_unacked: bool,
+    /// Launch the next session with the runtime's own resume of this session id.
+    resume_session: Option<String>,
+    /// The last start used a runtime resume and no `session-start` came yet:
+    /// if the session dies again, the next resume starts a clean session.
+    resume_unconfirmed: bool,
+    /// When the daemon resumed this agent by itself (bounded, see above).
+    auto_resumes: Vec<i64>,
 }
 
 impl Actor {
@@ -361,11 +396,21 @@ impl Actor {
                     self.log(None, "notify", Some(json!({"text": text}))).await;
                     self.notify(text);
                 }
-                Effect::DeliveryAck => self.delivery = None,
+                Effect::DeliveryAck => {
+                    self.delivery = None;
+                    if self.first_unacked {
+                        self.first_unacked = false;
+                        self.agent.next_prompt = None;
+                        self.commit(self.agent.status).await;
+                    }
+                }
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
                 // Token usage, auto-approval, parking: later milestones.
                 Effect::AfterStop => self.after_ship().await,
             }
+        }
+        if result == ReportResult::Applied && r.event == ReportEvent::SessionStart {
+            self.resume_unconfirmed = false;
         }
         if result == ReportResult::Applied
             && r.event == ReportEvent::SessionStart
@@ -438,8 +483,9 @@ impl Actor {
 
     /// The session is ready: type the command it was started for (the flow's
     /// start command, or the next command after approving a parked agent;
-    /// R-005d, R-028). It is cleared once typed, so later session starts
-    /// (`/clear`, resume) do not repeat it.
+    /// R-005d, R-028). It is cleared once Claude accepts a prompt (the
+    /// `user-prompt-submit` ack), so later session starts (`/clear`, resume)
+    /// do not repeat it, while a start that loses the typed text does.
     async fn send_first_prompt(&mut self) {
         let Some(cmd) = self.agent.next_prompt.clone() else {
             return;
@@ -460,7 +506,7 @@ impl Actor {
         let before = self.agent.status;
         match self.send(&cmd, enters).await {
             Ok(()) => {
-                self.agent.next_prompt = None;
+                self.first_unacked = true;
                 self.log(None, "first-prompt", Some(json!({"text": cmd})))
                     .await;
                 self.commit(before).await;
@@ -512,10 +558,72 @@ impl Actor {
             Some(json!({"args": args, "changed": changed})),
         )
         .await;
+        self.write_progress(&call.cmd);
         if changed {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
+    }
+
+    /// Write the progress lines xherd owns (D11) into `tasks.md` / `commits.md`
+    /// after a task or commit call succeeded. A missing file or entry is
+    /// skipped; this never fails the call.
+    fn write_progress(&self, cmd: &XapCmd) {
+        match cmd {
+            XapCmd::TaskStart { id }
+            | XapCmd::TaskDone { id, .. }
+            | XapCmd::TaskBlock { id, .. } => {
+                let Some(t) = self.agent.tasks.iter().find(|t| &t.id == id) else {
+                    return;
+                };
+                let evidence = (t.status == TaskStatus::Done)
+                    .then_some(t.evidence.as_deref())
+                    .flatten();
+                self.edit_spec_file("tasks.md", |text| {
+                    xherd_flow::progress::set_task(text, id, t.status, evidence)
+                });
+            }
+            XapCmd::CommitPropose { id, .. }
+            | XapCmd::CommitDone { id, .. }
+            | XapCmd::CommitDrop { id, .. } => self.write_commit_progress(id),
+            _ => {}
+        }
+    }
+
+    /// `status:` and `sha:` of a commit entry in `commits.md`.
+    fn write_commit_progress(&self, id: &str) {
+        let Some(c) = self.agent.commits.iter().find(|c| c.id == id) else {
+            return;
+        };
+        let status = match c.status {
+            CommitStatus::Proposed | CommitStatus::Approved => "proposed",
+            CommitStatus::Done => "done",
+            CommitStatus::Dropped => "dropped",
+        };
+        let sha = c.sha.as_deref().unwrap_or("");
+        self.edit_spec_file("commits.md", |text| {
+            xherd_flow::progress::set_commit(text, id, status, sha)
+        });
+    }
+
+    fn edit_spec_file(&self, name: &str, edit: impl FnOnce(&str) -> Option<String>) {
+        let Ok(wd) = self.workdir() else { return };
+        let path = wd.join(xherd_flow::xap::SPEC_DIR).join(name);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            tracing::debug!(agent = %self.agent.name, name, "no file for progress lines");
+            return;
+        };
+        match edit(&text) {
+            Some(new) if new != text => {
+                if let Err(e) = xherd_core::paths::write_atomic(&path, new.as_bytes(), None) {
+                    tracing::warn!(agent = %self.agent.name, name, %e, "progress lines not written");
+                }
+            }
+            Some(_) => {}
+            None => {
+                tracing::debug!(agent = %self.agent.name, name, "entry not found for progress lines")
+            }
+        }
     }
 
     fn workdir(&self) -> Result<PathBuf, Refusal> {
@@ -534,7 +642,15 @@ impl Actor {
     /// Look at the files and git for calls that need it. Small local reads,
     /// done inline: the agent waits for the answer anyway.
     async fn observe(&self, pack: Option<&Pack>, cmd: &XapCmd) -> Result<Observed, Refusal> {
-        use xherd_flow::xap::{HANDOFF, doc_path, gate_docs};
+        use xherd_flow::xap::{HANDOFF, SPEC_DIR, doc_path, gate_docs};
+        // Every gate and commit proposal of an xhSpec flow leaves a valid memory.md.
+        if matches!(cmd, XapCmd::GateOpen { .. } | XapCmd::CommitPropose { .. })
+            && pack.is_some_and(|p| p.name == xherd_flow::XHSPEC)
+            && xherd_flow::xap::flow_of(&self.agent, pack).is_ok()
+        {
+            let file = self.workdir()?.join(SPEC_DIR).join("memory.md");
+            xherd_flow::memory::check(std::fs::read_to_string(file).ok().as_deref())?;
+        }
         Ok(match cmd {
             XapCmd::GateOpen { .. } => {
                 let wd = self.workdir()?;
@@ -547,7 +663,33 @@ impl Actor {
             XapCmd::TasksSync { file } => {
                 let wd = self.workdir()?;
                 let d = doc_path(file.as_deref().unwrap_or("tasks.md"), &wd)?;
-                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+                let text = inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok());
+                // A `verify:` that is not a shell command is refused now, before
+                // the tasks are approved (editing it later re-opens the gate).
+                if let Some(Ok(tasks)) = text.as_deref().map(xherd_flow::tasks::parse) {
+                    for t in tasks {
+                        if let Some(v) = &t.verify {
+                            self.verify_syntax(&t.id, v).await?;
+                        }
+                    }
+                }
+                Observed::Text(text)
+            }
+            XapCmd::TaskDone { id, .. } => {
+                // Unknown task or none to run: `apply` decides.
+                let verify = self
+                    .agent
+                    .tasks
+                    .iter()
+                    .find(|t| &t.id == id && t.status != TaskStatus::Done)
+                    .and_then(|t| t.verify.clone());
+                match verify {
+                    Some(command) => {
+                        self.verify_syntax(id, &command).await?;
+                        Observed::Verify(Some(self.run_verify(command).await?))
+                    }
+                    None => Observed::Verify(None),
+                }
             }
             XapCmd::HandoffWritten { file } => {
                 let wd = self.workdir()?;
@@ -572,6 +714,53 @@ impl Actor {
                 })
             }
             _ => Observed::Nothing,
+        })
+    }
+
+    /// `verify:` must be one shell command: `sh -n` parses it without running
+    /// it. Prose with a stray backtick or quote does not parse.
+    async fn verify_syntax(&self, task: &str, command: &str) -> Result<(), Refusal> {
+        let out = xherd_core::exec::run(
+            xherd_core::exec::Cmd::new(["sh", "-n", "-c", command])
+                .timeout(std::time::Duration::from_secs(5)),
+        )
+        .await;
+        match out {
+            Ok(o) if o.success() => Ok(()),
+            Ok(o) => Err(refusal(
+                "verify_invalid",
+                format!(
+                    "{task}: `verify:` is not one shell command ({}); write a single runnable \
+                     command, or none and keep the notes in `contract`",
+                    o.stderr.lines().next().unwrap_or("syntax error").trim()
+                ),
+            )),
+            // No shell to check with: the run decides.
+            Err(_) => Ok(()),
+        }
+    }
+
+    /// Run a task's `verify:` command in the worktree (R-118). A deliberate
+    /// inline exception to "slow work returns as `WorkDone`", like
+    /// `commit_for_user`: the agent waits for the answer and the actor holds
+    /// no other work meanwhile. `sh -c` with the daemon's allowlisted env.
+    async fn run_verify(&self, command: String) -> Result<VerifyFact, Refusal> {
+        let wd = self.workdir()?;
+        let out = xherd_core::exec::run(
+            xherd_core::exec::Cmd::new(["sh", "-c", command.as_str()])
+                .cwd(wd)
+                .timeout(self.env.settings.verify_timeout),
+        )
+        .await
+        .map_err(|e| refusal("verify_failed", format!("verify `{command}`: {e}")))?;
+        let mut text = out.stdout_str();
+        text.push_str(&out.stderr);
+        let lines: Vec<&str> = text.lines().collect();
+        Ok(VerifyFact {
+            command,
+            code: out.code,
+            timed_out: out.timed_out,
+            tail: lines[lines.len().saturating_sub(20)..].join("\n"),
         })
     }
 
@@ -680,12 +869,7 @@ impl Actor {
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
-                // The runtime cannot resume its own session yet (no resume
-                // argv), so the new session reloads the state with the pack's
-                // `resume` command; a pending next prompt wins (R-027).
-                if self.agent.next_prompt.is_none() {
-                    self.agent.next_prompt = self.resume_command();
-                }
+                self.prepare_resume();
                 "user.resume"
             }
             UserAction::Cancel => {
@@ -714,8 +898,13 @@ impl Actor {
                     "user.send"
                 }
             }
-            UserAction::Approve { reason, expect } => {
-                self.approve(reason.clone(), expect).await?;
+            UserAction::Approve {
+                reason,
+                expect,
+                message,
+            } => {
+                self.approve(reason.clone(), expect, message.clone())
+                    .await?;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
@@ -766,6 +955,19 @@ impl Actor {
             .clone()
             .filter(|a| !a.is_empty())
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
+        let argv = match (self.resume_session.take(), &self.env.resume) {
+            (Some(id), Some(r)) => {
+                let env = |v: &str| std::env::var(v).ok();
+                match r.argv(&id, &env) {
+                    Some(extra) => {
+                        self.resume_unconfirmed = true;
+                        argv.into_iter().chain(extra).collect()
+                    }
+                    None => argv,
+                }
+            }
+            _ => argv,
+        };
         self.revoke_tokens().await;
         let token = mint_token(
             &self.env.store,
@@ -786,6 +988,17 @@ impl Actor {
             ("XHERD_AGENT_TOKEN".into(), token),
             ("XHERD_PORT_BASE".into(), port_base.to_string()),
         ];
+        // The prompts call plain `xherd …`: a command with a variable in it
+        // cannot be checked by the runtime and asks every time.
+        if let Some(dir) = Path::new(&s.xherd_bin).parent().filter(|d| d.is_absolute()) {
+            let old = std::env::var("PATH").unwrap_or_default();
+            ctx.env.push((
+                "PATH".into(),
+                format!("{}:{old}", dir.display())
+                    .trim_end_matches(':')
+                    .to_string(),
+            ));
+        }
         self.env
             .driver
             .start(&ctx, &self.session_argv(argv))
@@ -904,6 +1117,7 @@ impl Actor {
         &mut self,
         reason: Option<String>,
         expect: &std::collections::BTreeMap<String, String>,
+        message: Option<String>,
     ) -> Result<(), ActionError> {
         let gate = self.gate_for_user(true)?;
         let wd = self.workdir().map_err(|e| refuse(e.code, e.message))?;
@@ -994,6 +1208,11 @@ impl Actor {
             Some(json!({"gate": label, "files": files, "reason": reason, "next": next.as_ref().map(|n| &n.0)})),
         )
         .await;
+        // xherd makes the approved commit itself; the agent only records it
+        // (and fixes it when git refuses).
+        if let Gate::Commit(c) = &gate {
+            self.commit_for_user(&wd, &c.id, message).await;
+        }
         match (self.agent.status, next) {
             (Status::Parked, next) => {
                 // The next session starts with it once a slot is free (R-028).
@@ -1042,6 +1261,52 @@ impl Actor {
         Ok(())
     }
 
+    /// Commit the approved proposal with git: exactly its files and its
+    /// message (as edited by the user), hooks included. On success the commit
+    /// is `done` with its sha; on failure git's output goes to
+    /// `.xherd/commit-error.txt` and the agent, which gets `/xhspec:commit`
+    /// next, fixes it. The approval stands either way.
+    async fn commit_for_user(&mut self, wd: &Path, id: &str, edited: Option<String>) {
+        let Some(i) = self.agent.commits.iter().position(|c| c.id == id) else {
+            return;
+        };
+        if let Some(m) = edited
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+        {
+            self.agent.commits[i].message = Some(m);
+        }
+        let c = self.agent.commits[i].clone();
+        let message = c.message.clone().unwrap_or_else(|| c.subject.clone());
+        // Hooks (lint, tests) can take a while.
+        let git = self.env.git.clone().with_timeout(Duration::from_secs(300));
+        let error_file = wd.join(".xherd/commit-error.txt");
+        match git.commit_paths(wd, &c.files, &message).await {
+            Ok(sha) => {
+                let _ = std::fs::remove_file(&error_file);
+                self.agent.commits[i].sha = Some(sha.clone());
+                self.agent.commits[i].status = CommitStatus::Done;
+                self.write_commit_progress(id);
+                self.log(None, "commit-made", Some(json!({"id": id, "sha": sha})))
+                    .await;
+            }
+            Err(e) => {
+                let text = e.to_string();
+                let _ = xherd_core::paths::write_atomic(&error_file, text.as_bytes(), None);
+                self.log(
+                    None,
+                    "commit-failed",
+                    Some(json!({"id": id, "error": text})),
+                )
+                .await;
+                self.notify(format!(
+                    "{}: git refused commit {id}; the agent will fix it",
+                    self.agent.name
+                ));
+            }
+        }
+    }
+
     /// Whether an approval replaces the session (R-023): fresh sessions are
     /// on and the agent follows a flow (R-024; flow `none` has no gates).
     /// Background tasks (also R-024) are not tracked yet.
@@ -1075,6 +1340,23 @@ impl Actor {
 
     /// The pack's `resume` command for the agent's runtime; `None` for flow
     /// `none` or a pack without one.
+    /// A resumed agent gets the pack's `resume` command (a pending next prompt
+    /// wins, R-027) and, when the runtime still has the last conversation, a
+    /// session that continues it. If the last resume of that kind never
+    /// reached `session-start`, this one is a clean session instead.
+    fn prepare_resume(&mut self) {
+        if self.agent.next_prompt.is_none() {
+            self.agent.next_prompt = self.resume_command();
+        }
+        let env = |v: &str| std::env::var(v).ok();
+        self.resume_session = match (&self.env.resume, &self.agent.session) {
+            (Some(r), Some(id)) if !self.resume_unconfirmed && r.argv(id, &env).is_some() => {
+                Some(id.clone())
+            }
+            _ => None,
+        };
+    }
+
     fn resume_command(&self) -> Option<String> {
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
         let runtime = self
@@ -1183,13 +1465,61 @@ impl Actor {
         let now = self.now();
         let minutes = |m: u64| (m as i64) * 60_000;
         match t {
-            TickKind::SessionCheck { alive } => {
+            TickKind::SessionCheck { alive, recover } => {
                 if self.agent.status.is_live() && !alive {
                     self.revoke_tokens().await;
                     self.delivery = None;
-                    self.agent.fire(Trigger::SessionLost, now);
-                    self.log(None, "session-lost", None).await;
-                    self.notify(format!("{}: terminal session disappeared", self.agent.name));
+                    // Waiting at a gate you can approve: park, which is what
+                    // a long wait does (approving starts a fresh session).
+                    let at_gate = self.agent.status == Status::WaitingInput
+                        && matches!(self.agent.gate, Some(Gate::Docs { .. } | Gate::Commit(_)));
+                    if recover && at_gate {
+                        self.agent.fire(Trigger::Park, now);
+                        self.log(None, "parked", Some(json!({"why": "interrupted"})))
+                            .await;
+                        self.notify(format!(
+                            "{}: xherd restarted; approve the gate to continue",
+                            self.agent.name
+                        ));
+                    } else {
+                        self.agent.fire(Trigger::SessionLost, now);
+                        self.log(None, "session-lost", None).await;
+                        if recover {
+                            // Same as Resume: a new session reloads the state.
+                            self.agent.fire(Trigger::Resume, now);
+                            self.prepare_resume();
+                            self.notify(format!("{}: xherd restarted; resuming", self.agent.name));
+                        } else {
+                            // A session that vanishes while xherd runs is
+                            // resumed by itself a couple of times per hour, so
+                            // an agent is not stuck in error until someone
+                            // notices; after that the Resume button is the way.
+                            self.auto_resumes
+                                .retain(|t| now - t < AUTO_RESUME_WINDOW_MS);
+                            if self.auto_resumes.len() < AUTO_RESUMES {
+                                self.auto_resumes.push(now);
+                                self.agent.fire(Trigger::Resume, now);
+                                self.prepare_resume();
+                                self.log(
+                                    None,
+                                    "auto-resume",
+                                    Some(json!({"n": self.auto_resumes.len(), "of": AUTO_RESUMES})),
+                                )
+                                .await;
+                                self.notify(format!(
+                                    "{}: terminal session disappeared; resuming ({}/{})",
+                                    self.agent.name,
+                                    self.auto_resumes.len(),
+                                    AUTO_RESUMES
+                                ));
+                            } else {
+                                self.notify(format!(
+                                    "{}: terminal session disappeared again; press Resume",
+                                    self.agent.name
+                                ));
+                            }
+                        }
+                    }
                     self.commit(before).await;
                 }
             }

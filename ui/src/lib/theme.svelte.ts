@@ -1,5 +1,6 @@
-// Theme choice: system (prefers-color-scheme), light or dark. Applied as
-// `data-theme` on <html> (app.css); remembered per browser.
+// Theme: follow the system (no saved choice), or light/dark chosen by the user.
+// Applied as `data-theme` on <html> (app.css) and remembered per browser. The
+// first paint is set by a small script in index.html, so there is no flash.
 export type Theme = 'system' | 'light' | 'dark';
 const KEY = 'xherd.theme';
 
@@ -12,7 +13,16 @@ function stored(): Theme {
   }
 }
 
-export const theme = $state<{ value: Theme }>({ value: stored() });
+const query = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null;
+
+export const theme = $state<{ value: Theme; systemDark: boolean }>({
+  value: stored(),
+  systemDark: query?.matches ?? false,
+});
+query?.addEventListener('change', (e) => (theme.systemDark = e.matches));
+
+/** The theme the user sees now. */
+export const isDark = () => (theme.value === 'system' ? theme.systemDark : theme.value === 'dark');
 
 export function apply(t: Theme) {
   theme.value = t;
@@ -26,5 +36,7 @@ export function apply(t: Theme) {
   }
 }
 
-const NEXT: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
-export const cycle = () => apply(NEXT[theme.value]);
+/** Flip what is visible, so a click always changes something. */
+export const toggle = () => apply(isDark() ? 'light' : 'dark');
+/** Back to following the system. */
+export const followSystem = () => apply('system');

@@ -170,7 +170,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-008 | Reports from a session xherd already ended (paused, queued, cancelled) never revive the agent. |
 | R-009 | Every status report carries a per-agent **monotonic sequence number**; reports with a lower or equal number are logged but do not change state. Reports synthesised by the daemon (screen rules) get daemon sequence numbers and never make a real report stale. |
 | R-010 | Every change to an agent goes through one serialised path per agent; no change is lost when reports, user actions and timers arrive together. |
-| R-011 | **Reconcile** on start and every minute: a live agent whose tmux session is gone → `error` (event `session-lost`). |
+| R-011 | **Reconcile** on start and every minute: a live agent whose tmux session is gone → `error` (event `session-lost`). At daemon start (a container or terminal-server restart) such an agent is instead parked when it waits at a docs or commit gate (approving still works), or resumed like R-027. A session that vanishes while the daemon runs is resumed by itself at most twice per hour per agent (event `auto-resume`, with a notification); after that the agent stays in `error` until the user presses Resume. |
 
 ### 5.4 Status reporting
 
@@ -192,7 +192,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-020 | Terminal driver: text is typed into the agent's window, then Enter (runtimes may need extra Enters after slash commands). ACP driver: an ACP prompt message. |
 | R-021 | xherd never types into a `blocked` agent. |
 | R-022 | Delivery is acknowledged by the next prompt-submitted or `working` report within a timeout (default 10 s); otherwise Enter is retried once and the user is notified. |
-| R-023 | **Hand-on** after an approved gate: with fresh sessions on, only the agent window's process is replaced (`tmux respawn-window`) by a new runtime session started with the next command, so other windows (a dev server, tests) keep running; otherwise the command is typed into the current session; a parked or watching agent is started with it. |
+| R-023 | **Hand-on** after an approved gate: with fresh sessions on, only the agent window's process is replaced (`tmux respawn-window`) by a new runtime session started with the next command, so other windows (a dev server, tests) keep running; the new session knows nothing of the last one and reads `memory.md` (state, decisions, code map) and the approved documents, not the codebase; otherwise the command is typed into the current session; a parked or watching agent is started with it. |
 | R-024 | No fresh session while the agent has background tasks running (they would be killed), or for flow `none`. |
 | R-025 | A change of runtime between steps always uses a fresh session in the new runtime (status files and permissions for that runtime are written first). If the new runtime is unusable, the agent stays and the user is warned. |
 
@@ -201,7 +201,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | ID | Requirement |
 |---|---|
 | R-026 | **Pause**: ask the agent to write a handoff (pack `handoff` command), wait for it to stop (≤ `pauseTimeoutSec`, default 120), end the session, status `paused`. Flow `none`: end the session. |
-| R-027 | **Resume**: back into the same runtime session when the runtime can resume it, otherwise (or when a handoff was written and fresh sessions are on) a fresh session with the pack's `resume` command. A pending "next prompt" set by xherd (e.g. PR review) takes precedence. |
+| R-027 | **Resume** (the Resume button, also for an agent in `error`): back into the same runtime session when the runtime can resume it (the plugin's `data.terminal.resume`, used only while the runtime still has that session's transcript, and not twice in a row without a `session-start` in between), otherwise (or when a handoff was written and fresh sessions are on) a fresh session with the pack's `resume` command. A pending "next prompt" set by xherd (e.g. PR review) takes precedence. |
 | R-028 | **Park** (automatic, §5.3): end the session; the agent stays in Needs you. A message resumes the same session; approval starts a fresh one for the next step. |
 | R-029 | **Cancel**: end the session without handoff; keep the worktree; resumable. |
 | R-030 | **Remove worktree** (done or cancelled agents only): archive `.xherd/` to `<data>/archive/<repo>/<agent>/`, `git worktree remove`, keep the branch. |
@@ -231,9 +231,10 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 
 | ID | Requirement |
 |---|---|
-| R-106 | Every approval (human or automatic) appends `{gate, file, sha256, actor, auto, reason, at, commit}` to the agent's approval ledger and the daemon database. The daemon **never edits** the agent's documents. |
+| R-106 | Every approval (human or automatic) appends `{gate, file, sha256, actor, auto, reason, at, commit}` to the agent's approval ledger and the daemon database. The daemon **never edits** the agent's documents, except the progress lines it owns: task `status` / `evidence` in the tasks document and commit `status` / `sha` in `commits.md`, written after the XAP call that changes them. |
 | R-107 | A document is approved when the ledger has an approval whose hash equals its current content (line endings normalised). Editing an approved document re-opens its gate ("changed since approved") and the UI shows the diff against the approved version. Exception: in the tasks document (the one the flow's `tasks` stage gates), task progress lines (`- status:` and `- evidence:` under a task heading) are not content; recording progress does not re-open the gate. |
 | R-108 | Several documents changed together form **one** gate approved together. |
+| R-108a | **Commit gates**: the agent proposes the files and the full commit message (`commit propose --message`). The Changes view shows the diff of exactly those files and the user may edit the message. On approval **xherd makes the commit** (stages exactly the proposed files, commits with the message, hooks included, never `--no-verify`) and records the sha. If git refuses, the approval stands and the agent fixes and commits with git's output. The Commits view lists every commit with its message and files; the Changes view has tabs for uncommitted changes, all changes against the base, and any one commit. |
 
 ### 6.3 Autonomy
 
@@ -415,7 +416,7 @@ Example block for a prompt-based SDD command:
 ```markdown
 ## When running under xherd
 If the environment variable `XHERD_ENV` is `1`, after writing the spec run
-`"$XHERD_BIN" gate open spec --role spec --doc <spec path> --next "/sdd-task <spec path>"`
+`xherd gate open spec --role spec --doc <spec path> --next "/sdd-task <spec path>"`
 then stop and wait. If it exits with code 2, fix what it says and run it again.
 ```
 
@@ -580,7 +581,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 
 | # | Threat | Guardrails |
 |---|---|---|
-| T1 | **Prompt injection** from tickets, PR comments, web pages or repo files steering an agent to run harmful commands, leak secrets or push bad code | Untrusted text is passed to agents inside clearly marked blocks with an instruction to treat it as data (R-1201); PR triage and replies always wait for a human; autonomy limits and tripwires (§6.4); tool permissions ask by default; secret tripwire on commits (R-117); egress allowlist (roadmap). |
+| T1 | **Prompt injection** from tickets, PR comments, web pages or repo files steering an agent to run harmful commands, leak secrets or push bad code | Untrusted text is passed to agents inside clearly marked blocks with an instruction to treat it as data (R-1201); PR triage and replies always wait for a human; autonomy limits and tripwires (§6.4); tool permissions: file edits in the worktree are accepted by default and everything else asks (`ask` mode is always available); secret tripwire on commits (R-117); egress allowlist (roadmap). |
 | T2 | **Agent approves its own gates** or changes xherd settings | XAP has no approve command; agents get an agent-scoped token valid only for reports and XAP of that agent (R-1202); in Docker, agent processes cannot read the daemon's config and secrets (R-1203). |
 | T3 | **Pushing where it must not** (base branch, force push, other branches) | Worktrees have no upstream; an xherd-managed `pre-push` hook in each worktree rejects pushes to any ref except the agent's branch and any non-fast-forward push (R-1204); xhSpec rules forbid force pushes; the docs recommend branch protection on the host. |
 | T4 | **Destructive commands** in the workspace (deleting repos, `git reset --hard` on the main checkout) | Agents work only in their worktree; tool permission `all` only inside the container; the container protects the host but not the workspace mount, so backups (§15) cover the workspace's unpushed work; the kill switch (R-032). |
@@ -805,7 +806,7 @@ The core (sessions, stages, gates, autonomy, per-step models, XAP, ledgers, view
 | D-3 | **One shared container** with all tools in v1; version managers for languages. |
 | D-4 | **Single user** per daemon. |
 | D-5 | SDD documents **private** in `.xherd/` by default; committing is opt-in per profile. |
-| D-6 | Approvals by **content hash** in an append-only ledger; the daemon never edits agent documents. |
+| D-6 | Approvals by **content hash** in an append-only ledger; the daemon never edits agent documents except the progress lines (task and commit status, sha, evidence) it owns; hashes ignore them. |
 | D-7 | Pluggable SDD: flow packs, step roles, and dynamic flows via XAP. |
 | D-8 | Driver chosen by configuration: live terminal (default) or ACP. |
 | D-9 | Runtimes declare models with tiers and effort; steps choose runtime + model/tier + effort + driver. |

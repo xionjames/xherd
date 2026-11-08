@@ -91,6 +91,17 @@ pub struct CommitFact {
     pub files: Vec<String>,
 }
 
+/// The daemon's run of a task's `verify:` command (`task.done`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyFact {
+    pub command: String,
+    /// `None` when killed (timeout or signal).
+    pub code: Option<i32>,
+    pub timed_out: bool,
+    /// The last lines of stdout and stderr.
+    pub tail: String,
+}
+
 /// What the actor looked at before calling [`apply`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Observed {
@@ -103,6 +114,9 @@ pub enum Observed {
     Commit(CommitFact),
     /// `handoff.written`: whether the file exists.
     Exists(bool),
+    /// `task.done`: the verify run, `None` when the task has no `verify:` or
+    /// is already done.
+    Verify(Option<VerifyFact>),
 }
 
 pub fn flow_of<'a>(a: &Agent, pack: Option<&'a Pack>) -> Result<&'a Flow, Refusal> {
@@ -387,12 +401,31 @@ pub fn apply(
                     "say how the task was verified (--evidence)",
                 ));
             }
+            let verify = match obs {
+                Observed::Verify(v) => v,
+                Observed::Nothing => None,
+                _ => return Err(wrong("task.done")),
+            };
             let t = &mut a.tasks[i];
-            if t.status == TaskStatus::Done && t.evidence.as_deref() == Some(evidence) {
+            // Done already with this note (a verified one carries the run after it).
+            if t.status == TaskStatus::Done
+                && t.evidence.as_deref().is_some_and(|e| {
+                    e == evidence
+                        || e.strip_prefix(evidence.as_str())
+                            .is_some_and(|rest| rest.starts_with("\n[verify exit "))
+                })
+            {
                 return Ok(false);
             }
+            let evidence = match verify {
+                None => evidence.clone(),
+                Some(v) if v.code == Some(0) && !v.timed_out => {
+                    format!("{evidence}\n[verify exit 0] {}", v.tail)
+                }
+                Some(v) => return Err(verify_failed(&v)),
+            };
             t.status = TaskStatus::Done;
-            t.evidence = Some(evidence.clone());
+            t.evidence = Some(evidence);
             t.blocked_reason = None;
             Ok(true)
         }
@@ -411,6 +444,7 @@ pub fn apply(
         XapCmd::CommitPropose {
             id,
             subject,
+            message,
             files,
             tasks,
             needs_human,
@@ -428,6 +462,11 @@ pub fn apply(
             let proposal = Commit {
                 id: id.clone(),
                 subject: subject.clone(),
+                message: message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_string),
                 files,
                 status: CommitStatus::Proposed,
                 tasks: tasks.clone(),
@@ -624,6 +663,29 @@ fn set<T: PartialEq>(slot: &mut T, v: T) -> bool {
         *slot = v;
         true
     }
+}
+
+/// R-118: a failing `verify:` keeps the task `doing`; the message is one line.
+fn verify_failed(v: &VerifyFact) -> Refusal {
+    let how = if v.timed_out {
+        "timed out".to_string()
+    } else {
+        match v.code {
+            Some(c) => format!("exited {c}"),
+            None => "was killed".to_string(),
+        }
+    };
+    let lines: Vec<&str> = v.tail.lines().collect();
+    let shown = lines[lines.len().saturating_sub(5)..].join(" | ");
+    // 126/127: the shell could not run it at all, usually prose in `verify:`.
+    let hint = match v.code {
+        Some(126 | 127) => " (not a runnable command? `verify:` must be one shell command)",
+        _ => "",
+    };
+    refuse(
+        "verify_failed",
+        format!("verify `{}` {how}: {shown}{hint}", v.command),
+    )
 }
 
 fn task_index(a: &Agent, id: &str) -> Result<usize, Refusal> {
@@ -924,6 +986,38 @@ mod tests {
     }
 
     #[test]
+    fn task_done_with_a_verify_run() {
+        let p = pack();
+        let mut a = agent();
+        a.tasks = vec![task("T01", TaskStatus::Doing, &[], &[])];
+        let done = XapCmd::TaskDone {
+            id: "T01".into(),
+            evidence: "ran it".into(),
+        };
+        let run = |code, timed_out| {
+            Observed::Verify(Some(VerifyFact {
+                command: "make test".into(),
+                code,
+                timed_out,
+                tail: "a\nb\nc".into(),
+            }))
+        };
+        let e = apply(&mut a, Some(&p), &done, run(Some(2), false), 0).unwrap_err();
+        assert_eq!(e.code, "verify_failed");
+        assert_eq!(e.message, "verify `make test` exited 2: a | b | c");
+        let e = apply(&mut a, Some(&p), &done, run(None, true), 0).unwrap_err();
+        assert!(e.message.contains("timed out"), "{}", e.message);
+        assert_eq!(a.tasks[0].status, TaskStatus::Doing);
+        assert!(apply(&mut a, Some(&p), &done, run(Some(0), false), 0).unwrap());
+        assert_eq!(
+            a.tasks[0].evidence.as_deref(),
+            Some("ran it\n[verify exit 0] a\nb\nc")
+        );
+        // The same note again (a new call id) is not a change.
+        assert!(!apply(&mut a, Some(&p), &done, Observed::Verify(None), 0).unwrap());
+    }
+
+    #[test]
     fn task_rules() {
         let p = pack();
         let mut a = agent();
@@ -968,6 +1062,7 @@ mod tests {
         XapCmd::CommitPropose {
             id: id.into(),
             subject: "s".into(),
+            message: None,
             files: files.iter().map(|s| s.to_string()).collect(),
             tasks: tasks.iter().map(|s| s.to_string()).collect(),
             needs_human: None,

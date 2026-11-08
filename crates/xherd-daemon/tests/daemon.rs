@@ -134,13 +134,23 @@ async fn first_prompt_is_typed_once_the_session_is_ready() {
     assert_eq!(t.d.report(start).await, Some(ReportResult::Applied));
     let typed = r#"send SC-1 "/xhspec:feature SC-1 add login" 1"#.to_string();
     assert_eq!(t.drv.calls().last(), Some(&typed));
+    // Not acknowledged yet: Claude Code may start a second session and lose
+    // the typed text, so the command is typed again at the next start.
     let now = t.d.action("SC-1", UserAction::Get).await.unwrap();
-    assert_eq!(now.next_prompt, None);
-
-    // A later session start (e.g. after /clear) types nothing again.
+    assert!(now.next_prompt.is_some());
     let again = rep(&a, "s2", ReportEvent::SessionStart, 2, Value::Null);
     t.d.report(again).await;
-    assert_eq!(t.drv.calls().iter().filter(|c| **c == typed).count(), 1);
+    assert_eq!(t.drv.calls().iter().filter(|c| **c == typed).count(), 2);
+
+    // Once a prompt is submitted the command is done; a later session start
+    // (e.g. after /clear) types nothing.
+    let submit = rep(&a, "p1", ReportEvent::UserPromptSubmit, 3, Value::Null);
+    t.d.report(submit).await;
+    let now = t.d.action("SC-1", UserAction::Get).await.unwrap();
+    assert_eq!(now.next_prompt, None);
+    let clear = rep(&a, "s3", ReportEvent::SessionStart, 4, Value::Null);
+    t.d.report(clear).await;
+    assert_eq!(t.drv.calls().iter().filter(|c| **c == typed).count(), 2);
 }
 
 #[tokio::test]
@@ -213,9 +223,67 @@ async fn reconcile_marks_lost_sessions() {
     wait_status(&t.d, "SC-1", Status::Running).await;
     t.d.reconcile().await;
     assert_eq!(status(&t.d, "SC-1").await, Status::Running);
+    let starts = |t: &T| {
+        t.drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start "))
+            .count()
+    };
+    // A vanished session is resumed by itself twice per hour...
+    for n in 2..=3 {
+        t.drv.alive.lock().unwrap().clear();
+        t.d.reconcile().await;
+        for _ in 0..50 {
+            if starts(&t) == n {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(starts(&t), n);
+        assert_ne!(status(&t.d, "SC-1").await, Status::Error);
+    }
+    // ...then it stays in error until the user presses Resume.
     t.drv.alive.lock().unwrap().clear();
     t.d.reconcile().await;
     wait_status(&t.d, "SC-1", Status::Error).await;
+    let ev = t.d.store.events(&a.id, 50).await.unwrap();
+    assert!(ev.iter().any(|e| e.kind == "session-lost"));
+    assert_eq!(ev.iter().filter(|e| e.kind == "auto-resume").count(), 2);
+    t.d.action("SC-1", UserAction::Resume).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
+}
+
+#[tokio::test]
+async fn a_restart_resumes_a_running_agent_instead_of_failing_it() {
+    let t = daemon(4).await;
+    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
+    // The container restarted: the session is gone.
+    t.drv.alive.lock().unwrap().clear();
+    t.d.reconcile_with(true).await;
+    // Queued again and started in a new session, not left in error.
+    for _ in 0..50 {
+        if t.drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start "))
+            .count()
+            == 2
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        t.drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start "))
+            .count(),
+        2
+    );
+    assert_ne!(status(&t.d, "SC-1").await, Status::Error);
     let ev = t.d.store.events(&a.id, 20).await.unwrap();
     assert!(ev.iter().any(|e| e.kind == "session-lost"));
 }

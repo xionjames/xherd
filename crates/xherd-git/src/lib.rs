@@ -310,6 +310,25 @@ impl Git {
         res
     }
 
+    /// Commit exactly `paths` (new, changed and deleted files, taken literally)
+    /// with `message`, whatever else is staged; returns the new sha. Hooks run
+    /// (never `--no-verify`), so a failing hook is an error with its output.
+    pub async fn commit_paths(
+        &self,
+        dir: &Path,
+        paths: &[String],
+        message: &str,
+    ) -> Result<String> {
+        let lit = "--literal-pathspecs";
+        let mut add = vec![lit, "add", "--all", "--"];
+        add.extend(paths.iter().map(String::as_str));
+        self.run(dir, &add).await?;
+        let mut commit = vec![lit, "commit", "--only", "-m", message, "--"];
+        commit.extend(paths.iter().map(String::as_str));
+        self.run(dir, &commit).await?;
+        self.rev_parse(dir, "HEAD").await
+    }
+
     /// Files touched by one commit.
     pub async fn commit_files(&self, dir: &Path, sha: &str) -> Result<Vec<String>> {
         let out = self

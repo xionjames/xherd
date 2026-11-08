@@ -76,3 +76,46 @@ async fn checks_report_and_fix_the_pack_install() {
     );
     assert_eq!(v["running"]["maxConcurrentAgents"], 4);
 }
+
+#[tokio::test]
+async fn disabled_plugins_apply_live() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    // A runtime and two toolchains, harmless checks.
+    o.builtin_plugins
+        .retain(|m| ["claude-code", "nvm", "uv"].contains(&m.name.as_str()));
+    for m in &mut o.builtin_plugins {
+        m.checks = serde_json::from_value(json!([{"name": "runs", "argv": ["git", "--version"]}]))
+            .unwrap();
+    }
+    let d = Daemon::start(paths, o).await.unwrap();
+    let h = home.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let ids = |cs: Vec<checks::Check>| cs.into_iter().map(|c| c.id).collect::<Vec<_>>();
+
+    assert!(ids(d.checks(&env).await).contains(&"plugin:nvm:runs".to_string()));
+
+    // Switching a plugin off applies at once and needs no restart.
+    let patch = serde_json::from_value(json!({"disabledPlugins": ["nvm"]})).unwrap();
+    let v = d.save_config(patch).unwrap();
+    assert_eq!(v["restartNeeded"], false);
+    assert!(!d.plugin_enabled("nvm") && d.plugin_enabled("claude-code"));
+    let after = ids(d.checks(&env).await);
+    assert!(!after.contains(&"plugin:nvm:runs".to_string()));
+    assert!(after.contains(&"plugin:claude-code:runs".to_string()));
+
+    // The last plugin of a kind, and unknown names, are refused.
+    for off in [json!(["claude-code"]), json!(["nope"])] {
+        let patch = serde_json::from_value(json!({ "disabledPlugins": off })).unwrap();
+        assert_eq!(d.save_config(patch).unwrap_err().code, "bad_config");
+    }
+}

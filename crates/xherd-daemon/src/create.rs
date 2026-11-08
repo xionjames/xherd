@@ -51,7 +51,8 @@ impl Daemon {
         let (label, rt) = self
             .plugins
             .get(rt_name)
-            .ok_or_else(|| format!("runtime plugin {rt_name} is not installed"))
+            .filter(|_| self.plugin_enabled(rt_name))
+            .ok_or_else(|| format!("runtime plugin {rt_name} is not installed or is switched off"))
             .and_then(|p| Ok((p.manifest.label.clone(), Terminal::of(&p.manifest)?)))
             .map_err(|e| refuse("runtime_unusable", e))?;
         let launch = rt
@@ -139,7 +140,8 @@ impl Daemon {
             }
             prepare_xherd_dir(&git, &workdir, &a).await?;
             if let Some(h) = &rt.hooks {
-                install_hooks(&git, &workdir, h, &self.xherd_bin).await?;
+                let rules = permission_rules(pack);
+                install_hooks(&git, &workdir, h, &self.xherd_bin, &rules).await?;
             }
             self.create_agent(a).await
         }
@@ -152,6 +154,24 @@ impl Daemon {
         let a = res?;
         debug_assert_eq!(a.status, Status::Queued);
         Ok(a)
+    }
+}
+
+/// Continue the runtime's last conversation (R-027): the launch arguments for
+/// a session id, only while the runtime still has that session's transcript.
+#[derive(Debug, Clone)]
+pub struct Resumer(pub runtime::Resume);
+
+impl Resumer {
+    pub fn argv(&self, session: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<Vec<String>> {
+        let args = self.0.argv(session)?;
+        let dir = xherd_flow::install::expand(&self.0.transcripts, env).ok()?;
+        let file = self.0.file.replace("{session}", session);
+        std::fs::read_dir(dir)
+            .ok()?
+            .flatten()
+            .any(|p| p.path().join(&file).is_file())
+            .then_some(args)
     }
 }
 
@@ -261,6 +281,59 @@ async fn prepare_xherd_dir(git: &Git, workdir: &Path, a: &Agent) -> Result<(), A
         .map_err(|e| refuse("git", e.to_string()))
 }
 
+/// The XAP calls an agent makes, as runtime allow rules. The prompts call
+/// plain `xherd` (on the session's PATH), which the runtime can match; a
+/// `$XHERD_BIN` variable cannot be checked and asks every time.
+const XAP_ALLOW: &[&str] = &[
+    "Bash(xherd stage *)",
+    "Bash(xherd gate *)",
+    "Bash(xherd ask *)",
+    "Bash(xherd tasks *)",
+    "Bash(xherd task *)",
+    "Bash(xherd commit *)",
+    "Bash(xherd pr *)",
+    "Bash(xherd handoff *)",
+    "Bash(xherd issue *)",
+];
+
+/// The runtime allow rules written into a new worktree: reading the pack's
+/// installed commands and the XAP calls. This is where profile and toolchain
+/// commands will be added.
+fn permission_rules(pack: Option<&xherd_flow::Pack>) -> Vec<String> {
+    let mut rules: Vec<String> = pack
+        .map(command_dirs)
+        .unwrap_or_default()
+        .iter()
+        // `//` marks an absolute path; a single `/` is relative to the
+        // project root and would never match this folder.
+        .map(|d| format!("Read(//{}/**)", d.trim_matches('/')))
+        .collect();
+    rules.extend(XAP_ALLOW.iter().map(|s| s.to_string()));
+    rules
+}
+
+/// Folders the default runtime's pack commands are installed in (outside the
+/// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
+/// plan cannot be made (no HOME).
+fn command_dirs(pack: &xherd_flow::Pack) -> Vec<String> {
+    let env = |k: &str| std::env::var(k).ok();
+    let plan = pack
+        .plan_install(
+            xherd_flow::approve::DEFAULT_RUNTIME,
+            xherd_flow::install::XHSPEC_FILES,
+            &env,
+        )
+        .unwrap_or_default();
+    let mut dirs: Vec<String> = plan
+        .iter()
+        .filter_map(|f| f.path.parent())
+        .map(|d| d.to_string_lossy().into_owned())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
 /// Make the runtime report to xherd (R-005b): merge xherd's tagged hook
 /// entries into the runtime's settings file and keep that file out of git.
 async fn install_hooks(
@@ -268,10 +341,11 @@ async fn install_hooks(
     workdir: &Path,
     h: &runtime::HookFile,
     xherd_bin: &str,
+    allow_rules: &[String],
 ) -> Result<(), ActionError> {
     let f = workdir.join(&h.file);
     let existing = std::fs::read_to_string(&f).ok();
-    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin)
+    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin, allow_rules)
         .map_err(|e| refuse("runtime_hooks", e))?;
     if let Some(dir) = f.parent() {
         std::fs::create_dir_all(dir)
@@ -287,6 +361,41 @@ async fn install_hooks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_rules_are_the_command_reads_then_the_xap_calls() {
+        let xap: Vec<String> = XAP_ALLOW.iter().map(|s| s.to_string()).collect();
+        assert_eq!(permission_rules(None), xap);
+        let pack = xherd_flow::xhspec();
+        let dirs = command_dirs(&pack);
+        let rules = permission_rules(Some(&pack));
+        assert_eq!(rules.len(), dirs.len() + xap.len());
+        assert_eq!(rules[dirs.len()..], xap[..]);
+        for (r, d) in rules.iter().zip(&dirs) {
+            assert_eq!(*r, format!("Read(//{}/**)", d.trim_matches('/')));
+        }
+    }
+
+    #[test]
+    fn resume_needs_the_transcript_and_a_plain_id() {
+        let home = tempfile::tempdir().unwrap();
+        let proj = home.path().join("projects/-work-TST-1");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("abc-123.jsonl"), "{}").unwrap();
+        let r = Resumer(runtime::Resume {
+            args: vec!["--resume".into(), "{session}".into()],
+            transcripts: format!("{}/projects", home.path().display()),
+            file: "{session}.jsonl".into(),
+        });
+        let env = |_: &str| None;
+        assert_eq!(
+            r.argv("abc-123", &env),
+            Some(vec!["--resume".to_string(), "abc-123".to_string()])
+        );
+        assert_eq!(r.argv("missing", &env), None);
+        assert_eq!(r.argv("../abc-123", &env), None);
+        assert_eq!(r.argv("", &env), None);
+    }
 
     #[test]
     fn repos_must_be_inside_a_mount() {

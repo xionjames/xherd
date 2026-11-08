@@ -36,11 +36,26 @@ where a gate would be, telling the user what to review.
 - Work only inside this worktree, on its branch. Never push another branch,
   never force-push, never rewrite history that was pushed.
 - Implement only what the approved documents say. Out-of-scope problems you
-  notice go to `"$XHERD_BIN" issue add --title "Flaky retry in the client" --severity minor`.
+  notice go to `xherd issue add --title "Flaky retry in the client" --severity minor`.
 - One task, one commit, only after the user approved the proposal. Commit
   exactly the proposed files.
-- Keep `.xherd/spec/memory.md` current at every gate, so a fresh session can
-  continue from it.
+- Every step runs in a new session with no memory of the last one. Start by
+  reading `.xherd/spec/memory.md` and the approved documents. Its code map says
+  where to look: open those files and the ones the task names, and explore
+  further only when something it names is missing or wrong (then fix the map).
+  Do not re-read the whole codebase.
+- Rewrite `.xherd/spec/memory.md` before every gate (format above), with the
+  code map for the next step: the files it will need and how to build and test.
+- Run each shell command on its own, as written: do not chain commands with
+  `;`, `&&` or `||`, and do not add `echo $?` or any other `$variable`. The
+  exit status comes back with the result. A command with a variable in it
+  cannot be checked in advance, so the user is asked to confirm it every time.
+- Change files with your edit and write tools, never through the shell: no
+  `sed -i`, `tee`, `>` or `>>` redirects, `mv` over a document. The edit tools
+  work in this worktree without asking; a shell write asks the user every time.
+  This includes `.xherd/spec/*.md` (`tasks.md`, `commits.md`, `memory.md`).
+  Never edit the `status:` / `evidence:` lines of tasks or the `status:` / `sha:`
+  lines of commits: xherd writes them.
 - Use the repository's own commands to build, test and lint, and say which
   ones you ran in each task's evidence.
 

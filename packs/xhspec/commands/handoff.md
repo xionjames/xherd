@@ -9,5 +9,5 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
 2. Write `.xherd/HANDOFF.md` in the handoff format: done, in progress (files
    touched, commands that were running), next steps, open questions.
 3. Update `.xherd/spec/memory.md`.
-4. `"$XHERD_BIN" handoff written`
+4. `xherd handoff written`
 5. Stop.

@@ -5,7 +5,7 @@
   import { get, put, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import TermView from './TermView.svelte';
-  import type { GitHost, GitHostsView, GitFinding } from '../lib/types';
+  import type { GitHost, GitHostsView, GitFinding, ConfigView } from '../lib/types';
 
   type Row = GitHost & { token: string };
   let view = $state<GitHostsView | null>(null);
@@ -40,6 +40,35 @@
     try { fill(await get<GitHostsView>('/git/hosts')); } catch (e) { showError('Could not load git access', e); }
   }
   $effect(() => { load(); });
+
+  // Who agents commit as: git refuses to commit without it, and the container
+  // has no identity of its own.
+  let idName = $state('');
+  let idEmail = $state('');
+  let idRules = $state<{ scope: string; name: string; email: string }[]>([]);
+  let idSaved = $state('');
+  const idSnapshot = () => `${idName}\n${idEmail}\n${JSON.stringify(idRules)}`;
+  let idBusy = $state(false);
+  const idDirty = $derived(idSnapshot() !== idSaved);
+  async function loadIdentity() {
+    try {
+      const c = (await get<ConfigView>('/config')).config;
+      idName = String(c.gitUserName ?? '');
+      idEmail = String(c.gitUserEmail ?? '');
+      idRules = ((c.gitIdentities ?? []) as typeof idRules).map((r) => ({ ...r }));
+      idSaved = idSnapshot();
+    } catch (e) { showError('Could not load the commit identity', e); }
+  }
+  $effect(() => { loadIdentity(); });
+  async function saveIdentity() {
+    idBusy = true;
+    try {
+      await put('/config', { gitUserName: idName, gitUserEmail: idEmail, gitIdentities: idRules });
+      idRules = idRules.map((r) => ({ ...r, scope: r.scope.trim().replace(/\/+$/, ''), name: r.name.trim(), email: r.email.trim() }));
+      idSaved = idSnapshot();
+    } catch (e) { showError('Could not save the commit identity', e); }
+    finally { idBusy = false; }
+  }
 
   function add(host: string) {
     host = host.trim().toLowerCase();
@@ -118,6 +147,28 @@
     <p class="hint">xherd runs natively: these settings go to <span class="mono">{view.gitconfig}</span>. Add
       <span class="mono" style="user-select:all">[include] path = {view.gitconfig}</span> to <span class="mono">~/.gitconfig</span> to use them.</p>
   {/if}
+
+  <section class="sec"><div class="bd stack">
+    <h3>Commit identity</h3>
+    <p class="hint">Agents commit as this name and email. Without it git refuses to commit ("unable to auto-detect email address").</p>
+    <div class="g3">
+      <label class="f">Name <input bind:value={idName} placeholder="Your Name" autocomplete="off" /></label>
+      <label class="f">Email <input type="email" bind:value={idEmail} placeholder="you@example.com" autocomplete="off" /></label>
+    </div>
+    <span class="lbl">Other identities, by repository owner</span>
+    <p class="hint">For repositories under an owner or a host, use a different identity (for example work on the same github.com). Matched on the remote URL, HTTPS or SSH.</p>
+    {#each idRules as r, i (i)}
+      <div class="g3">
+        <label class="f">Owner <input class="mono" bind:value={r.scope} placeholder="github.com/my-company" autocomplete="off" /></label>
+        <label class="f">Name <input bind:value={r.name} autocomplete="off" /></label>
+        <label class="f">Email <input type="email" bind:value={r.email} autocomplete="off" /></label>
+        <div><button class="btn ghost sm" onclick={() => idRules.splice(i, 1)}>Remove</button></div>
+      </div>
+    {/each}
+    <div><button class="btn" onclick={() => idRules.push({ scope: '', name: '', email: '' })}>+ Add an identity</button></div>
+    <div><button class="btn" disabled={idBusy || !idDirty} onclick={saveIdentity}>{idBusy ? 'Saving…' : 'Save identity'}</button>
+      {#if !idDirty && idName && idEmail}<span class="hint">Saved; applies to new commits at once.</span>{/if}</div>
+  </div></section>
 
   {#each rows as r (r.host)}
     {@const d = doctor[r.host]}

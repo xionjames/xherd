@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use xherd_core::domain::{CommitStatus, Gate};
+use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
 use xherd_core::hash::content_sha256;
 use xherd_core::paths::Paths;
 use xherd_core::report::{Report, ReportEvent};
@@ -39,6 +39,9 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(o.stdout).unwrap().trim().to_string()
 }
 
+/// What gates and commit proposals need next to them (FORMAT.md).
+const VALID_MEMORY: &str = "# Memory\n## State\nspec\n## Decisions\nnone\n## Code map\nsrc/a.rs: a\n## Watch out\nnothing\n";
+
 async fn setup() -> T {
     setup_with(true).await
 }
@@ -48,14 +51,22 @@ async fn setup_with(fresh_sessions: bool) -> T {
 }
 
 async fn setup_config(config: Value) -> T {
+    setup_full(config, None).await
+}
+
+async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
     let wt = tempfile::tempdir().unwrap();
     git(wt.path(), &["init", "-q", "-b", "main"]);
     git(wt.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
     std::fs::create_dir_all(wt.path().join(".xherd/spec")).unwrap();
+    std::fs::write(wt.path().join(".xherd/spec/memory.md"), VALID_MEMORY).unwrap();
     let drv = Arc::new(FakeDriver::default());
-    let o = Options::new(drv.clone(), Arc::new(SystemClock));
+    let mut o = Options::new(drv.clone(), Arc::new(SystemClock));
+    if let Some(t) = verify_timeout {
+        o.verify_timeout = t;
+    }
     let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
     let mut a = Agent::new("SC-1", "SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
@@ -260,6 +271,7 @@ async fn tasks_and_commit_with_real_git() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -382,7 +394,8 @@ async fn approve_docs_gate_hands_on_next_command() {
             &t,
             UserAction::Approve {
                 reason: None,
-                expect: Default::default()
+                expect: Default::default(),
+                message: None,
             }
         )
         .await
@@ -398,7 +411,8 @@ async fn approve_docs_gate_hands_on_next_command() {
             &t,
             UserAction::Approve {
                 reason: None,
-                expect: Default::default()
+                expect: Default::default(),
+                message: None,
             }
         )
         .await
@@ -414,6 +428,7 @@ async fn approve_docs_gate_hands_on_next_command() {
         UserAction::Approve {
             reason: Some("lgtm".into()),
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -468,6 +483,7 @@ async fn design_skip_goes_to_tasks() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -507,7 +523,8 @@ async fn request_changes_keeps_the_gate() {
             &t2,
             UserAction::Approve {
                 reason: None,
-                expect: Default::default()
+                expect: Default::default(),
+                message: None,
             }
         )
         .await
@@ -543,6 +560,7 @@ async fn edited_or_undeclared_documents_open_a_gate_on_stop() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -578,6 +596,7 @@ async fn task_progress_does_not_reopen_the_tasks_gate() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -620,6 +639,7 @@ async fn ledger_file_wins_after_restart() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -660,6 +680,7 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
             UserAction::Approve {
                 reason: None,
                 expect: Default::default(),
+                message: None,
             },
         )
         .await
@@ -681,6 +702,43 @@ async fn session_start(t: &T, seq: u64) {
 }
 
 #[tokio::test]
+async fn a_restart_parks_an_agent_waiting_at_a_gate_and_approval_still_works() {
+    let t = setup().await;
+    session_start(&t, 1).await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 2).await;
+    assert_eq!(get(&t).await.status, Status::WaitingInput);
+
+    // The container restarted: the terminal server and the session are gone.
+    t.drv.alive.lock().unwrap().clear();
+    t.d.reconcile_with(true).await;
+    for _ in 0..50 {
+        if get(&t).await.status == Status::Parked {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let a = get(&t).await;
+    assert_eq!((a.status, a.gate.is_some()), (Status::Parked, true));
+
+    // The gate can still be approved; the next session starts with the command.
+    let a = act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:design"));
+}
+
+#[tokio::test]
 async fn approval_starts_a_fresh_session_with_the_next_command() {
     let t = setup().await;
     session_start(&t, 1).await;
@@ -696,6 +754,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -714,9 +773,26 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
     session_start(&t, 3).await;
     assert_eq!(sends(&t), ["send SC-1 \"/xhspec:design\" 1"]);
     let a = get(&t).await;
-    assert_eq!((a.next_prompt, a.session.as_deref()), (None, Some("s-3")));
+    // Kept until a prompt is accepted: a session start that loses the typed
+    // text types it again.
+    assert_eq!(
+        (a.next_prompt.as_deref(), a.session.as_deref()),
+        (Some("/xhspec:design"), Some("s-3"))
+    );
     session_start(&t, 4).await;
-    assert_eq!(sends(&t).len(), 1);
+    assert_eq!(sends(&t).len(), 2);
+    let submit = Report {
+        id: "submit-5".into(),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::UserPromptSubmit,
+        payload: json!({"prompt": "/xhspec:design"}),
+        seq: 5,
+        at: 0,
+    };
+    t.d.report(submit).await;
+    assert_eq!(get(&t).await.next_prompt, None);
+    session_start(&t, 6).await;
+    assert_eq!(sends(&t).len(), 2);
 }
 
 #[tokio::test]
@@ -748,7 +824,7 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
     std::fs::write(wt.join("a.txt"), "new a\n").unwrap();
     std::fs::write(wt.join("other.txt"), "left out\n").unwrap();
 
-    let v = t.d.diff("SC-1").await.unwrap();
+    let v = t.d.diff("SC-1", None, None).await.unwrap();
     assert!(v["commit"].is_null());
     assert_eq!(v["files"], json!(["a.txt", "gone.txt", "other.txt"]));
     assert!(v["diff"].as_str().unwrap().contains("+left out"));
@@ -761,7 +837,7 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
     )
     .await
     .unwrap();
-    let v = t.d.diff("SC-1").await.unwrap();
+    let v = t.d.diff("SC-1", None, None).await.unwrap();
     assert_eq!(v["commit"]["id"], "C01");
     assert_eq!(v["files"], json!(["a.txt", "gone.txt"]));
     assert_eq!(v["others"], json!(["other.txt"]));
@@ -772,7 +848,10 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
     // Viewing changes nothing the agent will commit from.
     assert_eq!(git(wt, &["diff", "--cached", "--name-only"]), "");
 
-    assert_eq!(t.d.diff("nobody").await.unwrap_err().code, "unknown_agent");
+    assert_eq!(
+        t.d.diff("nobody", None, None).await.unwrap_err().code,
+        "unknown_agent"
+    );
 }
 
 #[tokio::test]
@@ -793,7 +872,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     assert_eq!(get(&t).await.status, Status::WaitingInput);
 
     // At the ship gate the user reviews what will be pushed.
-    let v = t.d.diff("SC-1").await.unwrap();
+    let v = t.d.diff("SC-1", None, None).await.unwrap();
     assert_eq!(v["branch"], "main...HEAD");
     assert_eq!(v["files"], json!(["feature.rs"]));
     assert_eq!(v["others"], json!(["stray.txt"]));
@@ -805,6 +884,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
         UserAction::Approve {
             reason: None,
             expect: Default::default(),
+            message: None,
         },
     )
     .await
@@ -979,7 +1059,10 @@ async fn ui_reads_a_document_and_approves_what_it_read() {
         .unwrap();
     stop(&t, 1).await;
 
-    assert_eq!(t.d.docs("SC-1").await.unwrap(), ["spec.md", "notes.md"]);
+    assert_eq!(
+        t.d.docs("SC-1").await.unwrap(),
+        ["spec.md", "memory.md", "notes.md"]
+    );
     let doc = t.d.doc("SC-1", "spec.md").await.unwrap();
     assert_eq!(doc["path"], "spec.md");
     assert_eq!(doc["reviewed"], Value::Null);
@@ -997,6 +1080,7 @@ async fn ui_reads_a_document_and_approves_what_it_read() {
         UserAction::Approve {
             reason: None,
             expect,
+            message: None,
         },
     )
     .await
@@ -1015,6 +1099,7 @@ async fn ui_reads_a_document_and_approves_what_it_read() {
         UserAction::Approve {
             reason: None,
             expect,
+            message: None,
         },
     )
     .await
@@ -1056,4 +1141,464 @@ async fn visited_stages_show_skipped_ones_and_are_rebuilt_from_events() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert_eq!(seen, ["spec", "tasks"]);
+}
+
+/// Open a commit gate for `a.txt` (message proposed by the agent), with an
+/// unrelated untracked `b.txt` lying around, and stop at it.
+async fn commit_gate(t: &T) {
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/tasks.md"),
+        "## T01: add a\n- files: a.txt\n",
+    )
+    .unwrap();
+    xap(t, "g1", "tasks.sync", json!({})).await.unwrap();
+    xap(t, "g2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    std::fs::write(t.wt.path().join("b.txt"), "b\n").unwrap();
+    xap(
+        t,
+        "g3",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "message": "Add a\n\nBecause T01 needs it.",
+               "files": ["a.txt"], "tasks": ["T01"]}),
+    )
+    .await
+    .unwrap();
+    stop(t, 1).await;
+}
+
+fn approve(message: Option<&str>) -> UserAction {
+    UserAction::Approve {
+        reason: None,
+        expect: Default::default(),
+        message: message.map(str::to_string),
+    }
+}
+
+#[tokio::test]
+async fn approving_a_commit_makes_the_commit_with_the_edited_message() {
+    let t = setup().await;
+    commit_gate(&t).await;
+    assert_eq!(
+        get(&t).await.commits[0].message.as_deref(),
+        Some("Add a\n\nBecause T01 needs it.")
+    );
+
+    t.d.action("SC-1", approve(Some("Add a, as edited by the user")))
+        .await
+        .unwrap();
+    let a = get(&t).await;
+    let sha = git(t.wt.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+    assert_eq!(a.commits[0].sha.as_deref(), Some(sha.as_str()));
+    assert_eq!(
+        git(t.wt.path(), &["log", "-1", "--format=%B"]),
+        "Add a, as edited by the user"
+    );
+    // Exactly the proposed file; the other one stays untouched.
+    assert_eq!(
+        git(t.wt.path(), &["show", "--name-only", "--format=", "HEAD"]),
+        "a.txt"
+    );
+    assert!(git(t.wt.path(), &["status", "--porcelain"]).contains("?? b.txt"));
+    // The agent only records it, in a fresh session.
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:commit C01"));
+    assert!(!t.wt.path().join(".xherd/commit-error.txt").exists());
+    // Reporting the same sha later is harmless.
+    xap(
+        &t,
+        "g4",
+        "commit.done",
+        json!({"id": "C01", "sha": &sha[..8]}),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_refused_commit_goes_to_the_agent_with_gits_output() {
+    let t = setup().await;
+    commit_gate(&t).await;
+    let hook = t.wt.path().join(".git/hooks/pre-commit");
+    // A worktree keeps hooks in the common dir.
+    let hook = if hook.parent().unwrap().exists() {
+        hook
+    } else {
+        let common = git(t.wt.path(), &["rev-parse", "--git-common-dir"]);
+        let dir = std::path::Path::new(&common).join("hooks");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("pre-commit")
+    };
+    std::fs::write(&hook, "#!/bin/sh\necho 'lint failed: a.txt' >&2\nexit 1\n").unwrap();
+    std::process::Command::new("chmod")
+        .args(["+x"])
+        .arg(&hook)
+        .status()
+        .unwrap();
+
+    t.d.action("SC-1", approve(None)).await.unwrap();
+    let a = get(&t).await;
+    // The approval stands, nothing was committed, the agent gets the error.
+    assert_eq!(a.commits[0].status, CommitStatus::Approved);
+    assert_eq!(a.commits[0].sha, None);
+    let err = std::fs::read_to_string(t.wt.path().join(".xherd/commit-error.txt")).unwrap();
+    assert!(err.contains("lint failed"), "{err}");
+    assert_eq!(a.next_prompt.as_deref(), Some("/xhspec:commit C01"));
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "commit-failed"));
+}
+
+#[tokio::test]
+async fn diff_views_uncommitted_branch_and_commit() {
+    let t = setup().await;
+    // Work on a branch off `main`, the agent's base.
+    git(t.wt.path(), &["checkout", "-q", "-b", "feature"]);
+    // As in a real worktree, `.xherd/` is excluded from git.
+    std::fs::write(t.wt.path().join(".git/info/exclude"), ".xherd/\n").unwrap();
+    commit_gate(&t).await;
+    let files = |v: &Value| -> Vec<String> {
+        v["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Before approval: the proposal shows what would be committed.
+    let v = t.d.diff("SC-1", Some("commit"), Some("C01")).await.unwrap();
+    assert_eq!(
+        (v["view"].as_str(), files(&v)),
+        (Some("commit"), vec!["a.txt".to_string()])
+    );
+    assert_eq!(v["commit"]["message"], "Add a\n\nBecause T01 needs it.");
+    assert!(v["diff"].as_str().unwrap().contains("+a"));
+    let v = t.d.diff("SC-1", Some("uncommitted"), None).await.unwrap();
+    assert_eq!(files(&v), ["a.txt", "b.txt"]);
+
+    t.d.action("SC-1", approve(None)).await.unwrap();
+
+    // After: the commit is a real one; uncommitted keeps only b.txt; the
+    // branch view has both (committed a.txt, untracked b.txt) against `main`.
+    let v = t.d.diff("SC-1", Some("commit"), Some("C01")).await.unwrap();
+    assert_eq!(files(&v), ["a.txt"]);
+    assert!(v["diff"].as_str().unwrap().contains("+a"));
+    let v = t.d.diff("SC-1", Some("uncommitted"), None).await.unwrap();
+    assert_eq!(files(&v), ["b.txt"]);
+    let v = t.d.diff("SC-1", Some("branch"), None).await.unwrap();
+    assert_eq!(files(&v), ["a.txt", "b.txt"]);
+    assert_eq!(v["branch"], "main...HEAD");
+
+    for (view, commit, code) in [
+        (Some("nope"), None, "bad_request"),
+        (Some("commit"), None, "bad_request"),
+        (Some("commit"), Some("C99"), "commit_unknown"),
+    ] {
+        assert_eq!(t.d.diff("SC-1", view, commit).await.unwrap_err().code, code);
+    }
+}
+
+#[tokio::test]
+async fn task_done_runs_the_verify_command() {
+    let t = setup_full(json!({}), Some(Duration::from_millis(400))).await;
+    let wt = t.wt.path();
+    std::fs::write(
+        wt.join(".xherd/spec/tasks.md"),
+        "## T01: passes\n- verify: `echo one; echo two >&2; test -f marker && echo found`\n\
+         ## T02: fails\n- verify: `echo broken; echo oops >&2; exit 3`\n\
+         ## T03: hangs\n- verify: `sleep 30`\n\
+         ## T04: no verify\n- files: x\n",
+    )
+    .unwrap();
+    std::fs::write(wt.join("marker"), "").unwrap();
+    xap(&t, "v0", "tasks.sync", json!({})).await.unwrap();
+    let task = |a: &Agent, id: &str| a.tasks.iter().find(|x| x.id == id).unwrap().clone();
+
+    // Passing: runs in the worktree; the note and the run are both kept.
+    xap(&t, "v1", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "v2",
+        "task.done",
+        json!({"id": "T01", "evidence": "my note"}),
+    )
+    .await
+    .unwrap();
+    let a = get(&t).await;
+    assert_eq!(task(&a, "T01").status, TaskStatus::Done);
+    assert_eq!(
+        task(&a, "T01").evidence.as_deref(),
+        Some("my note\n[verify exit 0] one\nfound\ntwo")
+    );
+    // The same call again does not run it twice: remove the marker, replay.
+    std::fs::remove_file(wt.join("marker")).unwrap();
+    let r = xap(
+        &t,
+        "v2",
+        "task.done",
+        json!({"id": "T01", "evidence": "my note"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["duplicate"], true);
+    let r = xap(
+        &t,
+        "v2b",
+        "task.done",
+        json!({"id": "T01", "evidence": "my note"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["changed"], false);
+
+    // Failing: refused, the task stays doing.
+    xap(&t, "v3", "task.start", json!({"id": "T02"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "v4", "task.done", json!({"id": "T02", "evidence": "x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "verify_failed");
+    assert!(e.message.contains("exited 3"), "{}", e.message);
+    assert!(e.message.contains("broken | oops"), "{}", e.message);
+    assert_eq!(task(&get(&t).await, "T02").status, TaskStatus::Doing);
+
+    // Timing out: refused too.
+    xap(
+        &t,
+        "v5",
+        "task.block",
+        json!({"id": "T02", "reason": "later"}),
+    )
+    .await
+    .unwrap();
+    xap(&t, "v6", "task.start", json!({"id": "T03"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "v7", "task.done", json!({"id": "T03", "evidence": "x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "verify_failed");
+    assert!(e.message.contains("timed out"), "{}", e.message);
+    assert_eq!(task(&get(&t).await, "T03").status, TaskStatus::Doing);
+
+    // No verify: unchanged behaviour.
+    xap(
+        &t,
+        "v8",
+        "task.block",
+        json!({"id": "T03", "reason": "later"}),
+    )
+    .await
+    .unwrap();
+    xap(&t, "v9", "task.start", json!({"id": "T04"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "v10",
+        "task.done",
+        json!({"id": "T04", "evidence": "by hand"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        task(&get(&t).await, "T04").evidence.as_deref(),
+        Some("by hand")
+    );
+}
+
+#[tokio::test]
+async fn gates_and_commit_proposals_need_a_valid_memory() {
+    let t = setup().await;
+    let memory = t.wt.path().join(".xherd/spec/memory.md");
+    let spec = t.wt.path().join(".xherd/spec/spec.md");
+    std::fs::write(&spec, "---\nticket: SC-1\n---\n# Spec\n").unwrap();
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/tasks.md"),
+        "## T01: add a\n- files: a.txt\n",
+    )
+    .unwrap();
+    xap(&t, "m0", "tasks.sync", json!({})).await.unwrap();
+    let gate = |id: &'static str| xap(&t, id, "gate.open", json!({"stage": "spec"}));
+    let propose = |id: &'static str| {
+        xap(
+            &t,
+            id,
+            "commit.propose",
+            json!({"id": "C01", "subject": "a", "files": ["a.txt"], "tasks": ["T01"]}),
+        )
+    };
+
+    std::fs::remove_file(&memory).unwrap();
+    let e = gate("m1").await.unwrap_err();
+    assert_eq!(e.code, "memory_invalid");
+    assert!(e.message.contains("missing"), "{}", e.message);
+    assert_eq!(propose("m2").await.unwrap_err().code, "memory_invalid");
+
+    std::fs::write(&memory, "## State\n## Decisions\n## Code map\n").unwrap();
+    let e = gate("m3").await.unwrap_err();
+    assert!(e.message.contains("`## watch out`"), "{}", e.message);
+
+    let long = format!("{VALID_MEMORY}{}", "line\n".repeat(90));
+    std::fs::write(&memory, long).unwrap();
+    assert!(gate("m4").await.unwrap_err().message.contains("lines"));
+
+    std::fs::write(&memory, VALID_MEMORY).unwrap();
+    gate("m5").await.unwrap();
+    assert!(matches!(get(&t).await.gate, Some(Gate::Docs { .. })));
+}
+
+#[tokio::test]
+async fn memory_is_not_checked_without_a_flow() {
+    let t = setup().await;
+    std::fs::remove_file(t.wt.path().join(".xherd/spec/memory.md")).unwrap();
+    // Flow none is refused for its own reason, never as memory_invalid.
+    let mut a = Agent::new("SC-2", "SC-2", 2);
+    a.launch = Some(vec!["rt".into()]);
+    a.workdir = Some(t.wt.path().to_string_lossy().into_owned());
+    let a = t.d.create_agent(a).await.unwrap();
+    for _ in 0..200 {
+        if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let e =
+        t.d.xap(call(&a, "n1", "gate.open", json!({"stage": "spec"})))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "no_flow");
+}
+
+#[tokio::test]
+async fn xherd_writes_the_progress_lines_of_tasks_and_commits() {
+    let t = setup().await;
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    let spec = t.wt.path().join(".xherd/spec");
+    let tasks = "# Tasks\n\n## T01: add a\n- status: todo\n- files: a.txt\n- verify: echo ok\n- evidence:\n\n## T02: later\n- files: b.txt\n- depends: T01\n\n## Assumptions\n- None.\n";
+    std::fs::write(spec.join("tasks.md"), tasks).unwrap();
+    xap(&t, "p0", "tasks.sync", json!({})).await.unwrap();
+    let read = |name: &str| std::fs::read_to_string(spec.join(name)).unwrap();
+
+    xap(&t, "p1", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        read("tasks.md"),
+        tasks.replace("status: todo", "status: doing")
+    );
+    xap(
+        &t,
+        "p2",
+        "task.done",
+        json!({"id": "T01", "evidence": "by hand"}),
+    )
+    .await
+    .unwrap();
+    let done = read("tasks.md");
+    assert!(done.contains("- status: done\n"), "{done}");
+    assert!(
+        done.contains("- evidence: by hand | [verify exit 0] ok\n"),
+        "{done}"
+    );
+    // Nothing else changed: approvals ignore exactly these lines.
+    assert_eq!(
+        xherd_flow::tasks::without_progress(&done),
+        xherd_flow::tasks::without_progress(tasks)
+    );
+
+    // The agent writes the entry; xherd keeps status and sha.
+    std::fs::write(
+        spec.join("commits.md"),
+        "## C01: Add a\n- tasks: T01\n- files: `a.txt`\n",
+    )
+    .unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    xap(
+        &t,
+        "p3",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "files": ["a.txt"], "tasks": ["T01"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        read("commits.md"),
+        "## C01: Add a\n- status: proposed\n- sha:\n- tasks: T01\n- files: `a.txt`\n"
+    );
+    stop(&t, 1).await;
+    t.d.action("SC-1", approve(None)).await.unwrap();
+    let sha = git(t.wt.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(
+        read("commits.md"),
+        format!("## C01: Add a\n- status: done\n- sha: {sha}\n- tasks: T01\n- files: `a.txt`\n")
+    );
+
+    // Missing entry or file: skipped, the call still succeeds.
+    std::fs::remove_file(spec.join("commits.md")).unwrap();
+    xap(&t, "p4", "task.start", json!({"id": "T02"}))
+        .await
+        .unwrap();
+    std::fs::remove_file(spec.join("tasks.md")).unwrap();
+    xap(&t, "p5", "task.block", json!({"id": "T02", "reason": "r"}))
+        .await
+        .unwrap();
+    assert!(!spec.join("tasks.md").exists());
+}
+
+#[tokio::test]
+async fn a_prose_verify_is_refused_when_tasks_sync_not_after_approval() {
+    let t = setup().await;
+    let tasks = t.wt.path().join(".xherd/spec/tasks.md");
+    // Prose with a stray backtick: the shell cannot parse it.
+    std::fs::write(
+        &tasks,
+        "## T01: readme\n- verify: `grep -qi e4b README.md` finds the model name in the README\n",
+    )
+    .unwrap();
+    let e = xap(&t, "v1", "tasks.sync", json!({})).await.unwrap_err();
+    assert_eq!(e.code, "verify_invalid");
+    assert!(e.message.starts_with("T01:"), "{}", e.message);
+    assert!(get(&t).await.tasks.is_empty(), "nothing was synced");
+
+    // A real command (and a task without one) syncs.
+    std::fs::write(
+        &tasks,
+        "## T01: readme\n- verify: `grep -qi e4b README.md`\n## T02: none\n- files: x\n",
+    )
+    .unwrap();
+    xap(&t, "v2", "tasks.sync", json!({})).await.unwrap();
+    assert_eq!(get(&t).await.tasks.len(), 2);
+}
+
+#[tokio::test]
+async fn a_verify_that_is_not_a_command_gets_a_hint() {
+    let t = setup().await;
+    // Parses as a shell command, but there is no such program (prose, in practice).
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/tasks.md"),
+        "## T01: readme\n- verify: `The README mentions the model`\n",
+    )
+    .unwrap();
+    xap(&t, "h1", "tasks.sync", json!({})).await.unwrap();
+    xap(&t, "h2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "h3", "task.done", json!({"id": "T01", "evidence": "x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "verify_failed");
+    assert!(
+        e.message.contains("not a runnable command"),
+        "{}",
+        e.message
+    );
 }

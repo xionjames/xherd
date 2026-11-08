@@ -113,7 +113,7 @@ impl Daemon {
 
         // Plugin checks: required only for the default runtime.
         let mut set = tokio::task::JoinSet::new();
-        for p in self.plugins.all() {
+        for p in self.plugins.all().filter(|p| self.plugin_enabled(p.name())) {
             let p = p.clone();
             let ctx = self.plugin_context(&p);
             set.spawn(async move {

@@ -62,6 +62,18 @@ pub struct Config {
     pub tmux_socket: Option<String>,
     /// Plugin settings by plugin name (non-secret).
     pub plugin_settings: Map<String, Value>,
+    /// Plugins switched off in Welcome/Settings; read live, no restart.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub disabled_plugins: Vec<String>,
+    /// Commit identity for the managed git config (agents commit as this
+    /// user). Both are needed; saved live, no restart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_user_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_user_email: Option<String>,
+    /// Identities by remote (`github.com/my-company`), over the global one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub git_identities: Vec<GitIdentity>,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -88,6 +100,10 @@ impl Default for Config {
             workspace: None,
             tmux_socket: None,
             plugin_settings: Map::new(),
+            disabled_plugins: Vec::new(),
+            git_user_name: None,
+            git_user_email: None,
+            git_identities: Vec::new(),
             git_hosts: Vec::new(),
             extra: Map::new(),
         }
@@ -131,6 +147,17 @@ pub struct GitHost {
     /// Rewrite HTTPS remotes of this host to SSH (off by default).
     #[serde(default)]
     pub prefer_ssh: bool,
+}
+
+/// Commit identity for repositories whose remote is under `scope`
+/// (`github.com/my-company`, or a whole host). Beats the global identity;
+/// matched by git itself (`includeIf hasconfig:remote.*.url`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitIdentity {
+    pub scope: String,
+    pub name: String,
+    pub email: String,
 }
 
 fn both_protocols() -> Vec<String> {
