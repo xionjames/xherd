@@ -140,15 +140,7 @@ impl Daemon {
             }
             prepare_xherd_dir(&git, &workdir, &a).await?;
             if let Some(h) = &rt.hooks {
-                let mut rules: Vec<String> = pack
-                    .map(command_dirs)
-                    .unwrap_or_default()
-                    .iter()
-                    // `//` marks an absolute path; a single `/` is relative to
-                    // the project root and would never match this folder.
-                    .map(|d| format!("Read(//{}/**)", d.trim_matches('/')))
-                    .collect();
-                rules.extend(XAP_ALLOW.iter().map(|s| s.to_string()));
+                let rules = permission_rules(pack);
                 install_hooks(&git, &workdir, h, &self.xherd_bin, &rules).await?;
             }
             self.create_agent(a).await
@@ -304,6 +296,22 @@ const XAP_ALLOW: &[&str] = &[
     "Bash(xherd issue *)",
 ];
 
+/// The runtime allow rules written into a new worktree: reading the pack's
+/// installed commands and the XAP calls. This is where profile and toolchain
+/// commands will be added.
+fn permission_rules(pack: Option<&xherd_flow::Pack>) -> Vec<String> {
+    let mut rules: Vec<String> = pack
+        .map(command_dirs)
+        .unwrap_or_default()
+        .iter()
+        // `//` marks an absolute path; a single `/` is relative to the
+        // project root and would never match this folder.
+        .map(|d| format!("Read(//{}/**)", d.trim_matches('/')))
+        .collect();
+    rules.extend(XAP_ALLOW.iter().map(|s| s.to_string()));
+    rules
+}
+
 /// Folders the default runtime's pack commands are installed in (outside the
 /// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
 /// plan cannot be made (no HOME).
@@ -353,6 +361,20 @@ async fn install_hooks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permission_rules_are_the_command_reads_then_the_xap_calls() {
+        let xap: Vec<String> = XAP_ALLOW.iter().map(|s| s.to_string()).collect();
+        assert_eq!(permission_rules(None), xap);
+        let pack = xherd_flow::xhspec();
+        let dirs = command_dirs(&pack);
+        let rules = permission_rules(Some(&pack));
+        assert_eq!(rules.len(), dirs.len() + xap.len());
+        assert_eq!(rules[dirs.len()..], xap[..]);
+        for (r, d) in rules.iter().zip(&dirs) {
+            assert_eq!(*r, format!("Read(//{}/**)", d.trim_matches('/')));
+        }
+    }
 
     #[test]
     fn resume_needs_the_transcript_and_a_plain_id() {
