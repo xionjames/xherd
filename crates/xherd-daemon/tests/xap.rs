@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use xherd_core::domain::{CommitStatus, Gate};
+use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
 use xherd_core::hash::content_sha256;
 use xherd_core::paths::Paths;
 use xherd_core::report::{Report, ReportEvent};
@@ -48,6 +48,10 @@ async fn setup_with(fresh_sessions: bool) -> T {
 }
 
 async fn setup_config(config: Value) -> T {
+    setup_full(config, None).await
+}
+
+async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
     let wt = tempfile::tempdir().unwrap();
@@ -55,7 +59,10 @@ async fn setup_config(config: Value) -> T {
     git(wt.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
     std::fs::create_dir_all(wt.path().join(".xherd/spec")).unwrap();
     let drv = Arc::new(FakeDriver::default());
-    let o = Options::new(drv.clone(), Arc::new(SystemClock));
+    let mut o = Options::new(drv.clone(), Arc::new(SystemClock));
+    if let Some(t) = verify_timeout {
+        o.verify_timeout = t;
+    }
     let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
     let mut a = Agent::new("SC-1", "SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
@@ -1286,4 +1293,116 @@ async fn diff_views_uncommitted_branch_and_commit() {
     ] {
         assert_eq!(t.d.diff("SC-1", view, commit).await.unwrap_err().code, code);
     }
+}
+
+#[tokio::test]
+async fn task_done_runs_the_verify_command() {
+    let t = setup_full(json!({}), Some(Duration::from_millis(400))).await;
+    let wt = t.wt.path();
+    std::fs::write(
+        wt.join(".xherd/spec/tasks.md"),
+        "## T01: passes\n- verify: `echo one; echo two >&2; test -f marker && echo found`\n\
+         ## T02: fails\n- verify: `echo broken; echo oops >&2; exit 3`\n\
+         ## T03: hangs\n- verify: `sleep 30`\n\
+         ## T04: no verify\n- files: x\n",
+    )
+    .unwrap();
+    std::fs::write(wt.join("marker"), "").unwrap();
+    xap(&t, "v0", "tasks.sync", json!({})).await.unwrap();
+    let task = |a: &Agent, id: &str| a.tasks.iter().find(|x| x.id == id).unwrap().clone();
+
+    // Passing: runs in the worktree; the note and the run are both kept.
+    xap(&t, "v1", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "v2",
+        "task.done",
+        json!({"id": "T01", "evidence": "my note"}),
+    )
+    .await
+    .unwrap();
+    let a = get(&t).await;
+    assert_eq!(task(&a, "T01").status, TaskStatus::Done);
+    assert_eq!(
+        task(&a, "T01").evidence.as_deref(),
+        Some("my note\n[verify exit 0] one\nfound\ntwo")
+    );
+    // The same call again does not run it twice: remove the marker, replay.
+    std::fs::remove_file(wt.join("marker")).unwrap();
+    let r = xap(
+        &t,
+        "v2",
+        "task.done",
+        json!({"id": "T01", "evidence": "my note"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["duplicate"], true);
+    let r = xap(
+        &t,
+        "v2b",
+        "task.done",
+        json!({"id": "T01", "evidence": "my note"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["changed"], false);
+
+    // Failing: refused, the task stays doing.
+    xap(&t, "v3", "task.start", json!({"id": "T02"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "v4", "task.done", json!({"id": "T02", "evidence": "x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "verify_failed");
+    assert!(e.message.contains("exited 3"), "{}", e.message);
+    assert!(e.message.contains("broken | oops"), "{}", e.message);
+    assert_eq!(task(&get(&t).await, "T02").status, TaskStatus::Doing);
+
+    // Timing out: refused too.
+    xap(
+        &t,
+        "v5",
+        "task.block",
+        json!({"id": "T02", "reason": "later"}),
+    )
+    .await
+    .unwrap();
+    xap(&t, "v6", "task.start", json!({"id": "T03"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "v7", "task.done", json!({"id": "T03", "evidence": "x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "verify_failed");
+    assert!(e.message.contains("timed out"), "{}", e.message);
+    assert_eq!(task(&get(&t).await, "T03").status, TaskStatus::Doing);
+
+    // No verify: unchanged behaviour.
+    xap(
+        &t,
+        "v8",
+        "task.block",
+        json!({"id": "T03", "reason": "later"}),
+    )
+    .await
+    .unwrap();
+    xap(&t, "v9", "task.start", json!({"id": "T04"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "v10",
+        "task.done",
+        json!({"id": "T04", "evidence": "by hand"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        task(&get(&t).await, "T04").evidence.as_deref(),
+        Some("by hand")
+    );
 }

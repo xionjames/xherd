@@ -106,7 +106,9 @@ xherd task done <ID> --evidence TEXT
 xherd task block <ID> --reason TEXT
 ```
 
-`tasks sync` re-reads the task list (built-in parser or the pack's `parse`); default file `tasks.md`. The file is the source of tasks; a status already reported through XAP is kept when the file still says `todo`. Refusals: `doc_missing`, `doc_schema` (the list does not parse), `task_unknown`, `task_not_ready` (dependencies not done), `task_already_doing` (another task is in progress), `evidence_missing`.
+`tasks sync` re-reads the task list (built-in parser or the pack's `parse`); default file `tasks.md`. The file is the source of tasks; a status already reported through XAP is kept when the file still says `todo`. Refusals: `doc_missing`, `doc_schema` (the list does not parse), `task_unknown`, `task_not_ready` (dependencies not done), `task_already_doing` (another task is in progress), `evidence_missing`, `verify_failed` (`task done` only: see below).
+
+When the task has a `verify:` command, `task done` makes the daemon run it (`sh -c`, in the worktree, 10 minutes at most) before accepting. Exit 0: the task is done and its evidence is the agent's `--evidence` followed by `[verify exit 0]` and the last 20 lines of output. Non-zero exit or timeout: refused with `verify_failed` (one line: the command, how it ended, the last lines of output) and the task stays `doing`. A replayed call (same call id) does not run it again.
 
 ## 5. Commits
 

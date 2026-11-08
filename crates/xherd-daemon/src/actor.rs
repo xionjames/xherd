@@ -11,13 +11,13 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
-use xherd_core::domain::{CommitStatus, Gate};
+use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
 use xherd_core::xap::{Refusal, XapCall, XapCmd, refuse as refusal};
 use xherd_core::{Agent, Status, Trigger};
 use xherd_flow::Pack;
-use xherd_flow::xap::{CommitFact, DocFact, DocState, Observed};
+use xherd_flow::xap::{CommitFact, DocFact, DocState, Observed, VerifyFact};
 use xherd_store::{Event, Store};
 use xherd_term::ScreenRules;
 
@@ -133,6 +133,8 @@ pub struct ActorSettings {
     /// Install missing toolchain versions before the runtime starts
     /// (container); native installs only resolve (R-653).
     pub toolchain_install: bool,
+    /// Longest a task's `verify:` command may run.
+    pub verify_timeout: Duration,
 }
 
 impl Default for ActorSettings {
@@ -146,6 +148,7 @@ impl Default for ActorSettings {
             xherd_url: "http://127.0.0.1:4740".into(),
             screen_rules: None,
             toolchain_install: false,
+            verify_timeout: VERIFY_TIMEOUT,
         }
     }
 }
@@ -171,6 +174,9 @@ pub struct Env {
     /// How to continue the runtime's last conversation, when it can.
     pub resume: Option<Arc<crate::Resumer>>,
 }
+
+/// Default limit for a task's `verify:` command.
+pub const VERIFY_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Session losses the daemon answers with a resume by itself, per window.
 const AUTO_RESUMES: usize = 2;
@@ -589,6 +595,19 @@ impl Actor {
                 let d = doc_path(file.as_deref().unwrap_or("tasks.md"), &wd)?;
                 Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
             }
+            XapCmd::TaskDone { id, .. } => {
+                // Unknown task or none to run: `apply` decides.
+                let verify = self
+                    .agent
+                    .tasks
+                    .iter()
+                    .find(|t| &t.id == id && t.status != TaskStatus::Done)
+                    .and_then(|t| t.verify.clone());
+                match verify {
+                    Some(command) => Observed::Verify(Some(self.run_verify(command).await?)),
+                    None => Observed::Verify(None),
+                }
+            }
             XapCmd::HandoffWritten { file } => {
                 let wd = self.workdir()?;
                 let d = doc_path(file.as_deref().unwrap_or(HANDOFF), &wd)?;
@@ -612,6 +631,30 @@ impl Actor {
                 })
             }
             _ => Observed::Nothing,
+        })
+    }
+
+    /// Run a task's `verify:` command in the worktree (R-118). A deliberate
+    /// inline exception to "slow work returns as `WorkDone`", like
+    /// `commit_for_user`: the agent waits for the answer and the actor holds
+    /// no other work meanwhile. `sh -c` with the daemon's allowlisted env.
+    async fn run_verify(&self, command: String) -> Result<VerifyFact, Refusal> {
+        let wd = self.workdir()?;
+        let out = xherd_core::exec::run(
+            xherd_core::exec::Cmd::new(["sh", "-c", command.as_str()])
+                .cwd(wd)
+                .timeout(self.env.settings.verify_timeout),
+        )
+        .await
+        .map_err(|e| refusal("verify_failed", format!("verify `{command}`: {e}")))?;
+        let mut text = out.stdout_str();
+        text.push_str(&out.stderr);
+        let lines: Vec<&str> = text.lines().collect();
+        Ok(VerifyFact {
+            command,
+            code: out.code,
+            timed_out: out.timed_out,
+            tail: lines[lines.len().saturating_sub(20)..].join("\n"),
         })
     }
 

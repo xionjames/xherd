@@ -61,6 +61,8 @@ pub struct Options {
     /// Peer addresses treated like loopback: the container's gateway, through
     /// which the port published on the host's 127.0.0.1 arrives.
     pub local_peers: Vec<std::net::IpAddr>,
+    /// Limit for a task's `verify:` command (tests shorten it).
+    pub verify_timeout: std::time::Duration,
 }
 
 impl Options {
@@ -75,6 +77,7 @@ impl Options {
             screen_rules: None,
             sandbox: false,
             local_peers: Vec::new(),
+            verify_timeout: actor::VERIFY_TIMEOUT,
         }
     }
 }
@@ -201,6 +204,7 @@ impl Daemon {
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
             toolchain_install: opts.sandbox,
+            verify_timeout: opts.verify_timeout,
         };
         let trust = plugins
             .get(xherd_flow::approve::DEFAULT_RUNTIME)
