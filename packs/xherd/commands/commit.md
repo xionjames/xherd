@@ -1,12 +1,12 @@
 ---
-description: xhSpec — record the approved commit (or fix it), then continue
+description: xherd — record the approved commit (or fix it), then continue
 argument-hint: <commit id, e.g. C01>
 ---
 # Record an approved commit
 
 Arguments: `{{args}}` (the commit id).
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 xherd makes the commit itself when the user approves a proposal: it stages
 exactly the proposed files and commits with the proposal's message (as the

@@ -4,7 +4,7 @@ import type { Agent, FlowInfo } from './types';
 
 describe('steps', () => {
   const f: FlowInfo = {
-    pack: 'xhspec', flow: 'feature',
+    pack: 'xherd', flow: 'feature',
     stages: ['spec', 'design', 'tasks', 'implement'].map((id) => ({ id, role: id as never, class: 'routine', gate: true })),
   };
   const a = (over: Partial<Agent>): Agent => ({ id: 'x', name: 'x', ticketKey: 'X', status: 'waiting-input', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });

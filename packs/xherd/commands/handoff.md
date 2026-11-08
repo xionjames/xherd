@@ -1,9 +1,9 @@
 ---
-description: xhSpec — write a handoff note before the session ends
+description: xherd — write a handoff note before the session ends
 ---
 # Handoff
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 1. Finish or safely stop what you are doing; do not start anything new.
 2. Write `.xherd/HANDOFF.md` in the handoff format: done, in progress (files

@@ -1,9 +1,9 @@
 ---
-description: xhSpec — break the approved spec and design into tasks
+description: xherd — break the approved spec and design into tasks
 ---
 # Feature: tasks
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 1. `xherd stage enter tasks`
 2. Read `.xherd/spec/memory.md`, `.xherd/spec/spec.md` and, if it exists,

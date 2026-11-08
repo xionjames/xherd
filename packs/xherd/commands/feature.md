@@ -1,12 +1,12 @@
 ---
-description: xhSpec — start a feature: read the ticket, explore, write the spec
+description: xherd — start a feature: read the ticket, explore, write the spec
 argument-hint: <TICKET-KEY> <what to build>
 ---
 # Feature: spec
 
 Arguments: `{{args}}` (a ticket key, then a description of the feature).
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 1. Mark the stage: `xherd stage enter spec`.
 2. Read the ticket with the tracker tools you have (MCP server or CLI). If

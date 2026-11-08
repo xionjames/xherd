@@ -60,7 +60,7 @@ enum Cmd {
     },
     /// List agents.
     Ls,
-    /// Install a pack's commands for agent runtimes (default: xhSpec, every runtime).
+    /// Install a pack's commands for agent runtimes (default: xherd, every runtime).
     Install {
         #[arg(long)]
         runtime: Option<String>,
@@ -705,13 +705,13 @@ mod tests {
         out
     }
 
-    /// Every `` `xherd …` `` call the xhSpec prompts teach is a valid
+    /// Every `` `xherd …` `` call the xherd prompts teach is a valid
     /// command line for this CLI (a call ends at the closing backtick).
     #[test]
     fn prompt_calls_parse() {
         let env = |k: &str| (k == "HOME").then(|| "/home/u".to_string());
-        let plan = xherd_flow::xhspec()
-            .plan_install("claude-code", xherd_flow::install::XHSPEC_FILES, &env)
+        let plan = xherd_flow::builtin()
+            .plan_install("claude-code", xherd_flow::install::BUILTIN_FILES, &env)
             .unwrap();
         let mut seen = 0;
         for f in &plan {

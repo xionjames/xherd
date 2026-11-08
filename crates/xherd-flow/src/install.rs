@@ -5,52 +5,52 @@ use std::path::PathBuf;
 
 use crate::Pack;
 
-/// The built-in pack's files, by path inside `packs/xhspec/`.
-pub const XHSPEC_FILES: &[(&str, &str)] = &[
-    ("FORMAT.md", include_str!("../../../packs/xhspec/FORMAT.md")),
+/// The built-in pack's files, by path inside `packs/xherd/`.
+pub const BUILTIN_FILES: &[(&str, &str)] = &[
+    ("FORMAT.md", include_str!("../../../packs/xherd/FORMAT.md")),
     (
         "commands/commit.md",
-        include_str!("../../../packs/xhspec/commands/commit.md"),
+        include_str!("../../../packs/xherd/commands/commit.md"),
     ),
     (
         "commands/design.md",
-        include_str!("../../../packs/xhspec/commands/design.md"),
+        include_str!("../../../packs/xherd/commands/design.md"),
     ),
     (
         "commands/feature.md",
-        include_str!("../../../packs/xhspec/commands/feature.md"),
+        include_str!("../../../packs/xherd/commands/feature.md"),
     ),
     (
         "commands/handoff.md",
-        include_str!("../../../packs/xhspec/commands/handoff.md"),
+        include_str!("../../../packs/xherd/commands/handoff.md"),
     ),
     (
         "commands/next.md",
-        include_str!("../../../packs/xhspec/commands/next.md"),
+        include_str!("../../../packs/xherd/commands/next.md"),
     ),
     (
         "commands/resume.md",
-        include_str!("../../../packs/xhspec/commands/resume.md"),
+        include_str!("../../../packs/xherd/commands/resume.md"),
     ),
     (
         "commands/review.md",
-        include_str!("../../../packs/xhspec/commands/review.md"),
+        include_str!("../../../packs/xherd/commands/review.md"),
     ),
     (
         "commands/rules.md",
-        include_str!("../../../packs/xhspec/commands/rules.md"),
+        include_str!("../../../packs/xherd/commands/rules.md"),
     ),
     (
         "commands/ship.md",
-        include_str!("../../../packs/xhspec/commands/ship.md"),
+        include_str!("../../../packs/xherd/commands/ship.md"),
     ),
     (
         "commands/status.md",
-        include_str!("../../../packs/xhspec/commands/status.md"),
+        include_str!("../../../packs/xherd/commands/status.md"),
     ),
     (
         "commands/tasks.md",
-        include_str!("../../../packs/xhspec/commands/tasks.md"),
+        include_str!("../../../packs/xherd/commands/tasks.md"),
     ),
 ];
 
@@ -235,12 +235,12 @@ mod tests {
     }
 
     #[test]
-    fn xhspec_for_claude_code() {
-        let p = crate::xhspec();
+    fn xherd_for_claude_code() {
+        let p = crate::builtin();
         let plan = p
-            .plan_install("claude-code", XHSPEC_FILES, &env("/home/u"))
+            .plan_install("claude-code", BUILTIN_FILES, &env("/home/u"))
             .unwrap();
-        let dir = "/home/u/.claude/commands/xhspec";
+        let dir = "/home/u/.claude/commands/xherd";
         let next = plan
             .iter()
             .find(|f| f.path == std::path::Path::new(&format!("{dir}/next.md")))
@@ -254,13 +254,13 @@ mod tests {
             .find(|f| f.path.ends_with("feature.md"))
             .unwrap();
         assert!(feature.text.contains("`$ARGUMENTS`"));
-        assert!(p.plan_install("codex", XHSPEC_FILES, &env("/h")).is_err());
+        assert!(p.plan_install("codex", BUILTIN_FILES, &env("/h")).is_err());
     }
 
     /// Every command the manifest can send exists as a command file.
     #[test]
     fn every_template_has_a_prompt() {
-        let p = crate::xhspec();
+        let p = crate::builtin();
         let mut templates: Vec<&str> = p.commands.values().map(String::as_str).collect();
         for f in p.flows.values() {
             templates.push(&f.start);
@@ -278,7 +278,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{t} does not start with {{prefix}}"));
             let file = format!("commands/{name}.md");
             assert!(
-                XHSPEC_FILES.iter().any(|(p, _)| *p == file),
+                BUILTIN_FILES.iter().any(|(p, _)| *p == file),
                 "{t}: no {file}"
             );
         }
@@ -286,14 +286,14 @@ mod tests {
 
     #[test]
     fn every_pack_file_is_embedded() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/xhspec");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/xherd");
         let mut on_disk: Vec<String> = std::fs::read_dir(dir.join("commands"))
             .unwrap()
             .map(|e| format!("commands/{}", e.unwrap().file_name().to_string_lossy()))
             .collect();
         on_disk.push("FORMAT.md".into());
         on_disk.sort();
-        let mut embedded: Vec<&str> = XHSPEC_FILES.iter().map(|(p, _)| *p).collect();
+        let mut embedded: Vec<&str> = BUILTIN_FILES.iter().map(|(p, _)| *p).collect();
         embedded.sort();
         assert_eq!(on_disk, embedded);
     }
@@ -301,7 +301,7 @@ mod tests {
     /// The `tasks.md` example in FORMAT.md is what the parser reads.
     #[test]
     fn format_tasks_example_parses() {
-        let format = XHSPEC_FILES[0].1;
+        let format = BUILTIN_FILES[0].1;
         let start = format.find("## tasks.md").unwrap();
         let block = format[start..]
             .split("```markdown\n")

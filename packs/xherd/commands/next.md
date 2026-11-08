@@ -1,9 +1,9 @@
 ---
-description: xhSpec — implement the next ready task and propose its commit
+description: xherd — implement the next ready task and propose its commit
 ---
 # Implement the next task
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 1. `xherd stage enter implement`
 2. Read `.xherd/spec/memory.md` and `.xherd/spec/tasks.md`. The next task is the first one with status

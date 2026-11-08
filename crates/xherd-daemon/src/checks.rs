@@ -169,14 +169,14 @@ impl Daemon {
         out
     }
 
-    /// The xhSpec commands are where the default runtime finds them.
+    /// The xherd commands are where the default runtime finds them.
     async fn pack_check(&self, env: &(dyn Fn(&str) -> Option<String> + Sync)) -> Check {
         let rt = xherd_flow::approve::DEFAULT_RUNTIME;
-        let missing = match self.packs.get(xherd_flow::XHSPEC) {
+        let missing = match self.packs.get(xherd_flow::BUILTIN) {
             Some(p) => p
-                .plan_install(rt, xherd_flow::install::XHSPEC_FILES, env)
+                .plan_install(rt, xherd_flow::install::BUILTIN_FILES, env)
                 .map(|plan| plan.iter().filter(|f| !f.path.exists()).count()),
-            None => Err("the xhSpec pack is not loaded".into()),
+            None => Err("the xherd pack is not loaded".into()),
         };
         let (ok, detail) = match missing {
             Ok(0) => (true, "installed".to_string()),
@@ -186,7 +186,7 @@ impl Daemon {
         Check {
             id: PACK_CHECK.into(),
             group: "runtime",
-            label: format!("xhSpec commands installed for {rt}"),
+            label: format!("xherd commands installed for {rt}"),
             required: true,
             ok,
             detail,

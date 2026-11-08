@@ -41,13 +41,13 @@ mod tests {
         let s = render(
             "{prefix}feature {key} {prompt}",
             &[
-                ("prefix", "/xhspec:"),
+                ("prefix", "/xherd:"),
                 ("key", "SC-1"),
                 ("prompt", "add login"),
             ],
         )
         .unwrap();
-        assert_eq!(s, "/xhspec:feature SC-1 add login");
+        assert_eq!(s, "/xherd:feature SC-1 add login");
     }
 
     #[test]
