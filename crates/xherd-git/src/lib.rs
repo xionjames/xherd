@@ -393,6 +393,73 @@ impl Git {
             .map(drop)
     }
 
+    /// Pre-push guard (R-1204): a hooks folder for this worktree only
+    /// (`core.hooksPath` in the worktree's own config, which needs
+    /// `extensions.worktreeConfig`). It links every hook of the folder git
+    /// used before, so the repository's other hooks keep running, and replaces
+    /// `pre-push` with a script that asks `xherd guard pre-push` first and then
+    /// runs the original `pre-push`, if any. Hooks can be skipped
+    /// (`--no-verify`): this stops mistakes, not a determined agent.
+    pub async fn install_push_guard(
+        &self,
+        worktree: &Path,
+        hooks_dir: &Path,
+        xherd_bin: &str,
+        branch: &str,
+    ) -> Result<()> {
+        let fail = |e: std::io::Error| GitError::Failed {
+            args: "push guard".into(),
+            stderr: format!("{}: {e}", hooks_dir.display()),
+        };
+        // Where git looked for hooks so far (honours an existing core.hooksPath).
+        let base = self
+            .run(worktree, &["rev-parse", "--git-path", "hooks"])
+            .await?;
+        let base = if Path::new(&base).is_absolute() {
+            PathBuf::from(base)
+        } else {
+            worktree.join(base)
+        };
+        let base = base.canonicalize().unwrap_or(base);
+        if base == hooks_dir {
+            return Ok(()); // already installed
+        }
+        std::fs::create_dir_all(hooks_dir).map_err(fail)?;
+        for entry in std::fs::read_dir(&base).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            let n = name.to_string_lossy();
+            let link = hooks_dir.join(&name);
+            if n == "pre-push" || n.ends_with(".sample") || link.symlink_metadata().is_ok() {
+                continue;
+            }
+            std::os::unix::fs::symlink(entry.path(), link).map_err(fail)?;
+        }
+        let q = sh_quote;
+        let script = format!(
+            "#!/bin/sh\n# xherd push guard (R-1204)\ninput=$(cat)\n\
+             printf '%s\\n' \"$input\" | {} guard pre-push --branch {} \"$@\" || exit 1\n\
+             if [ -x {orig} ]; then printf '%s\\n' \"$input\" | {orig} \"$@\"; fi\n",
+            q(xherd_bin),
+            q(branch),
+            orig = q(&base.join("pre-push").to_string_lossy()),
+        );
+        let hook = hooks_dir.join("pre-push");
+        xherd_core::paths::write_atomic(&hook, script.as_bytes(), Some(0o755)).map_err(fail)?;
+        self.run(worktree, &["config", "extensions.worktreeConfig", "true"])
+            .await?;
+        self.run(
+            worktree,
+            &[
+                "config",
+                "--worktree",
+                "core.hooksPath",
+                &hooks_dir.to_string_lossy(),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Append patterns to `.git/info/exclude` of the repo `dir` belongs to,
     /// skipping ones already present (R-005b).
     pub async fn add_excludes(&self, dir: &Path, patterns: &[&str]) -> Result<()> {
@@ -444,6 +511,11 @@ fn parse_worktrees(porcelain: &str) -> Vec<Worktree> {
     }
     out.extend(cur);
     out
+}
+
+/// Single-quote a string for `sh`.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]

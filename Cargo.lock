@@ -2482,6 +2482,7 @@ dependencies = [
  "xherd-core",
  "xherd-daemon",
  "xherd-flow",
+ "xherd-git",
  "xherd-plugin",
  "xherd-store",
  "xherd-term",

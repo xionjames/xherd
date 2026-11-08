@@ -1607,3 +1607,44 @@ async fn a_verify_that_is_not_a_command_gets_a_hint() {
         e.message
     );
 }
+
+#[tokio::test]
+async fn secret_in_a_proposed_commit_holds_it_for_a_human() {
+    let t = setup().await;
+    let token = format!("ghp_{}", "a1".repeat(18));
+    std::fs::write(t.wt.path().join("cfg.txt"), format!("token = {token}\n")).unwrap();
+    std::fs::write(t.wt.path().join("ok.txt"), "nothing here\n").unwrap();
+    xap(
+        &t,
+        "s1",
+        "commit.propose",
+        json!({"id": "C01", "subject": "cfg", "files": ["cfg.txt", "ok.txt"]}),
+    )
+    .await
+    .unwrap();
+    let Some(Gate::Commit(c)) = get(&t).await.gate else {
+        panic!("no commit gate")
+    };
+    let why = c.needs_human.unwrap();
+    assert!(why.contains("GitHub token in cfg.txt:1"), "{why}");
+    assert!(
+        !why.contains(&token),
+        "the secret must not be repeated: {why}"
+    );
+
+    // A clean proposal is not held.
+    let t = setup().await;
+    std::fs::write(t.wt.path().join("ok.txt"), "nothing here\n").unwrap();
+    xap(
+        &t,
+        "s2",
+        "commit.propose",
+        json!({"id": "C01", "subject": "ok", "files": ["ok.txt"]}),
+    )
+    .await
+    .unwrap();
+    let Some(Gate::Commit(c)) = get(&t).await.gate else {
+        panic!("no commit gate")
+    };
+    assert_eq!(c.needs_human, None);
+}
