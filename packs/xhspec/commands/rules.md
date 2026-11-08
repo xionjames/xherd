@@ -46,6 +46,10 @@ where a gate would be, telling the user what to review.
   Do not re-read the whole codebase.
 - Rewrite `.xherd/spec/memory.md` before every gate (format above), with the
   code map for the next step: the files it will need and how to build and test.
+- Run each shell command on its own, as written: do not chain commands with
+  `;`, `&&` or `||`, and do not add `echo $?` or any other `$variable`. The
+  exit status comes back with the result. A command with a variable in it
+  cannot be checked in advance, so the user is asked to confirm it every time.
 - Use the repository's own commands to build, test and lint, and say which
   ones you ran in each task's evidence.
 

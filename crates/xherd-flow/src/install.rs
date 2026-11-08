@@ -57,8 +57,10 @@ pub const XHSPEC_FILES: &[(&str, &str)] = &[
 /// What `{{xap}}` expands to when the runtime calls XAP through the shell.
 pub const XAP_SHELL: &str = r#"## Calling xherd (XAP)
 
-Run the calls with the shell, exactly as shown (`xherd` is on your `PATH`; do
-not replace it with a variable). Document paths are relative to `.xherd/spec/`.
+Run the calls with the shell, exactly as shown, each one as its own command
+(`xherd` is on your `PATH`; do not replace it with a variable, do not chain it
+with `;` or `&&`, and do not append `echo $?`: the exit status comes back with
+the result, and a command with a variable asks the user every time). Document paths are relative to `.xherd/spec/`.
 
 | Exit | Meaning | Do |
 |---|---|---|
