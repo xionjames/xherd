@@ -530,7 +530,7 @@ impl Actor {
 
     /// Validate and apply one XAP call (design §6.5). Accepted calls are logged
     /// as `xap.<cmd>` under the call id, which also de-duplicates replays.
-    async fn on_xap(&mut self, call: XapCall) -> Result<Value, Refusal> {
+    async fn on_xap(&mut self, mut call: XapCall) -> Result<Value, Refusal> {
         if !self.agent.status.is_live() {
             return Err(refusal(
                 "not_live",
@@ -540,6 +540,7 @@ impl Actor {
         if self.env.store.event_exists(&call.id).await.unwrap_or(false) {
             return Ok(json!({"changed": false, "duplicate": true}));
         }
+        self.secret_tripwire(&mut call.cmd).await;
         let packs = self.env.packs.clone();
         let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
         let obs = self.observe(pack, &call.cmd).await?;
@@ -563,6 +564,32 @@ impl Actor {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
+    }
+
+    /// Secret tripwire (R-117): a commit proposal whose diff looks like it
+    /// holds a secret is held for a human (`needs_human`, masked). Reads the
+    /// diff only; a failing git leaves the proposal as it was.
+    async fn secret_tripwire(&self, cmd: &mut XapCmd) {
+        let XapCmd::CommitPropose {
+            files, needs_human, ..
+        } = cmd
+        else {
+            return;
+        };
+        let Ok(wd) = self.workdir() else { return };
+        let diff = match self.env.git.diff_proposed(&wd, files).await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::debug!(agent = %self.agent.name, %e, "secret tripwire: no diff");
+                return;
+            }
+        };
+        if let Some(why) = xherd_core::tripwire::summary(&xherd_core::tripwire::scan_diff(&diff)) {
+            *needs_human = Some(match needs_human.take() {
+                Some(own) => format!("{own}; {why}"),
+                None => why,
+            });
+        }
     }
 
     /// Write the progress lines xherd owns (D11) into `tasks.md` / `commits.md`

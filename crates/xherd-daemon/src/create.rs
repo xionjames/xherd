@@ -139,6 +139,15 @@ impl Daemon {
                     .map_err(|e| refuse("runtime_trust", format!("{label}: {e}")))?;
             }
             prepare_xherd_dir(&git, &workdir, &a).await?;
+            // R-1204: this worktree's pushes go through `xherd guard pre-push`.
+            git.install_push_guard(
+                &workdir,
+                &workdir.join(".xherd/hooks"),
+                &self.xherd_bin,
+                &c.name,
+            )
+            .await
+            .map_err(|e| refuse("push_guard", e.to_string()))?;
             if let Some(h) = &rt.hooks {
                 let rules = permission_rules(pack);
                 install_hooks(&git, &workdir, h, &self.xherd_bin, &rules).await?;

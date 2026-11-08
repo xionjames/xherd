@@ -11,6 +11,7 @@ use xherd_core::paths::Paths;
 
 mod docker;
 mod git;
+mod guard;
 mod init;
 mod open_in;
 mod report;
@@ -90,6 +91,9 @@ enum Cmd {
     /// Git access.
     #[command(subcommand)]
     Git(GitCmd),
+    /// Checks behind xherd's git hooks.
+    #[command(subcommand)]
+    Guard(GuardCmd),
     /// Open an agent's worktree in an app on this computer (apps: ~/.config/xherd/open.json, else editors on PATH).
     Open {
         agent: String,
@@ -194,6 +198,18 @@ enum DockerCmd {
 }
 
 #[derive(Subcommand)]
+enum GuardCmd {
+    /// The `pre-push` check (git passes the remote and its URL; ref lines arrive on stdin).
+    PrePush {
+        /// The only branch this agent may push.
+        #[arg(long)]
+        branch: String,
+        #[arg(trailing_var_arg = true)]
+        _git: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ToolchainCmd {
     /// Provide the tools `.xherd/toolchain.json` lists, then run the command
     /// with them on PATH (the daemon starts agents this way).
@@ -272,6 +288,7 @@ fn main() -> ExitCode {
         Cmd::Diff { agent } => diff(&agent, json),
         Cmd::Toolchain(ToolchainCmd::Exec { argv }) => toolchain::exec(argv),
         Cmd::Credential { op } => git::credential(&op),
+        Cmd::Guard(GuardCmd::PrePush { branch, .. }) => guard::pre_push(&branch),
         Cmd::Open { agent, app } => with_client(|c| open_in::open(c, &agent, app)),
         Cmd::Attach { agent } => with_client(|c| open_in::attach(c, &agent, false)),
         Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),

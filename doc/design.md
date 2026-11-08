@@ -680,6 +680,11 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Git access setup and doctor
 - [ ] **M4 → v1.0**
   - [ ] Guardrails
+    - [x] Secret tripwire on commit proposals (R-117)
+    - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
+    - [ ] Daemon/agent user split (R-1203)
+    - [ ] Code tripwires: sensitive paths, diff size, tests, scope fence (R-115, R-116)
+    - [ ] Untrusted-text blocks (R-1201), budgets and run limits (R-1205, R-120, R-1206), `xherd security check`
   - [ ] Backups
   - [ ] Autonomy `important`
   - [ ] PR follow-up

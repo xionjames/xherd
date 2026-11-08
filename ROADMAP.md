@@ -62,7 +62,8 @@ by theme; update it together with them.
 
 ## M4 → v1.0
 
-- [ ] Guardrails: daemon/agent user split, pre-push guard (R-1204), code tripwires on commits (R-115…R-117), `diff_viewed` marks
+- [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for agents created from now on
+- [ ] Guardrails still open: daemon/agent user split (R-1203), the other code tripwires (R-115, R-116), untrusted-text blocks (R-1201), budgets and run limits, `xherd security check`, `diff_viewed` marks
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
 - [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI
