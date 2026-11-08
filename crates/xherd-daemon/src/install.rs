@@ -44,7 +44,7 @@ fn write(path: &Path, text: &str) -> Result<(), ActionError> {
 }
 
 impl Daemon {
-    /// Install `pack` (default xhSpec) for `runtime` (default: every runtime
+    /// Install `pack` (default xherd) for `runtime` (default: every runtime
     /// the pack supports). `env` resolves `${VAR}` and `HOME` in destinations.
     pub async fn install(
         &self,
@@ -52,8 +52,8 @@ impl Daemon {
         pack: Option<&str>,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<Installed>, ActionError> {
-        let name = pack.unwrap_or(xherd_flow::XHSPEC);
-        let (Some(p), true) = (self.packs.get(name), name == xherd_flow::XHSPEC) else {
+        let name = pack.unwrap_or(xherd_flow::BUILTIN);
+        let (Some(p), true) = (self.packs.get(name), name == xherd_flow::BUILTIN) else {
             return Err(refuse("unknown_pack", format!("no pack {name}")));
         };
         let runtimes: Vec<&str> = match runtime {
@@ -69,7 +69,7 @@ impl Daemon {
         let mut out = Vec::new();
         for rt in runtimes {
             let plan = p
-                .plan_install(rt, xherd_flow::install::XHSPEC_FILES, env)
+                .plan_install(rt, xherd_flow::install::BUILTIN_FILES, env)
                 .map_err(|e| refuse("install", e))?;
             for f in plan {
                 let key = f.path.to_string_lossy().into_owned();

@@ -20,10 +20,10 @@ pub use manifest::{
 pub const XAP_PROTOCOL: u32 = 1;
 
 /// Name of the built-in pack.
-pub const XHSPEC: &str = "xhspec";
+pub const BUILTIN: &str = "xherd";
 
-/// The built-in xhSpec pack (spec §7).
-pub fn xhspec() -> Pack {
-    Pack::parse(include_str!("../../../packs/xhspec/xherd-flow.yaml"))
-        .expect("built-in xhspec manifest is valid (tested)")
+/// The built-in xherd pack (spec §7).
+pub fn builtin() -> Pack {
+    Pack::parse(include_str!("../../../packs/xherd/xherd-flow.yaml"))
+        .expect("built-in xherd manifest is valid (tested)")
 }

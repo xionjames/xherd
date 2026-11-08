@@ -1,9 +1,9 @@
 ---
-description: xhSpec — reload the state and continue where the work stopped
+description: xherd — reload the state and continue where the work stopped
 ---
 # Resume
 
-Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 
 1. Read `.xherd/instructions.md` (when under xherd), `.xherd/HANDOFF.md` if it
    exists, `.xherd/spec/memory.md`, and the documents in `.xherd/spec/`.

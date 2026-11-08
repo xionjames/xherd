@@ -190,8 +190,8 @@ impl Daemon {
         }
 
         let packs = Arc::new(BTreeMap::from([(
-            xherd_flow::XHSPEC.to_string(),
-            xherd_flow::xhspec(),
+            xherd_flow::BUILTIN.to_string(),
+            xherd_flow::builtin(),
         )]));
         let host = host_plugin(&plugins, &paths, &config, &secrets, &opts.xherd_bin);
         let hub = support::hub();
@@ -281,7 +281,7 @@ impl Daemon {
                 .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, &env)
                 .await
             {
-                tracing::warn!(error = %e.message, "installing the xhSpec commands failed");
+                tracing::warn!(error = %e.message, "installing the xherd commands failed");
             }
         }
         if let Some(iv) = opts.scheduler {

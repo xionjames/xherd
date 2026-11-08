@@ -32,7 +32,7 @@ Working today:
 - A web UI: the herd at a glance, a "your call" band for whatever needs you, a live terminal per agent, diffs, and settings with setup checks.
 - Approval gates for spec, design, tasks and commits. Approvals are hashed, so you approve exactly what you read, and each step starts a fresh session that carries over a short `memory.md`.
 - xherd runs the approved commit for you, and the agent opens a draft pull request when you approve the ship gate.
-- Pluggable spec-driven development: a built-in flow, or your own through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
+- Pluggable spec-driven development: **xherd** built in, or your own through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
 - Docker-first: agents, toolchains (Java, Node, Go, Rust, Python) and Claude Code live in one container and only your workspace is shared. "Open in" your IDE through same-path mounts.
 - Agents survive restarts: they are parked at their gate or resumed, not lost.
 - Git access from the UI (HTTPS tokens, SSH keys, per-owner commit identity) and repositories cloned by URL.

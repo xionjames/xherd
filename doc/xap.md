@@ -91,7 +91,7 @@ Special stages: `pr-triage` and `pr-replies` (PR rounds, no documents).
 
 Without `--doc`/`--artifact`, the stage's documents from the pack are used.
 
-Refusals: `unknown_stage`, `no_docs_gate` (the stage gates commits or has no documents), `doc_missing`, `doc_schema` (frontmatter does not parse or fails the pack's schema; message names the field), `already_approved` (same content already approved), `path_outside_workspace` (also through symlinks), `next_not_allowed` (`--next` on a pack flow: the pack decides), `gate_open_commit` (a commit proposal is still open), `memory_invalid` (xhSpec flows: `.xherd/spec/memory.md` is missing, lacks one of the sections State, Decisions, Code map, Watch out, or has more than 80 lines; only structure is checked; `commit propose` refuses it too).
+Refusals: `unknown_stage`, `no_docs_gate` (the stage gates commits or has no documents), `doc_missing`, `doc_schema` (frontmatter does not parse or fails the pack's schema; message names the field), `already_approved` (same content already approved), `path_outside_workspace` (also through symlinks), `next_not_allowed` (`--next` on a pack flow: the pack decides), `gate_open_commit` (a commit proposal is still open), `memory_invalid` (xherd flows: `.xherd/spec/memory.md` is missing, lacks one of the sections State, Decisions, Code map, Watch out, or has more than 80 lines; only structure is checked; `commit propose` refuses it too).
 
 ### `xherd ask <text>`
 

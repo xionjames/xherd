@@ -395,13 +395,13 @@ mod tests {
     fn read_dirs_are_allowed_once() {
         let h = claude().hooks.unwrap();
         let user = r#"{"permissions": {"allow": ["Bash(ls)"]}}"#;
-        let rules = ["Read(//home/x/.claude/commands/xhspec/**)".to_string()];
+        let rules = ["Read(//home/x/.claude/commands/xherd/**)".to_string()];
         let once = merge_hooks(Some(user), &h, "xherd", &rules).unwrap();
         let twice = merge_hooks(Some(&once), &h, "xherd", &rules).unwrap();
         let v: Value = serde_json::from_str(&twice).unwrap();
         assert_eq!(
             v["permissions"]["allow"],
-            json!(["Bash(ls)", "Read(//home/x/.claude/commands/xhspec/**)"])
+            json!(["Bash(ls)", "Read(//home/x/.claude/commands/xherd/**)"])
         );
         let none = merge_hooks(None, &h, "xherd", &[]).unwrap();
         assert!(!none.contains("permissions"));

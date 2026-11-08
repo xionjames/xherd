@@ -111,11 +111,11 @@ async fn creates_worktree_and_private_folder() {
     );
     assert_eq!(
         (a.pack.as_deref(), a.flow.as_deref()),
-        (Some("xhspec"), Some("feature"))
+        (Some("xherd"), Some("feature"))
     );
     assert_eq!(
         a.next_prompt.as_deref(),
-        Some("/xhspec:feature SC-1 add login")
+        Some("/xherd:feature SC-1 add login")
     );
     assert_eq!(a.base.as_deref(), Some("main"));
 

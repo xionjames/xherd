@@ -23,7 +23,7 @@ pub struct Pack {
     pub version: String,
     /// XAP major the pack's prompts are written for.
     pub protocol: u32,
-    /// `private` (`.xherd/spec/`) or a committed folder template such as `xhspec/{agent}` (R-155).
+    /// `private` (`.xherd/spec/`) or a committed folder template such as `xherd/{agent}` (R-155).
     #[serde(default = "default_spec_dir")]
     pub spec_dir: String,
     #[serde(default)]
@@ -50,7 +50,7 @@ fn default_spec_dir() -> String {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeInstall {
-    /// Replaces `{prefix}` in command templates (`/xhspec:`).
+    /// Replaces `{prefix}` in command templates (`/xherd:`).
     pub prefix: String,
     #[serde(default)]
     pub commands: Option<InstallSet>,
@@ -460,13 +460,13 @@ mod tests {
     }
 
     fn feature() -> Flow {
-        crate::xhspec().flow("feature").unwrap().clone()
+        crate::builtin().flow("feature").unwrap().clone()
     }
 
     #[test]
     fn builtin_parses() {
-        let p = crate::xhspec();
-        assert_eq!(p.name, "xhspec");
+        let p = crate::builtin();
+        assert_eq!(p.name, "xherd");
         let f = feature();
         let ids: Vec<&str> = f.stages.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn renders_for_runtime() {
-        let p = crate::xhspec();
+        let p = crate::builtin();
         let f = feature();
         let s = p
             .command(
@@ -529,7 +529,7 @@ mod tests {
                 &[("key", "SC-1"), ("prompt", "add login")],
             )
             .unwrap();
-        assert_eq!(s, "/xhspec:feature SC-1 add login");
+        assert_eq!(s, "/xherd:feature SC-1 add login");
         let c = p
             .command(
                 "claude-code",
@@ -537,7 +537,7 @@ mod tests {
                 &[("commit", "C01")],
             )
             .unwrap();
-        assert_eq!(c, "/xhspec:commit C01");
+        assert_eq!(c, "/xherd:commit C01");
         assert!(p.command("codex", "{prefix}next", &[]).is_err());
     }
 

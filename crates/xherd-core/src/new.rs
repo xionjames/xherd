@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn files() {
         let mut a = Agent::new("SC-1", "SC-1", 0);
-        a.pack = Some("xhspec".into());
+        a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         let j = agent_json(&a);
         assert_eq!(
@@ -300,6 +300,6 @@ mod tests {
             (Some("SC-1"), Some("feature"))
         );
         let md = instructions_md(&a);
-        assert!(md.contains("Flow: xhspec / feature") && md.contains("gate open"));
+        assert!(md.contains("Flow: xherd / feature") && md.contains("gate open"));
     }
 }

@@ -123,16 +123,16 @@ async fn failed_start_is_an_error_and_frees_the_slot() {
 async fn first_prompt_is_typed_once_the_session_is_ready() {
     let t = daemon(4).await;
     let mut a = agent("SC-1", 1);
-    a.pack = Some("xhspec".into());
+    a.pack = Some("xherd".into());
     a.flow = Some("feature".into());
-    a.next_prompt = Some("/xhspec:feature SC-1 add login".into());
+    a.next_prompt = Some("/xherd:feature SC-1 add login".into());
     let a = t.d.create_agent(a).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     assert_eq!(t.drv.calls(), vec!["start SC-1 fake-runtime --go"]);
 
     let start = rep(&a, "s1", ReportEvent::SessionStart, 1, Value::Null);
     assert_eq!(t.d.report(start).await, Some(ReportResult::Applied));
-    let typed = r#"send SC-1 "/xhspec:feature SC-1 add login" 1"#.to_string();
+    let typed = r#"send SC-1 "/xherd:feature SC-1 add login" 1"#.to_string();
     assert_eq!(t.drv.calls().last(), Some(&typed));
     // Not acknowledged yet: Claude Code may start a second session and lose
     // the typed text, so the command is typed again at the next start.

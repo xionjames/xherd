@@ -53,7 +53,7 @@ async fn checks_report_and_fix_the_pack_install() {
     d.fix_check("pack", &env).await.unwrap();
     assert!(
         home.path()
-            .join(".claude/commands/xhspec/feature.md")
+            .join(".claude/commands/xherd/feature.md")
             .exists()
     );
     let cs = d.checks(&env).await;
