@@ -14,6 +14,15 @@
   let { agent, flow, tabId }: { agent: Agent; flow?: FlowInfo; tabId?: string } = $props();
   let text = $state('');
   let busy = $state(false);
+  // Open questions: one answer per question, sent as a change request.
+  let answers = $state<string[]>([]);
+  const questions = $derived(agent.gate?.kind === 'docs' ? (agent.gate.questions ?? []) : []);
+  const answered = $derived(answers.some((a, i) => a?.trim() && i < questions.length));
+  function sendAnswers() {
+    const lines = questions.flatMap((q, i) => (answers[i]?.trim() ? [`Q: ${q}\nA: ${answers[i].trim()}`] : []));
+    run('request-changes', { comment: `Answers to your open questions:\n\n${lines.join('\n\n')}` }, 'Could not send the answers')
+      .then((ok) => { if (ok) answers = []; });
+  }
   // The band stays one line high; long text opens on demand.
   let open = $state(false);
 
@@ -72,14 +81,16 @@
     g?.kind === 'commit' ? `Approve ${g.id}` : g?.kind === 'docs' ? (g.role === 'ship' ? 'Approve and ship' : `Approve ${g.stage}`) : 'Approve',
   );
 
-  async function run(action: string, body: Record<string, unknown>, label: string) {
+  async function run(action: string, body: Record<string, unknown>, label: string): Promise<boolean> {
     busy = true;
     try {
       const r = await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`, body);
       upsertAgent(r.agent);
       text = '';
+      return true;
     } catch (e) {
       showError(label, e);
+      return false;
     } finally {
       busy = false;
     }
@@ -141,10 +152,24 @@
   {/if}
   {#if g?.kind === 'docs' && g.questions?.length}
     <div class="gmore">
-      <div class="gbox">
+      <div class="gbox" style="flex:1 1 100%">
         <span class="lbl">Open questions · {g.questions.length}</span>
-        <ul>{#each g.questions as q, i (i)}<li>{q}</li>{/each}</ul>
-        <span class="hint">Answer them in your change request.</span>
+        {#if reviewing}
+          {#each g.questions as q, i (i)}
+            <label class="gbox">
+              <span>{q}</span>
+              <textarea rows="2" bind:value={answers[i]} aria-label={`Answer: ${q}`} placeholder="Your answer"
+                style="background:var(--pen);resize:vertical"></textarea>
+            </label>
+          {/each}
+          <div>
+            <button class="btn" disabled={busy || !answered} onclick={sendAnswers}>Send answers</button>
+            <span class="hint">The agent revises the document with them; unanswered questions stay open.</span>
+          </div>
+        {:else}
+          <ul>{#each g.questions as q, i (i)}<li>{q}</li>{/each}</ul>
+          <span class="hint">Open the document to answer them.</span>
+        {/if}
       </div>
     </div>
   {/if}
