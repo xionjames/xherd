@@ -22,17 +22,29 @@ xherd is a small daemon with a web UI. It manages a herd of coding agents so you
 
 In short: you describe the work, agents do it in parallel, and xherd makes sure you always know where each one stands and what needs your decision.
 
-> **Status: design phase.** Nothing is runnable yet. Read the docs below and open an issue with feedback.
+> **Status: early, but it runs.** One agent works end to end (worktree, Claude Code in tmux, approval gates, commits, draft PR), with a web UI and a Docker setup. It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
 
-## Highlights (planned)
+## Highlights
 
-- Many agents in parallel, each isolated in a worktree, with a concurrency cap.
-- Approval gates for spec, design, tasks, commits and PR replies, with adjustable autonomy and tripwires.
-- Pluggable spec-driven development: **xhSpec** built in; your own SDD through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
-- Docker-first, with "Open in" your IDE through same-path workspace mounts; native binary too.
-- A runtime, model and effort per step; live terminal or ACP driver.
-- Plugins in any language (the CLI is the plugin API), declarative views, guardrails, backups.
-- Single Rust binary, web UI embedded.
+Working today:
+
+- Many agents in parallel, each isolated in its own git worktree and tmux session, with a concurrency cap.
+- A web UI: the herd at a glance, a "your call" band for whatever needs you, a live terminal per agent, diffs, and settings with setup checks.
+- Approval gates for spec, design, tasks and commits. Approvals are hashed, so you approve exactly what you read, and each step starts a fresh session that carries over a short `memory.md`.
+- xherd runs the approved commit for you, and the agent opens a draft pull request when you approve the ship gate.
+- Pluggable spec-driven development: a built-in flow, or your own through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
+- Docker-first: agents, toolchains (Java, Node, Go, Rust, Python) and Claude Code live in one container and only your workspace is shared. "Open in" your IDE through same-path mounts.
+- Agents survive restarts: they are parked at their gate or resumed, not lost.
+- Git access from the UI (HTTPS tokens, SSH keys, per-owner commit identity) and repositories cloned by URL.
+- Plugins in any language (the CLI is the plugin API). Single Rust binary, web UI embedded.
+
+Planned:
+
+- Adjustable autonomy, tripwires and guardrails (for example, blocking pushes).
+- Following the pull request after it opens: CI, review comments, replies.
+- Other runtimes beyond Claude Code (Codex, opencode…), and a runtime, model and effort per step.
+- Board, review and time views, notifications, and access from your phone.
+- Declarative views and backups.
 
 ## Documentation
 
