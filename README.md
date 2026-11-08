@@ -2,7 +2,25 @@
 
 Run, watch and steer a herd of coding agents working on your tickets in parallel.
 
-xherd gives each ticket its own git worktree and terminal session and starts a coding agent (Claude Code, Codex, opencode…) with a spec-driven flow. It stops the agent at approval gates and lets you approve or ask for changes from your browser or phone, then follows the pull request until it is merged.
+## Why xherd exists
+
+I got overwhelmed running several coding tasks in parallel. Terminal windows piled up, virtual desktops multiplied, and I kept losing track of which agent was doing what. Worse, an agent would sit for an hour waiting for an answer I never saw.
+
+I tried a number of good existing tools. Each one gave me one or two things I liked for my daily work, but none gave me everything I needed. So I decided to build the one I wanted, and to vibe code it with the same kind of agents it now manages.
+
+xherd is that tool. It is opinionated and built around my own workflow, and I hope it is useful to yours too.
+
+## What xherd is
+
+xherd is a small daemon with a web UI. It manages a herd of coding agents so you don't have to juggle them by hand.
+
+- **One ticket, one sandbox.** Every task gets its own git worktree and its own tmux session, so agents never step on each other or on your checkout.
+- **One screen for all of them.** The browser shows every agent, what it is doing, and which ones are waiting for you. Nothing sits unanswered in a forgotten terminal.
+- **You stay in control.** Agents follow a spec-driven flow (spec, design, tasks, commits, pull request) and stop at approval gates. You read what they propose, then approve or ask for changes.
+- **Bring your own agent.** Claude Code today. The runtime, the flow and the integrations are plugins, and your own spec-driven process can plug in too.
+- **Run it in Docker or natively.** The Docker setup keeps agents and toolchains in a container and shares only your workspace, and you can still open the code in your IDE.
+
+In short: you describe the work, agents do it in parallel, and xherd makes sure you always know where each one stands and what needs your decision.
 
 > **Status: design phase.** Nothing is runnable yet. Read the docs below and open an issue with feedback.
 
