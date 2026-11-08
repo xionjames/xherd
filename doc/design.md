@@ -665,7 +665,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Commit gates
   - [x] Ship
   - [x] Draft PR via GitHub
-- [ ] **M2 UI**
+- [x] **M2 UI**
   - [x] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
   - [x] Hash approvals from the UI
   - [x] Websockets
