@@ -113,7 +113,7 @@ stage: tasks
 | `refs` | requirement ids from `spec.md` |
 | `files` | comma-separated paths the task may change; the commit for the task must touch exactly files from this list |
 | `depends` | task ids that must be done first, or `none` |
-| `verify` | optional command that proves the task works |
+| `verify` | optional: **one runnable shell command** that proves the task works (xherd runs it as written in the worktree when the task is done; exit 0 passes). Never a description: leave it out, and put notes in `contract` or below the fields |
 | `evidence` | filled when done: what was run and what it showed |
 | `tier` | optional model hint: `high`, `medium` or `low` |
 | `source` | `spec` or `review` |

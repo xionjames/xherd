@@ -677,9 +677,14 @@ fn verify_failed(v: &VerifyFact) -> Refusal {
     };
     let lines: Vec<&str> = v.tail.lines().collect();
     let shown = lines[lines.len().saturating_sub(5)..].join(" | ");
+    // 126/127: the shell could not run it at all, usually prose in `verify:`.
+    let hint = match v.code {
+        Some(126 | 127) => " (not a runnable command? `verify:` must be one shell command)",
+        _ => "",
+    };
     refuse(
         "verify_failed",
-        format!("verify `{}` {how}: {shown}", v.command),
+        format!("verify `{}` {how}: {shown}{hint}", v.command),
     )
 }
 

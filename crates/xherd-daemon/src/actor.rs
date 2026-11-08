@@ -663,7 +663,17 @@ impl Actor {
             XapCmd::TasksSync { file } => {
                 let wd = self.workdir()?;
                 let d = doc_path(file.as_deref().unwrap_or("tasks.md"), &wd)?;
-                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+                let text = inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok());
+                // A `verify:` that is not a shell command is refused now, before
+                // the tasks are approved (editing it later re-opens the gate).
+                if let Some(Ok(tasks)) = text.as_deref().map(xherd_flow::tasks::parse) {
+                    for t in tasks {
+                        if let Some(v) = &t.verify {
+                            self.verify_syntax(&t.id, v).await?;
+                        }
+                    }
+                }
+                Observed::Text(text)
             }
             XapCmd::TaskDone { id, .. } => {
                 // Unknown task or none to run: `apply` decides.
@@ -674,7 +684,10 @@ impl Actor {
                     .find(|t| &t.id == id && t.status != TaskStatus::Done)
                     .and_then(|t| t.verify.clone());
                 match verify {
-                    Some(command) => Observed::Verify(Some(self.run_verify(command).await?)),
+                    Some(command) => {
+                        self.verify_syntax(id, &command).await?;
+                        Observed::Verify(Some(self.run_verify(command).await?))
+                    }
                     None => Observed::Verify(None),
                 }
             }
@@ -702,6 +715,29 @@ impl Actor {
             }
             _ => Observed::Nothing,
         })
+    }
+
+    /// `verify:` must be one shell command: `sh -n` parses it without running
+    /// it. Prose with a stray backtick or quote does not parse.
+    async fn verify_syntax(&self, task: &str, command: &str) -> Result<(), Refusal> {
+        let out = xherd_core::exec::run(
+            xherd_core::exec::Cmd::new(["sh", "-n", "-c", command])
+                .timeout(std::time::Duration::from_secs(5)),
+        )
+        .await;
+        match out {
+            Ok(o) if o.success() => Ok(()),
+            Ok(o) => Err(refusal(
+                "verify_invalid",
+                format!(
+                    "{task}: `verify:` is not one shell command ({}); write a single runnable \
+                     command, or none and keep the notes in `contract`",
+                    o.stderr.lines().next().unwrap_or("syntax error").trim()
+                ),
+            )),
+            // No shell to check with: the run decides.
+            Err(_) => Ok(()),
+        }
     }
 
     /// Run a task's `verify:` command in the worktree (R-118). A deliberate

@@ -1553,3 +1553,52 @@ async fn xherd_writes_the_progress_lines_of_tasks_and_commits() {
         .unwrap();
     assert!(!spec.join("tasks.md").exists());
 }
+
+#[tokio::test]
+async fn a_prose_verify_is_refused_when_tasks_sync_not_after_approval() {
+    let t = setup().await;
+    let tasks = t.wt.path().join(".xherd/spec/tasks.md");
+    // Prose with a stray backtick: the shell cannot parse it.
+    std::fs::write(
+        &tasks,
+        "## T01: readme\n- verify: `grep -qi e4b README.md` finds the model name in the README\n",
+    )
+    .unwrap();
+    let e = xap(&t, "v1", "tasks.sync", json!({})).await.unwrap_err();
+    assert_eq!(e.code, "verify_invalid");
+    assert!(e.message.starts_with("T01:"), "{}", e.message);
+    assert!(get(&t).await.tasks.is_empty(), "nothing was synced");
+
+    // A real command (and a task without one) syncs.
+    std::fs::write(
+        &tasks,
+        "## T01: readme\n- verify: `grep -qi e4b README.md`\n## T02: none\n- files: x\n",
+    )
+    .unwrap();
+    xap(&t, "v2", "tasks.sync", json!({})).await.unwrap();
+    assert_eq!(get(&t).await.tasks.len(), 2);
+}
+
+#[tokio::test]
+async fn a_verify_that_is_not_a_command_gets_a_hint() {
+    let t = setup().await;
+    // Parses as a shell command, but there is no such program (prose, in practice).
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/tasks.md"),
+        "## T01: readme\n- verify: `The README mentions the model`\n",
+    )
+    .unwrap();
+    xap(&t, "h1", "tasks.sync", json!({})).await.unwrap();
+    xap(&t, "h2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "h3", "task.done", json!({"id": "T01", "evidence": "x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "verify_failed");
+    assert!(
+        e.message.contains("not a runnable command"),
+        "{}",
+        e.message
+    );
+}

@@ -10,7 +10,8 @@ Read the xhSpec rules in `{{dir}}/rules.md` first and follow them.
    `.xherd/spec/design.md`. Trust the code map; open files only to size a task.
 3. Write `.xherd/spec/tasks.md` in the tasks format: small tasks, each one
    commit, with `refs`, the exact `files` it may change, `depends`, and a
-   `verify` command when one exists. A test that fails before the change
+   `verify` command when one exists (one runnable shell command such as
+   `cargo test -p store`, never a sentence: xherd runs it as written). A test that fails before the change
    comes first when that is practical.
 4. Check that xherd can read it: `xherd tasks sync`. Fix the file
    until the call is accepted.
