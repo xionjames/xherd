@@ -6,6 +6,7 @@ pub mod approve;
 pub mod frontmatter;
 pub mod install;
 pub mod manifest;
+pub mod memory;
 pub mod tasks;
 pub mod template;
 pub mod xap;

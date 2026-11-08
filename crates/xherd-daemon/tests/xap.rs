@@ -39,6 +39,9 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8(o.stdout).unwrap().trim().to_string()
 }
 
+/// What gates and commit proposals need next to them (FORMAT.md).
+const VALID_MEMORY: &str = "# Memory\n## State\nspec\n## Decisions\nnone\n## Code map\nsrc/a.rs: a\n## Watch out\nnothing\n";
+
 async fn setup() -> T {
     setup_with(true).await
 }
@@ -58,6 +61,7 @@ async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
     git(wt.path(), &["init", "-q", "-b", "main"]);
     git(wt.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
     std::fs::create_dir_all(wt.path().join(".xherd/spec")).unwrap();
+    std::fs::write(wt.path().join(".xherd/spec/memory.md"), VALID_MEMORY).unwrap();
     let drv = Arc::new(FakeDriver::default());
     let mut o = Options::new(drv.clone(), Arc::new(SystemClock));
     if let Some(t) = verify_timeout {
@@ -1055,7 +1059,10 @@ async fn ui_reads_a_document_and_approves_what_it_read() {
         .unwrap();
     stop(&t, 1).await;
 
-    assert_eq!(t.d.docs("SC-1").await.unwrap(), ["spec.md", "notes.md"]);
+    assert_eq!(
+        t.d.docs("SC-1").await.unwrap(),
+        ["spec.md", "memory.md", "notes.md"]
+    );
     let doc = t.d.doc("SC-1", "spec.md").await.unwrap();
     assert_eq!(doc["path"], "spec.md");
     assert_eq!(doc["reviewed"], Value::Null);
@@ -1405,4 +1412,67 @@ async fn task_done_runs_the_verify_command() {
         task(&get(&t).await, "T04").evidence.as_deref(),
         Some("by hand")
     );
+}
+
+#[tokio::test]
+async fn gates_and_commit_proposals_need_a_valid_memory() {
+    let t = setup().await;
+    let memory = t.wt.path().join(".xherd/spec/memory.md");
+    let spec = t.wt.path().join(".xherd/spec/spec.md");
+    std::fs::write(&spec, "---\nticket: SC-1\n---\n# Spec\n").unwrap();
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/tasks.md"),
+        "## T01: add a\n- files: a.txt\n",
+    )
+    .unwrap();
+    xap(&t, "m0", "tasks.sync", json!({})).await.unwrap();
+    let gate = |id: &'static str| xap(&t, id, "gate.open", json!({"stage": "spec"}));
+    let propose = |id: &'static str| {
+        xap(
+            &t,
+            id,
+            "commit.propose",
+            json!({"id": "C01", "subject": "a", "files": ["a.txt"], "tasks": ["T01"]}),
+        )
+    };
+
+    std::fs::remove_file(&memory).unwrap();
+    let e = gate("m1").await.unwrap_err();
+    assert_eq!(e.code, "memory_invalid");
+    assert!(e.message.contains("missing"), "{}", e.message);
+    assert_eq!(propose("m2").await.unwrap_err().code, "memory_invalid");
+
+    std::fs::write(&memory, "## State\n## Decisions\n## Code map\n").unwrap();
+    let e = gate("m3").await.unwrap_err();
+    assert!(e.message.contains("`## watch out`"), "{}", e.message);
+
+    let long = format!("{VALID_MEMORY}{}", "line\n".repeat(90));
+    std::fs::write(&memory, long).unwrap();
+    assert!(gate("m4").await.unwrap_err().message.contains("lines"));
+
+    std::fs::write(&memory, VALID_MEMORY).unwrap();
+    gate("m5").await.unwrap();
+    assert!(matches!(get(&t).await.gate, Some(Gate::Docs { .. })));
+}
+
+#[tokio::test]
+async fn memory_is_not_checked_without_a_flow() {
+    let t = setup().await;
+    std::fs::remove_file(t.wt.path().join(".xherd/spec/memory.md")).unwrap();
+    // Flow none is refused for its own reason, never as memory_invalid.
+    let mut a = Agent::new("SC-2", "SC-2", 2);
+    a.launch = Some(vec!["rt".into()]);
+    a.workdir = Some(t.wt.path().to_string_lossy().into_owned());
+    let a = t.d.create_agent(a).await.unwrap();
+    for _ in 0..200 {
+        if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let e =
+        t.d.xap(call(&a, "n1", "gate.open", json!({"stage": "spec"})))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "no_flow");
 }

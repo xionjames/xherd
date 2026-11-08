@@ -169,7 +169,8 @@ transition to apply to the ticket once the PR is open.
 
 A short state note for a fresh session: every step starts in a new session that
 knows nothing but this file and the approved documents. Rewrite it (do not
-append forever) at each gate, in at most about 60 lines, with these sections:
+append forever) at each gate, in about 60 lines (xherd refuses a gate or commit proposal when it is missing,
+lacks a section or passes 80 lines), with these sections:
 
 - `## State`: current stage, current task, what comes next.
 - `## Decisions`: taken with the user, and why; anything a newcomer must not redo.

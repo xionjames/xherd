@@ -580,7 +580,15 @@ impl Actor {
     /// Look at the files and git for calls that need it. Small local reads,
     /// done inline: the agent waits for the answer anyway.
     async fn observe(&self, pack: Option<&Pack>, cmd: &XapCmd) -> Result<Observed, Refusal> {
-        use xherd_flow::xap::{HANDOFF, doc_path, gate_docs};
+        use xherd_flow::xap::{HANDOFF, SPEC_DIR, doc_path, gate_docs};
+        // Every gate and commit proposal of an xhSpec flow leaves a valid memory.md.
+        if matches!(cmd, XapCmd::GateOpen { .. } | XapCmd::CommitPropose { .. })
+            && pack.is_some_and(|p| p.name == xherd_flow::XHSPEC)
+            && xherd_flow::xap::flow_of(&self.agent, pack).is_ok()
+        {
+            let file = self.workdir()?.join(SPEC_DIR).join("memory.md");
+            xherd_flow::memory::check(std::fs::read_to_string(file).ok().as_deref())?;
+        }
         Ok(match cmd {
             XapCmd::GateOpen { .. } => {
                 let wd = self.workdir()?;
