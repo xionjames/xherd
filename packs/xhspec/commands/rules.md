@@ -50,6 +50,10 @@ where a gate would be, telling the user what to review.
   `;`, `&&` or `||`, and do not add `echo $?` or any other `$variable`. The
   exit status comes back with the result. A command with a variable in it
   cannot be checked in advance, so the user is asked to confirm it every time.
+- Change files with your edit and write tools, never through the shell: no
+  `sed -i`, `tee`, `>` or `>>` redirects, `mv` over a document. The edit tools
+  work in this worktree without asking; a shell write asks the user every time.
+  This includes `.xherd/spec/*.md` (`tasks.md`, `commits.md`, `memory.md`).
 - Use the repository's own commands to build, test and lint, and say which
   ones you ran in each task's evidence.
 
