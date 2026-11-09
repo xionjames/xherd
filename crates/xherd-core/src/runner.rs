@@ -50,6 +50,26 @@ enum Request {
         max_output: usize,
         redact: Vec<String>,
     },
+    /// Read a file; a missing one is not an error.
+    ReadFile {
+        path: PathBuf,
+    },
+    /// Write a file atomically, creating its folder.
+    WriteFile {
+        path: PathBuf,
+        data: String,
+        mode: Option<u32>,
+    },
+    /// Create a folder and its parents; `mode` is set on the last one.
+    Mkdir {
+        path: PathBuf,
+        mode: u32,
+    },
+    /// The first `<dir>/<any folder>/<name>` that is a file.
+    Find {
+        dir: PathBuf,
+        name: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,6 +89,19 @@ enum Reply {
     Failed {
         kind: FailKind,
         program: String,
+        message: String,
+    },
+    /// A file read: `None` when it does not exist.
+    File {
+        data: Option<String>,
+    },
+    /// A search: the path found, if any.
+    Found {
+        path: Option<PathBuf>,
+    },
+    Done,
+    /// A file operation failed.
+    IoFailed {
         message: String,
     },
     /// The request itself was refused or malformed.
@@ -178,16 +211,160 @@ pub async fn exec(socket: &Path, cmd: Cmd) -> Result<Output, ExecError> {
                 source: std::io::Error::other(message),
             },
         }),
-        Reply::Refused { message } => Err(ExecError::Runner(message)),
-        Reply::Pong => Err(ExecError::Runner(format!(
-            "unexpected answer for {program}"
-        ))),
+        Reply::Refused { message } | Reply::IoFailed { message } => Err(ExecError::Runner(message)),
+        Reply::Pong | Reply::File { .. } | Reply::Found { .. } | Reply::Done => Err(
+            ExecError::Runner(format!("unexpected answer for {program}")),
+        ),
+    }
+}
+
+fn find_in_subdirs(dir: &Path, name: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path().join(name))
+        .find(|p| p.is_file())
+}
+
+/// The first `<dir>/<any folder>/<name>` that is a file, as the agent user
+/// (a runtime keeps its session transcripts in its own home).
+pub async fn find_in_subdirs_as_agent(dir: &Path, name: &str) -> Option<PathBuf> {
+    let Some(sock) = runner_socket() else {
+        return find_in_subdirs(dir, name);
+    };
+    let req = Request::Find {
+        dir: dir.into(),
+        name: name.into(),
+    };
+    match roundtrip(sock, &req, Duration::from_secs(30)).await {
+        Ok(Reply::Found { path }) => path,
+        _ => None,
+    }
+}
+
+/// An environment variable as the agent user sees it: its `HOME` is
+/// `XHERD_AGENT_HOME` when set (the daemon's own home is another folder in
+/// the container, R-1203).
+pub fn agent_env(name: &str) -> Option<String> {
+    if name == "HOME"
+        && let Some(h) = std::env::var("XHERD_AGENT_HOME")
+            .ok()
+            .filter(|h| !h.is_empty())
+    {
+        return Some(h);
+    }
+    std::env::var(name).ok()
+}
+
+fn make_dir(path: &Path, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+}
+
+/// Read a file as the agent user (`None` if it does not exist). Without a
+/// runner it is read in place.
+pub async fn read_file(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    let Some(sock) = runner_socket() else {
+        return match std::fs::read(path) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        };
+    };
+    let req = Request::ReadFile { path: path.into() };
+    match roundtrip(sock, &req, Duration::from_secs(30))
+        .await
+        .map_err(std::io::Error::other)?
+    {
+        Reply::File { data: None } => Ok(None),
+        Reply::File { data: Some(d) } => hex::decode(d).map(Some).map_err(std::io::Error::other),
+        other => Err(file_error(other)),
+    }
+}
+
+/// Write a file atomically as the agent user. Without a runner it is
+/// written in place.
+pub async fn write_file(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Result<()> {
+    let Some(sock) = runner_socket() else {
+        return crate::paths::write_atomic(path, bytes, mode);
+    };
+    let req = Request::WriteFile {
+        path: path.into(),
+        data: hex::encode(bytes),
+        mode,
+    };
+    match roundtrip(sock, &req, Duration::from_secs(30))
+        .await
+        .map_err(std::io::Error::other)?
+    {
+        Reply::Done => Ok(()),
+        other => Err(file_error(other)),
+    }
+}
+
+/// Create a folder as the agent user and set `mode` on it (e.g. `0o2775`).
+pub async fn mkdir(path: &Path, mode: u32) -> std::io::Result<()> {
+    let Some(sock) = runner_socket() else {
+        return make_dir(path, mode);
+    };
+    let req = Request::Mkdir {
+        path: path.into(),
+        mode,
+    };
+    match roundtrip(sock, &req, Duration::from_secs(30))
+        .await
+        .map_err(std::io::Error::other)?
+    {
+        Reply::Done => Ok(()),
+        other => Err(file_error(other)),
+    }
+}
+
+fn file_error(r: Reply) -> std::io::Error {
+    match r {
+        Reply::IoFailed { message } | Reply::Refused { message } => std::io::Error::other(message),
+        _ => std::io::Error::other("unexpected answer from the runner"),
     }
 }
 
 async fn handle(req: Request) -> Reply {
     match req {
         Request::Ping => Reply::Pong,
+        Request::ReadFile { path } => match std::fs::read(&path) {
+            Ok(b) => Reply::File {
+                data: Some(hex::encode(b)),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Reply::File { data: None },
+            Err(e) => Reply::IoFailed {
+                message: format!("{}: {e}", path.display()),
+            },
+        },
+        Request::WriteFile { path, data, mode } => {
+            let bytes = match hex::decode(data) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Reply::Refused {
+                        message: format!("data: {e}"),
+                    };
+                }
+            };
+            match crate::paths::write_atomic(&path, &bytes, mode) {
+                Ok(()) => Reply::Done,
+                Err(e) => Reply::IoFailed {
+                    message: format!("{}: {e}", path.display()),
+                },
+            }
+        }
+        Request::Find { dir, name } => Reply::Found {
+            path: find_in_subdirs(&dir, &name),
+        },
+        Request::Mkdir { path, mode } => match make_dir(&path, mode) {
+            Ok(()) => Reply::Done,
+            Err(e) => Reply::IoFailed {
+                message: format!("{}: {e}", path.display()),
+            },
+        },
         Request::Exec {
             argv,
             cwd,
@@ -365,6 +542,67 @@ mod tests {
             exec(&sock, Cmd::new(["true"]).inherit_output()).await,
             Err(ExecError::Runner(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn files_are_written_read_and_made_through_the_socket() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, sock) = start().await;
+        let f = dir.path().join("a/b/c.json");
+        let w = Request::WriteFile {
+            path: f.clone(),
+            data: hex::encode(b"{}\n"),
+            mode: Some(0o640),
+        };
+        assert!(matches!(
+            roundtrip(&sock, &w, Duration::from_secs(5)).await,
+            Ok(Reply::Done)
+        ));
+        assert_eq!(std::fs::read(&f).unwrap(), b"{}\n");
+        assert_eq!(
+            std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+
+        let r = Request::ReadFile { path: f.clone() };
+        let Ok(Reply::File { data: Some(d) }) = roundtrip(&sock, &r, Duration::from_secs(5)).await
+        else {
+            panic!("read failed");
+        };
+        assert_eq!(hex::decode(d).unwrap(), b"{}\n");
+        let missing = Request::ReadFile {
+            path: dir.path().join("none"),
+        };
+        assert!(matches!(
+            roundtrip(&sock, &missing, Duration::from_secs(5)).await,
+            Ok(Reply::File { data: None })
+        ));
+
+        let d = dir.path().join("x/y");
+        let m = Request::Mkdir {
+            path: d.clone(),
+            mode: 0o2775,
+        };
+        assert!(matches!(
+            roundtrip(&sock, &m, Duration::from_secs(5)).await,
+            Ok(Reply::Done)
+        ));
+        // The setgid bit may be dropped by the filesystem; the rest must hold.
+        assert_eq!(
+            std::fs::metadata(&d).unwrap().permissions().mode() & 0o777,
+            0o775
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_runner_files_are_handled_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("n/f.txt");
+        assert_eq!(read_file(&f).await.unwrap(), None);
+        write_file(&f, b"hi", None).await.unwrap();
+        assert_eq!(read_file(&f).await.unwrap().as_deref(), Some(&b"hi"[..]));
+        mkdir(&dir.path().join("m/k"), 0o755).await.unwrap();
+        assert!(dir.path().join("m/k").is_dir());
     }
 
     #[tokio::test]

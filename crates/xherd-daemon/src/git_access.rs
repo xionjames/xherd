@@ -517,7 +517,8 @@ impl Daemon {
                 .env(
                     "GIT_SSH_COMMAND",
                     "ssh -o BatchMode=yes -o ConnectTimeout=10",
-                ))
+                )
+                .as_agent())
             .await;
             out.push(Finding {
                 id: "git-transport",
@@ -553,7 +554,7 @@ impl Daemon {
         if !ok {
             return;
         }
-        let keys = sh(Cmd::new(["ssh-add", "-l"])).await;
+        let keys = sh(Cmd::new(["ssh-add", "-l"]).as_agent()).await;
         let ok = keys.code == Some(0);
         out.push(Finding {
             id: "ssh-key",
@@ -571,7 +572,7 @@ impl Daemon {
         if !ok {
             return;
         }
-        let known = sh(Cmd::new(["ssh", "-G", host])).await;
+        let known = sh(Cmd::new(["ssh", "-G", host]).as_agent()).await;
         let files: Vec<String> = known
             .out
             .lines()
@@ -581,8 +582,10 @@ impl Daemon {
         let name = host.split(':').next().unwrap_or(host);
         let mut is_known = false;
         for f in &files {
-            let f = f.replacen('~', &std::env::var("HOME").unwrap_or_default(), 1);
-            if sh(Cmd::new(["ssh-keygen", "-F", name, "-f", &f]))
+            // `~` is the agent user's home, which is not ours (R-1203).
+            let script = "f=$1; case \"$f\" in \"~\"*) f=\"$HOME${f#\\~}\";; esac; \
+                          exec ssh-keygen -F \"$0\" -f \"$f\"";
+            if sh(Cmd::new(["sh", "-c", script, name, f]).as_agent())
                 .await
                 .code
                 == Some(0)
@@ -633,7 +636,8 @@ impl Daemon {
             "-o",
             "ConnectTimeout=10",
             &format!("git@{name}"),
-        ]))
+        ])
+        .as_agent())
         .await;
         let text = format!("{}{}", r.out, r.err);
         let lower = text.to_lowercase();
@@ -654,14 +658,9 @@ impl Daemon {
 
     async fn doctor_https(&self, host: &str, repo: Option<&str>, out: &mut Vec<Finding>) {
         let url = format!("https://{host}/");
-        let helper = sh(Cmd::new([
-            "git",
-            "config",
-            "--get-urlmatch",
-            "credential.helper",
-            &url,
-        ]))
-        .await;
+        let helper =
+            sh(Cmd::new(["git", "config", "--get-urlmatch", "credential.helper", &url]).as_agent())
+                .await;
         let helper = helper.out.trim().to_string();
         let ok = !helper.is_empty();
         out.push(Finding {
@@ -688,7 +687,8 @@ impl Daemon {
         let fill = sh(Cmd::new(["git", "credential", "fill"])
             .stdin(format!("protocol=https\nhost={host}\n\n"))
             .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GCM_INTERACTIVE", "never"))
+            .env("GCM_INTERACTIVE", "never")
+            .as_agent())
         .await;
         let token = fill
             .out

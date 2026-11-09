@@ -7,7 +7,6 @@ use std::path::Path;
 
 use serde::Serialize;
 use xherd_core::hash::content_sha256;
-use xherd_core::paths::write_atomic;
 
 use crate::{ActionError, Daemon};
 
@@ -35,12 +34,12 @@ fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
     }
 }
 
-fn write(path: &Path, text: &str) -> Result<(), ActionError> {
-    let io = |e: std::io::Error| refuse("io", format!("{}: {e}", path.display()));
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(io)?;
-    }
-    write_atomic(path, text.as_bytes(), None).map_err(io)
+/// The commands go where the agents find them: written as the agent user
+/// (R-1203).
+async fn write(path: &Path, text: &str) -> Result<(), ActionError> {
+    xherd_core::runner::write_file(path, text.as_bytes(), None)
+        .await
+        .map_err(|e| refuse("io", format!("{}: {e}", path.display())))
 }
 
 impl Daemon {
@@ -74,7 +73,11 @@ impl Daemon {
             for f in plan {
                 let key = f.path.to_string_lossy().into_owned();
                 let new = content_sha256(f.text.as_bytes());
-                let current = std::fs::read(&f.path).ok().map(|b| content_sha256(&b));
+                let current = xherd_core::runner::read_file(&f.path)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|b| content_sha256(&b));
                 let recorded = self
                     .store
                     .install_sha(rt, name, &key)
@@ -85,11 +88,11 @@ impl Daemon {
                     Some(c) if recorded.as_deref() != Some(c.as_str()) => {
                         let mut side = f.path.clone().into_os_string();
                         side.push(".xherd-new");
-                        write(Path::new(&side), &f.text)?;
+                        write(Path::new(&side), &f.text).await?;
                         InstallAction::Kept
                     }
                     _ => {
-                        write(&f.path, &f.text)?;
+                        write(&f.path, &f.text).await?;
                         InstallAction::Written
                     }
                 };

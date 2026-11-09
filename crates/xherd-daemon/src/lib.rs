@@ -294,7 +294,7 @@ impl Daemon {
         if d.sandbox {
             // The container is set up without a shell: commands go where the
             // agents find them at every start (user-edited files are kept).
-            let env = |v: &str| std::env::var(v).ok();
+            let env = xherd_core::runner::agent_env;
             if let Err(e) = d
                 .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, &env)
                 .await

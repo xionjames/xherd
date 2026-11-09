@@ -474,20 +474,16 @@ impl Actor {
         ) else {
             return;
         };
-        let env = |v: &str| std::env::var(v).ok();
-        let Some(path) = r.transcript(&session, &env) else {
-            return;
-        };
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
         tokio::spawn(async move {
-            let tokens = tokio::task::spawn_blocking(move || {
-                std::fs::read_to_string(&path)
-                    .ok()
-                    .map(|t| usage.totals(&t).budget_tokens())
-            })
-            .await
-            .ok()
-            .flatten();
+            // The transcript is in the agent user's home (R-1203).
+            let Some(path) = r.transcript(&session, &xherd_core::runner::agent_env).await else {
+                return;
+            };
+            let tokens = match xherd_core::runner::read_file(&path).await {
+                Ok(Some(b)) => Some(usage.totals(&String::from_utf8_lossy(&b)).budget_tokens()),
+                _ => None,
+            };
             if let Some(tokens) = tokens {
                 let _ = tx.send(Msg::WorkDone {
                     generation,
@@ -1200,13 +1196,15 @@ impl Actor {
     /// Run a task's `verify:` command in the worktree (R-118). A deliberate
     /// inline exception to "slow work returns as `WorkDone`", like
     /// `commit_for_user`: the agent waits for the answer and the actor holds
-    /// no other work meanwhile. `sh -c` with the daemon's allowlisted env.
+    /// no other work meanwhile. `sh -c` with the agent user's allowlisted env.
     async fn run_verify(&self, command: String) -> Result<VerifyFact, Refusal> {
         let wd = self.workdir()?;
         let out = xherd_core::exec::run(
             xherd_core::exec::Cmd::new(["sh", "-c", command.as_str()])
                 .cwd(wd)
-                .timeout(self.env.settings.verify_timeout),
+                .timeout(self.env.settings.verify_timeout)
+                // As the user the agent is (R-1203): it can run the same.
+                .as_agent(),
         )
         .await
         .map_err(|e| refusal("verify_failed", format!("verify `{command}`: {e}")))?;
@@ -1326,7 +1324,7 @@ impl Actor {
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
-                self.prepare_resume();
+                self.prepare_resume().await;
                 "user.resume"
             }
             UserAction::Cancel => {
@@ -1413,16 +1411,13 @@ impl Actor {
             .filter(|a| !a.is_empty())
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
         let argv = match (self.resume_session.take(), &self.env.resume) {
-            (Some(id), Some(r)) => {
-                let env = |v: &str| std::env::var(v).ok();
-                match r.argv(&id, &env) {
-                    Some(extra) => {
-                        self.resume_unconfirmed = true;
-                        argv.into_iter().chain(extra).collect()
-                    }
-                    None => argv,
+            (Some(id), Some(r)) => match r.argv(&id, &xherd_core::runner::agent_env).await {
+                Some(extra) => {
+                    self.resume_unconfirmed = true;
+                    argv.into_iter().chain(extra).collect()
                 }
-            }
+                None => argv,
+            },
             _ => argv,
         };
         self.revoke_tokens().await;
@@ -1458,7 +1453,7 @@ impl Actor {
         }
         self.env
             .driver
-            .start(&ctx, &self.session_argv(argv))
+            .start(&ctx, &self.session_argv(argv).await)
             .await
             .map_err(|e| refuse("driver", e.0))?;
         self.agent.session_since = Some(self.now());
@@ -1468,13 +1463,13 @@ impl Actor {
     /// The argv of a new session: the runtime, wrapped in `xherd toolchain
     /// exec` when the worktree's version files ask for tools (R-652). The plan
     /// is written at every start, so version files edited since count.
-    fn session_argv(&self, launch: Vec<String>) -> Vec<String> {
+    async fn session_argv(&self, launch: Vec<String>) -> Vec<String> {
         use xherd_plugin::toolchain::{PLAN_FILE, plan};
         let Some(wd) = self.agent.workdir.as_deref().map(Path::new) else {
             return launch;
         };
         if let Some(t) = &self.env.trust
-            && let Err(e) = t.ensure(wd)
+            && let Err(e) = t.ensure(wd).await
         {
             tracing::warn!(agent = %self.agent.name, error = %e, "runtime trust not written");
         }
@@ -1791,7 +1786,7 @@ impl Actor {
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
         self.env
             .driver
-            .respawn(&self.ctx(), &self.session_argv(argv))
+            .respawn(&self.ctx(), &self.session_argv(argv).await)
             .await
             .map_err(|e| refuse("driver", e.0))?;
         self.delivery = None;
@@ -1809,13 +1804,15 @@ impl Actor {
     /// wins, R-027) and, when the runtime still has the last conversation, a
     /// session that continues it. If the last resume of that kind never
     /// reached `session-start`, this one is a clean session instead.
-    fn prepare_resume(&mut self) {
+    async fn prepare_resume(&mut self) {
         if self.agent.next_prompt.is_none() {
             self.agent.next_prompt = self.resume_command();
         }
-        let env = |v: &str| std::env::var(v).ok();
         self.resume_session = match (&self.env.resume, &self.agent.session) {
-            (Some(r), Some(id)) if !self.resume_unconfirmed && r.argv(id, &env).is_some() => {
+            (Some(r), Some(id))
+                if !self.resume_unconfirmed
+                    && r.argv(id, &xherd_core::runner::agent_env).await.is_some() =>
+            {
                 Some(id.clone())
             }
             _ => None,
@@ -1974,7 +1971,7 @@ impl Actor {
                         if recover {
                             // Same as Resume: a new session reloads the state.
                             self.agent.fire(Trigger::Resume, now);
-                            self.prepare_resume();
+                            self.prepare_resume().await;
                             self.notify(format!("{}: xherd restarted; resuming", self.agent.name));
                         } else {
                             // A session that vanishes while xherd runs is
@@ -1986,7 +1983,7 @@ impl Actor {
                             if self.auto_resumes.len() < AUTO_RESUMES {
                                 self.auto_resumes.push(now);
                                 self.agent.fire(Trigger::Resume, now);
-                                self.prepare_resume();
+                                self.prepare_resume().await;
                                 self.log(
                                     None,
                                     "auto-resume",
