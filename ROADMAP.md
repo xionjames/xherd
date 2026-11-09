@@ -69,14 +69,15 @@ by theme; update it together with them.
 - [ ] Move `sensitivePaths` / `maxDiffLines` into repo profiles and add the profile test command tripwire (R-115), with profiles (v1.x)
 - [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
 - [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asking for a handoff first waits for R-026
-- [x] `xherd security check` (R-1210), first version; add autonomy, budgets and branch protection findings when those exist (`security::PENDING`)
+- [x] `xherd security check` (R-1210), first version; autonomy and budgets are in; the branch protection finding waits for the host command (`security::PENDING`)
 - [x] Token budgets (R-1205), global until profiles; per-profile budgets and a cost estimate come with profiles
 - [x] Review→fix loop with `maxReviewLoops` (R-120); the review gate is held while review tasks are open
 - [x] R-114 first half: findings in `review.md` are Markdown with a field list; major/blocker findings not fixed hold the review gate; severity colours in the UI
 - [x] Daemon/agent user split in the container (R-1203, branch `m4-user-split`): `xherd runner`, `xherd-daemon` user and volume, loopback is not the user; **check on Linux and Docker Desktop** (file permissions are not enforced on Colima's mounts)
-- [ ] Guardrails still open: `maxAutoApprovalsInRow` (R-120, with autonomy), `diff_viewed` marks, a Setup check for the runner dying after start
+- [ ] Guardrails still open: `diff_viewed` marks, a Setup check for the runner dying after start
 - [ ] Backups
-- [ ] Autonomy `important` and the ship stage's auto-approved variant
+- [x] Autonomy `ask` / `important` (R-109…R-111) with `maxAutoApprovalsInRow` (R-120), per agent, changeable live; the ship stage's auto-approved variant (`--no-ticket-update`) is only reachable at `never` (v1.x), since ship is critical
+- [x] "To review" list of auto-approvals (R-111): `GET /reviews` and the page `#/review`; a mark-as-reviewed state and the agent's stated assumptions come with the v1.x views
 - [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel
 - [x] PR comments into the agent (R-304): new comments saved wrapped as untrusted data, agent queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
 - [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
@@ -89,7 +90,7 @@ by theme; update it together with them.
 - [ ] Codex and opencode runtimes
 - [ ] Kanban, To review and Work log views
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
-- [ ] TODOs, budgets, `never` autonomy
+- [ ] TODOs, budgets, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
 
 ## Later
 

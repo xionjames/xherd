@@ -72,6 +72,9 @@ enum Cmd {
         repo: Option<String>,
         #[arg(long)]
         base: Option<String>,
+        /// What xherd may approve by itself: ask (default) or important.
+        #[arg(long)]
+        autonomy: Option<xherd_core::autonomy::Autonomy>,
         prompt: Option<String>,
     },
     /// List agents.
@@ -82,6 +85,11 @@ enum Cmd {
         runtime: Option<String>,
         #[arg(long)]
         pack: Option<String>,
+    },
+    /// Change what xherd may approve by itself: ask or important.
+    Autonomy {
+        agent: String,
+        level: xherd_core::autonomy::Autonomy,
     },
     /// Pause an agent (ends its session).
     Pause { agent: String },
@@ -297,8 +305,14 @@ fn main() -> ExitCode {
             flow,
             repo,
             base,
+            autonomy,
             prompt,
-        } => new_agent(key, slug, flow, repo, base, prompt),
+        } => new_agent(key, slug, flow, repo, base, autonomy, prompt),
+        Cmd::Autonomy { agent, level } => action(
+            &agent,
+            "autonomy",
+            Some(serde_json::json!({"level": level})),
+        ),
         Cmd::Pause { agent } => action(&agent, "pause", None),
         Cmd::Resume { agent } => action(&agent, "resume", None),
         Cmd::Cancel { agent } => action(&agent, "cancel", None),
@@ -680,6 +694,7 @@ fn new_agent(
     flow: Option<String>,
     repo: Option<String>,
     base: Option<String>,
+    autonomy: Option<xherd_core::autonomy::Autonomy>,
     prompt: Option<String>,
 ) -> i32 {
     // The daemon has its own working directory: send an absolute path.
@@ -698,6 +713,7 @@ fn new_agent(
     };
     let body = serde_json::json!({
         "ticketKey": key, "slug": slug, "repo": repo, "base": base, "flow": flow, "prompt": prompt,
+        "autonomy": autonomy,
     });
     match Client::new().and_then(|c| c.call("POST", "/agents", Some(body))) {
         Ok(v) => {

@@ -2173,3 +2173,211 @@ async fn entering_ship_writes_the_repositorys_pr_templates() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!file.exists());
 }
+
+// ---- Autonomy (R-109…R-111, R-120) ----
+
+fn level(l: &str) -> UserAction {
+    UserAction::SetAutonomy {
+        level: l.parse().unwrap(),
+    }
+}
+
+async fn open_stop(t: &T, id: &str, stage: &str, file: &str, seq: u64) {
+    std::fs::write(
+        t.wt.path().join(".xherd/spec").join(file),
+        format!("# {stage}\n"),
+    )
+    .unwrap();
+    xap(t, id, "gate.open", json!({"stage": stage}))
+        .await
+        .unwrap();
+    stop(t, seq).await;
+}
+
+fn ledger_lines(t: &T) -> Vec<Value> {
+    std::fs::read_to_string(t.wt.path().join(".xherd/ledger/approvals.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn ask_never_approves_by_itself() {
+    let t = setup().await;
+    assert_eq!(get(&t).await.autonomy, xherd_core::autonomy::Autonomy::Ask);
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_some() && a.status == Status::WaitingInput);
+    assert!(ledger_lines(&t).is_empty());
+}
+
+#[tokio::test]
+async fn important_approves_a_routine_gate_and_records_it() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+
+    let a = get(&t).await;
+    assert!(a.gate.is_none());
+    assert_eq!((a.status, a.auto_in_row), (Status::Running, 1));
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:tasks"));
+    let lines = ledger_lines(&t);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        (lines[0]["actor"].as_str(), lines[0]["auto"].as_bool()),
+        (Some("auto"), Some(true))
+    );
+    assert!(lines[0]["reason"].as_str().unwrap().contains("design"));
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "approval"));
+}
+
+#[tokio::test]
+async fn important_still_waits_at_the_spec_and_ship_gates() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    open_stop(&t, "c1", "spec", "spec.md", 1).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_some() && a.status == Status::WaitingInput);
+    assert!(ledger_lines(&t).is_empty());
+}
+
+#[tokio::test]
+async fn a_human_hold_or_open_questions_stop_auto_approval() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    std::fs::write(t.wt.path().join(".xherd/spec/design.md"), "# d\n").unwrap();
+    xap(
+        &t,
+        "c1",
+        "gate.open",
+        json!({"stage": "design", "needsHuman": "touches billing"}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_some(), "held by the agent's own flag");
+    assert_eq!(a.auto_in_row, 0);
+}
+
+#[tokio::test]
+async fn a_tripwire_on_a_commit_holds_it_even_with_important() {
+    let t = setup_config(json!({"freshSessions": true, "sensitivePaths": ["infra/**"]})).await;
+    act(&t, level("important")).await.unwrap();
+    std::fs::create_dir_all(t.wt.path().join("infra")).unwrap();
+    std::fs::write(t.wt.path().join("infra/prod.tf"), "a\n").unwrap();
+    xap(
+        &t,
+        "g1",
+        "commit.propose",
+        json!({"id": "C01", "subject": "x", "files": ["infra/prod.tf"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    assert!(matches!(a.gate, Some(Gate::Commit(_))));
+    assert!(
+        git(t.wt.path(), &["log", "--format=%s"])
+            .lines()
+            .all(|l| l == "base")
+    );
+}
+
+#[tokio::test]
+async fn a_clean_commit_is_approved_and_committed_by_xherd() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    commit_gate(&t).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_none());
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+    assert_eq!(
+        git(t.wt.path(), &["show", "--name-only", "--format=", "HEAD"]),
+        "a.txt"
+    );
+}
+
+#[tokio::test]
+async fn the_run_limit_holds_the_next_gate_and_a_human_approval_resets_it() {
+    let t = setup_config(json!({"freshSessions": true, "maxAutoApprovalsInRow": 1})).await;
+    act(&t, level("important")).await.unwrap();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert_eq!(get(&t).await.auto_in_row, 1);
+
+    open_stop(&t, "c2", "tasks", "tasks.md", 2).await;
+    let a = get(&t).await;
+    let Some(Gate::Docs { needs_human, .. }) = &a.gate else {
+        panic!("tasks gate should wait")
+    };
+    assert!(
+        needs_human
+            .as_deref()
+            .unwrap()
+            .contains("maxAutoApprovalsInRow")
+    );
+
+    act(&t, approve(None)).await.unwrap();
+    assert_eq!(get(&t).await.auto_in_row, 0);
+}
+
+#[tokio::test]
+async fn changing_the_level_rewrites_instructions_and_approves_a_waiting_gate() {
+    let t = setup().await;
+    let md = t.wt.path().join(".xherd/instructions.md");
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert!(get(&t).await.gate.is_some());
+
+    act(&t, level("important")).await.unwrap();
+    let a = get(&t).await;
+    assert!(a.gate.is_none(), "the waiting gate is approved at once");
+    assert_eq!(a.autonomy.as_str(), "important");
+    assert!(
+        std::fs::read_to_string(&md)
+            .unwrap()
+            .contains("Autonomy: important.")
+    );
+
+    assert_eq!(
+        act(&t, level("never")).await.unwrap_err().code,
+        "autonomy_unavailable"
+    );
+}
+
+#[tokio::test]
+async fn a_gate_the_agent_did_not_declare_is_never_auto_approved() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    // No `gate open`: the stop finds a finished document and infers the gate.
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# spec\n").unwrap();
+    std::fs::write(t.wt.path().join(".xherd/spec/design.md"), "# design\n").unwrap();
+    xap(&t, "c1", "stage.enter", json!({"stage": "design"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    let Some(Gate::Docs { needs_human, .. }) = &a.gate else {
+        panic!("a gate should be inferred")
+    };
+    assert!(needs_human.as_deref().unwrap().contains("did not declare"));
+    assert!(ledger_lines(&t).is_empty());
+}
+
+#[tokio::test]
+async fn auto_approvals_are_listed_for_review() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    let list = t.d.store.auto_approvals(10).await.unwrap();
+    assert_eq!(list.len(), 1);
+    let p = list[0].payload.as_ref().unwrap();
+    assert_eq!(p["gate"], "design");
+    assert!(p["reason"].as_str().unwrap().contains("autonomy important"));
+    // A human approval is not listed.
+    act(&t, level("ask")).await.unwrap();
+    open_stop(&t, "c2", "tasks", "tasks.md", 2).await;
+    act(&t, approve(None)).await.unwrap();
+    assert_eq!(t.d.store.auto_approvals(10).await.unwrap().len(), 1);
+}

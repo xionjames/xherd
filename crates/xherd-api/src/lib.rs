@@ -54,6 +54,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/security", get(security))
+        .route("/api/v1/reviews", get(reviews))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
@@ -422,9 +423,25 @@ async fn put_config(
     Ok(Json(d.save_config(patch)?))
 }
 
+/// `GET /api/v1/reviews` (R-111): what xherd approved by itself, newest first.
+async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    let events =
+        d.store.auto_approvals(100).await.map_err(|e| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
+        })?;
+    let items: Vec<Value> = events
+        .into_iter()
+        .map(|e| {
+            let p = e.payload.unwrap_or_default();
+            json!({"agentId": e.agent_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"]})
+        })
+        .collect();
+    Ok(Json(json!({"reviews": items})))
+}
+
 async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {
     Json(json!({
-        "findings": d.security_check(),
+        "findings": d.security_check().await,
         "pending": xherd_daemon::security::PENDING,
     }))
 }
@@ -707,6 +724,8 @@ struct ActionBody {
     expect: Option<std::collections::BTreeMap<String, String>>,
     /// Approve (commit gate): the commit message as edited.
     message: Option<String>,
+    /// Autonomy: `ask` or `important`.
+    level: Option<xherd_core::autonomy::Autonomy>,
 }
 
 async fn agent_action(
@@ -739,6 +758,15 @@ async fn agent_action(
         },
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
+        },
+        "autonomy" => UserAction::SetAutonomy {
+            level: b.level.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "body {\"level\": \"ask\"|\"important\"} required",
+                )
+            })?,
         },
         _ => {
             return Err(ApiError::new(

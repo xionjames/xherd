@@ -82,6 +82,12 @@ pub struct Config {
     /// Review→fix rounds after which the review gate is held for a human
     /// (R-120 `maxReviewLoops`). 0 = no limit. Global until profiles.
     pub max_review_loops: u32,
+    /// Autonomy of new agents (R-109); global until profiles. `never` is not
+    /// selectable yet.
+    pub autonomy: crate::autonomy::Autonomy,
+    /// Consecutive automatic approvals after which the next gate waits for a
+    /// human (R-120). 0 = no limit.
+    pub max_auto_approvals_in_row: u32,
     /// Token budget of one agent and of all agents per UTC day (R-1205). At
     /// 80 % a notification; at 100 % the agent is paused at its next stop.
     /// 0 = no budget.
@@ -129,6 +135,8 @@ impl Default for Config {
             max_session_minutes: 0,
             pr_poll_minutes: 5,
             max_review_loops: 3,
+            autonomy: crate::autonomy::Autonomy::Ask,
+            max_auto_approvals_in_row: 10,
             agent_token_budget: 0,
             daily_token_budget: 0,
             max_diff_lines: 1000,

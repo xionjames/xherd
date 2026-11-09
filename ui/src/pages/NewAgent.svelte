@@ -8,7 +8,7 @@
   import type { Agent } from '../lib/types';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
-  let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '' });
+  let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask' });
   let busy = $state(false);
   const keyOk = $derived(/^[A-Z0-9][A-Z0-9_-]*$/.test(f.ticketKey));
   const slugOk = $derived(!f.slug || /^[a-z0-9][a-z0-9-]{0,40}$/.test(f.slug));
@@ -62,6 +62,7 @@
     if (f.slug) body.slug = f.slug;
     if (f.base.trim()) body.base = f.base.trim();
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
+    body.autonomy = f.autonomy;
     try {
       const r = await post<{ agent: Agent }>('/agents', body);
       upsertAgent(r.agent);
@@ -110,6 +111,15 @@
           <button type="button" class:on={f.flow === fl} aria-pressed={f.flow === fl} onclick={() => (f.flow = fl)}>{fl === 'none' ? 'No workflow' : fl}</button>
         {/each}
       </div></div>
+    <div class="f">Autonomy
+      <div class="seg" role="group" aria-label="Autonomy" style="align-self:flex-start">
+        {#each ['ask', 'important'] as lv (lv)}
+          <button type="button" class:on={f.autonomy === lv} aria-pressed={f.autonomy === lv} onclick={() => (f.autonomy = lv)}>{lv}</button>
+        {/each}
+      </div>
+      <span class="hint">{f.autonomy === 'ask'
+        ? 'Every gate waits for you.'
+        : 'Design, tasks, review and commit gates are approved by xherd when nothing needs you; spec and ship always wait.'}</span></div>
     <label class="f">{f.flow === 'none' ? 'Prompt' : 'What to do (optional)'}
       <textarea rows="4" bind:value={f.prompt} placeholder={f.flow === 'none' ? 'Typed into the agent as its first message' : 'Context for the spec step'}></textarea></label>
   </div></section>

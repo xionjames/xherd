@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::autonomy::Autonomy;
 use crate::domain::{Commit, Gate, Task};
 use crate::status::{Status, Trigger, next_status};
 
@@ -125,6 +126,12 @@ pub struct Agent {
     /// The 80 % budget warning was sent.
     #[serde(default)]
     pub budget_warned: bool,
+    /// Which gates xherd may approve by itself (R-109).
+    #[serde(default)]
+    pub autonomy: Autonomy,
+    /// Gates approved automatically since a human last approved one (R-120).
+    #[serde(default)]
+    pub auto_in_row: u32,
 }
 
 impl Agent {
@@ -165,6 +172,8 @@ impl Agent {
             tokens_session: 0,
             tokens_session_id: None,
             budget_warned: false,
+            autonomy: Autonomy::Ask,
+            auto_in_row: 0,
             review_rounds: 0,
             pr_state: None,
             pr_comments_seen: Vec::new(),

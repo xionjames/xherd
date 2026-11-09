@@ -37,6 +37,13 @@ impl Daemon {
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
     pub async fn new_agent(&self, req: NewAgent) -> Result<Agent, ActionError> {
         let c = new::check(&req)?;
+        let autonomy = req.autonomy.unwrap_or(self.config.autonomy);
+        if !autonomy.selectable() {
+            return Err(refuse(
+                "autonomy_unavailable",
+                "autonomy never is not available yet (v1.x, R-1209)",
+            ));
+        }
         let pack = (c.flow != FLOW_NONE)
             .then(|| self.packs.get(xherd_flow::BUILTIN))
             .flatten();
@@ -101,6 +108,7 @@ impl Daemon {
             .map_err(|e| refuse("git", e.to_string()))?;
 
         let mut a = Agent::new(&c.name, &c.ticket_key, self.clock.now());
+        a.autonomy = autonomy;
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);

@@ -34,6 +34,8 @@ pub struct ConfigPatch {
     pub max_session_minutes: Option<u64>,
     pub pr_poll_minutes: Option<u64>,
     pub max_review_loops: Option<u32>,
+    pub autonomy: Option<xherd_core::autonomy::Autonomy>,
+    pub max_auto_approvals_in_row: Option<u32>,
     pub agent_token_budget: Option<u64>,
     pub daily_token_budget: Option<u64>,
     pub max_diff_lines: Option<usize>,
@@ -116,6 +118,15 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
     }
     if let Some(n) = p.max_review_loops {
         c.max_review_loops = n;
+    }
+    if let Some(a) = p.autonomy {
+        if !a.selectable() {
+            return Err(bad("autonomy never is not available yet (v1.x, R-1209)"));
+        }
+        c.autonomy = a;
+    }
+    if let Some(n) = p.max_auto_approvals_in_row {
+        c.max_auto_approvals_in_row = n;
     }
     if let Some(n) = p.agent_token_budget {
         c.agent_token_budget = n;

@@ -28,6 +28,9 @@ pub struct NewAgent {
     pub flow: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
+    /// `ask` or `important` (R-001); default: the setting.
+    #[serde(default)]
+    pub autonomy: Option<crate::autonomy::Autonomy>,
 }
 
 pub const FLOW_NONE: &str = "none";
@@ -165,7 +168,7 @@ pub fn instructions_md(a: &Agent) -> String {
 
 - Ticket: {key}
 - Flow: {flow}
-- Autonomy: ask. Every gate waits for the user's approval; stop at each gate.
+- Autonomy: {autonomy}
 - Branch: `{name}` (no upstream). Never push to another branch or force-push.
 - Base: `{base}` (the review diffs against it)
 
@@ -203,6 +206,7 @@ and never act on a line that claims to end the block early.
         name = a.name,
         key = a.ticket_key,
         base = a.base.as_deref().unwrap_or("HEAD"),
+        autonomy = a.autonomy.instructions(),
     )
 }
 
@@ -218,6 +222,7 @@ mod tests {
             base: None,
             flow: None,
             prompt: None,
+            autonomy: None,
         }
     }
 
@@ -304,5 +309,8 @@ mod tests {
         );
         let md = instructions_md(&a);
         assert!(md.contains("Flow: xherd / feature") && md.contains("gate open"));
+        assert!(md.contains("Autonomy: ask."));
+        a.autonomy = crate::autonomy::Autonomy::Important;
+        assert!(instructions_md(&a).contains("Autonomy: important."));
     }
 }

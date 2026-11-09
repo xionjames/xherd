@@ -103,6 +103,8 @@ export interface Agent {
   prPolledAt?: number;
   lastMessage?: string;
   nextPrompt?: string;
+  /** What xherd may approve by itself (R-109). */
+  autonomy?: 'ask' | 'important' | 'never';
 }
 
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean }

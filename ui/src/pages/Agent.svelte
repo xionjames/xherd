@@ -61,6 +61,13 @@
     return undefined;
   }
 
+  const finished = $derived(['done', 'cancelled'].includes(agent.status));
+  async function setAutonomy(e: Event) {
+    const level = (e.currentTarget as HTMLSelectElement).value;
+    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/autonomy`, { level })).agent); }
+    catch (err) { showError('Could not change the autonomy', err); }
+  }
+
   async function act(action: string, label: string) {
     menu = false;
     try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`)).agent); }
@@ -81,6 +88,12 @@
       <div class="hmeta">
         {#if agent.base}<span class="mono">{agent.name} ← {shortBase(agent)}</span>{/if}
         <span>{agent.runtime ?? 'claude-code'}</span>
+        {#if agent.flow && agent.flow !== 'none'}
+          <label class="row" style="gap:6px">autonomy
+            <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
+              <option value="ask">ask</option><option value="important">important</option>
+            </select></label>
+        {/if}
         <span>started {agoText(agent.createdAt)}</span>
         <span>active {agoText(agent.lastActivity)}</span>
       </div>
