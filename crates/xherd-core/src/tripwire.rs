@@ -1,8 +1,10 @@
 //! Code tripwires over a proposed commit's diff (pure, R-115…R-117).
 //!
-//! Only the secret tripwire (R-117) lives here so far: built-in patterns for
-//! common token formats, private key headers, and the content of `.env`-like
-//! files. Matches are reported masked; the secret itself never leaves the diff.
+//! The secret tripwire (R-117): built-in patterns for common token formats,
+//! private key headers, and the content of `.env`-like files; matches are
+//! reported masked, the secret itself never leaves the diff. Also the diff size
+//! limit (R-115). Sensitive paths (R-115) are global until repo profiles; the test
+//! command waits for them; the scope fence (R-116) is a refusal in `xherd_flow::xap`.
 
 /// One suspicious added line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +171,108 @@ pub fn summary(findings: &[Finding]) -> Option<String> {
     ))
 }
 
+fn glob_at(p: &[char], s: &[char]) -> bool {
+    match p.first() {
+        None => s.is_empty(),
+        Some('*') if p.get(1) == Some(&'*') => {
+            let mut rest = &p[2..];
+            // `**/` also matches no folder at all.
+            if rest.first() == Some(&'/') {
+                rest = &rest[1..];
+                if glob_at(rest, s) {
+                    return true;
+                }
+            }
+            (0..=s.len()).any(|i| glob_at(rest, &s[i..]))
+        }
+        Some('*') => {
+            let max = s.iter().position(|c| *c == '/').unwrap_or(s.len());
+            (0..=max).any(|i| glob_at(&p[1..], &s[i..]))
+        }
+        Some('?') => s.first().is_some_and(|c| *c != '/') && glob_at(&p[1..], &s[1..]),
+        Some(c) => s.first() == Some(c) && glob_at(&p[1..], &s[1..]),
+    }
+}
+
+/// Does `path` match the glob? A pattern without `/` matches the file name
+/// at any depth.
+pub fn glob_match(pattern: &str, path: &str) -> bool {
+    let path = path.strip_prefix("./").unwrap_or(path);
+    let target = if pattern.contains('/') {
+        path
+    } else {
+        path.rsplit('/').next().unwrap_or(path)
+    };
+    let p: Vec<char> = pattern.chars().collect();
+    let s: Vec<char> = target.chars().collect();
+    glob_at(&p, &s)
+}
+
+/// Sensitive paths (R-115): proposed `files` matching any of the globs.
+pub fn sensitive_summary(files: &[String], globs: &[String]) -> Option<String> {
+    let hit: Vec<&str> = files
+        .iter()
+        .map(|f| f.strip_prefix("./").unwrap_or(f))
+        .filter(|f| globs.iter().any(|g| glob_match(g, f)))
+        .collect();
+    if hit.is_empty() {
+        return None;
+    }
+    let more = hit.len().saturating_sub(3);
+    let tail = if more > 0 {
+        format!(" and {more} more")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "sensitive path: {}{tail}; check before approving",
+        hit[..hit.len().min(3)].join(", ")
+    ))
+}
+
+/// Review gate (R-114, R-120): major or blocker findings not fixed (`F01
+/// (blocker)`), tasks that came from the review and are not done, and
+/// review→fix rounds beyond `max_rounds` (0 = no limit).
+pub fn review_summary(
+    open_findings: &[String],
+    open_tasks: &[&str],
+    rounds: u32,
+    max_rounds: u32,
+) -> Option<String> {
+    let mut why = Vec::new();
+    if !open_findings.is_empty() {
+        why.push(format!("findings not fixed: {}", open_findings.join(", ")));
+    }
+    if !open_tasks.is_empty() {
+        why.push(format!("review tasks not done: {}", open_tasks.join(", ")));
+    }
+    if max_rounds > 0 && rounds > max_rounds {
+        why.push(format!(
+            "review loop limit: {rounds} review→fix rounds, limit {max_rounds}"
+        ));
+    }
+    (!why.is_empty()).then(|| format!("{}; check before approving", why.join("; ")))
+}
+
+/// Default for R-115 `maxDiffLines`.
+pub const MAX_DIFF_LINES: usize = 1000;
+
+/// Added plus removed lines of a unified diff.
+pub fn diff_lines(diff: &str) -> usize {
+    diff.lines()
+        .filter(|l| {
+            (l.starts_with('+') && !l.starts_with("+++"))
+                || (l.starts_with('-') && !l.starts_with("---"))
+        })
+        .count()
+}
+
+/// Reason to hold a proposal whose diff is longer than `max` lines (R-115).
+pub fn size_summary(diff: &str, max: usize) -> Option<String> {
+    let n = diff_lines(diff);
+    (n > max).then(|| format!("large diff: {n} changed lines, limit {max}; check before approving"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,5 +351,46 @@ mod tests {
         let s = summary(&scan_diff(&diff("k", &refs))).unwrap();
         assert!(s.contains("and 2 more"), "{s}");
         assert_eq!(summary(&[]), None);
+    }
+
+    #[test]
+    fn globs() {
+        assert!(glob_match("*.pem", "keys/a.pem"));
+        assert!(glob_match(
+            ".github/workflows/*",
+            "./.github/workflows/ci.yml"
+        ));
+        assert!(!glob_match(
+            ".github/workflows/*",
+            ".github/workflows/x/ci.yml"
+        ));
+        assert!(glob_match("migrations/**", "migrations/2024/a.sql"));
+        assert!(glob_match("**/secrets.yml", "secrets.yml"));
+        assert!(glob_match("**/secrets.yml", "a/b/secrets.yml"));
+        assert!(!glob_match("src/*.rs", "src/a/b.rs"));
+        let f = vec!["./a.rs".to_string(), "infra/prod.tf".to_string()];
+        let g = vec!["infra/**".to_string()];
+        assert!(sensitive_summary(&f, &g).unwrap().contains("infra/prod.tf"));
+        assert!(sensitive_summary(&f, &[]).is_none());
+    }
+
+    #[test]
+    fn review_hold() {
+        assert_eq!(review_summary(&[], &[], 3, 3), None);
+        assert_eq!(review_summary(&[], &[], 9, 0), None, "0 = no limit");
+        let s = review_summary(&["F03 (blocker)".into()], &["T05", "T06"], 4, 3).unwrap();
+        assert!(s.contains("findings not fixed: F03 (blocker)"), "{s}");
+        assert!(
+            s.contains("T05, T06") && s.contains("4 review→fix rounds, limit 3"),
+            "{s}"
+        );
+    }
+
+    #[test]
+    fn size_counts_changed_lines_only() {
+        let d = diff("a.rs", &["x"; 5]);
+        assert_eq!(diff_lines(&d), 5);
+        assert!(size_summary(&d, 5).is_none());
+        assert!(size_summary(&d, 4).unwrap().contains("5 changed lines"));
     }
 }

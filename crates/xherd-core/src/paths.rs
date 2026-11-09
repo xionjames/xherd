@@ -9,9 +9,20 @@ pub struct Paths {
 
 impl Paths {
     /// `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd`.
+    ///
+    /// In the container a CLI run as the daemon's user (`docker exec -u
+    /// xherd-daemon`) finds the daemon's data root when it can read it; the
+    /// agents' user cannot, and keeps the default (R-1203).
     pub fn from_env() -> Paths {
+        let xherd_home = std::env::var_os("XHERD_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                let in_container = std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1");
+                let root = PathBuf::from(crate::container::DAEMON_DATA);
+                (in_container && root.join("config.json").is_file()).then_some(root)
+            });
         Self::resolve(
-            std::env::var_os("XHERD_HOME").map(PathBuf::from),
+            xherd_home,
             std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
             std::env::var_os("HOME").map(PathBuf::from),
         )
@@ -48,8 +59,13 @@ impl Paths {
     pub fn db(&self) -> PathBuf {
         self.root.join("xherd.db")
     }
+    /// The offline hook queue: `$XHERD_QUEUE` (the container keeps it where the
+    /// daemon's user and the agents' user can both write), else in the root.
     pub fn hook_queue(&self) -> PathBuf {
-        self.root.join("hook-queue.jsonl")
+        match std::env::var_os("XHERD_QUEUE").filter(|p| !p.is_empty()) {
+            Some(p) => PathBuf::from(p),
+            None => self.root.join("hook-queue.jsonl"),
+        }
     }
     pub fn archive(&self) -> PathBuf {
         self.root.join("archive")

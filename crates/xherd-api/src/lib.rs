@@ -37,6 +37,12 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
+        .route("/api/v1/agents/{id}/findings", get(findings))
+        .route("/api/v1/agents/{id}/pr-review", get(pr_review))
+        .route(
+            "/api/v1/agents/{id}/pr-decisions",
+            axum::routing::put(put_pr_decisions),
+        )
         .route("/api/v1/agents/{id}/file", get(file))
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
         .route("/api/v1/agents/{id}/open", post(open_in))
@@ -47,6 +53,8 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/install", post(install))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
+        .route("/api/v1/security", get(security))
+        .route("/api/v1/reviews", get(reviews))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
@@ -143,12 +151,16 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// Loopback peer, local Host header, no proxy headers (design §7.2).
+///
+/// In the container (`sandbox`) loopback is where the agents are, so it never
+/// counts: only the gateway the published port arrives from (`local_peers`)
+/// is the local user (R-1203, T2). The CLI there uses its token.
 async fn is_local(parts: &mut Parts, d: &Daemon) -> bool {
     let peer_local = ConnectInfo::<SocketAddr>::from_request_parts(parts, d)
         .await
         .is_ok_and(|ConnectInfo(a)| {
             let ip = a.ip().to_canonical();
-            ip.is_loopback() || d.local_peers.contains(&ip)
+            (!d.sandbox && ip.is_loopback()) || d.local_peers.contains(&ip)
         });
     let host = parts
         .headers
@@ -391,7 +403,7 @@ async fn install(
     State(d): State<Daemon>,
     Json(req): Json<InstallReq>,
 ) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     let installed = d
         .install(req.runtime.as_deref(), req.pack.as_deref(), &env)
         .await?;
@@ -411,8 +423,31 @@ async fn put_config(
     Ok(Json(d.save_config(patch)?))
 }
 
+/// `GET /api/v1/reviews` (R-111): what xherd approved by itself, newest first.
+async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    let events =
+        d.store.auto_approvals(100).await.map_err(|e| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
+        })?;
+    let items: Vec<Value> = events
+        .into_iter()
+        .map(|e| {
+            let p = e.payload.unwrap_or_default();
+            json!({"agentId": e.agent_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"]})
+        })
+        .collect();
+    Ok(Json(json!({"reviews": items})))
+}
+
+async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {
+    Json(json!({
+        "findings": d.security_check().await,
+        "pending": xherd_daemon::security::PENDING,
+    }))
+}
+
 async fn checks(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     Ok(Json(json!({"checks": d.checks(&env).await})))
 }
 
@@ -421,7 +456,7 @@ async fn fix_check(
     State(d): State<Daemon>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     d.fix_check(&id, &env).await?;
     Ok(Json(json!({"checks": d.checks(&env).await})))
 }
@@ -621,6 +656,42 @@ async fn diff(
     ))
 }
 
+/// `GET /agents/:id/pr-review`: this round's PR comments, the agent's
+/// proposals and the user's decisions (R-306).
+async fn pr_review(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.pr_review(&id).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct DecisionsReq {
+    decisions: std::collections::BTreeMap<String, xherd_core::pr::Verdict>,
+}
+
+/// `PUT /agents/:id/pr-decisions`: replace the user's decisions on the
+/// comments of this round (R-306).
+async fn put_pr_decisions(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(req): Json<DecisionsReq>,
+) -> ApiResult<Json<Value>> {
+    d.set_pr_decisions(&id, req.decisions).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+/// `GET /agents/:id/findings`: the findings of `review.md`.
+async fn findings(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.findings(&id).await?))
+}
+
 /// `GET /agents/:id/docs`: the agent's documents, open gate's first.
 async fn docs(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({"docs": d.docs(&id).await?})))
@@ -653,6 +724,8 @@ struct ActionBody {
     expect: Option<std::collections::BTreeMap<String, String>>,
     /// Approve (commit gate): the commit message as edited.
     message: Option<String>,
+    /// Autonomy: `ask` or `important`.
+    level: Option<xherd_core::autonomy::Autonomy>,
 }
 
 async fn agent_action(
@@ -685,6 +758,15 @@ async fn agent_action(
         },
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
+        },
+        "autonomy" => UserAction::SetAutonomy {
+            level: b.level.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "body {\"level\": \"ask\"|\"important\"} required",
+                )
+            })?,
         },
         _ => {
             return Err(ApiError::new(

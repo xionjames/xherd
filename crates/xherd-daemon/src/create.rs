@@ -37,6 +37,13 @@ impl Daemon {
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
     pub async fn new_agent(&self, req: NewAgent) -> Result<Agent, ActionError> {
         let c = new::check(&req)?;
+        let autonomy = req.autonomy.unwrap_or(self.config.autonomy);
+        if !autonomy.selectable() {
+            return Err(refuse(
+                "autonomy_unavailable",
+                "autonomy never is not available yet (v1.x, R-1209)",
+            ));
+        }
         let pack = (c.flow != FLOW_NONE)
             .then(|| self.packs.get(xherd_flow::BUILTIN))
             .flatten();
@@ -101,6 +108,7 @@ impl Daemon {
             .map_err(|e| refuse("git", e.to_string()))?;
 
         let mut a = Agent::new(&c.name, &c.ticket_key, self.clock.now());
+        a.autonomy = autonomy;
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);
@@ -136,6 +144,7 @@ impl Daemon {
                     root: self.config.workspace_root().join("worktrees"),
                 };
                 w.ensure(&workdir)
+                    .await
                     .map_err(|e| refuse("runtime_trust", format!("{label}: {e}")))?;
             }
             prepare_xherd_dir(&git, &workdir, &a).await?;
@@ -172,15 +181,28 @@ impl Daemon {
 pub struct Resumer(pub runtime::Resume);
 
 impl Resumer {
-    pub fn argv(&self, session: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<Vec<String>> {
+    pub async fn argv(
+        &self,
+        session: &str,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Option<Vec<String>> {
         let args = self.0.argv(session)?;
+        self.transcript(session, env).await.map(|_| args)
+    }
+
+    /// The transcript file of `session`, when the runtime has it.
+    ///
+    /// Looked up as the agent user: the runtime keeps it in the agent's home
+    /// (R-1203).
+    pub async fn transcript(
+        &self,
+        session: &str,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Option<PathBuf> {
+        runtime::plain_id(session).then_some(())?;
         let dir = xherd_flow::install::expand(&self.0.transcripts, env).ok()?;
         let file = self.0.file.replace("{session}", session);
-        std::fs::read_dir(dir)
-            .ok()?
-            .flatten()
-            .any(|p| p.path().join(&file).is_file())
-            .then_some(args)
+        xherd_core::runner::find_in_subdirs_as_agent(Path::new(&dir), &file).await
     }
 }
 
@@ -195,7 +217,7 @@ pub struct TrustWriter {
 }
 
 impl TrustWriter {
-    pub fn ensure(&self, dir: &Path) -> Result<(), String> {
+    pub async fn ensure(&self, dir: &Path) -> Result<(), String> {
         if !dir.starts_with(&self.root) || dir == self.root {
             return Err(format!(
                 "{} is not an agent worktree under {}",
@@ -203,11 +225,20 @@ impl TrustWriter {
                 self.root.display()
             ));
         }
-        let file = xherd_flow::install::expand(&self.trust.file, &|v| std::env::var(v).ok())?;
-        let text = std::fs::read_to_string(&file).ok();
+        // The runtime's file is in the agent user's home: read and written as
+        // that user (R-1203).
+        let file = xherd_flow::install::expand(&self.trust.file, &xherd_core::runner::agent_env)?;
+        let text = xherd_core::runner::read_file(Path::new(&file))
+            .await
+            .ok()
+            .flatten()
+            .map(|b| String::from_utf8_lossy(&b).into_owned());
         match self.trust.with_trusted(text.as_deref(), dir) {
-            Ok(Some(new)) => write_atomic(Path::new(&file), new.as_bytes(), Some(0o600))
-                .map_err(|e| format!("{file}: {e}")),
+            Ok(Some(new)) => {
+                xherd_core::runner::write_file(Path::new(&file), new.as_bytes(), Some(0o600))
+                    .await
+                    .map_err(|e| format!("{file}: {e}"))
+            }
             Ok(None) => Ok(()),
             Err(e) => Err(format!("{file}: {e}")),
         }
@@ -273,13 +304,22 @@ pub(crate) async fn resolve_base(
     ))
 }
 
+/// setgid, group-writable: the folders the daemon and the agent share.
+const SHARED_DIR_MODE: u32 = 0o2775;
+
 /// `.xherd/` with `agent.json`, `instructions.md` and `spec/`, excluded from
 /// git (R-005b exclude part, R-005c).
 async fn prepare_xherd_dir(git: &Git, workdir: &Path, a: &Agent) -> Result<(), ActionError> {
     let io = |p: &Path, e: std::io::Error| refuse("io", format!("{}: {e}", p.display()));
     let dir: PathBuf = workdir.join(".xherd");
     let spec = workdir.join(xherd_flow::xap::SPEC_DIR);
-    std::fs::create_dir_all(&spec).map_err(|e| io(&spec, e))?;
+    // Made as the agent user and shared with the daemon's group: both write
+    // in here (R-1203); the daemon's own files stay out of agents' reach.
+    for d in [&dir, &spec] {
+        xherd_core::runner::mkdir(d, SHARED_DIR_MODE)
+            .await
+            .map_err(|e| io(d, e))?;
+    }
     let json = serde_json::to_vec_pretty(&new::agent_json(a)).expect("json");
     let f = dir.join("agent.json");
     write_atomic(&f, &json, None).map_err(|e| io(&f, e))?;
@@ -325,7 +365,7 @@ fn permission_rules(pack: Option<&xherd_flow::Pack>) -> Vec<String> {
 /// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
 /// plan cannot be made (no HOME).
 fn command_dirs(pack: &xherd_flow::Pack) -> Vec<String> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     let plan = pack
         .plan_install(
             xherd_flow::approve::DEFAULT_RUNTIME,
@@ -353,14 +393,15 @@ async fn install_hooks(
     allow_rules: &[String],
 ) -> Result<(), ActionError> {
     let f = workdir.join(&h.file);
-    let existing = std::fs::read_to_string(&f).ok();
+    let existing = xherd_core::runner::read_file(&f)
+        .await
+        .ok()
+        .flatten()
+        .map(|b| String::from_utf8_lossy(&b).into_owned());
     let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin, allow_rules)
         .map_err(|e| refuse("runtime_hooks", e))?;
-    if let Some(dir) = f.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| refuse("io", format!("{}: {e}", dir.display())))?;
-    }
-    write_atomic(&f, text.as_bytes(), None)
+    xherd_core::runner::write_file(&f, text.as_bytes(), None)
+        .await
         .map_err(|e| refuse("io", format!("{}: {e}", f.display())))?;
     git.add_excludes(workdir, &[&h.file])
         .await
@@ -385,8 +426,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resume_needs_the_transcript_and_a_plain_id() {
+    #[tokio::test]
+    async fn resume_needs_the_transcript_and_a_plain_id() {
         let home = tempfile::tempdir().unwrap();
         let proj = home.path().join("projects/-work-TST-1");
         std::fs::create_dir_all(&proj).unwrap();
@@ -398,12 +439,12 @@ mod tests {
         });
         let env = |_: &str| None;
         assert_eq!(
-            r.argv("abc-123", &env),
+            r.argv("abc-123", &env).await,
             Some(vec!["--resume".to_string(), "abc-123".to_string()])
         );
-        assert_eq!(r.argv("missing", &env), None);
-        assert_eq!(r.argv("../abc-123", &env), None);
-        assert_eq!(r.argv("", &env), None);
+        assert_eq!(r.argv("missing", &env).await, None);
+        assert_eq!(r.argv("../abc-123", &env).await, None);
+        assert_eq!(r.argv("", &env).await, None);
     }
 
     #[test]

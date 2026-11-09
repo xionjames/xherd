@@ -1,0 +1,279 @@
+//! `xherd security check` (R-1210): a summary of the current exposure, from
+//! what this version knows. Informational: a warning is something to look at,
+//! not a failure.
+
+use serde::Serialize;
+use xherd_core::autonomy::Autonomy;
+use xherd_core::config::Config;
+
+use crate::Daemon;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Finding {
+    pub id: &'static str,
+    pub ok: bool,
+    pub label: &'static str,
+    pub detail: String,
+}
+
+/// What R-1210 lists that this version cannot report yet.
+pub const PENDING: &[&str] = &["branch protection of the base branch (host command not built yet)"];
+
+fn f(id: &'static str, ok: bool, label: &'static str, detail: impl Into<String>) -> Finding {
+    Finding {
+        id,
+        ok,
+        label,
+        detail: detail.into(),
+    }
+}
+
+fn loopback(bind: &str) -> bool {
+    bind == "localhost"
+        || bind
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|a| a.is_loopback())
+}
+
+fn budget_text(n: u64) -> String {
+    if n == 0 {
+        "off".into()
+    } else {
+        format!("{n} tokens")
+    }
+}
+
+/// Autonomy (R-1210): the default for new agents and the levels of the agents
+/// that have not finished. `never` is the only level that is a warning.
+fn autonomy_finding(c: &Config, levels: &[Autonomy]) -> Finding {
+    let count = |l: Autonomy| levels.iter().filter(|x| **x == l).count();
+    let detail = format!(
+        "new agents start at {}; active agents: {} ask, {} important, {} never; important still waits at spec and ship, and any tripwire holds a gate",
+        c.autonomy,
+        count(Autonomy::Ask),
+        count(Autonomy::Important),
+        count(Autonomy::Never)
+    );
+    f(
+        "autonomy",
+        count(Autonomy::Never) == 0 && c.autonomy != Autonomy::Never,
+        "Autonomy",
+        detail,
+    )
+}
+
+/// Pure part: everything but the plugin list and the agents' levels comes from the config.
+pub fn findings(
+    c: &Config,
+    sandbox: bool,
+    split: bool,
+    external_plugins: &[String],
+    levels: &[Autonomy],
+) -> Vec<Finding> {
+    let mut out = Vec::new();
+    out.push(match (loopback(&c.bind), sandbox) {
+        (true, _) => f(
+            "network",
+            true,
+            "Network binding",
+            format!("listens on {}:{} only", c.bind, c.port),
+        ),
+        (false, true) => f(
+            "network",
+            true,
+            "Network binding",
+            format!(
+                "listens on {} inside the container; compose must publish port {} on the host's 127.0.0.1 (`xherd docker doctor` checks it)",
+                c.bind, c.port
+            ),
+        ),
+        (false, false) => f(
+            "network",
+            false,
+            "Network binding",
+            format!(
+                "listens on {}:{}: reachable from the network; bind 127.0.0.1 unless a firewall or proxy protects it",
+                c.bind, c.port
+            ),
+        ),
+    });
+    out.push(if split {
+        f(
+            "user-split",
+            true,
+            "Daemon and agents",
+            "run as different users: agents cannot read the daemon's config, secrets or database (R-1203)",
+        )
+    } else if sandbox {
+        f(
+            "user-split",
+            false,
+            "Daemon and agents",
+            "run as the same user in this container, so an agent can read the daemon's config and secrets",
+        )
+    } else {
+        f(
+            "user-split",
+            false,
+            "Daemon and agents",
+            "run as the same OS user: xherd's files are 0600, which is a guardrail, not a boundary; an agent can read them (R-1203, use the Docker install for a boundary)",
+        )
+    });
+    out.push(if external_plugins.is_empty() {
+        f(
+            "plugins",
+            true,
+            "External plugins",
+            "none; only built-in plugins run",
+        )
+    } else {
+        f(
+            "plugins",
+            false,
+            "External plugins",
+            format!(
+                "{} run with your rights and are not pinned to a version: {}",
+                external_plugins.len(),
+                external_plugins.join(", ")
+            ),
+        )
+    });
+    out.push(autonomy_finding(c, levels));
+    out.push(if c.max_session_minutes > 0 {
+        f(
+            "session-limit",
+            true,
+            "Session length",
+            format!("a session over {} min is paused", c.max_session_minutes),
+        )
+    } else {
+        f(
+            "session-limit",
+            false,
+            "Session length",
+            "no limit: set maxSessionMinutes to pause long sessions",
+        )
+    });
+    out.push(if c.agent_token_budget > 0 || c.daily_token_budget > 0 {
+        f(
+            "budgets",
+            true,
+            "Token budgets",
+            format!(
+                "per agent {}, per day {}",
+                budget_text(c.agent_token_budget),
+                budget_text(c.daily_token_budget)
+            ),
+        )
+    } else {
+        f(
+            "budgets",
+            false,
+            "Token budgets",
+            "none: set agentTokenBudget / dailyTokenBudget to pause runaway agents",
+        )
+    });
+    out.push(if c.sensitive_paths.is_empty() {
+        f(
+            "sensitive-paths",
+            false,
+            "Sensitive paths",
+            "none set: set sensitivePaths to hold commits that touch them",
+        )
+    } else {
+        f(
+            "sensitive-paths",
+            true,
+            "Sensitive paths",
+            format!("{} glob(s) hold a commit", c.sensitive_paths.len()),
+        )
+    });
+    out
+}
+
+impl Daemon {
+    pub async fn security_check(&self) -> Vec<Finding> {
+        use xherd_core::Status;
+        let levels: Vec<Autonomy> = self
+            .store
+            .list_agents()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|a| !matches!(a.status, Status::Done | Status::Cancelled | Status::Error))
+            .map(|a| a.autonomy)
+            .collect();
+        let external: Vec<String> = self
+            .plugins
+            .all()
+            .filter(|p| !p.builtin())
+            .map(|p| p.name().to_string())
+            .collect();
+        findings(
+            &self.config,
+            self.sandbox,
+            self.sandbox && xherd_core::runner::runner_socket().is_some(),
+            &external,
+            &levels,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn get<'a>(v: &'a [Finding], id: &str) -> &'a Finding {
+        v.iter().find(|f| f.id == id).unwrap()
+    }
+
+    #[test]
+    fn defaults_warn_about_what_is_unset() {
+        let v = findings(&Config::default(), false, false, &[], &[]);
+        assert!(get(&v, "network").ok);
+        assert!(get(&v, "plugins").ok);
+        assert!(!get(&v, "session-limit").ok);
+        assert!(!get(&v, "sensitive-paths").ok);
+        assert!(!get(&v, "budgets").ok);
+        assert!(!get(&v, "user-split").ok);
+    }
+
+    #[test]
+    fn autonomy_lists_levels_and_warns_only_about_never() {
+        let c = Config::default();
+        let v = findings(&c, false, false, &[], &[Autonomy::Ask, Autonomy::Important]);
+        let a = get(&v, "autonomy");
+        assert!(
+            a.ok && a.detail.contains("1 ask, 1 important, 0 never"),
+            "{}",
+            a.detail
+        );
+        let v = findings(&c, false, false, &[], &[Autonomy::Never]);
+        assert!(!get(&v, "autonomy").ok);
+    }
+
+    #[test]
+    fn open_bind_warns_outside_the_container_only() {
+        let c = Config {
+            bind: "0.0.0.0".into(),
+            ..Default::default()
+        };
+        assert!(!get(&findings(&c, false, false, &[], &[]), "network").ok);
+        assert!(get(&findings(&c, true, false, &[], &[]), "network").ok);
+    }
+
+    #[test]
+    fn set_limits_and_external_plugins() {
+        let c = Config {
+            max_session_minutes: 60,
+            daily_token_budget: 5_000_000,
+            sensitive_paths: vec!["infra/**".into()],
+            ..Default::default()
+        };
+        let v = findings(&c, false, false, &["mine".into()], &[]);
+        assert!(get(&v, "session-limit").ok && get(&v, "sensitive-paths").ok);
+        assert!(get(&v, "budgets").detail.contains("per agent off"));
+        let p = get(&v, "plugins");
+        assert!(!p.ok && p.detail.contains("mine"));
+    }
+}

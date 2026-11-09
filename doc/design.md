@@ -432,7 +432,15 @@ The container starts as root under `tini` and runs `xherd init`, which:
 5. Marks Claude Code's first-run screens done (`hasCompletedOnboarding`; the daemon trusts each agent worktree itself, §4.1). The runtime login happens in the first agent's terminal in the browser (`/login`).
 6. Passes the default gateway as `XHERD_LOCAL_PEERS` (the port published on the host's `127.0.0.1` arrives from it, so the daemon treats it as the local host), drops privileges and replaces itself with `xherd daemon` (bound to `0.0.0.0` inside the container through `XHERD_BIND`). The daemon installs the xherd commands at every start in the container.
 
-**Single user (M3)**: the daemon and the agents run as the same user. A daemon user separate from the agent user cannot write into repositories the host user cloned (typically `755`/`644`) without running every repository write as the agent user; that split comes with the guardrails (R-1203). Until then Setup checks state that agents can read xherd's config and secrets.
+**Two users (R-1203, M4)**: `init` is the only root process; it ends by running the daemon as `xherd-daemon`. Agents run as the host-mapped user. The daemon's user cannot write into repositories the host user cloned (typically `755`/`644`), so it never does:
+
+- **`xherd runner`**, started by `init` as the agents' user, runs for the daemon whatever has to happen as that user: every git command, the `verify:` command, host and plugin commands and checks (`Cmd::as_agent`, `xherd_core::runner`), and file reads and writes in places only that user reaches (the runtime's trust and hook files, the pack commands in `~/.claude`, transcripts, the repository's `info/exclude`). The daemon exits if the runner does not answer at start (the container restarts).
+- **The runner also keeps the tmux server** (`/run/xherd/tmux.sock`, restarted if it exits), so agent sessions are processes of the agents' user. The daemon's user is let in with tmux's `server-access` (tmux ≥ 3.3) and the host's group on the socket.
+- **Shared by group** (the daemon's user is in the host's group): each worktree's `.xherd/` (made by the runner with mode `2775`), `<workspace>/worktrees` and `repos` (made by `init`), `/run/xherd` (sockets and the offline hook queue). The daemon reads worktree files as itself, so they must be group- or world-readable.
+- **Private to the daemon**: `config.json`, `secrets.json` and the database in `/var/lib/xherd-daemon/data` (`0700`, its own volume). `shared/` there is readable by agents (the managed gitconfig, which they include but cannot change). The daemon runs with a system-only `PATH` (the agents' has folders they can write) and umask `002`.
+- **Access**: in the container, loopback is where the agents are, so only the gateway the published port arrives from has the local user's rights; the CLI there runs as `xherd-daemon` (`docker exec -u xherd-daemon xherd xherd …`) and uses its token.
+
+Native installs keep one user: the 0600 files are a guardrail, not a boundary, and the Setup finding says so. Pairing browsers as devices (`access: device`) comes with the server milestone.
 
 ### 8.5 Pitfalls
 
@@ -665,7 +673,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Commit gates
   - [x] Ship
   - [x] Draft PR via GitHub
-- [ ] **M2 UI**
+- [x] **M2 UI**
   - [x] Svelte UI on the panel registry: Overview, Agent page, Settings, Setup checks, Welcome
   - [x] Hash approvals from the UI
   - [x] Websockets
@@ -684,20 +692,34 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Guardrails
     - [x] Secret tripwire on commit proposals (R-117)
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
-    - [ ] Daemon/agent user split (R-1203)
-    - [ ] Code tripwires: sensitive paths, diff size, tests, scope fence (R-115, R-116)
-    - [ ] Untrusted-text blocks (R-1201), budgets and run limits (R-1205, R-120, R-1206), `xherd security check`
+    - [x] Daemon/agent user split (R-1203): runner, shared folders, two users in the container; checked on Colima, to check on Linux
+    - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a refusal)
+    - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`, used for PR comments (`pr-comments.json`); fetched ticket text will use it too
+    - [x] Max session length (R-1206): `maxSessionMinutes`, pauses (no handoff yet)
+    - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; token budgets are reported; autonomy and branch protection are listed as not reported yet and join when those exist
+    - [x] Token budgets (R-1205): `agentTokenBudget` / `dailyTokenBudget` (global until profiles), usage read from the runtime transcript after each stop, 80 % notification, pause at 100 %
+    - [x] Review→fix loop and `maxReviewLoops` (R-114 second half, R-120): `Task.source`, `Agent.review_rounds`, review gate held for a human by open review tasks or too many rounds
+    - [x] Findings in `review.md` as Markdown (`### F01: title` + `- severity:` / `location:` / `fixed:` / `left:`), parsed by `xherd_flow::review`; the review gate is refused when malformed and held while major or blocker findings are not fixed (R-114); the UI lists them with a colour per severity
+    - [x] `maxAutoApprovalsInRow` (R-120): with autonomy
   - [ ] Backups
-  - [ ] Autonomy `important`
-  - [ ] PR follow-up
+  - [x] Autonomy `ask` / `important` (R-109…R-111, R-121): `xherd_core::autonomy` policy table, per-agent level (`xherd new --autonomy`, `xherd autonomy`, agent page), auto-approval when the agent stops at a gate its class allows and no tripwire holds it; the `never` level exists in the table but is not selectable until v1.x
+  - [x] PR follow-up
+    - [x] Polling of a watching agent's PR: status, checks, mergeable (R-303); CI and conflict notifications (R-305); merged or closed finishes the agent (R-307); shown in the Pull request panel
+    - [x] Comments (R-304, R-1201): `pr-comments` host command, `pr-comments.json` with every body wrapped by `untrusted::wrap`, the agent queued with `/xherd:pr-review` in a fresh session, stage `pr-review` (gate on `pr-review.md`) then `/xherd:pr-apply`; flow `none` is only notified
+    - [x] Decisions and replies (R-306): `xherd_flow::pr_review` parses `pr-review.md`; the user decides fix / reply / skip with a note per comment in the Pull request panel (`PUT /agents/:id/pr-decisions`); approving the `pr-review` gate posts the `reply` answers through the host (`pr-reply`, marker appended, never twice) and writes `pr-decisions.json` for `pr-apply`. Separate `pr-triage` / `pr-replies` gates were not needed: one gate covers both
+    - [x] `pr-template` (R-153): `Host::pr_template` (built-in `github` reads the worktree's template files and folders, GitLab's too; no organisation defaults), looked up when the agent enters the ship stage, written to `pr-templates.json` for the `ship` prompt
+    - `pr.merged` hooks (R-307) belong to the stage-hook engine (R-401…R-404), listed under v1.x: nothing declares hooks until profiles or pack `stageHooks` exist
   - [ ] Notifications
   - [ ] Phones
 - [ ] **v1.x**
+  - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
+  - [ ] Repo profiles: move `sensitivePaths` and `maxDiffLines` (global since M4) into each profile, with the global values as defaults; add the profile's test command as a code tripwire (R-115)
   - [ ] Codex and opencode
   - [ ] Kanban / To review / Work log (per-ticket delivery metrics: cycle time, review–fix rounds, rework; spec §16.4)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [ ] TODOs
+  - [ ] Budgets per profile and a cost estimate (token budgets are global since M4)
   - [ ] `never` autonomy
 - [ ] **Later**
   - [ ] ACP driver

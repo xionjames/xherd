@@ -478,14 +478,17 @@ mod tests {
                 "implement",
                 "review",
                 "ship",
+                "pr-review",
                 "pr"
             ]
         );
         assert_eq!(f.stage("spec").unwrap().class, Class::Critical);
         assert_eq!(f.stage("pr").unwrap().class, Class::HumanOnly);
+        // Triage and replies are human-only at every level (spec §6.3, T1).
+        assert_eq!(f.stage("pr-review").unwrap().class, Class::HumanOnly);
         assert!(f.stage("implement").unwrap().is_commit_gate());
         assert_eq!(f.stage("design").unwrap().docs(), ["design.md"]);
-        assert_eq!(f.after("ship").unwrap().id, "pr");
+        assert_eq!(f.after("ship").unwrap().id, "pr-review");
         assert_eq!(p.install["claude-code"].slash_enters, 1);
     }
 

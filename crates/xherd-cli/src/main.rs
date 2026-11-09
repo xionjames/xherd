@@ -38,6 +38,21 @@ enum Cmd {
     Daemon,
     /// Container entrypoint (root): prepare the user, home, SSH and git, then run the daemon.
     Init,
+    /// Run commands for the daemon as this user (container, R-1203): listens on a unix socket.
+    Runner {
+        /// Socket path.
+        #[arg(long)]
+        socket: std::path::PathBuf,
+        /// Socket file mode, octal (the daemon's group must reach it).
+        #[arg(long, default_value = "660")]
+        mode: String,
+        /// Also keep a tmux server on this socket path (the agents' sessions).
+        #[arg(long)]
+        tmux: Option<std::path::PathBuf>,
+        /// With --tmux: the user who may use that server (the daemon's).
+        #[arg(long, requires = "tmux")]
+        tmux_allow: Option<String>,
+    },
     /// Run xherd in Docker: write the compose file, check the setup, update.
     #[command(subcommand)]
     Docker(DockerCmd),
@@ -57,6 +72,9 @@ enum Cmd {
         repo: Option<String>,
         #[arg(long)]
         base: Option<String>,
+        /// What xherd may approve by itself: ask (default) or important.
+        #[arg(long)]
+        autonomy: Option<xherd_core::autonomy::Autonomy>,
         prompt: Option<String>,
     },
     /// List agents.
@@ -67,6 +85,11 @@ enum Cmd {
         runtime: Option<String>,
         #[arg(long)]
         pack: Option<String>,
+    },
+    /// Change what xherd may approve by itself: ask or important.
+    Autonomy {
+        agent: String,
+        level: xherd_core::autonomy::Autonomy,
     },
     /// Pause an agent (ends its session).
     Pause { agent: String },
@@ -91,6 +114,9 @@ enum Cmd {
     /// Git access.
     #[command(subcommand)]
     Git(GitCmd),
+    /// Security overview.
+    #[command(subcommand)]
+    Security(SecurityCmd),
     /// Checks behind xherd's git hooks.
     #[command(subcommand)]
     Guard(GuardCmd),
@@ -152,6 +178,12 @@ enum Cmd {
     /// XAP: record an out-of-scope finding.
     #[command(subcommand)]
     Issue(xap::IssueCmd),
+}
+
+#[derive(Subcommand)]
+enum SecurityCmd {
+    /// Summarise the current exposure: network binding, plugins, limits.
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -241,6 +273,12 @@ fn main() -> ExitCode {
     let code = match cli.cmd {
         Cmd::Daemon => run_daemon(),
         Cmd::Init => init::init(),
+        Cmd::Runner {
+            socket,
+            mode,
+            tmux,
+            tmux_allow,
+        } => run_runner(&socket, &mode, tmux, tmux_allow),
         Cmd::Docker(DockerCmd::Init {
             workspace,
             image,
@@ -267,8 +305,14 @@ fn main() -> ExitCode {
             flow,
             repo,
             base,
+            autonomy,
             prompt,
-        } => new_agent(key, slug, flow, repo, base, prompt),
+        } => new_agent(key, slug, flow, repo, base, autonomy, prompt),
+        Cmd::Autonomy { agent, level } => action(
+            &agent,
+            "autonomy",
+            Some(serde_json::json!({"level": level})),
+        ),
         Cmd::Pause { agent } => action(&agent, "pause", None),
         Cmd::Resume { agent } => action(&agent, "resume", None),
         Cmd::Cancel { agent } => action(&agent, "cancel", None),
@@ -294,6 +338,7 @@ fn main() -> ExitCode {
         Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),
         Cmd::Companion => with_client(open_in::companion),
         Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
+        Cmd::Security(SecurityCmd::Check) => with_client(security_check),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -324,6 +369,41 @@ fn main() -> ExitCode {
 }
 
 // ---- daemon -------------------------------------------------------------------
+
+fn run_runner(
+    socket: &std::path::Path,
+    mode: &str,
+    tmux: Option<std::path::PathBuf>,
+    tmux_allow: Option<String>,
+) -> i32 {
+    let Ok(mode) = u32::from_str_radix(mode, 8) else {
+        eprintln!("xherd runner: --mode {mode:?} is not octal");
+        return 2;
+    };
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("xherd runner: {e}");
+            return 1;
+        }
+    };
+    let served = rt.block_on(async {
+        if let Some(t) = tmux {
+            tokio::spawn(xherd_core::runner::supervise_tmux(t, tmux_allow));
+        }
+        xherd_core::runner::serve(socket, mode).await
+    });
+    match served {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("xherd runner: {}: {e}", socket.display());
+            1
+        }
+    }
+}
 
 fn run_daemon() -> i32 {
     let filter = tracing_subscriber::EnvFilter::try_from_env("XHERD_LOG")
@@ -368,7 +448,7 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("cannot listen on {addr}: {e} (is another daemon running?)"))?;
 
-    let tmux = xherd_term::Tmux::new(cfg.tmux_socket.clone());
+    let tmux = xherd_term::Tmux::new(cfg.tmux_server());
     let mut opts = xherd_daemon::Options::new(
         Arc::new(xherd_daemon::TerminalDriver { tmux }),
         Arc::new(xherd_daemon::SystemClock),
@@ -376,6 +456,10 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
     opts.xherd_bin = std::env::current_exe()?.to_string_lossy().into_owned();
     opts.scheduler = Some(Default::default());
     opts.sandbox = std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1");
+    // Commands in worktrees run as the agent user through its runner (R-1203).
+    if let Some(sock) = std::env::var_os("XHERD_RUNNER").filter(|s| !s.is_empty()) {
+        xherd_core::runner::use_runner(sock.into());
+    }
     opts.local_peers = std::env::var("XHERD_LOCAL_PEERS")
         .unwrap_or_default()
         .split(',')
@@ -405,6 +489,33 @@ async fn shutdown_signal() {
 }
 
 // ---- user client ----------------------------------------------------------------
+
+/// `xherd security check` (R-1210): informational, exit 0 when it answered.
+fn security_check(c: &Client) -> i32 {
+    let v = match c.call("GET", "/security", None) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("xherd security check: {e}");
+            return 2;
+        }
+    };
+    for f in v["findings"].as_array().into_iter().flatten() {
+        println!(
+            "{} {:<18} {}",
+            if f["ok"].as_bool().unwrap_or(false) {
+                "ok  "
+            } else {
+                "WARN"
+            },
+            f["label"].as_str().unwrap_or("?"),
+            f["detail"].as_str().unwrap_or("")
+        );
+    }
+    for p in v["pending"].as_array().into_iter().flatten() {
+        println!("n/a  {}", p.as_str().unwrap_or(""));
+    }
+    0
+}
 
 fn with_client(f: impl FnOnce(&Client) -> i32) -> i32 {
     match Client::new() {
@@ -583,6 +694,7 @@ fn new_agent(
     flow: Option<String>,
     repo: Option<String>,
     base: Option<String>,
+    autonomy: Option<xherd_core::autonomy::Autonomy>,
     prompt: Option<String>,
 ) -> i32 {
     // The daemon has its own working directory: send an absolute path.
@@ -601,6 +713,7 @@ fn new_agent(
     };
     let body = serde_json::json!({
         "ticketKey": key, "slug": slug, "repo": repo, "base": base, "flow": flow, "prompt": prompt,
+        "autonomy": autonomy,
     });
     match Client::new().and_then(|c| c.call("POST", "/agents", Some(body))) {
         Ok(v) => {

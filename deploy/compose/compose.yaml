@@ -25,7 +25,10 @@ services:
     volumes:
       - ${XHERD_WORKSPACE}:${XHERD_WORKSPACE}
       - xherd-home:/home/xherd
+      # The daemon's own data: its user only, not the agents' (R-1203).
+      - xherd-data:/var/lib/xherd-daemon
       # SSH agent (Docker Desktop, OrbStack): uncomment.
       # - /run/host-services/ssh-auth.sock:/run/host-ssh-agent.sock
 volumes:
   xherd-home: {}
+  xherd-data: {}

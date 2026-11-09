@@ -14,7 +14,7 @@
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions'];
+  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow'];
   let form = $state<Form>({});
   let plugins = $state<Record<string, Record<string, string>>>({});
   let saving = $state(false);
@@ -47,7 +47,7 @@
   async function save() {
     saving = true;
     const body: Record<string, unknown> = {};
-    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'workspace' ? form[k] : Number(form[k]);
+    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'workspace' || k === 'autonomy' ? form[k] : Number(form[k]);
     if (changedPlugins.length) {
       body.pluginSettings = Object.fromEntries(
         changedPlugins.map((p) => [p, Object.fromEntries(Object.entries(plugins[p]).filter(([, v]) => v !== ''))]),
@@ -118,6 +118,14 @@
           <label class="f">Park at a gate after
             <span class="unit"><input type="number" min="0" bind:value={form.gateParkMinutes} /><span>min</span></span>
             <span class="hint">Frees the slot; stays in Needs you. 0 never parks.</span></label>
+        </div>
+        <div class="g3">
+          <label class="f">Autonomy of new agents
+            <select bind:value={form.autonomy}><option value="ask">ask</option><option value="important">important</option></select>
+            <span class="hint">important: xherd approves design, tasks, review and commit gates when no tripwire holds them. Spec and ship always wait. Each agent can change it.</span></label>
+          <label class="f">Stop auto-approving after
+            <span class="unit"><input type="number" min="0" bind:value={form.maxAutoApprovalsInRow} /><span>in a row</span></span>
+            <span class="hint">The next gate waits for you. 0 = no limit.</span></label>
         </div>
         {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.']] as [k, title, hint] (k)}
           <div class="tog">

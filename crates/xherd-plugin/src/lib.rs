@@ -266,6 +266,7 @@ fn build_cmd(p: &Plugin, argv: &[String], ctx: &Context, stdin: &Value, timeout:
         .stdin(serde_json::to_vec(stdin).expect("json"))
         .timeout(timeout)
         .redact(redact)
+        .as_agent()
         .env("XHERD_BIN", &ctx.xherd_bin)
         .env("XHERD_URL", &ctx.xherd_url)
         .env("XHERD_PLUGIN_ID", p.name())
@@ -396,7 +397,7 @@ pub async fn run_checks(p: &Plugin, ctx: &Context) -> Vec<CheckResult> {
             (false, "built-in plugin cannot run a ./ check".to_string())
         } else {
             let mut cmd = if p.builtin() {
-                Cmd::new(c.argv.clone()).timeout(CHECK_TIMEOUT)
+                Cmd::new(c.argv.clone()).timeout(CHECK_TIMEOUT).as_agent()
             } else {
                 build_cmd(p, &c.argv, ctx, &Value::Null, CHECK_TIMEOUT)
             };

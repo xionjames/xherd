@@ -65,10 +65,24 @@ by theme; update it together with them.
 ## M4 → v1.0
 
 - [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for agents created from now on
-- [ ] Guardrails still open: daemon/agent user split (R-1203), the other code tripwires (R-115, R-116), untrusted-text blocks (R-1201), budgets and run limits, `xherd security check`, `diff_viewed` marks
+- [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence is a refusal (R-116)
+- [ ] Move `sensitivePaths` / `maxDiffLines` into repo profiles and add the profile test command tripwire (R-115), with profiles (v1.x)
+- [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
+- [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asking for a handoff first waits for R-026
+- [x] `xherd security check` (R-1210), first version; autonomy and budgets are in; the branch protection finding waits for the host command (`security::PENDING`)
+- [x] Token budgets (R-1205), global until profiles; per-profile budgets and a cost estimate come with profiles
+- [x] Review→fix loop with `maxReviewLoops` (R-120); the review gate is held while review tasks are open
+- [x] R-114 first half: findings in `review.md` are Markdown with a field list; major/blocker findings not fixed hold the review gate; severity colours in the UI
+- [x] Daemon/agent user split in the container (R-1203, branch `m4-user-split`): `xherd runner`, `xherd-daemon` user and volume, loopback is not the user; **check on Linux and Docker Desktop** (file permissions are not enforced on Colima's mounts)
+- [ ] Guardrails still open: `diff_viewed` marks, a Setup check for the runner dying after start
 - [ ] Backups
-- [ ] Autonomy `important` and the ship stage's auto-approved variant
-- [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI
+- [x] Autonomy `ask` / `important` (R-109…R-111) with `maxAutoApprovalsInRow` (R-120), per agent, changeable live; the ship stage's auto-approved variant (`--no-ticket-update`) is only reachable at `never` (v1.x), since ship is critical
+- [x] "To review" list of auto-approvals (R-111): `GET /reviews` and the page `#/review`; a mark-as-reviewed state and the agent's stated assumptions come with the v1.x views
+- [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel
+- [x] PR comments into the agent (R-304): new comments saved wrapped as untrusted data, agent queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
+- [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
+- [x] `pr-template` (R-153): templates looked up on entering the ship stage, `pr-templates.json` read by the `ship` prompt
+- [ ] Stage hooks (R-401…R-404), including `pr.merged` (R-307): v1.x, with profiles / pack `stageHooks`
 - [ ] Notifications (browser, desktop, ntfy) and phones
 
 ## v1.x
@@ -76,7 +90,7 @@ by theme; update it together with them.
 - [ ] Codex and opencode runtimes
 - [ ] Kanban, To review and Work log views (per-ticket cycle time, review loops and rework)
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
-- [ ] TODOs, `never` autonomy (budgets and run limits belong to the M4 guardrails)
+- [ ] TODOs, budgets, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
 
 ## Later
 

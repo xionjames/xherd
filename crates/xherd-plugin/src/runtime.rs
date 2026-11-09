@@ -43,6 +43,127 @@ pub struct Terminal {
     /// How to continue the runtime's last conversation (R-027).
     #[serde(default)]
     pub resume: Option<Resume>,
+    /// How to read token usage from the transcript (R-1205). The transcript
+    /// is found through `resume`, so it needs one.
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+/// Token usage in a runtime's transcript: JSON lines, each possibly holding an
+/// object of counters. The plugin says where the counters are and what they
+/// are called; xherd decides what counts (`Totals::budget_tokens`), the same
+/// for every runtime.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Usage {
+    /// JSON pointer (RFC 6901) from a transcript line to its counters object;
+    /// lines without it are skipped.
+    pub records: String,
+    /// JSON pointer to a message id. A runtime that writes one message as
+    /// several lines repeats the id: the last line of an id counts.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Counter name inside the records object, per standard counter.
+    pub fields: UsageFields,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageFields {
+    #[serde(default)]
+    pub input: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
+    #[serde(default)]
+    pub cache_write: Option<String>,
+    #[serde(default)]
+    pub cache_read: Option<String>,
+}
+
+/// The standard counters, whatever the runtime calls them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Totals {
+    pub input: u64,
+    pub output: u64,
+    pub cache_write: u64,
+    pub cache_read: u64,
+}
+
+impl Totals {
+    /// What a token budget counts: input, output and cache writes. Cache reads
+    /// repeat the whole context on every turn and would swamp a budget.
+    pub fn budget_tokens(&self) -> u64 {
+        self.input + self.output + self.cache_write
+    }
+
+    fn add(&mut self, o: Totals) {
+        self.input += o.input;
+        self.output += o.output;
+        self.cache_write += o.cache_write;
+        self.cache_read += o.cache_read;
+    }
+}
+
+impl Usage {
+    fn check(&self) -> Result<(), String> {
+        for p in [Some(&self.records), self.id.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if !p.starts_with('/') {
+                return Err(format!("usage pointer {p:?} must start with /"));
+            }
+        }
+        let f = &self.fields;
+        if [&f.input, &f.output, &f.cache_write, &f.cache_read]
+            .iter()
+            .all(|x| x.is_none())
+        {
+            return Err("usage.fields names no counter".into());
+        }
+        Ok(())
+    }
+
+    /// Totals of a whole transcript. Lines that are not JSON are skipped.
+    pub fn totals(&self, transcript: &str) -> Totals {
+        let get = |o: &Value, name: &Option<String>| {
+            name.as_deref()
+                .and_then(|n| o.get(n))
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        };
+        let mut by_id: BTreeMap<String, Totals> = BTreeMap::new();
+        let mut sum = Totals::default();
+        for line in transcript.lines() {
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let Some(o) = v.pointer(&self.records) else {
+                continue;
+            };
+            let t = Totals {
+                input: get(o, &self.fields.input),
+                output: get(o, &self.fields.output),
+                cache_write: get(o, &self.fields.cache_write),
+                cache_read: get(o, &self.fields.cache_read),
+            };
+            match self
+                .id
+                .as_deref()
+                .and_then(|p| v.pointer(p))
+                .and_then(Value::as_str)
+            {
+                Some(id) => {
+                    by_id.insert(id.to_string(), t);
+                }
+                None => sum.add(t),
+            }
+        }
+        for t in by_id.into_values() {
+            sum.add(t);
+        }
+        sum
+    }
 }
 
 /// Continue a runtime conversation by its session id, when the runtime still
@@ -166,6 +287,15 @@ impl Terminal {
                     m.name
                 ));
             }
+        }
+        if let Some(u) = &t.usage {
+            if t.resume.is_none() {
+                return Err(format!(
+                    "runtime {}: usage needs resume (it names where the transcripts are)",
+                    m.name
+                ));
+            }
+            u.check().map_err(|e| format!("runtime {}: {e}", m.name))?;
         }
         for required in [STRICT_PERMISSION_MODE, DEFAULT_PERMISSION_MODE] {
             if !t.permission_modes.contains_key(required) {
@@ -405,5 +535,68 @@ mod tests {
         );
         let none = merge_hooks(None, &h, "xherd", &[]).unwrap();
         assert!(!none.contains("permissions"));
+    }
+
+    #[test]
+    fn claude_usage_counts_each_message_once_and_skips_cache_reads() {
+        let u = claude().usage.unwrap();
+        let t = r#"{"type":"user","message":{"content":"hi"}}
+{"message":{"id":"m1","usage":{"input_tokens":2,"output_tokens":5,"cache_creation_input_tokens":10,"cache_read_input_tokens":9000}}}
+{"message":{"id":"m1","usage":{"input_tokens":2,"output_tokens":40,"cache_creation_input_tokens":10,"cache_read_input_tokens":9000}}}
+not json
+{"message":{"id":"m2","usage":{"input_tokens":1,"output_tokens":1}}}
+{"message":{"usage":{"output_tokens":7}}}"#;
+        let totals = u.totals(t);
+        assert_eq!(
+            totals,
+            Totals {
+                input: 2 + 1,
+                output: 40 + 1 + 7,
+                cache_write: 10,
+                cache_read: 9000
+            }
+        );
+        assert_eq!(totals.budget_tokens(), 3 + 48 + 10);
+        assert_eq!(u.totals(""), Totals::default());
+    }
+
+    #[test]
+    fn another_runtime_declares_its_own_names() {
+        let u: Usage = serde_json::from_value(json!({
+            "records": "/event/tokens",
+            "fields": {"input": "prompt", "output": "completion"}
+        }))
+        .unwrap();
+        u.check().unwrap();
+        let t = "{\"event\":{\"tokens\":{\"prompt\":3,\"completion\":4}}}\n{\"event\":{\"tokens\":{\"prompt\":1,\"completion\":1}}}";
+        assert_eq!(u.totals(t).budget_tokens(), 9, "no id: every line counts");
+    }
+
+    #[test]
+    fn usage_declarations_are_checked() {
+        let m = |usage: Value, resume: bool| {
+            let mut t = json!({
+                "launch": ["x"],
+                "permissionModes": {"ask": ["a"], "edits": ["e"]},
+                "usage": usage
+            });
+            if resume {
+                t["resume"] = json!({"args": ["--r"], "transcripts": "/t", "file": "f"});
+            }
+            Manifest::parse(
+                &json!({"name": "rt", "kind": "runtime", "version": "1", "data": {"terminal": t}})
+                    .to_string(),
+            )
+            .unwrap()
+        };
+        let ok = json!({"records": "/u", "fields": {"output": "o"}});
+        assert!(Terminal::of(&m(ok.clone(), true)).is_ok());
+        let e = Terminal::of(&m(ok, false)).unwrap_err();
+        assert!(e.contains("needs resume"), "{e}");
+        let e =
+            Terminal::of(&m(json!({"records": "u", "fields": {"output": "o"}}), true)).unwrap_err();
+        assert!(e.contains("must start with /"), "{e}");
+        let e = Terminal::of(&m(json!({"records": "/u", "fields": {}}), true)).unwrap_err();
+        assert!(e.contains("names no counter"), "{e}");
     }
 }

@@ -21,8 +21,10 @@ pub mod driver;
 pub mod git_access;
 pub mod install;
 pub mod open_in;
+pub mod pr_round;
 pub mod repos;
 pub mod scheduler;
+pub mod security;
 pub mod settings;
 pub mod supervisor;
 pub mod support;
@@ -63,6 +65,8 @@ pub struct Options {
     pub local_peers: Vec<std::net::IpAddr>,
     /// Limit for a task's `verify:` command (tests shorten it).
     pub verify_timeout: std::time::Duration,
+    /// Time between PR polls; `None` = `prPollMinutes` of the config (tests).
+    pub pr_poll: Option<std::time::Duration>,
 }
 
 impl Options {
@@ -78,6 +82,7 @@ impl Options {
             sandbox: false,
             local_peers: Vec::new(),
             verify_timeout: actor::VERIFY_TIMEOUT,
+            pr_poll: None,
         }
     }
 }
@@ -158,6 +163,24 @@ impl Daemon {
     /// Prepare the data root, migrate config and database, load plugins and
     /// agents, replay queued reports, reconcile sessions, start the scheduler.
     pub async fn start(paths: Paths, opts: Options) -> Result<Daemon, StartError> {
+        // With a runner (the container, R-1203) nothing works without it:
+        // stop, so the container restarts, rather than fail every agent.
+        if let Some(sock) = xherd_core::runner::runner_socket() {
+            let mut up = false;
+            for _ in 0..60 {
+                if xherd_core::runner::ping(sock).await {
+                    up = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            if !up {
+                return Err(StartError::Io(std::io::Error::other(format!(
+                    "the runner at {} does not answer",
+                    sock.display()
+                ))));
+            }
+        }
         paths.ensure()?;
         let (mut config, migrated) = Config::load(&paths.config())?;
         let new_token = config.user_token.is_none();
@@ -205,6 +228,16 @@ impl Daemon {
             screen_rules: opts.screen_rules,
             toolchain_install: opts.sandbox,
             verify_timeout: opts.verify_timeout,
+            pr_poll: opts
+                .pr_poll
+                .unwrap_or(std::time::Duration::from_secs(config.pr_poll_minutes * 60)),
+            max_session_minutes: config.max_session_minutes,
+            max_review_loops: config.max_review_loops,
+            max_auto_approvals_in_row: config.max_auto_approvals_in_row,
+            agent_token_budget: config.agent_token_budget,
+            daily_token_budget: config.daily_token_budget,
+            max_diff_lines: config.max_diff_lines,
+            sensitive_paths: config.sensitive_paths.clone(),
         };
         let trust = plugins
             .get(xherd_flow::approve::DEFAULT_RUNTIME)
@@ -216,11 +249,14 @@ impl Daemon {
                     root: config.workspace_root().join("worktrees"),
                 })
             });
-        let resume = plugins
+        let terminal = plugins
             .get(xherd_flow::approve::DEFAULT_RUNTIME)
-            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
-            .and_then(|t| t.resume)
+            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok());
+        let resume = terminal
+            .as_ref()
+            .and_then(|t| t.resume.clone())
             .map(|r| Arc::new(Resumer(r)));
+        let usage = terminal.and_then(|t| t.usage).map(Arc::new);
         let toolchains = plugins
             .of_kind(xherd_plugin::Kind::Toolchain)
             .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
@@ -244,6 +280,7 @@ impl Daemon {
             toolchains: Arc::new(toolchains),
             trust,
             resume,
+            usage,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
@@ -276,7 +313,7 @@ impl Daemon {
         if d.sandbox {
             // The container is set up without a shell: commands go where the
             // agents find them at every start (user-edited files are kept).
-            let env = |v: &str| std::env::var(v).ok();
+            let env = xherd_core::runner::agent_env;
             if let Err(e) = d
                 .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, &env)
                 .await
@@ -340,6 +377,33 @@ impl Daemon {
             }
         }
         Ok(out)
+    }
+
+    /// The findings of the agent's `review.md` for the UI, each with whether
+    /// its fixing tasks are done. No review yet: an empty list. A malformed
+    /// document: `error` says where (the gate refuses it, so this is the
+    /// agent's work in progress).
+    pub async fn findings(&self, who: &str) -> Result<serde_json::Value, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        let text = match self.doc(who, "review.md").await {
+            Ok(d) => d["text"].as_str().unwrap_or_default().to_string(),
+            Err(e) if e.code == "no_such_doc" => String::new(),
+            Err(e) => return Err(e),
+        };
+        Ok(match xherd_flow::review::parse(&text) {
+            Ok(list) => {
+                let rows: Vec<_> = list
+                    .iter()
+                    .map(|f| {
+                        let mut v = serde_json::to_value(f).unwrap_or_default();
+                        v["resolved"] = xherd_flow::review::resolved(f, &a.tasks).into();
+                        v
+                    })
+                    .collect();
+                serde_json::json!({"findings": rows})
+            }
+            Err(e) => serde_json::json!({"findings": [], "error": e}),
+        })
     }
 
     /// One document as the UI shows it (R-107): its text, the hash an
@@ -613,7 +677,7 @@ impl Daemon {
     }
 }
 
-fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
+pub(crate) fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
     a.workdir
         .as_deref()
         .map(std::path::Path::new)

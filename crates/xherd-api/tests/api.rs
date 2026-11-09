@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use xherd_core::paths::Paths;
 use xherd_core::{Agent, Status};
-use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, mint_token};
+use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER, mint_token};
 use xherd_daemon::*;
 
 async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
@@ -147,6 +147,30 @@ async fn auth_rules() {
         xherd_api::router(d2).layer(MockConnectInfo(SocketAddr::from(([172, 17, 0, 1], 5555))));
     let req = get("/api/v1/agents").body(Body::empty()).unwrap();
     assert_eq!(call(gw, req).await.0, StatusCode::OK);
+
+    // There, loopback is where the agents are: no rights without a token,
+    // not even with an unknown one (R-1203, T2).
+    let mut d3 = d.clone();
+    d3.sandbox = true;
+    d3.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
+    let inside = xherd_api::router(d3.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    assert_eq!(call(inside.clone(), req).await.0, StatusCode::UNAUTHORIZED);
+    let req = get("/api/v1/agents")
+        .header("authorization", "Bearer never-issued")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(inside.clone(), req).await.0, StatusCode::UNAUTHORIZED);
+    // The user's own token still works from inside (the CLI).
+    let user_t = mint_token(&d3.store, TOKEN_USER, None, &[], 1)
+        .await
+        .unwrap();
+    let req = get("/api/v1/agents")
+        .header("authorization", format!("Bearer {user_t}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(inside, req).await.0, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -638,5 +662,69 @@ async fn git_access_and_credentials() {
             .await
             .0,
         StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn security_overview_needs_the_user_and_lists_findings() {
+    let (_dir, d, _a) = setup().await;
+    let remote = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 5], 5555))));
+    let local =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let req = || get("/api/v1/security").body(Body::empty()).unwrap();
+    assert_eq!(call(remote, req()).await.0, StatusCode::UNAUTHORIZED);
+    let (s, v) = call(local, req()).await;
+    assert_eq!(s, StatusCode::OK);
+    let ids: Vec<&str> = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"network") && ids.contains(&"session-limit"));
+    assert!(!v["pending"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn findings_endpoint_reads_review_md() {
+    let (dir, d, _a) = setup().await;
+    let wt = dir.path().join("wt");
+    let spec = wt.join(".xherd/spec");
+    std::fs::create_dir_all(&spec).unwrap();
+    let mut b = Agent::new("SC-2", "SC-2", 2);
+    b.launch = Some(vec!["rt".into()]);
+    b.workdir = Some(wt.to_string_lossy().into_owned());
+    d.create_agent(b).await.unwrap();
+    let local =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let req = || {
+        get("/api/v1/agents/SC-2/findings")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (s, v) = call(local.clone(), req()).await;
+    assert_eq!(
+        (s, v["findings"].as_array().map(Vec::len)),
+        (StatusCode::OK, Some(0))
+    );
+
+    std::fs::write(
+        spec.join("review.md"),
+        "### F01: race\n- severity: blocker\n- location: `a.rs:3`\n",
+    )
+    .unwrap();
+    let (_, v) = call(local.clone(), req()).await;
+    let f = &v["findings"][0];
+    assert_eq!(f["id"], "F01");
+    assert_eq!(f["severity"], "blocker");
+    assert_eq!(f["location"], "a.rs:3");
+    assert_eq!(f["resolved"], false);
+
+    std::fs::write(spec.join("review.md"), "### F01: race\n").unwrap();
+    let (_, v) = call(local, req()).await;
+    assert!(
+        v["error"].as_str().unwrap().contains("no `- severity"),
+        "{v}"
     );
 }

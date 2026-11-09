@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use xherd_core::domain::{Commit, CommitStatus, Gate, HashedFile, TaskStatus};
+use xherd_core::domain::{Commit, CommitStatus, Gate, HashedFile, Role, TaskStatus};
 use xherd_core::xap::{Refusal, XapCmd, refuse};
 use xherd_core::{Agent, Millis};
 
@@ -225,13 +225,22 @@ pub fn apply(
     match cmd {
         XapCmd::StageEnter { stage, .. } => {
             let flow = flow_of(a, pack)?;
-            if flow.stage(stage).is_none() {
+            let Some(def) = flow.stage(stage) else {
                 return Err(refuse(
                     "unknown_stage",
                     format!("flow {} has no stage {stage}", flow_name(a)),
                 ));
+            };
+            // Coming back to review after work in another stage is one more
+            // review→fix round (R-120). Repeating the call inside the stage
+            // is not.
+            let again = def.role == Role::Review
+                && a.stage.as_deref() != Some(stage)
+                && a.visited_stages.contains(stage);
+            if again {
+                a.review_rounds += 1;
             }
-            Ok(set(&mut a.stage, Some(stage.clone())))
+            Ok(set(&mut a.stage, Some(stage.clone())) | again)
         }
 
         XapCmd::GateOpen {
@@ -753,6 +762,7 @@ mod tests {
             evidence: None,
             verify: None,
             blocked_reason: None,
+            source: Default::default(),
         }
     }
 

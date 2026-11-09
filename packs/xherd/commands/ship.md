@@ -12,11 +12,14 @@ Read the xherd rules in `{{dir}}/rules.md` first and follow them.
 2. If `.xherd/spec/pr.md` exists, try `xherd gate open ship`.
    - Refused with `already_approved`: the user approved it. Go to step 6.
    - Accepted: the gate is open again for the current text. Stop and wait.
-3. Otherwise draft it. Look for the repository's pull-request template
+3. Otherwise draft it. xherd looks up the repository's pull-request
+   templates when you enter this stage: read `.xherd/spec/pr-templates.json`
+   (`{"templates": [{path, name, body}]}`; an empty list means the repository
+   has none). If the file is not there yet, wait a moment and read it again;
+   if it still is not, look in the usual places yourself
    (`.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE/*.md`,
-   `docs/pull_request_template.md`, `pull_request_template.md`,
-   `.gitlab/merge_request_templates/*.md`); with several, pick the fitting
-   one and name it in the frontmatter.
+   `docs/`, the root, `.gitlab/merge_request_templates/*.md`). With several
+   templates, pick the fitting one and name its `path` in the frontmatter.
 4. Write `.xherd/spec/pr.md` in the pr format: the template's headings first,
    the essentials (summary, requirements covered, key decisions, testing,
    assumptions) placed in them, a `## Ticket update` section if the ticket

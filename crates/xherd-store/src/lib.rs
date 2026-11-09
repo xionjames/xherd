@@ -329,6 +329,36 @@ impl Store {
         .await
     }
 
+    // ---- usage ---------------------------------------------------------------
+
+    /// Add tokens to `scope`'s total for `day` (`YYYY-MM-DD`, UTC).
+    pub async fn add_usage(&self, scope: &str, day: &str, tokens: u64) -> Result<()> {
+        let (s, d, t) = (scope.to_string(), day.to_string(), tokens as i64);
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO budgets (scope, day, tokens) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(scope, day) DO UPDATE SET tokens = tokens + excluded.tokens",
+                params![s, d, t],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn usage(&self, scope: &str, day: &str) -> Result<u64> {
+        let (s, d) = (scope.to_string(), day.to_string());
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT tokens FROM budgets WHERE scope = ?1 AND day = ?2",
+                params![s, d],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0) as u64)
+        })
+        .await
+    }
+
     // ---- installs ----------------------------------------------------------
 
     /// Hash of what `xherd install` last wrote at `path` (design §6.7).
@@ -416,6 +446,41 @@ impl Store {
                 let (id, agent_id, kind, payload, at) = row?;
                 let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
                 out.push(Event { id, agent_id, kind, payload, at });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Automatic approvals (`approval` events with `auto: true`), newest
+    /// first, across agents (R-111).
+    pub async fn auto_approvals(&self, limit: usize) -> Result<Vec<Event>> {
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT id, agent_id, kind, payload, at FROM events
+                 WHERE kind = 'approval' AND json_extract(payload, '$.auto') = 1
+                 ORDER BY at DESC, id DESC LIMIT ?1",
+            )?;
+            let rows = st.query_map(params![limit as i64], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get(4)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, agent_id, kind, payload, at) = row?;
+                let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
+                out.push(Event {
+                    id,
+                    agent_id,
+                    kind,
+                    payload,
+                    at,
+                });
             }
             Ok(out)
         })
