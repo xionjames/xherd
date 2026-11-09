@@ -686,9 +686,9 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
     - [ ] Daemon/agent user split (R-1203)
     - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a refusal)
-    - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`; the callers come with PR follow-up (PR comments) and ticket fetching
+    - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`, used for PR comments (`pr-comments.json`); fetched ticket text will use it too
     - [x] Max session length (R-1206): `maxSessionMinutes`, pauses (no handoff yet)
-    - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; autonomy, budgets and branch protection are listed as not reported yet and join when those exist
+    - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; token budgets are reported; autonomy and branch protection are listed as not reported yet and join when those exist
     - [x] Token budgets (R-1205): `agentTokenBudget` / `dailyTokenBudget` (global until profiles), usage read from the runtime transcript after each stop, 80 % notification, pause at 100 %
     - [x] Review→fix loop and `maxReviewLoops` (R-114 second half, R-120): `Task.source`, `Agent.review_rounds`, review gate held for a human by open review tasks or too many rounds
     - [x] Findings in `review.md` as Markdown (`### F01: title` + `- severity:` / `location:` / `fixed:` / `left:`), parsed by `xherd_flow::review`; the review gate is refused when malformed and held while major or blocker findings are not fixed (R-114); the UI lists them with a colour per severity
@@ -711,7 +711,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [ ] TODOs
-  - [ ] Budgets
+  - [ ] Budgets per profile and a cost estimate (token budgets are global since M4)
   - [ ] `never` autonomy
 - [ ] **Later**
   - [ ] ACP driver
