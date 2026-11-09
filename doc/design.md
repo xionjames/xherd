@@ -685,20 +685,33 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Secret tripwire on commit proposals (R-117)
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
     - [ ] Daemon/agent user split (R-1203)
-    - [ ] Code tripwires: sensitive paths, diff size, tests, scope fence (R-115, R-116)
-    - [ ] Untrusted-text blocks (R-1201), budgets and run limits (R-1205, R-120, R-1206), `xherd security check`
+    - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a refusal)
+    - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`, used for PR comments (`pr-comments.json`); fetched ticket text will use it too
+    - [x] Max session length (R-1206): `maxSessionMinutes`, pauses (no handoff yet)
+    - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; token budgets are reported; autonomy and branch protection are listed as not reported yet and join when those exist
+    - [x] Token budgets (R-1205): `agentTokenBudget` / `dailyTokenBudget` (global until profiles), usage read from the runtime transcript after each stop, 80 % notification, pause at 100 %
+    - [x] Review→fix loop and `maxReviewLoops` (R-114 second half, R-120): `Task.source`, `Agent.review_rounds`, review gate held for a human by open review tasks or too many rounds
+    - [x] Findings in `review.md` as Markdown (`### F01: title` + `- severity:` / `location:` / `fixed:` / `left:`), parsed by `xherd_flow::review`; the review gate is refused when malformed and held while major or blocker findings are not fixed (R-114); the UI lists them with a colour per severity
+    - [ ] `maxAutoApprovalsInRow` (R-120): with autonomy
   - [ ] Backups
   - [ ] Autonomy `important`
-  - [ ] PR follow-up
+  - [x] PR follow-up
+    - [x] Polling of a watching agent's PR: status, checks, mergeable (R-303); CI and conflict notifications (R-305); merged or closed finishes the agent (R-307); shown in the Pull request panel
+    - [x] Comments (R-304, R-1201): `pr-comments` host command, `pr-comments.json` with every body wrapped by `untrusted::wrap`, the agent queued with `/xherd:pr-review` in a fresh session, stage `pr-review` (gate on `pr-review.md`) then `/xherd:pr-apply`; flow `none` is only notified
+    - [x] Decisions and replies (R-306): `xherd_flow::pr_review` parses `pr-review.md`; the user decides fix / reply / skip with a note per comment in the Pull request panel (`PUT /agents/:id/pr-decisions`); approving the `pr-review` gate posts the `reply` answers through the host (`pr-reply`, marker appended, never twice) and writes `pr-decisions.json` for `pr-apply`. Separate `pr-triage` / `pr-replies` gates were not needed: one gate covers both
+    - [x] `pr-template` (R-153): `Host::pr_template` (built-in `github` reads the worktree's template files and folders, GitLab's too; no organisation defaults), looked up when the agent enters the ship stage, written to `pr-templates.json` for the `ship` prompt
+    - `pr.merged` hooks (R-307) belong to the stage-hook engine (R-401…R-404), listed under v1.x: nothing declares hooks until profiles or pack `stageHooks` exist
   - [ ] Notifications
   - [ ] Phones
 - [ ] **v1.x**
+  - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
+  - [ ] Repo profiles: move `sensitivePaths` and `maxDiffLines` (global since M4) into each profile, with the global values as defaults; add the profile's test command as a code tripwire (R-115)
   - [ ] Codex and opencode
   - [ ] Kanban / To review / Work log
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [ ] TODOs
-  - [ ] Budgets
+  - [ ] Budgets per profile and a cost estimate (token budgets are global since M4)
   - [ ] `never` autonomy
 - [ ] **Later**
   - [ ] ACP driver

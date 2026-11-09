@@ -74,6 +74,27 @@ pub struct Config {
     /// Identities by remote (`github.com/my-company`), over the global one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_identities: Vec<GitIdentity>,
+    /// A session running longer than this many minutes is ended and the agent
+    /// paused (R-1206). 0 = off.
+    pub max_session_minutes: u64,
+    /// Minutes between polls of a watched pull request (R-303); 0 = no polling.
+    pub pr_poll_minutes: u64,
+    /// Review→fix rounds after which the review gate is held for a human
+    /// (R-120 `maxReviewLoops`). 0 = no limit. Global until profiles.
+    pub max_review_loops: u32,
+    /// Token budget of one agent and of all agents per UTC day (R-1205). At
+    /// 80 % a notification; at 100 % the agent is paused at its next stop.
+    /// 0 = no budget.
+    pub agent_token_budget: u64,
+    pub daily_token_budget: u64,
+    /// Code gates hold a commit proposal with more changed lines than this
+    /// (R-115 `maxDiffLines`). Global until repo profiles exist.
+    pub max_diff_lines: usize,
+    /// Globs of sensitive paths: a commit proposal touching one is held
+    /// (R-115). `*` stays in a folder, `**` crosses folders, a pattern
+    /// without `/` matches the file name anywhere. Global until profiles.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sensitive_paths: Vec<String>,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -105,6 +126,13 @@ impl Default for Config {
             git_user_email: None,
             git_identities: Vec::new(),
             git_hosts: Vec::new(),
+            max_session_minutes: 0,
+            pr_poll_minutes: 5,
+            max_review_loops: 3,
+            agent_token_budget: 0,
+            daily_token_budget: 0,
+            max_diff_lines: 1000,
+            sensitive_paths: Vec::new(),
             extra: Map::new(),
         }
     }

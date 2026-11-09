@@ -47,6 +47,7 @@ pub fn spawn(d: Daemon, iv: Intervals) -> tokio::task::JoinHandle<()> {
                     d.reconcile().await;
                     d.sup.tick(TickKind::IdleCheck);
                     d.sup.tick(TickKind::ParkCheck);
+                    d.sup.tick(TickKind::SessionLimit);
                     // Reports queued while the daemon was unreachable but running.
                     if let Err(e) = d.replay_queue().await {
                         tracing::warn!(error = %e, "hook queue replay failed");

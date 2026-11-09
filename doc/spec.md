@@ -447,7 +447,7 @@ then stop and wait. If it exits with code 2, fix what it says and run it again.
 | R-506 | Settings resolution: manifest default → Settings → profile override (non-secret only). Secrets are global, stored in `secrets.json` (mode 0600), never sent to the UI (it only learns which are set), passed only on stdin to that plugin. |
 | R-507 | A broken plugin is listed with its error but cannot be chosen. |
 
-Host commands: `pr-for-branch {branch} → {url|null}`, `pr-status {url} → {state, number, url, mergeable?, reviewers?}`, `pr-checks {url} → [{name, bucket, link, workflow}]`, `pr-comments {url} → [{id, kind, author, body, url, createdAt, path?, line?, inReplyTo?}]`, `pr-reply {url, to, body} → {}`, `pr-template {} → [{path, name, body}]`. Runtime command: `usage {session, cwd, payload} → {input, output, cacheRead, cacheWrite, context}`. Event hooks receive `{event, agent, ticket, settings, secrets}`; output ignored.
+Host commands: `pr-for-branch {branch} → {url|null}`, `pr-status {url} → {state, number, url, mergeable?, reviewers?}`, `pr-checks {url} → [{name, bucket, link, workflow}]`, `pr-comments {url} → [{id, kind, author, body, url, createdAt, path?, line?, inReplyTo?}]`, `pr-reply {url, to, body} → {}`, `pr-template {} → [{path, name, body}]`. Runtime usage: a declarative `data.terminal.usage` (JSON pointers into the transcript lines and a name per standard counter `input`, `output`, `cacheWrite`, `cacheRead`; the transcript is found through `resume`), or, for runtimes whose transcripts are not JSON lines, a runtime command `usage {session, cwd, payload} → {input, output, cacheRead, cacheWrite, context}` (not built yet). Event hooks receive `{event, agent, ticket, settings, secrets}`; output ignored.
 
 ### 10.2 Runtime drivers
 

@@ -31,6 +31,14 @@ pub struct ConfigPatch {
     /// Replaces the list of identities by remote.
     pub git_identities: Option<Vec<GitIdentity>>,
     pub welcomed: Option<bool>,
+    pub max_session_minutes: Option<u64>,
+    pub pr_poll_minutes: Option<u64>,
+    pub max_review_loops: Option<u32>,
+    pub agent_token_budget: Option<u64>,
+    pub daily_token_budget: Option<u64>,
+    pub max_diff_lines: Option<usize>,
+    /// Replaces the list of sensitive path globs.
+    pub sensitive_paths: Option<Vec<String>>,
 }
 
 fn bad(message: impl Into<String>) -> ActionError {
@@ -102,6 +110,44 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             }
             c.plugin_settings.insert(name, v);
         }
+    }
+    if let Some(n) = p.pr_poll_minutes {
+        c.pr_poll_minutes = n;
+    }
+    if let Some(n) = p.max_review_loops {
+        c.max_review_loops = n;
+    }
+    if let Some(n) = p.agent_token_budget {
+        c.agent_token_budget = n;
+    }
+    if let Some(n) = p.daily_token_budget {
+        c.daily_token_budget = n;
+    }
+    if let Some(n) = p.max_session_minutes {
+        c.max_session_minutes = n;
+    }
+    if let Some(n) = p.max_diff_lines {
+        if !(1..=1_000_000).contains(&n) {
+            return Err(bad("maxDiffLines must be 1 to 1000000"));
+        }
+        c.max_diff_lines = n;
+    }
+    if let Some(globs) = p.sensitive_paths {
+        let mut out: Vec<String> = Vec::new();
+        for g in globs {
+            let g = g.trim();
+            if g.is_empty()
+                || g.len() > 200
+                || g.chars().any(char::is_control)
+                || g.starts_with('/')
+            {
+                return Err(bad("sensitivePaths: short relative globs, one per entry"));
+            }
+            if !out.iter().any(|o| o == g) {
+                out.push(g.to_string());
+            }
+        }
+        c.sensitive_paths = out;
     }
     if let Some(mut names) = p.disabled_plugins {
         names.sort();

@@ -8,6 +8,7 @@
   import { markRead } from '../lib/reads.svelte';
   import { route, go } from '../lib/router.svelte';
   import DiffLines from '../components/DiffLines.svelte';
+  import Findings from '../components/Findings.svelte';
 
   let { agent }: { agent: Agent } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -78,6 +79,7 @@
     {:else if doc && showDiff && changed}
       <div class="card"><DiffLines lines={lineDiff(doc.reviewed ?? '', doc.text)} /></div>
     {:else if parsed && rendered}
+      {#if doc?.path === 'review.md'}<Findings {agent} />{/if}
       <article class="paper">
         {#if parsed.meta.length}
           <div class="row" style="margin-bottom:12px">

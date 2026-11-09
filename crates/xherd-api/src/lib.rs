@@ -37,6 +37,12 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
+        .route("/api/v1/agents/{id}/findings", get(findings))
+        .route("/api/v1/agents/{id}/pr-review", get(pr_review))
+        .route(
+            "/api/v1/agents/{id}/pr-decisions",
+            axum::routing::put(put_pr_decisions),
+        )
         .route("/api/v1/agents/{id}/file", get(file))
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
         .route("/api/v1/agents/{id}/open", post(open_in))
@@ -47,6 +53,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/install", post(install))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
+        .route("/api/v1/security", get(security))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
@@ -411,6 +418,13 @@ async fn put_config(
     Ok(Json(d.save_config(patch)?))
 }
 
+async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {
+    Json(json!({
+        "findings": d.security_check(),
+        "pending": xherd_daemon::security::PENDING,
+    }))
+}
+
 async fn checks(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
     let env = |k: &str| std::env::var(k).ok();
     Ok(Json(json!({"checks": d.checks(&env).await})))
@@ -619,6 +633,42 @@ async fn diff(
     Ok(Json(
         d.diff(&id, q.view.as_deref(), q.commit.as_deref()).await?,
     ))
+}
+
+/// `GET /agents/:id/pr-review`: this round's PR comments, the agent's
+/// proposals and the user's decisions (R-306).
+async fn pr_review(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.pr_review(&id).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct DecisionsReq {
+    decisions: std::collections::BTreeMap<String, xherd_core::pr::Verdict>,
+}
+
+/// `PUT /agents/:id/pr-decisions`: replace the user's decisions on the
+/// comments of this round (R-306).
+async fn put_pr_decisions(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(req): Json<DecisionsReq>,
+) -> ApiResult<Json<Value>> {
+    d.set_pr_decisions(&id, req.decisions).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+/// `GET /agents/:id/findings`: the findings of `review.md`.
+async fn findings(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.findings(&id).await?))
 }
 
 /// `GET /agents/:id/docs`: the agent's documents, open gate's first.

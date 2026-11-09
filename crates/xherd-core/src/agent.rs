@@ -92,6 +92,39 @@ pub struct Agent {
     pub screen_blocked: bool,
     #[serde(default)]
     pub idle_alerted: bool,
+    /// When the current runtime session started (R-1206).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_since: Option<Millis>,
+    /// Tokens of earlier sessions, and of the current one (`tokens_session_id`),
+    /// read from the runtime's transcript (R-1205, `usage`).
+    #[serde(default)]
+    pub tokens_base: u64,
+    #[serde(default)]
+    pub tokens_session: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_session_id: Option<String>,
+    /// What the last poll of the pull request found (R-303): its state, the
+    /// rolled-up checks, whether failing checks and a merge conflict were
+    /// already announced, and when it was polled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<crate::pr::PrState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_ci: Option<crate::pr::Ci>,
+    #[serde(default)]
+    pub pr_ci_failed: bool,
+    #[serde(default)]
+    pub pr_conflict: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_polled_at: Option<Millis>,
+    /// Ids of the PR comments already handled or ignored (R-304).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pr_comments_seen: Vec<String>,
+    /// Times the agent came back to review after fixing (R-120).
+    #[serde(default)]
+    pub review_rounds: u32,
+    /// The 80 % budget warning was sent.
+    #[serde(default)]
+    pub budget_warned: bool,
 }
 
 impl Agent {
@@ -127,6 +160,18 @@ impl Agent {
             last_message: None,
             screen_blocked: false,
             idle_alerted: false,
+            session_since: None,
+            tokens_base: 0,
+            tokens_session: 0,
+            tokens_session_id: None,
+            budget_warned: false,
+            review_rounds: 0,
+            pr_state: None,
+            pr_comments_seen: Vec::new(),
+            pr_ci: None,
+            pr_ci_failed: false,
+            pr_conflict: false,
+            pr_polled_at: None,
         }
     }
 

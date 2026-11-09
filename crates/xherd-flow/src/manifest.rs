@@ -478,6 +478,7 @@ mod tests {
                 "implement",
                 "review",
                 "ship",
+                "pr-review",
                 "pr"
             ]
         );
@@ -485,7 +486,7 @@ mod tests {
         assert_eq!(f.stage("pr").unwrap().class, Class::HumanOnly);
         assert!(f.stage("implement").unwrap().is_commit_gate());
         assert_eq!(f.stage("design").unwrap().docs(), ["design.md"]);
-        assert_eq!(f.after("ship").unwrap().id, "pr");
+        assert_eq!(f.after("ship").unwrap().id, "pr-review");
         assert_eq!(p.install["claude-code"].slash_enters, 1);
     }
 

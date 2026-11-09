@@ -69,6 +69,8 @@ pub enum TickKind {
     ScreenScan,
     IdleCheck,
     ParkCheck,
+    /// `maxSessionMinutes` (R-1206).
+    SessionLimit,
     /// `recover`: the daemon just started, so a missing session means the
     /// terminal server went away with a container restart, not that the
     /// agent died; the agent is parked or resumed instead of failed.
@@ -89,6 +91,24 @@ pub enum WorkResult {
     },
     /// The host plugin's answer to `pr-for-branch` (R-302).
     PrLookup(Result<Option<String>, String>),
+    /// The host's answer to a poll of the pull request (R-303).
+    /// The host's answer to `pr-template` (R-153).
+    PrTemplates(Result<Vec<xherd_plugin::host::Template>, String>),
+    /// `None` comments: they could not be read (the status still counts).
+    PrPoll(
+        Result<
+            (
+                xherd_core::pr::Snapshot,
+                Option<Vec<xherd_core::pr::Comment>>,
+            ),
+            String,
+        >,
+    ),
+    /// Tokens of a runtime session, read from its transcript (R-1205).
+    Usage {
+        session: String,
+        tokens: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -135,6 +155,15 @@ pub struct ActorSettings {
     pub toolchain_install: bool,
     /// Longest a task's `verify:` command may run.
     pub verify_timeout: Duration,
+    /// Time between polls of a watched PR (R-303); zero = never.
+    pub pr_poll: Duration,
+    /// Code tripwires (R-115), from the config at daemon start.
+    pub max_session_minutes: u64,
+    pub max_review_loops: u32,
+    pub agent_token_budget: u64,
+    pub daily_token_budget: u64,
+    pub max_diff_lines: usize,
+    pub sensitive_paths: Vec<String>,
 }
 
 impl Default for ActorSettings {
@@ -149,6 +178,13 @@ impl Default for ActorSettings {
             screen_rules: None,
             toolchain_install: false,
             verify_timeout: VERIFY_TIMEOUT,
+            pr_poll: Duration::from_secs(300),
+            max_session_minutes: 0,
+            max_review_loops: 3,
+            agent_token_budget: 0,
+            daily_token_budget: 0,
+            max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
+            sensitive_paths: Vec::new(),
         }
     }
 }
@@ -173,6 +209,8 @@ pub struct Env {
     pub trust: Option<Arc<crate::TrustWriter>>,
     /// How to continue the runtime's last conversation, when it can.
     pub resume: Option<Arc<crate::Resumer>>,
+    /// How to read token usage from the runtime's transcript (R-1205).
+    pub usage: Option<Arc<xherd_plugin::runtime::Usage>>,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -405,8 +443,11 @@ impl Actor {
                     }
                 }
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
-                // Token usage, auto-approval, parking: later milestones.
-                Effect::AfterStop => self.after_ship().await,
+                // Auto-approval: with autonomy (M4).
+                Effect::AfterStop => {
+                    self.measure_usage();
+                    self.after_ship().await;
+                }
             }
         }
         if result == ReportResult::Applied && r.event == ReportEvent::SessionStart {
@@ -419,6 +460,231 @@ impl Actor {
             self.send_first_prompt().await;
         }
         result
+    }
+
+    /// Read the session's tokens from the runtime's transcript (slow: spawned,
+    /// back as `WorkDone`). Cumulative, so a dropped result is made up by the
+    /// next stop. Without a session id or a runtime that has transcripts there
+    /// is nothing to measure.
+    fn measure_usage(&self) {
+        let (Some(session), Some(r), Some(usage)) = (
+            self.agent.session.clone(),
+            self.env.resume.clone(),
+            self.env.usage.clone(),
+        ) else {
+            return;
+        };
+        let env = |v: &str| std::env::var(v).ok();
+        let Some(path) = r.transcript(&session, &env) else {
+            return;
+        };
+        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        tokio::spawn(async move {
+            let tokens = tokio::task::spawn_blocking(move || {
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .map(|t| usage.totals(&t).budget_tokens())
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(tokens) = tokens {
+                let _ = tx.send(Msg::WorkDone {
+                    generation,
+                    result: WorkResult::Usage { session, tokens },
+                });
+            }
+        });
+    }
+
+    /// Poll the pull request of a watching agent through the host plugin when
+    /// `prPollMinutes` have passed (R-303; slow: spawned, back as `WorkDone`).
+    /// Comments come with the rest of PR follow-up.
+    fn poll_pr(&mut self) {
+        let every = self.env.settings.pr_poll;
+        let now = self.now();
+        let due = self
+            .agent
+            .pr_polled_at
+            .is_none_or(|t| now - t >= every.as_millis() as i64);
+        let (Some(host), Ok(wd), Some(url), true) = (
+            self.env.host.clone(),
+            self.workdir(),
+            self.agent.pr_url.clone(),
+            self.agent.status == Status::Watching && !every.is_zero() && due,
+        ) else {
+            return;
+        };
+        // Set here so a slow host is not asked again by the next tick.
+        self.agent.pr_polled_at = Some(now);
+        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        tokio::spawn(async move {
+            let result = match host.pr_snapshot(&wd, &url).await {
+                Ok(snap) => {
+                    let comments = host
+                        .pr_comments(&wd, &url)
+                        .await
+                        .map_err(|e| tracing::warn!(error = %e, "PR comments not read"))
+                        .ok();
+                    Ok((snap, comments))
+                }
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::PrPoll(result),
+            });
+        });
+    }
+
+    /// What a poll found: tell the user what is new (R-305) and finish the
+    /// agent when the PR was merged or closed (R-307).
+    async fn on_pr_poll(
+        &mut self,
+        snap: xherd_core::pr::Snapshot,
+        comments: Option<Vec<xherd_core::pr::Comment>>,
+    ) {
+        use xherd_core::pr::{Event, PrState};
+        let before = self.agent.status;
+        let name = self.agent.name.clone();
+        for e in self.agent.apply_pr(&snap) {
+            let text = match e {
+                Event::Finished(state) => {
+                    self.agent.fire(Trigger::PrFinished, self.now());
+                    let what = if state == PrState::Merged {
+                        "merged"
+                    } else {
+                        "closed"
+                    };
+                    self.log(None, "pr-finished", Some(json!({"state": what})))
+                        .await;
+                    format!("{name}: the pull request was {what}")
+                }
+                Event::CiFailing(names) => {
+                    format!("{name}: checks are failing: {}", names.join(", "))
+                }
+                Event::CiPassingAgain => format!("{name}: all checks pass again"),
+                Event::Conflict => format!("{name}: the pull request has a merge conflict"),
+            };
+            self.notify(text);
+        }
+        if self.agent.status == Status::Watching
+            && let Some(all) = comments
+        {
+            let fresh = self.agent.new_comments(&all);
+            if !fresh.is_empty() {
+                self.on_new_comments(fresh).await;
+            }
+        }
+        self.commit(before).await;
+    }
+
+    /// New comments on the pull request (R-304): save them for the agent in
+    /// `pr-comments.json` (each body in an untrusted block, R-1201) and queue
+    /// it with the pack's PR review command, in a fresh session. Without a
+    /// flow (flow `none`) the user is only told.
+    async fn on_new_comments(&mut self, fresh: Vec<xherd_core::pr::Comment>) {
+        let n = fresh.len();
+        let name = self.agent.name.clone();
+        let written = self.write_pr_comments(&fresh);
+        let command = self.pack_command("prReview");
+        if let Err(e) = &written {
+            // Not handled: they are new again at the next poll.
+            self.agent
+                .pr_comments_seen
+                .retain(|id| !fresh.iter().any(|c| &c.id == id));
+            tracing::warn!(agent = %name, error = %e, "pr-comments.json not written");
+            return;
+        }
+        self.log(None, "pr-comments", Some(json!({"count": n})))
+            .await;
+        let s = if n == 1 { "" } else { "s" };
+        match command {
+            Some(cmd) => {
+                self.agent.next_prompt = Some(cmd);
+                self.agent.fire(Trigger::PrComments, self.now());
+                self.notify(format!(
+                    "{name}: {n} new PR comment{s}; the agent will triage them"
+                ));
+            }
+            None => self.notify(format!("{name}: {n} new PR comment{s}")),
+        }
+    }
+
+    /// `.xherd/spec/pr-comments.json`: `{"comments": [...]}` with every body
+    /// wrapped as untrusted data. Replaced each time: the agent is queued
+    /// right after, and polling resumes only when it is watching again.
+    fn write_pr_comments(&self, fresh: &[xherd_core::pr::Comment]) -> Result<(), String> {
+        let dir = self
+            .workdir()
+            .map_err(|e| e.message)?
+            .join(xherd_flow::xap::SPEC_DIR);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        crate::pr_round::start_round(self.workdir().map_err(|e| e.message)?.as_path(), fresh)?;
+        let comments: Vec<_> = fresh
+            .iter()
+            .map(|c| {
+                let mut c = c.clone();
+                c.body =
+                    xherd_core::untrusted::wrap(&format!("PR comment by {}", c.author), &c.body);
+                c
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&json!({"comments": comments}))
+            .map_err(|e| e.to_string())?;
+        xherd_core::paths::write_atomic(&dir.join("pr-comments.json"), text.as_bytes(), None)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Add a measurement to the agent and the day's total, then check the
+    /// budgets (R-1205): a notification at 80 %, a pause at 100 % (this is the
+    /// agent's stop, so "at its next stop" is now).
+    async fn on_usage(&mut self, session: &str, tokens: u64) {
+        use xherd_core::usage::{Level, day, level};
+        let delta = self.agent.record_usage(session, tokens);
+        let today = day(self.now());
+        if delta > 0
+            && let Err(e) = self.env.store.add_usage("all", &today, delta).await
+        {
+            tracing::warn!(agent = %self.agent.name, %e, "usage not stored");
+        }
+        let daily = self.env.store.usage("all", &today).await.unwrap_or(0);
+        let s = &self.env.settings;
+        let checks = [
+            ("agent", self.agent.tokens_total(), s.agent_token_budget),
+            ("daily", daily, s.daily_token_budget),
+        ];
+        let before = self.agent.status;
+        let hit = checks
+            .iter()
+            .find(|(_, used, budget)| level(*used, *budget) == Level::Exceeded);
+        if let Some((scope, used, budget)) = hit {
+            if next_status(self.agent.status, Trigger::Pause).is_some() {
+                self.end_session().await;
+                self.agent.fire(Trigger::Pause, self.now());
+                self.log(
+                    None,
+                    "budget-exhausted",
+                    Some(json!({"scope": scope, "used": used, "budget": budget})),
+                )
+                .await;
+                self.notify(format!(
+                    "{} paused: the {scope} token budget is used up ({used} of {budget})",
+                    self.agent.name
+                ));
+            }
+        } else if !self.agent.budget_warned
+            && let Some((scope, used, budget)) = checks
+                .iter()
+                .find(|(_, used, budget)| level(*used, *budget) == Level::Warn)
+        {
+            self.agent.budget_warned = true;
+            self.notify(format!(
+                "{}: 80% of the {scope} token budget is used ({used} of {budget})",
+                self.agent.name
+            ));
+        }
+        self.commit(before).await;
     }
 
     /// After ship (R-301): an agent following a flow that stopped with its PR
@@ -540,9 +806,11 @@ impl Actor {
         if self.env.store.event_exists(&call.id).await.unwrap_or(false) {
             return Ok(json!({"changed": false, "duplicate": true}));
         }
-        self.secret_tripwire(&mut call.cmd).await;
+        self.commit_tripwires(&mut call.cmd).await;
         let packs = self.env.packs.clone();
         let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
+        self.review_hold(&mut call.cmd, pack)?;
+        self.pr_review_check(&call.cmd)?;
         let obs = self.observe(pack, &call.cmd).await?;
         let (before, now) = (self.agent.status, self.now());
         let changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
@@ -560,31 +828,193 @@ impl Actor {
         )
         .await;
         self.write_progress(&call.cmd);
+        if let XapCmd::StageEnter { stage, .. } = &call.cmd
+            && self.stage_role(pack, stage) == Some(xherd_core::domain::Role::Ship)
+        {
+            self.fetch_templates();
+        }
         if changed {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
     }
 
-    /// Secret tripwire (R-117): a commit proposal whose diff looks like it
-    /// holds a secret is held for a human (`needs_human`, masked). Reads the
-    /// diff only; a failing git leaves the proposal as it was.
-    async fn secret_tripwire(&self, cmd: &mut XapCmd) {
+    /// Approving the `pr-review` gate (R-306): settle one decision per comment
+    /// (the user's over the agent's), post the replies decided `reply` through
+    /// the host with xherd's marker, remembering each so a retry never posts
+    /// twice, and write the final decisions for `pr-apply`. A failed post
+    /// refuses the approval: nothing else changes. Inline, like
+    /// `commit_for_user`: the user waits for the answer.
+    async fn publish_pr_decisions(&self, wd: &Path) -> Result<(), ActionError> {
+        use xherd_core::pr::{Decision, MARKER};
+        let comments = crate::pr_round::load_comments(wd);
+        if comments.is_empty() {
+            // No round of comments (an agent started the stage by itself).
+            return Ok(());
+        }
+        let proposals = crate::pr_round::load_proposals(wd).map_err(|e| refuse("doc_schema", e))?;
+        let mut state = crate::pr_round::load_overrides(wd);
+        let verdicts = xherd_core::pr::decide(&comments, &proposals, &state.overrides)
+            .map_err(|e| refuse("pr_decisions", e))?;
+        for v in verdicts.iter().filter(|v| v.decision == Decision::Reply) {
+            if state.posted.contains(&v.id) {
+                continue;
+            }
+            let (Some(host), Some(url)) = (self.env.host.clone(), self.agent.pr_url.clone()) else {
+                return Err(refuse(
+                    "no_host",
+                    "no host plugin or pull request to reply on",
+                ));
+            };
+            let body = format!(
+                "{}\n\n{MARKER}",
+                v.reply.as_deref().unwrap_or_default().trim()
+            );
+            host.pr_reply(wd, &url, &v.id, &body)
+                .await
+                .map_err(|e| refuse("reply_failed", format!("reply to {}: {e}", v.id)))?;
+            state.posted.push(v.id.clone());
+            crate::pr_round::save_overrides(wd, &state).map_err(|e| refuse("io", e))?;
+        }
+        crate::pr_round::write_decisions(wd, &verdicts, &state.posted).map_err(|e| refuse("io", e))
+    }
+
+    /// `gate open pr-review` (R-306): `pr-review.md` must decide every comment
+    /// of the round, in the format, with a text for each reply (`doc_schema`
+    /// otherwise), so the user is never shown an incomplete plan.
+    fn pr_review_check(&self, cmd: &XapCmd) -> Result<(), Refusal> {
+        let XapCmd::GateOpen { stage, .. } = cmd else {
+            return Ok(());
+        };
+        if stage != xherd_flow::pr_review::STAGE {
+            return Ok(());
+        }
+        let wd = self.workdir()?;
+        let proposals = crate::pr_round::load_proposals(&wd)
+            .map_err(|e| xherd_core::xap::refuse("doc_schema", e))?;
+        let comments = crate::pr_round::load_comments(&wd);
+        if comments.is_empty() {
+            return Ok(());
+        }
+        xherd_core::pr::decide(&comments, &proposals, &Default::default())
+            .map(|_| ())
+            .map_err(|e| xherd_core::xap::refuse("doc_schema", format!("pr-review.md: {e}")))
+    }
+
+    fn stage_role(
+        &self,
+        pack: Option<&xherd_flow::Pack>,
+        stage: &str,
+    ) -> Option<xherd_core::domain::Role> {
+        pack.zip(self.agent.flow.as_deref())
+            .and_then(|(p, f)| p.flow(f))
+            .and_then(|f| f.stage(stage))
+            .map(|s| s.role)
+    }
+
+    /// The repository's pull-request templates through the host plugin
+    /// (R-153; spawned, back as `WorkDone`), for the `ship` prompt.
+    fn fetch_templates(&self) {
+        let (Some(host), Ok(wd)) = (self.env.host.clone(), self.workdir()) else {
+            return;
+        };
+        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        tokio::spawn(async move {
+            let result = host.pr_template(&wd).await.map_err(|e| e.to_string());
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::PrTemplates(result),
+            });
+        });
+    }
+
+    /// Review gate (R-114, R-120): `review.md` must have well-formed findings
+    /// (`doc_schema` otherwise); the gate is held for a human while major or
+    /// blocker findings are not fixed, review-sourced tasks are open, or the
+    /// review→fix loop ran past `maxReviewLoops`.
+    fn review_hold(
+        &self,
+        cmd: &mut XapCmd,
+        pack: Option<&xherd_flow::Pack>,
+    ) -> Result<(), Refusal> {
+        use xherd_core::domain::{Role, TaskSource, TaskStatus};
+        let XapCmd::GateOpen {
+            stage, needs_human, ..
+        } = cmd
+        else {
+            return Ok(());
+        };
+        let is_review = pack
+            .zip(self.agent.flow.as_deref())
+            .and_then(|(p, f)| p.flow(f))
+            .and_then(|f| f.stage(stage))
+            .is_some_and(|s| s.role == Role::Review);
+        if !is_review {
+            return Ok(());
+        }
+        // Without a review.md the gate refuses on its own (`doc_missing`).
+        let path = self
+            .workdir()?
+            .join(xherd_flow::xap::SPEC_DIR)
+            .join("review.md");
+        let findings = match std::fs::read_to_string(path) {
+            Ok(text) => xherd_flow::review::parse(&text)
+                .map_err(|e| xherd_core::xap::refuse("doc_schema", e))?,
+            Err(_) => Vec::new(),
+        };
+        let open_findings: Vec<String> =
+            xherd_flow::review::open_findings(&findings, &self.agent.tasks)
+                .iter()
+                .map(|f| format!("{} ({})", f.id, f.severity.label()))
+                .collect();
+        let open: Vec<&str> = self
+            .agent
+            .tasks
+            .iter()
+            .filter(|t| t.source == TaskSource::Review && t.status != TaskStatus::Done)
+            .map(|t| t.id.as_str())
+            .collect();
+        let max = self.env.settings.max_review_loops;
+        if let Some(why) = xherd_core::tripwire::review_summary(
+            &open_findings,
+            &open,
+            self.agent.review_rounds,
+            max,
+        ) {
+            *needs_human = Some(match needs_human.take() {
+                Some(own) => format!("{own}; {why}"),
+                None => why,
+            });
+        }
+        Ok(())
+    }
+
+    /// Tripwires on a commit proposal: secret (R-117), sensitive paths and diff size (R-115). Any hit holds it for a human (`needs_human`,
+    /// masked). Reads the diff only; a failing git skips the diff checks.
+    async fn commit_tripwires(&self, cmd: &mut XapCmd) {
         let XapCmd::CommitPropose {
             files, needs_human, ..
         } = cmd
         else {
             return;
         };
-        let Ok(wd) = self.workdir() else { return };
-        let diff = match self.env.git.diff_proposed(&wd, files).await {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::debug!(agent = %self.agent.name, %e, "secret tripwire: no diff");
-                return;
+        use xherd_core::tripwire as tw;
+        let mut hits = Vec::new();
+        let st = &self.env.settings;
+        hits.extend(tw::sensitive_summary(files, &st.sensitive_paths));
+        if let Ok(wd) = self.workdir() {
+            match self.env.git.diff_proposed(&wd, files).await {
+                Ok(diff) => {
+                    hits.extend(tw::summary(&tw::scan_diff(&diff)));
+                    hits.extend(tw::size_summary(&diff, st.max_diff_lines));
+                }
+                Err(e) => {
+                    tracing::debug!(agent = %self.agent.name, %e, "commit tripwires: no diff");
+                }
             }
-        };
-        if let Some(why) = xherd_core::tripwire::summary(&xherd_core::tripwire::scan_diff(&diff)) {
+        }
+        if !hits.is_empty() {
+            let why = hits.join("; ");
             *needs_human = Some(match needs_human.take() {
                 Some(own) => format!("{own}; {why}"),
                 None => why,
@@ -1030,7 +1460,9 @@ impl Actor {
             .driver
             .start(&ctx, &self.session_argv(argv))
             .await
-            .map_err(|e| refuse("driver", e.0))
+            .map_err(|e| refuse("driver", e.0))?;
+        self.agent.session_since = Some(self.now());
+        Ok(())
     }
 
     /// The argv of a new session: the runtime, wrapped in `xherd toolchain
@@ -1188,6 +1620,11 @@ impl Actor {
                 "changed_since_read",
                 format!("{f} changed since you read it; read it again before approving"),
             ));
+        }
+        if let Gate::Docs { stage, .. } = &gate
+            && stage == xherd_flow::pr_review::STAGE
+        {
+            self.publish_pr_decisions(&wd).await?;
         }
         let next = self.next_command(&wd, &gate)?;
         let now = self.now();
@@ -1359,6 +1796,7 @@ impl Actor {
             .map_err(|e| refuse("driver", e.0))?;
         self.delivery = None;
         self.agent.session = None;
+        self.agent.session_since = Some(self.now());
         self.agent.next_prompt = Some(cmd.to_string());
         self.log(None, "fresh-session", Some(json!({"next": cmd})))
             .await;
@@ -1385,14 +1823,22 @@ impl Actor {
     }
 
     fn resume_command(&self) -> Option<String> {
+        self.pack_command("resume")
+    }
+
+    /// The pack's command `key` (`resume`, `prReview`…) for the agent's
+    /// runtime; `None` for flow `none` or a pack without it.
+    fn pack_command(&self, key: &str) -> Option<String> {
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
         let runtime = self
             .agent
             .runtime
             .as_deref()
             .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
-        pack.command(runtime, pack.commands.get("resume")?, &[])
-            .map_err(|e| tracing::warn!(agent = %self.agent.name, error = %e, "no resume command"))
+        pack.command(runtime, pack.commands.get(key)?, &[])
+            .map_err(
+                |e| tracing::warn!(agent = %self.agent.name, key, error = %e, "no pack command"),
+            )
             .ok()
     }
 
@@ -1577,6 +2023,27 @@ impl Actor {
                     self.commit(before).await;
                 }
             }
+            TickKind::SessionLimit => {
+                let m = self.env.settings.max_session_minutes;
+                if m > 0
+                    && self.agent.status.is_live()
+                    && self
+                        .agent
+                        .session_since
+                        .is_some_and(|s| now - s >= minutes(m))
+                {
+                    // No handoff yet (R-026): pause just ends the session.
+                    self.end_session().await;
+                    self.agent.fire(Trigger::Pause, now);
+                    self.log(None, "session-limit", Some(json!({"minutes": m})))
+                        .await;
+                    self.notify(format!(
+                        "{} paused: its session ran longer than {m} min",
+                        self.agent.name
+                    ));
+                    self.commit(before).await;
+                }
+            }
             TickKind::ParkCheck => {
                 let m = self.env.settings.gate_park_minutes;
                 if self.agent.status == Status::WaitingInput
@@ -1620,7 +2087,8 @@ impl Actor {
                     });
                 }
             }
-            TickKind::TodoTick | TickKind::PrPoll => {}
+            TickKind::PrPoll => self.poll_pr(),
+            TickKind::TodoTick => {}
         }
     }
 
@@ -1646,6 +2114,34 @@ impl Actor {
                 };
                 self.on_report(r, Origin::Daemon).await;
             }
+            WorkResult::PrTemplates(Ok(list)) => {
+                // Always written, empty included: "none" is an answer.
+                let written = self.workdir().map_err(|e| e.message).and_then(|wd| {
+                    let text = serde_json::to_string_pretty(&json!({"templates": list}))
+                        .map_err(|e| e.to_string())?;
+                    let dir = wd.join(xherd_flow::xap::SPEC_DIR);
+                    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                    xherd_core::paths::write_atomic(
+                        &dir.join("pr-templates.json"),
+                        text.as_bytes(),
+                        None,
+                    )
+                    .map_err(|e| e.to_string())
+                });
+                if let Err(e) = written {
+                    tracing::warn!(agent = %self.agent.name, error = %e, "pr-templates.json not written");
+                }
+            }
+            WorkResult::PrTemplates(Err(e)) => {
+                tracing::warn!(agent = %self.agent.name, error = %e, "PR templates lookup failed");
+            }
+            WorkResult::PrPoll(Ok((snap, comments))) => self.on_pr_poll(snap, comments).await,
+            WorkResult::PrPoll(Err(e)) => {
+                tracing::warn!(agent = %self.agent.name, error = %e, "PR poll failed");
+                self.log(None, "pr-poll-failed", Some(json!({"error": e})))
+                    .await;
+            }
+            WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
             WorkResult::PrLookup(Ok(None)) => {}
             WorkResult::PrLookup(Ok(Some(url))) => {
                 let before = self.agent.status;
