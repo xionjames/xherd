@@ -2127,3 +2127,49 @@ async fn a_user_decision_overrides_the_proposal() {
     assert_eq!(v["decisions"][0]["decision"], "skip");
     assert_eq!(v["decisions"][0]["note"], "not worth an answer");
 }
+
+#[tokio::test]
+async fn entering_ship_writes_the_repositorys_pr_templates() {
+    let t = setup().await;
+    let file = t.wt.path().join(".xherd/spec/pr-templates.json");
+    let read = || async {
+        for _ in 0..400 {
+            if let Ok(s) = std::fs::read_to_string(&file) {
+                return serde_json::from_str::<Value>(&s).unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("pr-templates.json was not written");
+    };
+
+    // No template: an empty list is still an answer.
+    xap(&t, "t1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    assert_eq!(read().await["templates"], json!([]));
+
+    std::fs::create_dir_all(t.wt.path().join(".github")).unwrap();
+    std::fs::write(
+        t.wt.path().join(".github/pull_request_template.md"),
+        "## Summary\n- [ ] tests\n",
+    )
+    .unwrap();
+    std::fs::remove_file(&file).unwrap();
+    xap(&t, "t2", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    let v = read().await;
+    assert_eq!(
+        v["templates"][0]["path"],
+        ".github/pull_request_template.md"
+    );
+    assert_eq!(v["templates"][0]["body"], "## Summary\n- [ ] tests\n");
+
+    // Other stages look nothing up.
+    std::fs::remove_file(&file).unwrap();
+    xap(&t, "t3", "stage.enter", json!({"stage": "implement"}))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!file.exists());
+}

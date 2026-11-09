@@ -92,6 +92,8 @@ pub enum WorkResult {
     /// The host plugin's answer to `pr-for-branch` (R-302).
     PrLookup(Result<Option<String>, String>),
     /// The host's answer to a poll of the pull request (R-303).
+    /// The host's answer to `pr-template` (R-153).
+    PrTemplates(Result<Vec<xherd_plugin::host::Template>, String>),
     /// `None` comments: they could not be read (the status still counts).
     PrPoll(
         Result<
@@ -826,6 +828,11 @@ impl Actor {
         )
         .await;
         self.write_progress(&call.cmd);
+        if let XapCmd::StageEnter { stage, .. } = &call.cmd
+            && self.stage_role(pack, stage) == Some(xherd_core::domain::Role::Ship)
+        {
+            self.fetch_templates();
+        }
         if changed {
             self.commit(before).await;
         }
@@ -892,6 +899,33 @@ impl Actor {
         xherd_core::pr::decide(&comments, &proposals, &Default::default())
             .map(|_| ())
             .map_err(|e| xherd_core::xap::refuse("doc_schema", format!("pr-review.md: {e}")))
+    }
+
+    fn stage_role(
+        &self,
+        pack: Option<&xherd_flow::Pack>,
+        stage: &str,
+    ) -> Option<xherd_core::domain::Role> {
+        pack.zip(self.agent.flow.as_deref())
+            .and_then(|(p, f)| p.flow(f))
+            .and_then(|f| f.stage(stage))
+            .map(|s| s.role)
+    }
+
+    /// The repository's pull-request templates through the host plugin
+    /// (R-153; spawned, back as `WorkDone`), for the `ship` prompt.
+    fn fetch_templates(&self) {
+        let (Some(host), Ok(wd)) = (self.env.host.clone(), self.workdir()) else {
+            return;
+        };
+        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        tokio::spawn(async move {
+            let result = host.pr_template(&wd).await.map_err(|e| e.to_string());
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::PrTemplates(result),
+            });
+        });
     }
 
     /// Review gate (R-114, R-120): `review.md` must have well-formed findings
@@ -2079,6 +2113,27 @@ impl Actor {
                     at: self.now(),
                 };
                 self.on_report(r, Origin::Daemon).await;
+            }
+            WorkResult::PrTemplates(Ok(list)) => {
+                // Always written, empty included: "none" is an answer.
+                let written = self.workdir().map_err(|e| e.message).and_then(|wd| {
+                    let text = serde_json::to_string_pretty(&json!({"templates": list}))
+                        .map_err(|e| e.to_string())?;
+                    let dir = wd.join(xherd_flow::xap::SPEC_DIR);
+                    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                    xherd_core::paths::write_atomic(
+                        &dir.join("pr-templates.json"),
+                        text.as_bytes(),
+                        None,
+                    )
+                    .map_err(|e| e.to_string())
+                });
+                if let Err(e) = written {
+                    tracing::warn!(agent = %self.agent.name, error = %e, "pr-templates.json not written");
+                }
+            }
+            WorkResult::PrTemplates(Err(e)) => {
+                tracing::warn!(agent = %self.agent.name, error = %e, "PR templates lookup failed");
             }
             WorkResult::PrPoll(Ok((snap, comments))) => self.on_pr_poll(snap, comments).await,
             WorkResult::PrPoll(Err(e)) => {

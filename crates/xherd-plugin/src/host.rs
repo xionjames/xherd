@@ -11,6 +11,78 @@ use xherd_core::pr::{CheckRun, Comment, Mergeable, PrState, Snapshot};
 
 use crate::{Context, Plugin, PluginError, run_command};
 
+/// A pull-request template of the repository (R-153).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Template {
+    /// Relative to the worktree.
+    pub path: String,
+    pub name: String,
+    pub body: String,
+}
+
+const TEMPLATE_FILES: &[&str] = &[
+    ".github/pull_request_template.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    "docs/pull_request_template.md",
+    "docs/PULL_REQUEST_TEMPLATE.md",
+    "pull_request_template.md",
+    "PULL_REQUEST_TEMPLATE.md",
+];
+const TEMPLATE_DIRS: &[&str] = &[
+    ".github/PULL_REQUEST_TEMPLATE",
+    ".gitlab/merge_request_templates",
+];
+const TEMPLATE_MAX_BYTES: u64 = 64 * 1024;
+const TEMPLATE_MAX: usize = 20;
+
+/// The templates the repository itself carries: GitHub's file locations and
+/// folder, and GitLab's merge request templates. Plain files only (a symlink
+/// could point out of the worktree) and none over 64 KiB. Organisation-wide
+/// defaults live on the host, not here.
+pub fn local_templates(dir: &Path) -> Vec<Template> {
+    let mut found: Vec<String> = TEMPLATE_FILES.iter().map(|s| s.to_string()).collect();
+    for d in TEMPLATE_DIRS {
+        let mut names: Vec<String> = std::fs::read_dir(dir.join(d))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.ends_with(".md"))
+            .collect();
+        names.sort();
+        found.extend(names.into_iter().map(|n| format!("{d}/{n}")));
+    }
+    let mut out: Vec<Template> = Vec::new();
+    for rel in found {
+        let path = dir.join(&rel);
+        let plain = path
+            .symlink_metadata()
+            .is_ok_and(|m| m.is_file() && m.len() <= TEMPLATE_MAX_BYTES);
+        let Some(body) = plain.then(|| std::fs::read_to_string(&path).ok()).flatten() else {
+            continue;
+        };
+        let name = rel
+            .rsplit('/')
+            .next()
+            .unwrap_or(&rel)
+            .trim_end_matches(".md")
+            .to_string();
+        // A case-insensitive filesystem lists one file under both spellings.
+        if out.iter().any(|t| t.path.eq_ignore_ascii_case(&rel)) {
+            continue;
+        }
+        out.push(Template {
+            path: rel,
+            name,
+            body,
+        });
+        if out.len() == TEMPLATE_MAX {
+            break;
+        }
+    }
+    out
+}
+
 /// The host plugin used for pull requests (v1 supports GitHub only).
 pub const GITHUB: &str = "github";
 
@@ -219,6 +291,18 @@ impl Host {
         Ok(())
     }
 
+    /// `pr-template {} → [{path, name, body}]` (R-153): the repository's
+    /// pull-request templates. Built-in `github` reads the files of the
+    /// worktree (it does not look up organisation defaults).
+    pub async fn pr_template(&self, dir: &Path) -> Result<Vec<Template>, PluginError> {
+        let name = "pr-template";
+        if self.plugin.builtin() {
+            return Ok(local_templates(dir));
+        }
+        let v = run_command(&self.plugin, name, json!({"worktree": dir}), &self.ctx).await?;
+        serde_json::from_value(v).map_err(|e| self.shape(name, &e.to_string()))
+    }
+
     fn json(&self, name: &str, bytes: &[u8]) -> Result<Value, PluginError> {
         serde_json::from_slice(bytes).map_err(|e| PluginError::BadJson {
             plugin: self.plugin.name().into(),
@@ -398,6 +482,45 @@ fn github_comment(kind: &str, v: &Value) -> Option<Comment> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn templates_are_found_where_hosts_look() {
+        let d = tempfile::tempdir().unwrap();
+        let w = |p: &str, t: &str| {
+            let f = d.path().join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, t).unwrap();
+        };
+        assert!(local_templates(d.path()).is_empty());
+        w(
+            ".github/pull_request_template.md",
+            "## Summary\n- [ ] tests\n",
+        );
+        w(".github/PULL_REQUEST_TEMPLATE/bug.md", "## Bug\n");
+        w(".github/PULL_REQUEST_TEMPLATE/feature.md", "## Feature\n");
+        w(".github/PULL_REQUEST_TEMPLATE/notes.txt", "not markdown");
+        w(".gitlab/merge_request_templates/Default.md", "## MR\n");
+        let t = local_templates(d.path());
+        let names: Vec<_> = t.iter().map(|t| t.path.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                ".github/pull_request_template.md",
+                ".github/PULL_REQUEST_TEMPLATE/bug.md",
+                ".github/PULL_REQUEST_TEMPLATE/feature.md",
+                ".gitlab/merge_request_templates/Default.md",
+            ]
+        );
+        assert_eq!(
+            (t[0].name.as_str(), t[0].body.as_str()),
+            ("pull_request_template", "## Summary\n- [ ] tests\n")
+        );
+        // Too large, and a symlink out of the worktree: skipped.
+        w("docs/pull_request_template.md", &"x".repeat(70_000));
+        std::os::unix::fs::symlink("/etc/hosts", d.path().join("pull_request_template.md"))
+            .unwrap();
+        assert_eq!(local_templates(d.path()).len(), 4);
+    }
 
     #[test]
     fn pr_urls() {

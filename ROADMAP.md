@@ -79,7 +79,8 @@ by theme; update it together with them.
 - [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel
 - [x] PR comments into the agent (R-304): new comments saved wrapped as untrusted data, agent queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
 - [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
-- [ ] PR follow-up, rest: `pr.merged` stage hooks, `pr-template` (R-153)
+- [x] `pr-template` (R-153): templates looked up on entering the ship stage, `pr-templates.json` read by the `ship` prompt
+- [ ] Stage hooks (R-401…R-404), including `pr.merged` (R-307): v1.x, with profiles / pack `stageHooks`
 - [ ] Notifications (browser, desktop, ntfy) and phones
 
 ## v1.x
