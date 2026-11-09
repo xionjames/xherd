@@ -186,8 +186,14 @@ title, and a bullet list:
 ```
 
 `decision` is `fix`, `reply` or `skip`; `reason` says why; `reply` is the
-drafted answer, for `reply` decisions and optionally for `fix`. Comments of one
-thread share a heading. Fixes become tasks with `source: pr`.
+drafted answer: required for `reply` (xherd posts it when the user approves,
+marked as sent by xherd), an optional draft for `fix` (not posted). Every
+comment of `pr-comments.json` needs a heading with its id: xherd refuses
+`gate open pr-review` otherwise, and when a decision lacks its keyword or a
+`reply` lacks its text. The user can change decisions before approving;
+xherd then writes the final ones, with what it posted, to
+`.xherd/spec/pr-decisions.json` for `pr-apply`. Fixes become tasks with
+`source: pr`.
 
 ## pr.md
 

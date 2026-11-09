@@ -7,6 +7,7 @@ pub mod frontmatter;
 pub mod install;
 pub mod manifest;
 pub mod memory;
+pub mod pr_review;
 pub mod progress;
 pub mod review;
 pub mod tasks;

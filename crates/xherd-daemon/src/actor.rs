@@ -618,6 +618,7 @@ impl Actor {
             .map_err(|e| e.message)?
             .join(xherd_flow::xap::SPEC_DIR);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        crate::pr_round::start_round(self.workdir().map_err(|e| e.message)?.as_path(), fresh)?;
         let comments: Vec<_> = fresh
             .iter()
             .map(|c| {
@@ -807,6 +808,7 @@ impl Actor {
         let packs = self.env.packs.clone();
         let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
         self.review_hold(&mut call.cmd, pack)?;
+        self.pr_review_check(&call.cmd)?;
         let obs = self.observe(pack, &call.cmd).await?;
         let (before, now) = (self.agent.status, self.now());
         let changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
@@ -828,6 +830,68 @@ impl Actor {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
+    }
+
+    /// Approving the `pr-review` gate (R-306): settle one decision per comment
+    /// (the user's over the agent's), post the replies decided `reply` through
+    /// the host with xherd's marker, remembering each so a retry never posts
+    /// twice, and write the final decisions for `pr-apply`. A failed post
+    /// refuses the approval: nothing else changes. Inline, like
+    /// `commit_for_user`: the user waits for the answer.
+    async fn publish_pr_decisions(&self, wd: &Path) -> Result<(), ActionError> {
+        use xherd_core::pr::{Decision, MARKER};
+        let comments = crate::pr_round::load_comments(wd);
+        if comments.is_empty() {
+            // No round of comments (an agent started the stage by itself).
+            return Ok(());
+        }
+        let proposals = crate::pr_round::load_proposals(wd).map_err(|e| refuse("doc_schema", e))?;
+        let mut state = crate::pr_round::load_overrides(wd);
+        let verdicts = xherd_core::pr::decide(&comments, &proposals, &state.overrides)
+            .map_err(|e| refuse("pr_decisions", e))?;
+        for v in verdicts.iter().filter(|v| v.decision == Decision::Reply) {
+            if state.posted.contains(&v.id) {
+                continue;
+            }
+            let (Some(host), Some(url)) = (self.env.host.clone(), self.agent.pr_url.clone()) else {
+                return Err(refuse(
+                    "no_host",
+                    "no host plugin or pull request to reply on",
+                ));
+            };
+            let body = format!(
+                "{}\n\n{MARKER}",
+                v.reply.as_deref().unwrap_or_default().trim()
+            );
+            host.pr_reply(wd, &url, &v.id, &body)
+                .await
+                .map_err(|e| refuse("reply_failed", format!("reply to {}: {e}", v.id)))?;
+            state.posted.push(v.id.clone());
+            crate::pr_round::save_overrides(wd, &state).map_err(|e| refuse("io", e))?;
+        }
+        crate::pr_round::write_decisions(wd, &verdicts, &state.posted).map_err(|e| refuse("io", e))
+    }
+
+    /// `gate open pr-review` (R-306): `pr-review.md` must decide every comment
+    /// of the round, in the format, with a text for each reply (`doc_schema`
+    /// otherwise), so the user is never shown an incomplete plan.
+    fn pr_review_check(&self, cmd: &XapCmd) -> Result<(), Refusal> {
+        let XapCmd::GateOpen { stage, .. } = cmd else {
+            return Ok(());
+        };
+        if stage != xherd_flow::pr_review::STAGE {
+            return Ok(());
+        }
+        let wd = self.workdir()?;
+        let proposals = crate::pr_round::load_proposals(&wd)
+            .map_err(|e| xherd_core::xap::refuse("doc_schema", e))?;
+        let comments = crate::pr_round::load_comments(&wd);
+        if comments.is_empty() {
+            return Ok(());
+        }
+        xherd_core::pr::decide(&comments, &proposals, &Default::default())
+            .map(|_| ())
+            .map_err(|e| xherd_core::xap::refuse("doc_schema", format!("pr-review.md: {e}")))
     }
 
     /// Review gate (R-114, R-120): `review.md` must have well-formed findings
@@ -1522,6 +1586,11 @@ impl Actor {
                 "changed_since_read",
                 format!("{f} changed since you read it; read it again before approving"),
             ));
+        }
+        if let Gate::Docs { stage, .. } = &gate
+            && stage == xherd_flow::pr_review::STAGE
+        {
+            self.publish_pr_decisions(&wd).await?;
         }
         let next = self.next_command(&wd, &gate)?;
         let now = self.now();

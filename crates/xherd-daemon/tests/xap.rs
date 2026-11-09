@@ -1758,7 +1758,7 @@ fn fake_gh_pr(dir: &Path, url: &str) -> std::path::PathBuf {
     std::fs::write(
         &bin,
         format!(
-            "#!/bin/sh\ncd '{d}'\nif [ \"$1\" = api ]; then for last; do :; done; case \"$last\" in *pulls/*/comments) f=review_comments.json;; *issues/*/comments) f=issue_comments.json;; *pulls/*/reviews) f=reviews.json;; esac; cat \"$f\" 2>/dev/null || echo '[]'; exit 0; fi\ncase \"$2\" in\nlist) echo '[{{\"url\":\"{url}\"}}]';;\nview) cat view.json;;\nchecks) cat checks.json; exit $(cat checks.code 2>/dev/null || echo 0);;\nesac\n",
+            "#!/bin/sh\ncd '{d}'\nif [ \"$1\" = api ]; then case \"$*\" in *\"-X POST\"*) [ -e post.fail ] && {{ echo boom >&2; exit 1; }}; echo \"$*\" >> post.log; echo \"{{}}\"; exit 0;; esac; for last; do :; done; case \"$last\" in *pulls/*/comments) f=review_comments.json;; *issues/*/comments) f=issue_comments.json;; *pulls/*/reviews) f=reviews.json;; esac; cat \"$f\" 2>/dev/null || echo '[]'; exit 0; fi\ncase \"$2\" in\nlist) echo '[{{\"url\":\"{url}\"}}]';;\nview) cat view.json;;\nchecks) cat checks.json; exit $(cat checks.code 2>/dev/null || echo 0);;\nesac\n",
             d = dir.display()
         ),
     )
@@ -1921,4 +1921,209 @@ async fn approving_the_pr_review_hands_on_the_apply_command() {
     .await
     .unwrap();
     assert_eq!(sends(&t), ["send SC-1 \"/xherd:pr-apply\" 1"]);
+}
+
+#[tokio::test]
+async fn pr_decisions_are_checked_edited_posted_and_handed_on() {
+    use xherd_daemon::actor::TickKind;
+    let bin_dir = tempfile::tempdir().unwrap();
+    let d = bin_dir.path();
+    let gh = fake_gh_pr(d, "https://github.com/acme/app/pull/7");
+    let put = |f: &str, v: &str| std::fs::write(d.join(f), v).unwrap();
+    put("view.json", r#"{"state":"OPEN","mergeable":"MERGEABLE"}"#);
+    put("checks.json", "[]");
+    put(
+        "review_comments.json",
+        r#"[{"id":11,"user":{"login":"bo"},"body":"rename this","path":"src/a.rs","line":4}]"#,
+    );
+    put(
+        "issue_comments.json",
+        r#"[{"id":12,"user":{"login":"cy"},"body":"why not use a map?"}]"#,
+    );
+    let t = setup_config(json!({
+        "freshSessions": false, "pluginSettings": {"github": {"gh": gh}}
+    }))
+    .await;
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    until(&t, |a| a.status == Status::Watching).await;
+    t.d.sup.tick(TickKind::PrPoll);
+    until(&t, |a| {
+        a.status == Status::Queued || a.status == Status::Running
+    })
+    .await;
+    until(&t, |a| a.status == Status::Running).await;
+
+    let review = t.wt.path().join(".xherd/spec/pr-review.md");
+    xap(&t, "p1", "stage.enter", json!({"stage": "pr-review"}))
+        .await
+        .unwrap();
+
+    // The plan must decide every comment, with a text for each reply.
+    std::fs::write(
+        &review,
+        "---\nstage: pr-review\n---\n### review-comment:11: rename\n- decision: fix\n",
+    )
+    .unwrap();
+    let e = xap(&t, "p2", "gate.open", json!({"stage": "pr-review"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "doc_schema");
+    assert!(
+        e.message.contains("issue:12 has no decision"),
+        "{}",
+        e.message
+    );
+    std::fs::write(
+        &review,
+        "---\nstage: pr-review\n---\n### review-comment:11: rename\n- decision: fix\n- reason: clearer\n### issue:12\n- decision: reply\n",
+    )
+    .unwrap();
+    let e = xap(&t, "p3", "gate.open", json!({"stage": "pr-review"}))
+        .await
+        .unwrap_err();
+    assert!(e.message.contains("no reply text"), "{}", e.message);
+    std::fs::write(
+        &review,
+        "---\nstage: pr-review\n---\n### review-comment:11: rename\n- decision: fix\n- reason: clearer\n### issue:12\n- decision: reply\n- reply: a map loses the order\n",
+    )
+    .unwrap();
+    xap(&t, "p4", "gate.open", json!({"stage": "pr-review"}))
+        .await
+        .unwrap();
+    stop(&t, 2).await;
+
+    // The UI sees the round; the user can only decide on its comments.
+    let round = t.d.pr_review("SC-1").await.unwrap();
+    assert_eq!(round["comments"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        round["comments"][1]["body"], "why not use a map?",
+        "raw, not wrapped"
+    );
+    assert_eq!(round["proposals"].as_array().unwrap().len(), 2);
+    let e =
+        t.d.set_pr_decisions("SC-1", [("nope".to_string(), verdict_of("nope"))].into())
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "bad_decisions");
+
+    // A failing host refuses the approval and nothing is posted.
+    put("post.fail", "");
+    let e = act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, "reply_failed");
+    assert!(get(&t).await.gate.is_some());
+    assert!(!d.join("post.log").exists());
+
+    // Retried: the reply goes out once, with the marker, in the conversation.
+    std::fs::remove_file(d.join("post.fail")).unwrap();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap();
+    let log = std::fs::read_to_string(d.join("post.log")).unwrap();
+    assert_eq!(log.matches("api -X POST").count(), 1, "{log}");
+    assert!(log.contains("repos/acme/app/issues/7/comments"), "{log}");
+    assert!(
+        log.contains("a map loses the order") && log.contains("<!-- xherd -->"),
+        "{log}"
+    );
+    assert_eq!(sends(&t), ["send SC-1 \"/xherd:pr-apply\" 1"]);
+
+    let f = std::fs::read_to_string(t.wt.path().join(".xherd/spec/pr-decisions.json")).unwrap();
+    let v: Value = serde_json::from_str(&f).unwrap();
+    let rows = v["decisions"].as_array().unwrap();
+    assert_eq!(
+        (rows[0]["decision"].clone(), rows[0]["posted"].clone()),
+        (json!("fix"), json!(false))
+    );
+    assert_eq!(
+        (rows[1]["decision"].clone(), rows[1]["posted"].clone()),
+        (json!("reply"), json!(true))
+    );
+}
+
+fn verdict_of(id: &str) -> xherd_core::pr::Verdict {
+    xherd_core::pr::Verdict {
+        id: id.into(),
+        decision: xherd_core::pr::Decision::Skip,
+        note: None,
+        reply: None,
+    }
+}
+
+#[tokio::test]
+async fn a_user_decision_overrides_the_proposal() {
+    use xherd_daemon::actor::TickKind;
+    let bin_dir = tempfile::tempdir().unwrap();
+    let d = bin_dir.path();
+    let gh = fake_gh_pr(d, "https://github.com/acme/app/pull/7");
+    let put = |f: &str, v: &str| std::fs::write(d.join(f), v).unwrap();
+    put("view.json", r#"{"state":"OPEN","mergeable":"MERGEABLE"}"#);
+    put("checks.json", "[]");
+    put(
+        "issue_comments.json",
+        r#"[{"id":12,"user":{"login":"cy"},"body":"why not use a map?"}]"#,
+    );
+    let t = setup_config(json!({
+        "freshSessions": false, "pluginSettings": {"github": {"gh": gh}}
+    }))
+    .await;
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    until(&t, |a| a.status == Status::Watching).await;
+    t.d.sup.tick(TickKind::PrPoll);
+    until(&t, |a| a.status == Status::Running).await;
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/pr-review.md"),
+        "---\nstage: pr-review\n---\n### issue:12\n- decision: reply\n- reply: a map loses the order\n",
+    )
+    .unwrap();
+    xap(&t, "p1", "stage.enter", json!({"stage": "pr-review"}))
+        .await
+        .unwrap();
+    xap(&t, "p2", "gate.open", json!({"stage": "pr-review"}))
+        .await
+        .unwrap();
+    stop(&t, 2).await;
+
+    // The user decides to skip it, with a note: nothing is posted.
+    let mut v = verdict_of("issue:12");
+    v.note = Some("not worth an answer".into());
+    t.d.set_pr_decisions("SC-1", [("issue:12".to_string(), v)].into())
+        .await
+        .unwrap();
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!d.join("post.log").exists());
+    let f = std::fs::read_to_string(t.wt.path().join(".xherd/spec/pr-decisions.json")).unwrap();
+    let v: Value = serde_json::from_str(&f).unwrap();
+    assert_eq!(v["decisions"][0]["decision"], "skip");
+    assert_eq!(v["decisions"][0]["note"], "not worth an answer");
 }

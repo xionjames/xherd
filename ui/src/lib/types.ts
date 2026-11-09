@@ -20,6 +20,29 @@ export interface Task {
   blockedReason?: string;
 }
 
+/** A comment on the pull request (R-304); `body` is untrusted text. */
+export interface PrComment {
+  id: string;
+  kind: string;
+  author: string;
+  body: string;
+  url?: string;
+  createdAt?: string;
+  path?: string;
+  line?: number;
+  inReplyTo?: string;
+}
+
+export type Decision = 'fix' | 'reply' | 'skip';
+
+/** What to do about a comment: the agent's proposal or the user's decision (R-306). */
+export interface Verdict {
+  id: string;
+  decision: Decision;
+  note?: string;
+  reply?: string;
+}
+
 export type Severity = 'minor' | 'major' | 'blocker';
 
 /** A finding of `review.md`; `resolved`: the tasks that fix it are done. */

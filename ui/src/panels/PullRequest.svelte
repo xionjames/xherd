@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Agent } from '../lib/types';
   import { agoText } from '../lib/format';
+  import PrComments from '../components/PrComments.svelte';
   let { agent }: { agent: Agent } = $props();
   const STATE_TONE = { open: 'acc', merged: 'done', closed: '' };
   const STATE_GLYPH = { open: '●', merged: '✓', closed: '○' };
@@ -31,4 +32,5 @@
       {/if}
     </div>
   </section>
+  {#if agent.prUrl}<PrComments {agent} />{/if}
 </div>

@@ -177,6 +177,48 @@ impl Host {
         Ok(out)
     }
 
+    /// `pr-reply {url, to, body}` (R-306): answer comment `to` (an id as
+    /// `pr-comments` gave it). `body` is posted as it is: the caller adds the
+    /// marker. Built-in `github` replies in the thread of a line comment and
+    /// otherwise adds a comment to the conversation.
+    pub async fn pr_reply(
+        &self,
+        dir: &Path,
+        url: &str,
+        to: &str,
+        body: &str,
+    ) -> Result<(), PluginError> {
+        let name = "pr-reply";
+        if !self.plugin.builtin() {
+            run_command(
+                &self.plugin,
+                name,
+                json!({"url": url, "to": to, "body": body, "worktree": dir}),
+                &self.ctx,
+            )
+            .await?;
+            return Ok(());
+        }
+        let (host, owner, repo, number) = parse_pr_url(url)
+            .ok_or_else(|| self.shape(name, &format!("{url} is not a pull request URL")))?;
+        let path = reply_path(to, &owner, &repo, number)
+            .ok_or_else(|| self.shape(name, &format!("{to} is not a comment id")))?;
+        let gh = self
+            .ctx
+            .settings
+            .get("gh")
+            .and_then(Value::as_str)
+            .unwrap_or("gh");
+        let field = format!("body={body}");
+        let mut args = vec!["api", "-X", "POST"];
+        if host != "github.com" {
+            args.extend(["--hostname", &host]);
+        }
+        args.extend([path.as_str(), "-f", &field]);
+        self.gh(gh, dir, &args).await?;
+        Ok(())
+    }
+
     fn json(&self, name: &str, bytes: &[u8]) -> Result<Value, PluginError> {
         serde_json::from_slice(bytes).map_err(|e| PluginError::BadJson {
             plugin: self.plugin.name().into(),
@@ -299,6 +341,21 @@ pub fn parse_pr_url(url: &str) -> Option<(String, String, String, u64)> {
         .map(|n| (host.into(), owner.into(), repo.into(), n))
 }
 
+/// The API path that answers comment `to` (`review-comment:11`, `issue:12`,
+/// `review:13`): a reply in the thread of a line comment, else a new comment
+/// in the conversation.
+fn reply_path(to: &str, owner: &str, repo: &str, number: u64) -> Option<String> {
+    let (kind, id) = to.split_once(':')?;
+    let id: u64 = id.parse().ok()?;
+    match kind {
+        "review-comment" => Some(format!(
+            "repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies"
+        )),
+        "issue" | "review" => Some(format!("repos/{owner}/{repo}/issues/{number}/comments")),
+        _ => None,
+    }
+}
+
 /// `gh api --paginate` prints one JSON array per page, back to back: all
 /// their items.
 pub fn parse_stream(bytes: &[u8]) -> Result<Vec<Value>, String> {
@@ -353,6 +410,26 @@ mod tests {
         assert_eq!(parse_pr_url("https://github.com/a/b/issues/7"), None);
         assert_eq!(parse_pr_url("https://github.com/a/b c/pull/7"), None);
         assert_eq!(parse_pr_url("https://github.com/a/../pull/x"), None);
+    }
+
+    #[test]
+    fn replies_go_where_the_comment_is() {
+        let p = |to| reply_path(to, "acme", "app", 7);
+        assert_eq!(
+            p("review-comment:11").as_deref(),
+            Some("repos/acme/app/pulls/7/comments/11/replies")
+        );
+        assert_eq!(
+            p("issue:12").as_deref(),
+            Some("repos/acme/app/issues/7/comments")
+        );
+        assert_eq!(
+            p("review:13").as_deref(),
+            Some("repos/acme/app/issues/7/comments")
+        );
+        assert_eq!(p("issue:x"), None);
+        assert_eq!(p("nope:1"), None);
+        assert_eq!(p("12"), None);
     }
 
     #[test]

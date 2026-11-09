@@ -21,6 +21,7 @@ pub mod driver;
 pub mod git_access;
 pub mod install;
 pub mod open_in;
+pub mod pr_round;
 pub mod repos;
 pub mod scheduler;
 pub mod security;
@@ -657,7 +658,7 @@ impl Daemon {
     }
 }
 
-fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
+pub(crate) fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
     a.workdir
         .as_deref()
         .map(std::path::Path::new)

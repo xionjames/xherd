@@ -38,6 +38,11 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
         .route("/api/v1/agents/{id}/findings", get(findings))
+        .route("/api/v1/agents/{id}/pr-review", get(pr_review))
+        .route(
+            "/api/v1/agents/{id}/pr-decisions",
+            axum::routing::put(put_pr_decisions),
+        )
         .route("/api/v1/agents/{id}/file", get(file))
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
         .route("/api/v1/agents/{id}/open", post(open_in))
@@ -628,6 +633,33 @@ async fn diff(
     Ok(Json(
         d.diff(&id, q.view.as_deref(), q.commit.as_deref()).await?,
     ))
+}
+
+/// `GET /agents/:id/pr-review`: this round's PR comments, the agent's
+/// proposals and the user's decisions (R-306).
+async fn pr_review(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.pr_review(&id).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct DecisionsReq {
+    decisions: std::collections::BTreeMap<String, xherd_core::pr::Verdict>,
+}
+
+/// `PUT /agents/:id/pr-decisions`: replace the user's decisions on the
+/// comments of this round (R-306).
+async fn put_pr_decisions(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(req): Json<DecisionsReq>,
+) -> ApiResult<Json<Value>> {
+    d.set_pr_decisions(&id, req.decisions).await?;
+    Ok(Json(json!({"ok": true})))
 }
 
 /// `GET /agents/:id/findings`: the findings of `review.md`.

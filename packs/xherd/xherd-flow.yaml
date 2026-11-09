@@ -5,7 +5,7 @@ version: 0.1.0
 protocol: 1
 specDir: private
 requiresCommitted: false
-private: [pr-comments.json, HANDOFF.md]
+private: [pr-comments.json, pr-decisions.json, HANDOFF.md]
 
 install:
   claude-code:

@@ -78,7 +78,8 @@ by theme; update it together with them.
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
 - [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel
 - [x] PR comments into the agent (R-304): new comments saved wrapped as untrusted data, agent queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
-- [ ] PR follow-up, rest: machine-readable decisions and posting replies (R-306), `pr.merged` hooks, `pr-template`
+- [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
+- [ ] PR follow-up, rest: `pr.merged` stage hooks, `pr-template` (R-153)
 - [ ] Notifications (browser, desktop, ntfy) and phones
 
 ## v1.x

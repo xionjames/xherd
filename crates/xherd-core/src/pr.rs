@@ -2,6 +2,8 @@
 //! found, and what it means for the agent. The host plugin answers with a
 //! `Snapshot`; `Agent::apply_pr` keeps the last state and says what is new.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Agent;
@@ -71,6 +73,65 @@ pub struct Comment {
     pub line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_reply_to: Option<String>,
+}
+
+/// What to do about a comment (R-306).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Decision {
+    /// The code must change.
+    Fix,
+    /// An answer is enough.
+    Reply,
+    /// Nothing to do.
+    Skip,
+}
+
+/// The decision about one comment: proposed by the agent in `pr-review.md`
+/// or set by the user, with a note and, for answers, the reply text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Verdict {
+    pub id: String,
+    pub decision: Decision,
+    /// Why (the user's note, or the agent's reason).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// The answer to post for `reply`; a draft for `fix`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+/// One verdict per comment: the user's `overrides` win over the agent's
+/// `proposals`. A comment with neither, an unknown id in either list, or a
+/// `reply` decision without text is an error naming it (R-306).
+pub fn decide(
+    comments: &[Comment],
+    proposals: &[Verdict],
+    overrides: &BTreeMap<String, Verdict>,
+) -> Result<Vec<Verdict>, String> {
+    let known = |id: &str| comments.iter().any(|c| c.id == id);
+    if let Some(v) = proposals.iter().find(|v| !known(&v.id)) {
+        return Err(format!("{} is not one of the comments", v.id));
+    }
+    if let Some(id) = overrides.keys().find(|id| !known(id)) {
+        return Err(format!("{id} is not one of the comments"));
+    }
+    let mut out = Vec::new();
+    for c in comments {
+        let v = overrides
+            .get(&c.id)
+            .or_else(|| proposals.iter().find(|v| v.id == c.id))
+            .ok_or_else(|| format!("comment {} has no decision", c.id))?;
+        if v.decision == Decision::Reply && v.reply.as_deref().is_none_or(|r| r.trim().is_empty()) {
+            return Err(format!(
+                "comment {} is decided `reply` but has no reply text",
+                c.id
+            ));
+        }
+        out.push(v.clone());
+    }
+    Ok(out)
 }
 
 /// Something new in a snapshot, to tell the user.
@@ -247,6 +308,42 @@ mod tests {
         assert_eq!(a.new_comments(&all), [], "seen already, ours included");
         let more = [all, vec![comment("3", "and this")]].concat();
         assert_eq!(a.new_comments(&more).len(), 1);
+    }
+
+    fn verdict(id: &str, d: Decision, reply: Option<&str>) -> Verdict {
+        Verdict {
+            id: id.into(),
+            decision: d,
+            note: None,
+            reply: reply.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn user_decisions_win_and_every_comment_needs_one() {
+        let comments = [comment("a", "x"), comment("b", "y")];
+        let proposals = [
+            verdict("a", Decision::Fix, None),
+            verdict("b", Decision::Skip, None),
+        ];
+        let mut over = BTreeMap::new();
+        over.insert("b".into(), verdict("b", Decision::Reply, Some("thanks")));
+        let v = decide(&comments, &proposals, &over).unwrap();
+        assert_eq!(
+            (v[0].decision, v[1].decision),
+            (Decision::Fix, Decision::Reply)
+        );
+
+        let e = decide(&comments, &proposals[..1], &BTreeMap::new()).unwrap_err();
+        assert!(e.contains("comment b has no decision"), "{e}");
+        let e = decide(&comments, &[verdict("z", Decision::Skip, None)], &over).unwrap_err();
+        assert!(e.contains("z is not one of the comments"), "{e}");
+        let bad = [
+            verdict("a", Decision::Reply, Some("  ")),
+            proposals[1].clone(),
+        ];
+        let e = decide(&comments, &bad, &BTreeMap::new()).unwrap_err();
+        assert!(e.contains("no reply text"), "{e}");
     }
 
     #[test]
