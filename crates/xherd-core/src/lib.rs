@@ -13,6 +13,7 @@ pub mod queue;
 pub mod report;
 pub mod status;
 pub mod tripwire;
+pub mod untrusted;
 pub mod xap;
 
 pub use agent::{Agent, Millis, new_id, now_ms};

@@ -67,7 +67,8 @@ by theme; update it together with them.
 - [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for agents created from now on
 - [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence is a refusal (R-116)
 - [ ] Move `sensitivePaths` / `maxDiffLines` into repo profiles and add the profile test command tripwire (R-115), with profiles (v1.x)
-- [ ] Guardrails still open: daemon/agent user split (R-1203), untrusted-text blocks (R-1201), budgets and run limits, `xherd security check`, `diff_viewed` marks
+- [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
+- [ ] Guardrails still open: daemon/agent user split (R-1203), budgets and run limits, `xherd security check`, `diff_viewed` marks
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
 - [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI
