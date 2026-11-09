@@ -1688,3 +1688,49 @@ async fn propose_reason(t: &T, id: &str, files: &[&str]) -> String {
     };
     c.needs_human.unwrap()
 }
+
+#[tokio::test]
+async fn review_gate_is_held_by_open_review_tasks_and_the_round_limit() {
+    let t = setup_config(json!({"freshSessions": true, "maxReviewLoops": 1})).await;
+    let spec = t.wt.path().join(".xherd/spec");
+    std::fs::write(
+        spec.join("tasks.md"),
+        "## T01: add a\n- files: a.txt\n\n## T02: fix the edge case\n- files: a.txt\n- source: review\n",
+    )
+    .unwrap();
+    xap(&t, "r1", "tasks.sync", json!({})).await.unwrap();
+    // First review, back to implement, review again: round 1; once more: round 2.
+    let mut n = 0;
+    for stage in ["review", "implement", "review", "implement", "review"] {
+        n += 1;
+        xap(
+            &t,
+            &format!("r-s{n}"),
+            "stage.enter",
+            json!({"stage": stage}),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(get(&t).await.review_rounds, 2);
+    // Repeating the call inside the stage is not another round.
+    xap(&t, "r-s9", "stage.enter", json!({"stage": "review"}))
+        .await
+        .unwrap();
+    assert_eq!(get(&t).await.review_rounds, 2);
+
+    std::fs::write(
+        spec.join("review.md"),
+        "---\nstage: review\n---\n# Review\n",
+    )
+    .unwrap();
+    xap(&t, "r2", "gate.open", json!({"stage": "review"}))
+        .await
+        .unwrap();
+    let Some(Gate::Docs { needs_human, .. }) = get(&t).await.gate else {
+        panic!("no docs gate")
+    };
+    let why = needs_human.unwrap();
+    assert!(why.contains("review tasks not done: T02"), "{why}");
+    assert!(why.contains("2 review→fix rounds, limit 1"), "{why}");
+}

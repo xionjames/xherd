@@ -49,6 +49,16 @@
         ],
         "transcripts": "${CLAUDE_CONFIG_DIR:-~/.claude}/projects",
         "file": "{session}.jsonl"
+      },
+      "usage": {
+        "records": "/message/usage",
+        "id": "/message/id",
+        "fields": {
+          "input": "input_tokens",
+          "output": "output_tokens",
+          "cacheWrite": "cache_creation_input_tokens",
+          "cacheRead": "cache_read_input_tokens"
+        }
       }
     }
   },

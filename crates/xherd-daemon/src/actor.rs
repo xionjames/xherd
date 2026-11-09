@@ -144,6 +144,7 @@ pub struct ActorSettings {
     pub verify_timeout: Duration,
     /// Code tripwires (R-115), from the config at daemon start.
     pub max_session_minutes: u64,
+    pub max_review_loops: u32,
     pub agent_token_budget: u64,
     pub daily_token_budget: u64,
     pub max_diff_lines: usize,
@@ -163,6 +164,7 @@ impl Default for ActorSettings {
             toolchain_install: false,
             verify_timeout: VERIFY_TIMEOUT,
             max_session_minutes: 0,
+            max_review_loops: 3,
             agent_token_budget: 0,
             daily_token_budget: 0,
             max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
@@ -191,6 +193,8 @@ pub struct Env {
     pub trust: Option<Arc<crate::TrustWriter>>,
     /// How to continue the runtime's last conversation, when it can.
     pub resume: Option<Arc<crate::Resumer>>,
+    /// How to read token usage from the runtime's transcript (R-1205).
+    pub usage: Option<Arc<xherd_plugin::runtime::Usage>>,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -447,7 +451,11 @@ impl Actor {
     /// next stop. Without a session id or a runtime that has transcripts there
     /// is nothing to measure.
     fn measure_usage(&self) {
-        let (Some(session), Some(r)) = (self.agent.session.clone(), self.env.resume.clone()) else {
+        let (Some(session), Some(r), Some(usage)) = (
+            self.agent.session.clone(),
+            self.env.resume.clone(),
+            self.env.usage.clone(),
+        ) else {
             return;
         };
         let env = |v: &str| std::env::var(v).ok();
@@ -459,7 +467,7 @@ impl Actor {
             let tokens = tokio::task::spawn_blocking(move || {
                 std::fs::read_to_string(&path)
                     .ok()
-                    .map(|t| xherd_core::usage::transcript_tokens(&t))
+                    .map(|t| usage.totals(&t).budget_tokens())
             })
             .await
             .ok()
@@ -646,6 +654,7 @@ impl Actor {
         self.commit_tripwires(&mut call.cmd).await;
         let packs = self.env.packs.clone();
         let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
+        self.review_hold(&mut call.cmd, pack);
         let obs = self.observe(pack, &call.cmd).await?;
         let (before, now) = (self.agent.status, self.now());
         let changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
@@ -667,6 +676,42 @@ impl Actor {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
+    }
+
+    /// Review gate (R-114, R-120): hold it for a human while review-sourced
+    /// tasks are open or the review→fix loop ran past `maxReviewLoops`.
+    fn review_hold(&self, cmd: &mut XapCmd, pack: Option<&xherd_flow::Pack>) {
+        use xherd_core::domain::{Role, TaskSource, TaskStatus};
+        let XapCmd::GateOpen {
+            stage, needs_human, ..
+        } = cmd
+        else {
+            return;
+        };
+        let is_review = pack
+            .zip(self.agent.flow.as_deref())
+            .and_then(|(p, f)| p.flow(f))
+            .and_then(|f| f.stage(stage))
+            .is_some_and(|s| s.role == Role::Review);
+        if !is_review {
+            return;
+        }
+        let open: Vec<&str> = self
+            .agent
+            .tasks
+            .iter()
+            .filter(|t| t.source == TaskSource::Review && t.status != TaskStatus::Done)
+            .map(|t| t.id.as_str())
+            .collect();
+        let max = self.env.settings.max_review_loops;
+        if let Some(why) =
+            xherd_core::tripwire::review_summary(&open, self.agent.review_rounds, max)
+        {
+            *needs_human = Some(match needs_human.take() {
+                Some(own) => format!("{own}; {why}"),
+                None => why,
+            });
+        }
     }
 
     /// Tripwires on a commit proposal: secret (R-117), sensitive paths and diff size (R-115). Any hit holds it for a human (`needs_human`,

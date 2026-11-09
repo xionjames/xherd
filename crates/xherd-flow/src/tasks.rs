@@ -9,9 +9,9 @@
 //! - verify: cargo test -p store
 //! ```
 //!
-//! Unknown fields (refs, contract, tier, source…) are ignored here.
+//! Unknown fields (refs, contract, tier…) are ignored here.
 
-use xherd_core::domain::{Task, TaskStatus};
+use xherd_core::domain::{Task, TaskSource, TaskStatus};
 
 fn heading(line: &str) -> Option<(String, String)> {
     let rest = line.trim_start_matches('#');
@@ -102,6 +102,7 @@ pub fn parse(text: &str) -> Result<Vec<Task>, String> {
                 evidence: None,
                 verify: None,
                 blocked_reason: None,
+                source: TaskSource::Spec,
             });
             continue;
         }
@@ -129,6 +130,13 @@ pub fn parse(text: &str) -> Result<Vec<Task>, String> {
             }
             "files" => t.files = list(value),
             "depends" => t.depends = list(value),
+            "source" => {
+                t.source = match value.trim_matches('`').to_ascii_lowercase().as_str() {
+                    "review" => TaskSource::Review,
+                    "pr" => TaskSource::Pr,
+                    _ => TaskSource::Spec,
+                }
+            }
             "evidence" if !value.is_empty() => t.evidence = Some(value.to_string()),
             "verify" if !value.is_empty() => t.verify = Some(value.trim_matches('`').to_string()),
             _ => {}
@@ -152,6 +160,16 @@ pub fn parse(text: &str) -> Result<Vec<Task>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_of_a_task() {
+        let t = parse(
+            "## T01: a\n- files: x\n\n## T02: b\n- source: `review`\n\n## T03: c\n- source: spec\n",
+        )
+        .unwrap();
+        let s: Vec<_> = t.iter().map(|t| t.source).collect();
+        assert_eq!(s, [TaskSource::Spec, TaskSource::Review, TaskSource::Spec]);
+    }
 
     const SAMPLE: &str = "\
 ---

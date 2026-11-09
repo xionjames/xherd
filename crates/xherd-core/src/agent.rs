@@ -103,6 +103,9 @@ pub struct Agent {
     pub tokens_session: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_session_id: Option<String>,
+    /// Times the agent came back to review after fixing (R-120).
+    #[serde(default)]
+    pub review_rounds: u32,
     /// The 80 % budget warning was sent.
     #[serde(default)]
     pub budget_warned: bool,
@@ -146,6 +149,7 @@ impl Agent {
             tokens_session: 0,
             tokens_session_id: None,
             budget_warned: false,
+            review_rounds: 0,
         }
     }
 

@@ -230,6 +230,21 @@ pub fn sensitive_summary(files: &[String], globs: &[String]) -> Option<String> {
     ))
 }
 
+/// Review gate (R-114, R-120): tasks that came from the review and are not
+/// done, and review→fix rounds beyond `max_rounds` (0 = no limit).
+pub fn review_summary(open_tasks: &[&str], rounds: u32, max_rounds: u32) -> Option<String> {
+    let mut why = Vec::new();
+    if !open_tasks.is_empty() {
+        why.push(format!("review tasks not done: {}", open_tasks.join(", ")));
+    }
+    if max_rounds > 0 && rounds > max_rounds {
+        why.push(format!(
+            "review loop limit: {rounds} review→fix rounds, limit {max_rounds}"
+        ));
+    }
+    (!why.is_empty()).then(|| format!("{}; check before approving", why.join("; ")))
+}
+
 /// Default for R-115 `maxDiffLines`.
 pub const MAX_DIFF_LINES: usize = 1000;
 
@@ -348,6 +363,17 @@ mod tests {
         let g = vec!["infra/**".to_string()];
         assert!(sensitive_summary(&f, &g).unwrap().contains("infra/prod.tf"));
         assert!(sensitive_summary(&f, &[]).is_none());
+    }
+
+    #[test]
+    fn review_hold() {
+        assert_eq!(review_summary(&[], 3, 3), None);
+        assert_eq!(review_summary(&[], 9, 0), None, "0 = no limit");
+        let s = review_summary(&["T05", "T06"], 4, 3).unwrap();
+        assert!(
+            s.contains("T05, T06") && s.contains("4 review→fix rounds, limit 3"),
+            "{s}"
+        );
     }
 
     #[test]

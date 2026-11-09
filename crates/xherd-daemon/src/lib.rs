@@ -207,6 +207,7 @@ impl Daemon {
             toolchain_install: opts.sandbox,
             verify_timeout: opts.verify_timeout,
             max_session_minutes: config.max_session_minutes,
+            max_review_loops: config.max_review_loops,
             agent_token_budget: config.agent_token_budget,
             daily_token_budget: config.daily_token_budget,
             max_diff_lines: config.max_diff_lines,
@@ -222,11 +223,14 @@ impl Daemon {
                     root: config.workspace_root().join("worktrees"),
                 })
             });
-        let resume = plugins
+        let terminal = plugins
             .get(xherd_flow::approve::DEFAULT_RUNTIME)
-            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
-            .and_then(|t| t.resume)
+            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok());
+        let resume = terminal
+            .as_ref()
+            .and_then(|t| t.resume.clone())
             .map(|r| Arc::new(Resumer(r)));
+        let usage = terminal.and_then(|t| t.usage).map(Arc::new);
         let toolchains = plugins
             .of_kind(xherd_plugin::Kind::Toolchain)
             .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
@@ -250,6 +254,7 @@ impl Daemon {
             toolchains: Arc::new(toolchains),
             trust,
             resume,
+            usage,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);

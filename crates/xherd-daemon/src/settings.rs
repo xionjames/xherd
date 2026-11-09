@@ -32,6 +32,7 @@ pub struct ConfigPatch {
     pub git_identities: Option<Vec<GitIdentity>>,
     pub welcomed: Option<bool>,
     pub max_session_minutes: Option<u64>,
+    pub max_review_loops: Option<u32>,
     pub agent_token_budget: Option<u64>,
     pub daily_token_budget: Option<u64>,
     pub max_diff_lines: Option<usize>,
@@ -108,6 +109,9 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             }
             c.plugin_settings.insert(name, v);
         }
+    }
+    if let Some(n) = p.max_review_loops {
+        c.max_review_loops = n;
     }
     if let Some(n) = p.agent_token_budget {
         c.agent_token_budget = n;

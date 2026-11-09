@@ -71,7 +71,9 @@ by theme; update it together with them.
 - [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asking for a handoff first waits for R-026
 - [x] `xherd security check` (R-1210), first version; add autonomy, budgets and branch protection findings when those exist (`security::PENDING`)
 - [x] Token budgets (R-1205), global until profiles; per-profile budgets and a cost estimate come with profiles
-- [ ] Guardrails still open: daemon/agent user split (R-1203), run limits (R-120: needs a review→fix loop in the pack and autonomy), `diff_viewed` marks
+- [x] Review→fix loop with `maxReviewLoops` (R-120); the review gate is held while review tasks are open
+- [ ] R-114 first half: hold the review gate on blocker/major findings (needs a machine-readable findings format in `review.md`)
+- [ ] Guardrails still open: daemon/agent user split (R-1203), `maxAutoApprovalsInRow` (R-120, with autonomy), `diff_viewed` marks
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
 - [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI

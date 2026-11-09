@@ -59,6 +59,23 @@ pub enum TaskStatus {
     Blocked,
 }
 
+/// Where a task came from (`- source:` in `tasks.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskSource {
+    #[default]
+    Spec,
+    /// A review finding that must be fixed (the review→fix loop, R-120).
+    Review,
+    Pr,
+}
+
+impl TaskSource {
+    pub fn is_spec(&self) -> bool {
+        *self == TaskSource::Spec
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
@@ -76,6 +93,8 @@ pub struct Task {
     pub verify: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "TaskSource::is_spec")]
+    pub source: TaskSource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

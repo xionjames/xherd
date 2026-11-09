@@ -18,8 +18,10 @@ run a sub-agent with a fresh context, give it this review to do.
    repository's tests and linters.
 4. Each finding that must be fixed becomes a new task in `tasks.md` with
    `source: review`; run `xherd tasks sync` and implement them one by
-   one as `{{dir}}/next.md` describes (each with its own commit gate). Come
-   back to this review when they are done.
+   one as `{{dir}}/next.md` describes (each with its own commit gate). When
+   they are all done, come back to this review and run
+   `xherd stage enter review` again: xherd counts each return as a review
+   round, and holds the gate for the user after too many.
 5. Write `.xherd/spec/review.md` in the review format, and update
    `memory.md`.
 6. `xherd gate open review`

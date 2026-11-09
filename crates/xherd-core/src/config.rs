@@ -77,6 +77,9 @@ pub struct Config {
     /// A session running longer than this many minutes is ended and the agent
     /// paused (R-1206). 0 = off.
     pub max_session_minutes: u64,
+    /// Review→fix rounds after which the review gate is held for a human
+    /// (R-120 `maxReviewLoops`). 0 = no limit. Global until profiles.
+    pub max_review_loops: u32,
     /// Token budget of one agent and of all agents per UTC day (R-1205). At
     /// 80 % a notification; at 100 % the agent is paused at its next stop.
     /// 0 = no budget.
@@ -122,6 +125,7 @@ impl Default for Config {
             git_identities: Vec::new(),
             git_hosts: Vec::new(),
             max_session_minutes: 0,
+            max_review_loops: 3,
             agent_token_budget: 0,
             daily_token_budget: 0,
             max_diff_lines: 1000,

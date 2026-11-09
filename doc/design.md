@@ -690,7 +690,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Max session length (R-1206): `maxSessionMinutes`, pauses (no handoff yet)
     - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; autonomy, budgets and branch protection are listed as not reported yet and join when those exist
     - [x] Token budgets (R-1205): `agentTokenBudget` / `dailyTokenBudget` (global until profiles), usage read from the runtime transcript after each stop, 80 % notification, pause at 100 %
-    - [ ] Run limits (R-120): `maxReviewLoops` needs a review→fix loop in the pack, `maxAutoApprovalsInRow` needs autonomy
+    - [x] Review→fix loop and `maxReviewLoops` (R-114 second half, R-120): `Task.source`, `Agent.review_rounds`, review gate held for a human by open review tasks or too many rounds
+    - [ ] `maxAutoApprovalsInRow` (R-120) and blocker/major findings (R-114 first half): with autonomy
   - [ ] Backups
   - [ ] Autonomy `important`
   - [ ] PR follow-up
