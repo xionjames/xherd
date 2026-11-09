@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 use xherd_core::paths::Paths;
 use xherd_core::{Agent, Status};
-use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, mint_token};
+use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER, mint_token};
 use xherd_daemon::*;
 
 async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
@@ -147,6 +147,30 @@ async fn auth_rules() {
         xherd_api::router(d2).layer(MockConnectInfo(SocketAddr::from(([172, 17, 0, 1], 5555))));
     let req = get("/api/v1/agents").body(Body::empty()).unwrap();
     assert_eq!(call(gw, req).await.0, StatusCode::OK);
+
+    // There, loopback is where the agents are: no rights without a token,
+    // not even with an unknown one (R-1203, T2).
+    let mut d3 = d.clone();
+    d3.sandbox = true;
+    d3.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
+    let inside = xherd_api::router(d3.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    assert_eq!(call(inside.clone(), req).await.0, StatusCode::UNAUTHORIZED);
+    let req = get("/api/v1/agents")
+        .header("authorization", "Bearer never-issued")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(inside.clone(), req).await.0, StatusCode::UNAUTHORIZED);
+    // The user's own token still works from inside (the CLI).
+    let user_t = mint_token(&d3.store, TOKEN_USER, None, &[], 1)
+        .await
+        .unwrap();
+    let req = get("/api/v1/agents")
+        .header("authorization", format!("Bearer {user_t}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(inside, req).await.0, StatusCode::OK);
 }
 
 #[tokio::test]

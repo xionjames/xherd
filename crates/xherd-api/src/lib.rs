@@ -150,12 +150,16 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// Loopback peer, local Host header, no proxy headers (design §7.2).
+///
+/// In the container (`sandbox`) loopback is where the agents are, so it never
+/// counts: only the gateway the published port arrives from (`local_peers`)
+/// is the local user (R-1203, T2). The CLI there uses its token.
 async fn is_local(parts: &mut Parts, d: &Daemon) -> bool {
     let peer_local = ConnectInfo::<SocketAddr>::from_request_parts(parts, d)
         .await
         .is_ok_and(|ConnectInfo(a)| {
             let ip = a.ip().to_canonical();
-            ip.is_loopback() || d.local_peers.contains(&ip)
+            (!d.sandbox && ip.is_loopback()) || d.local_peers.contains(&ip)
         });
     let host = parts
         .headers
