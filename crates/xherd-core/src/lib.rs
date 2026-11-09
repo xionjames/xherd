@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod container;
 pub mod domain;
 pub mod exec;
 pub mod guard;
@@ -12,6 +13,7 @@ pub mod paths;
 pub mod pr;
 pub mod queue;
 pub mod report;
+pub mod runner;
 pub mod status;
 pub mod tripwire;
 pub mod untrusted;

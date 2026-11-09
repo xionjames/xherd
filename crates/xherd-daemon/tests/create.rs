@@ -344,8 +344,8 @@ async fn trusts_each_new_worktree_in_the_runtime_file() {
     );
 }
 
-#[test]
-fn trust_is_written_only_under_the_worktrees_root() {
+#[tokio::test]
+async fn trust_is_written_only_under_the_worktrees_root() {
     let tmp = tempfile::tempdir().unwrap();
     let w = TrustWriter {
         trust: serde_json::from_value(serde_json::json!({
@@ -355,9 +355,9 @@ fn trust_is_written_only_under_the_worktrees_root() {
         .unwrap(),
         root: tmp.path().join("worktrees"),
     };
-    assert!(w.ensure(tmp.path()).is_err());
-    assert!(w.ensure(&tmp.path().join("worktrees")).is_err());
-    assert!(w.ensure(&tmp.path().join("worktrees/r/SC-1")).is_ok());
+    assert!(w.ensure(tmp.path()).await.is_err());
+    assert!(w.ensure(&tmp.path().join("worktrees")).await.is_err());
+    assert!(w.ensure(&tmp.path().join("worktrees/r/SC-1")).await.is_ok());
     let text = std::fs::read_to_string(tmp.path().join("t.json")).unwrap();
     assert!(text.contains("worktrees/r/SC-1"), "{text}");
 }

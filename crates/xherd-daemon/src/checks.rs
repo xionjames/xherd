@@ -54,7 +54,8 @@ pub fn tmux_version(out: &str) -> Option<(u32, u32)> {
 
 async fn version(argv: &[&str]) -> Result<String, String> {
     let cmd = Cmd::new(argv.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-        .timeout(Duration::from_secs(10));
+        .timeout(Duration::from_secs(10))
+        .as_agent();
     match run(cmd).await {
         Ok(o) if o.success() => Ok(o.stdout_str().trim().to_string()),
         Ok(o) => Err(o

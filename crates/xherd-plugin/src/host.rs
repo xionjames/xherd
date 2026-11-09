@@ -335,7 +335,8 @@ impl Host {
             .cwd(dir)
             .timeout(Duration::from_secs(secs))
             .env("GH_PROMPT_DISABLED", "1")
-            .env("NO_COLOR", "1");
+            .env("NO_COLOR", "1")
+            .as_agent();
         if let Some(t) = self.ctx.secrets.get("token").and_then(Value::as_str)
             && !t.is_empty()
         {

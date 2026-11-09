@@ -150,12 +150,16 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// Loopback peer, local Host header, no proxy headers (design §7.2).
+///
+/// In the container (`sandbox`) loopback is where the agents are, so it never
+/// counts: only the gateway the published port arrives from (`local_peers`)
+/// is the local user (R-1203, T2). The CLI there uses its token.
 async fn is_local(parts: &mut Parts, d: &Daemon) -> bool {
     let peer_local = ConnectInfo::<SocketAddr>::from_request_parts(parts, d)
         .await
         .is_ok_and(|ConnectInfo(a)| {
             let ip = a.ip().to_canonical();
-            ip.is_loopback() || d.local_peers.contains(&ip)
+            (!d.sandbox && ip.is_loopback()) || d.local_peers.contains(&ip)
         });
     let host = parts
         .headers
@@ -398,7 +402,7 @@ async fn install(
     State(d): State<Daemon>,
     Json(req): Json<InstallReq>,
 ) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     let installed = d
         .install(req.runtime.as_deref(), req.pack.as_deref(), &env)
         .await?;
@@ -426,7 +430,7 @@ async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {
 }
 
 async fn checks(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     Ok(Json(json!({"checks": d.checks(&env).await})))
 }
 
@@ -435,7 +439,7 @@ async fn fix_check(
     State(d): State<Daemon>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     d.fix_check(&id, &env).await?;
     Ok(Json(json!({"checks": d.checks(&env).await})))
 }

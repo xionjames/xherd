@@ -147,7 +147,17 @@ pub fn attach(client: &Client, who: &str, shell: bool) -> i32 {
     let err = match (docker_uid(), shell) {
         (Some(uid), false) => std::process::Command::new("docker")
             .args([
-                "exec", "-it", "-u", &uid, "xherd", "tmux", "attach", "-t", &target,
+                "exec",
+                "-it",
+                "-u",
+                &uid,
+                "xherd",
+                "tmux",
+                "-S",
+                xherd_core::container::TMUX_SOCK,
+                "attach",
+                "-t",
+                &target,
             ])
             .exec(),
         (Some(uid), true) => std::process::Command::new("docker")

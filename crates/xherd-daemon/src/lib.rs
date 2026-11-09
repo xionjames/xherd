@@ -163,6 +163,24 @@ impl Daemon {
     /// Prepare the data root, migrate config and database, load plugins and
     /// agents, replay queued reports, reconcile sessions, start the scheduler.
     pub async fn start(paths: Paths, opts: Options) -> Result<Daemon, StartError> {
+        // With a runner (the container, R-1203) nothing works without it:
+        // stop, so the container restarts, rather than fail every agent.
+        if let Some(sock) = xherd_core::runner::runner_socket() {
+            let mut up = false;
+            for _ in 0..60 {
+                if xherd_core::runner::ping(sock).await {
+                    up = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            if !up {
+                return Err(StartError::Io(std::io::Error::other(format!(
+                    "the runner at {} does not answer",
+                    sock.display()
+                ))));
+            }
+        }
         paths.ensure()?;
         let (mut config, migrated) = Config::load(&paths.config())?;
         let new_token = config.user_token.is_none();
@@ -294,7 +312,7 @@ impl Daemon {
         if d.sandbox {
             // The container is set up without a shell: commands go where the
             // agents find them at every start (user-edited files are kept).
-            let env = |v: &str| std::env::var(v).ok();
+            let env = xherd_core::runner::agent_env;
             if let Err(e) = d
                 .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, &env)
                 .await

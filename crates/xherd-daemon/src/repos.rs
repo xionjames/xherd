@@ -119,6 +119,14 @@ impl Daemon {
     }
 }
 
+/// Remove a folder git made: as the agent user, who owns what is inside it
+/// (the daemon's user cannot delete those files, R-1203).
+async fn remove_tree(dir: &Path) {
+    use xherd_core::exec::{Cmd, run};
+    let dir = dir.to_string_lossy().into_owned();
+    let _ = run(Cmd::new(["rm", "-rf", "--", dir.as_str()]).as_agent()).await;
+}
+
 /// Reuse and fetch an existing clone, else clone into a temporary folder
 /// beside `dest` and rename it, so a failed or concurrent clone never leaves
 /// a half-made repository at `dest`.
@@ -153,7 +161,7 @@ async fn clone_or_fetch(git: &Git, url: &str, dest: &Path) -> Result<Located, Ac
     let tmp = parent.join(format!(".{name}.cloning-{nanos}"));
     let slow = git.clone().with_timeout(CLONE_TIMEOUT);
     if let Err(e) = slow.clone_repo(url, &tmp).await {
-        let _ = std::fs::remove_dir_all(&tmp);
+        remove_tree(&tmp).await;
         // git's own message, not the command line with the temporary folder.
         let e = match e {
             xherd_git::GitError::Failed { stderr, .. } => stderr,
@@ -173,7 +181,7 @@ async fn clone_or_fetch(git: &Git, url: &str, dest: &Path) -> Result<Located, Ac
         ));
     }
     if let Err(e) = std::fs::rename(&tmp, dest) {
-        let _ = std::fs::remove_dir_all(&tmp);
+        remove_tree(&tmp).await;
         // Another clone of the same URL finished first: use it.
         if !git.is_repo(dest).await {
             return Err(refuse("io", format!("{}: {e}", dest.display())));

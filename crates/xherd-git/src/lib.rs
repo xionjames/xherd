@@ -76,7 +76,9 @@ impl Git {
             .cwd(dir)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("LC_ALL", "C")
-            .timeout(self.timeout);
+            .timeout(self.timeout)
+            // Git runs as the agent user (R-1203), who owns the repository.
+            .as_agent();
         for (k, v) in env {
             cmd = cmd.env(*k, *v);
         }
@@ -306,7 +308,9 @@ impl Git {
             self.run_env(dir, &env, &args).await
         }
         .await;
-        let _ = std::fs::remove_file(&index);
+        // The index file belongs to whoever ran git (the agent user, through
+        // the runner), and /tmp is sticky: remove it as the same user.
+        let _ = run(Cmd::new(["rm", "-f", "--", idx.as_str()]).as_agent()).await;
         res
     }
 
@@ -464,7 +468,12 @@ impl Git {
     /// skipping ones already present (R-005b).
     pub async fn add_excludes(&self, dir: &Path, patterns: &[&str]) -> Result<()> {
         let file = self.common_dir(dir).await?.join("info").join("exclude");
-        let existing = std::fs::read_to_string(&file).unwrap_or_default();
+        let existing = xherd_core::runner::read_file(&file)
+            .await
+            .ok()
+            .flatten()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
         let have: std::collections::HashSet<&str> = existing.lines().map(str::trim).collect();
         let mut add = String::new();
         for p in patterns.iter().filter(|p| !have.contains(*p)) {
@@ -479,12 +488,12 @@ impl Git {
             content.push('\n');
         }
         content.push_str(&add);
-        xherd_core::paths::write_atomic(&file, content.as_bytes(), None).map_err(|e| {
-            GitError::Failed {
+        xherd_core::runner::write_file(&file, content.as_bytes(), None)
+            .await
+            .map_err(|e| GitError::Failed {
                 args: "info/exclude".into(),
                 stderr: e.to_string(),
-            }
-        })
+            })
     }
 }
 

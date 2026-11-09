@@ -46,7 +46,12 @@ fn budget_text(n: u64) -> String {
 }
 
 /// Pure part: everything but the plugin list comes from the config.
-pub fn findings(c: &Config, sandbox: bool, external_plugins: &[String]) -> Vec<Finding> {
+pub fn findings(
+    c: &Config,
+    sandbox: bool,
+    split: bool,
+    external_plugins: &[String],
+) -> Vec<Finding> {
     let mut out = Vec::new();
     out.push(match (loopback(&c.bind), sandbox) {
         (true, _) => f(
@@ -74,12 +79,28 @@ pub fn findings(c: &Config, sandbox: bool, external_plugins: &[String]) -> Vec<F
             ),
         ),
     });
-    out.push(f(
-        "user-split",
-        false,
-        "Daemon and agents",
-        "run as the same user, so an agent can read the daemon's config and secrets (R-1203, not built yet)",
-    ));
+    out.push(if split {
+        f(
+            "user-split",
+            true,
+            "Daemon and agents",
+            "run as different users: agents cannot read the daemon's config, secrets or database (R-1203)",
+        )
+    } else if sandbox {
+        f(
+            "user-split",
+            false,
+            "Daemon and agents",
+            "run as the same user in this container, so an agent can read the daemon's config and secrets",
+        )
+    } else {
+        f(
+            "user-split",
+            false,
+            "Daemon and agents",
+            "run as the same OS user: xherd's files are 0600, which is a guardrail, not a boundary; an agent can read them (R-1203, use the Docker install for a boundary)",
+        )
+    });
     out.push(if external_plugins.is_empty() {
         f(
             "plugins",
@@ -159,7 +180,12 @@ impl Daemon {
             .filter(|p| !p.builtin())
             .map(|p| p.name().to_string())
             .collect();
-        findings(&self.config, self.sandbox, &external)
+        findings(
+            &self.config,
+            self.sandbox,
+            self.sandbox && xherd_core::runner::runner_socket().is_some(),
+            &external,
+        )
     }
 }
 
@@ -173,7 +199,7 @@ mod tests {
 
     #[test]
     fn defaults_warn_about_what_is_unset() {
-        let v = findings(&Config::default(), false, &[]);
+        let v = findings(&Config::default(), false, false, &[]);
         assert!(get(&v, "network").ok);
         assert!(get(&v, "plugins").ok);
         assert!(!get(&v, "session-limit").ok);
@@ -188,8 +214,8 @@ mod tests {
             bind: "0.0.0.0".into(),
             ..Default::default()
         };
-        assert!(!get(&findings(&c, false, &[]), "network").ok);
-        assert!(get(&findings(&c, true, &[]), "network").ok);
+        assert!(!get(&findings(&c, false, false, &[]), "network").ok);
+        assert!(get(&findings(&c, true, false, &[]), "network").ok);
     }
 
     #[test]
@@ -200,7 +226,7 @@ mod tests {
             sensitive_paths: vec!["infra/**".into()],
             ..Default::default()
         };
-        let v = findings(&c, false, &["mine".into()]);
+        let v = findings(&c, false, false, &["mine".into()]);
         assert!(get(&v, "session-limit").ok && get(&v, "sensitive-paths").ok);
         assert!(get(&v, "budgets").detail.contains("per agent off"));
         let p = get(&v, "plugins");

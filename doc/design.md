@@ -432,7 +432,15 @@ The container starts as root under `tini` and runs `xherd init`, which:
 5. Marks Claude Code's first-run screens done (`hasCompletedOnboarding`; the daemon trusts each agent worktree itself, §4.1). The runtime login happens in the first agent's terminal in the browser (`/login`).
 6. Passes the default gateway as `XHERD_LOCAL_PEERS` (the port published on the host's `127.0.0.1` arrives from it, so the daemon treats it as the local host), drops privileges and replaces itself with `xherd daemon` (bound to `0.0.0.0` inside the container through `XHERD_BIND`). The daemon installs the xherd commands at every start in the container.
 
-**Single user (M3)**: the daemon and the agents run as the same user. A daemon user separate from the agent user cannot write into repositories the host user cloned (typically `755`/`644`) without running every repository write as the agent user; that split comes with the guardrails (R-1203). Until then Setup checks state that agents can read xherd's config and secrets.
+**Two users (R-1203, M4)**: `init` is the only root process; it ends by running the daemon as `xherd-daemon`. Agents run as the host-mapped user. The daemon's user cannot write into repositories the host user cloned (typically `755`/`644`), so it never does:
+
+- **`xherd runner`**, started by `init` as the agents' user, runs for the daemon whatever has to happen as that user: every git command, the `verify:` command, host and plugin commands and checks (`Cmd::as_agent`, `xherd_core::runner`), and file reads and writes in places only that user reaches (the runtime's trust and hook files, the pack commands in `~/.claude`, transcripts, the repository's `info/exclude`). The daemon exits if the runner does not answer at start (the container restarts).
+- **The runner also keeps the tmux server** (`/run/xherd/tmux.sock`, restarted if it exits), so agent sessions are processes of the agents' user. The daemon's user is let in with tmux's `server-access` (tmux ≥ 3.3) and the host's group on the socket.
+- **Shared by group** (the daemon's user is in the host's group): each worktree's `.xherd/` (made by the runner with mode `2775`), `<workspace>/worktrees` and `repos` (made by `init`), `/run/xherd` (sockets and the offline hook queue). The daemon reads worktree files as itself, so they must be group- or world-readable.
+- **Private to the daemon**: `config.json`, `secrets.json` and the database in `/var/lib/xherd-daemon/data` (`0700`, its own volume). `shared/` there is readable by agents (the managed gitconfig, which they include but cannot change). The daemon runs with a system-only `PATH` (the agents' has folders they can write) and umask `002`.
+- **Access**: in the container, loopback is where the agents are, so only the gateway the published port arrives from has the local user's rights; the CLI there runs as `xherd-daemon` (`docker exec -u xherd-daemon xherd xherd …`) and uses its token.
+
+Native installs keep one user: the 0600 files are a guardrail, not a boundary, and the Setup finding says so. Pairing browsers as devices (`access: device`) comes with the server milestone.
 
 ### 8.5 Pitfalls
 
@@ -684,7 +692,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Guardrails
     - [x] Secret tripwire on commit proposals (R-117)
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
-    - [ ] Daemon/agent user split (R-1203)
+    - [x] Daemon/agent user split (R-1203): runner, shared folders, two users in the container; checked on Colima, to check on Linux
     - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a refusal)
     - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`, used for PR comments (`pr-comments.json`); fetched ticket text will use it too
     - [x] Max session length (R-1206): `maxSessionMinutes`, pauses (no handoff yet)

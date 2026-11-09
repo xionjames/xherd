@@ -38,6 +38,21 @@ enum Cmd {
     Daemon,
     /// Container entrypoint (root): prepare the user, home, SSH and git, then run the daemon.
     Init,
+    /// Run commands for the daemon as this user (container, R-1203): listens on a unix socket.
+    Runner {
+        /// Socket path.
+        #[arg(long)]
+        socket: std::path::PathBuf,
+        /// Socket file mode, octal (the daemon's group must reach it).
+        #[arg(long, default_value = "660")]
+        mode: String,
+        /// Also keep a tmux server on this socket path (the agents' sessions).
+        #[arg(long)]
+        tmux: Option<std::path::PathBuf>,
+        /// With --tmux: the user who may use that server (the daemon's).
+        #[arg(long, requires = "tmux")]
+        tmux_allow: Option<String>,
+    },
     /// Run xherd in Docker: write the compose file, check the setup, update.
     #[command(subcommand)]
     Docker(DockerCmd),
@@ -250,6 +265,12 @@ fn main() -> ExitCode {
     let code = match cli.cmd {
         Cmd::Daemon => run_daemon(),
         Cmd::Init => init::init(),
+        Cmd::Runner {
+            socket,
+            mode,
+            tmux,
+            tmux_allow,
+        } => run_runner(&socket, &mode, tmux, tmux_allow),
         Cmd::Docker(DockerCmd::Init {
             workspace,
             image,
@@ -335,6 +356,41 @@ fn main() -> ExitCode {
 
 // ---- daemon -------------------------------------------------------------------
 
+fn run_runner(
+    socket: &std::path::Path,
+    mode: &str,
+    tmux: Option<std::path::PathBuf>,
+    tmux_allow: Option<String>,
+) -> i32 {
+    let Ok(mode) = u32::from_str_radix(mode, 8) else {
+        eprintln!("xherd runner: --mode {mode:?} is not octal");
+        return 2;
+    };
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("xherd runner: {e}");
+            return 1;
+        }
+    };
+    let served = rt.block_on(async {
+        if let Some(t) = tmux {
+            tokio::spawn(xherd_core::runner::supervise_tmux(t, tmux_allow));
+        }
+        xherd_core::runner::serve(socket, mode).await
+    });
+    match served {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("xherd runner: {}: {e}", socket.display());
+            1
+        }
+    }
+}
+
 fn run_daemon() -> i32 {
     let filter = tracing_subscriber::EnvFilter::try_from_env("XHERD_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -378,7 +434,7 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("cannot listen on {addr}: {e} (is another daemon running?)"))?;
 
-    let tmux = xherd_term::Tmux::new(cfg.tmux_socket.clone());
+    let tmux = xherd_term::Tmux::new(cfg.tmux_server());
     let mut opts = xherd_daemon::Options::new(
         Arc::new(xherd_daemon::TerminalDriver { tmux }),
         Arc::new(xherd_daemon::SystemClock),
@@ -386,6 +442,10 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
     opts.xherd_bin = std::env::current_exe()?.to_string_lossy().into_owned();
     opts.scheduler = Some(Default::default());
     opts.sandbox = std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1");
+    // Commands in worktrees run as the agent user through its runner (R-1203).
+    if let Some(sock) = std::env::var_os("XHERD_RUNNER").filter(|s| !s.is_empty()) {
+        xherd_core::runner::use_runner(sock.into());
+    }
     opts.local_peers = std::env::var("XHERD_LOCAL_PEERS")
         .unwrap_or_default()
         .split(',')

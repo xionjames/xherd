@@ -46,6 +46,9 @@ pub struct Cmd {
     /// Stdout and stderr go to ours instead of being captured (a live log in
     /// a terminal); `Output` then has them empty.
     pub inherit_output: bool,
+    /// Runs as the agent user: through the runner when the daemon has one
+    /// (`runner::use_runner`, in the container, R-1203), else in place.
+    pub as_agent: bool,
 }
 
 impl Cmd {
@@ -63,6 +66,7 @@ impl Cmd {
             max_output: DEFAULT_MAX_OUTPUT,
             redact: Vec::new(),
             inherit_output: false,
+            as_agent: false,
         }
     }
     pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Cmd {
@@ -87,6 +91,11 @@ impl Cmd {
     }
     pub fn inherit_output(mut self) -> Cmd {
         self.inherit_output = true;
+        self
+    }
+    /// See `as_agent`.
+    pub fn as_agent(mut self) -> Cmd {
+        self.as_agent = true;
         self
     }
 }
@@ -125,6 +134,9 @@ pub enum ExecError {
         program: String,
         source: std::io::Error,
     },
+    /// The runner could not be reached or refused the request.
+    #[error("runner: {0}")]
+    Runner(String),
 }
 
 pub fn redact(text: &str, secrets: &[String]) -> String {
@@ -158,6 +170,11 @@ async fn read_capped<R: AsyncRead + Unpin>(
 
 pub async fn run(cmd: Cmd) -> Result<Output, ExecError> {
     let program = cmd.argv.first().cloned().ok_or(ExecError::EmptyArgv)?;
+    if cmd.as_agent
+        && let Some(socket) = crate::runner::runner_socket()
+    {
+        return crate::runner::exec(socket, cmd).await;
+    }
     let span = tracing::debug_span!("exec", program = %program, args = cmd.argv.len() - 1);
     run_inner(cmd, program).instrument(span).await
 }

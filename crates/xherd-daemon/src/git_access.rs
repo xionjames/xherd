@@ -230,7 +230,12 @@ impl Daemon {
     /// data root that the user may include (xherd never edits their config).
     pub fn gitconfig_path(&self) -> Option<PathBuf> {
         if self.sandbox {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/xherd/gitconfig"))
+            // A folder the daemon owns and the agents' user can read: they
+            // include the file but cannot change it (R-1203).
+            let dir = std::env::var_os("XHERD_SHARED")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(xherd_core::container::SHARED));
+            Some(dir.join("gitconfig"))
         } else {
             Some(self.paths.root.join("gitconfig"))
         }
@@ -390,7 +395,9 @@ impl Daemon {
     /// Add a host key the user accepted, if `ssh-keyscan` still sees exactly
     /// that fingerprint (container: xherd's known_hosts; native: the user's).
     pub async fn accept_host_key(&self, host: &str, fingerprint: &str) -> Result<(), ActionError> {
-        let home = std::env::var("HOME").map_err(|_| fail("io", "HOME is not set"))?;
+        // The agents' user's home: its ssh config includes this file (R-1203).
+        let home =
+            xherd_core::runner::agent_env("HOME").ok_or_else(|| fail("io", "HOME is not set"))?;
         let file = if self.sandbox {
             Path::new(&home).join(".config/xherd/known_hosts")
         } else {
@@ -408,7 +415,12 @@ impl Daemon {
                 format!("{host} no longer shows {fingerprint}; run the doctor again"),
             ));
         }
-        let mut text = std::fs::read_to_string(&file).unwrap_or_default();
+        let mut text = xherd_core::runner::read_file(&file)
+            .await
+            .ok()
+            .flatten()
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default();
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }
@@ -416,10 +428,8 @@ impl Daemon {
             text.push_str(&l);
             text.push('\n');
         }
-        if let Some(d) = file.parent() {
-            std::fs::create_dir_all(d).map_err(|e| fail("io", e.to_string()))?;
-        }
-        write_atomic(&file, text.as_bytes(), Some(0o644))
+        xherd_core::runner::write_file(&file, text.as_bytes(), Some(0o644))
+            .await
             .map_err(|e| fail("io", format!("{}: {e}", file.display())))?;
         tracing::info!(host, fingerprint, "host key accepted");
         Ok(())
@@ -462,11 +472,12 @@ impl Daemon {
                 ));
             }
         };
-        let tmux = xherd_term::Tmux::new(self.config.tmux_socket.clone());
+        let tmux = xherd_term::Tmux::new(self.config.tmux_server());
         if tmux.has_session(LOGIN_SESSION).await {
             let _ = tmux.kill_session(LOGIN_SESSION).await;
         }
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+        let home =
+            PathBuf::from(xherd_core::runner::agent_env("HOME").unwrap_or_else(|| "/".into()));
         tmux.new_session(LOGIN_SESSION, &home, &[], &argv)
             .await
             .map_err(|e| fail("driver", e.to_string()))
@@ -483,11 +494,12 @@ impl Daemon {
             .login
             .clone()
             .ok_or_else(|| fail("not_fixable", format!("{plugin} has no login")))?;
-        let tmux = xherd_term::Tmux::new(self.config.tmux_socket.clone());
+        let tmux = xherd_term::Tmux::new(self.config.tmux_server());
         if tmux.has_session(PLUGIN_LOGIN_SESSION).await {
             let _ = tmux.kill_session(PLUGIN_LOGIN_SESSION).await;
         }
-        let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+        let home =
+            PathBuf::from(xherd_core::runner::agent_env("HOME").unwrap_or_else(|| "/".into()));
         tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &[], &argv)
             .await
             .map_err(|e| fail("driver", e.to_string()))
@@ -517,7 +529,8 @@ impl Daemon {
                 .env(
                     "GIT_SSH_COMMAND",
                     "ssh -o BatchMode=yes -o ConnectTimeout=10",
-                ))
+                )
+                .as_agent())
             .await;
             out.push(Finding {
                 id: "git-transport",
@@ -553,7 +566,7 @@ impl Daemon {
         if !ok {
             return;
         }
-        let keys = sh(Cmd::new(["ssh-add", "-l"])).await;
+        let keys = sh(Cmd::new(["ssh-add", "-l"]).as_agent()).await;
         let ok = keys.code == Some(0);
         out.push(Finding {
             id: "ssh-key",
@@ -571,7 +584,7 @@ impl Daemon {
         if !ok {
             return;
         }
-        let known = sh(Cmd::new(["ssh", "-G", host])).await;
+        let known = sh(Cmd::new(["ssh", "-G", host]).as_agent()).await;
         let files: Vec<String> = known
             .out
             .lines()
@@ -581,8 +594,10 @@ impl Daemon {
         let name = host.split(':').next().unwrap_or(host);
         let mut is_known = false;
         for f in &files {
-            let f = f.replacen('~', &std::env::var("HOME").unwrap_or_default(), 1);
-            if sh(Cmd::new(["ssh-keygen", "-F", name, "-f", &f]))
+            // `~` is the agent user's home, which is not ours (R-1203).
+            let script = "f=$1; case \"$f\" in \"~\"*) f=\"$HOME${f#\\~}\";; esac; \
+                          exec ssh-keygen -F \"$0\" -f \"$f\"";
+            if sh(Cmd::new(["sh", "-c", script, name, f]).as_agent())
                 .await
                 .code
                 == Some(0)
@@ -633,7 +648,8 @@ impl Daemon {
             "-o",
             "ConnectTimeout=10",
             &format!("git@{name}"),
-        ]))
+        ])
+        .as_agent())
         .await;
         let text = format!("{}{}", r.out, r.err);
         let lower = text.to_lowercase();
@@ -654,14 +670,9 @@ impl Daemon {
 
     async fn doctor_https(&self, host: &str, repo: Option<&str>, out: &mut Vec<Finding>) {
         let url = format!("https://{host}/");
-        let helper = sh(Cmd::new([
-            "git",
-            "config",
-            "--get-urlmatch",
-            "credential.helper",
-            &url,
-        ]))
-        .await;
+        let helper =
+            sh(Cmd::new(["git", "config", "--get-urlmatch", "credential.helper", &url]).as_agent())
+                .await;
         let helper = helper.out.trim().to_string();
         let ok = !helper.is_empty();
         out.push(Finding {
@@ -688,7 +699,8 @@ impl Daemon {
         let fill = sh(Cmd::new(["git", "credential", "fill"])
             .stdin(format!("protocol=https\nhost={host}\n\n"))
             .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GCM_INTERACTIVE", "never"))
+            .env("GCM_INTERACTIVE", "never")
+            .as_agent())
         .await;
         let token = fill
             .out
