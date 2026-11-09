@@ -77,6 +77,11 @@ pub struct Config {
     /// A session running longer than this many minutes is ended and the agent
     /// paused (R-1206). 0 = off.
     pub max_session_minutes: u64,
+    /// Token budget of one agent and of all agents per UTC day (R-1205). At
+    /// 80 % a notification; at 100 % the agent is paused at its next stop.
+    /// 0 = no budget.
+    pub agent_token_budget: u64,
+    pub daily_token_budget: u64,
     /// Code gates hold a commit proposal with more changed lines than this
     /// (R-115 `maxDiffLines`). Global until repo profiles exist.
     pub max_diff_lines: usize,
@@ -117,6 +122,8 @@ impl Default for Config {
             git_identities: Vec::new(),
             git_hosts: Vec::new(),
             max_session_minutes: 0,
+            agent_token_budget: 0,
+            daily_token_budget: 0,
             max_diff_lines: 1000,
             sensitive_paths: Vec::new(),
             extra: Map::new(),

@@ -18,7 +18,6 @@ pub struct Finding {
 /// What R-1210 lists that this version cannot report yet.
 pub const PENDING: &[&str] = &[
     "autonomy levels in use (autonomy comes later in M4)",
-    "budgets not set (budgets are not built yet)",
     "branch protection of the base branch (host command not built yet)",
 ];
 
@@ -36,6 +35,14 @@ fn loopback(bind: &str) -> bool {
         || bind
             .parse::<std::net::IpAddr>()
             .is_ok_and(|a| a.is_loopback())
+}
+
+fn budget_text(n: u64) -> String {
+    if n == 0 {
+        "off".into()
+    } else {
+        format!("{n} tokens")
+    }
 }
 
 /// Pure part: everything but the plugin list comes from the config.
@@ -107,6 +114,25 @@ pub fn findings(c: &Config, sandbox: bool, external_plugins: &[String]) -> Vec<F
             "no limit: set maxSessionMinutes to pause long sessions",
         )
     });
+    out.push(if c.agent_token_budget > 0 || c.daily_token_budget > 0 {
+        f(
+            "budgets",
+            true,
+            "Token budgets",
+            format!(
+                "per agent {}, per day {}",
+                budget_text(c.agent_token_budget),
+                budget_text(c.daily_token_budget)
+            ),
+        )
+    } else {
+        f(
+            "budgets",
+            false,
+            "Token budgets",
+            "none: set agentTokenBudget / dailyTokenBudget to pause runaway agents",
+        )
+    });
     out.push(if c.sensitive_paths.is_empty() {
         f(
             "sensitive-paths",
@@ -152,6 +178,7 @@ mod tests {
         assert!(get(&v, "plugins").ok);
         assert!(!get(&v, "session-limit").ok);
         assert!(!get(&v, "sensitive-paths").ok);
+        assert!(!get(&v, "budgets").ok);
         assert!(!get(&v, "user-split").ok);
     }
 
@@ -169,11 +196,13 @@ mod tests {
     fn set_limits_and_external_plugins() {
         let c = Config {
             max_session_minutes: 60,
+            daily_token_budget: 5_000_000,
             sensitive_paths: vec!["infra/**".into()],
             ..Default::default()
         };
         let v = findings(&c, false, &["mine".into()]);
         assert!(get(&v, "session-limit").ok && get(&v, "sensitive-paths").ok);
+        assert!(get(&v, "budgets").detail.contains("per agent off"));
         let p = get(&v, "plugins");
         assert!(!p.ok && p.detail.contains("mine"));
     }

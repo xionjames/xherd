@@ -95,6 +95,17 @@ pub struct Agent {
     /// When the current runtime session started (R-1206).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_since: Option<Millis>,
+    /// Tokens of earlier sessions, and of the current one (`tokens_session_id`),
+    /// read from the runtime's transcript (R-1205, `usage`).
+    #[serde(default)]
+    pub tokens_base: u64,
+    #[serde(default)]
+    pub tokens_session: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_session_id: Option<String>,
+    /// The 80 % budget warning was sent.
+    #[serde(default)]
+    pub budget_warned: bool,
 }
 
 impl Agent {
@@ -131,6 +142,10 @@ impl Agent {
             screen_blocked: false,
             idle_alerted: false,
             session_since: None,
+            tokens_base: 0,
+            tokens_session: 0,
+            tokens_session_id: None,
+            budget_warned: false,
         }
     }
 

@@ -91,6 +91,11 @@ pub enum WorkResult {
     },
     /// The host plugin's answer to `pr-for-branch` (R-302).
     PrLookup(Result<Option<String>, String>),
+    /// Tokens of a runtime session, read from its transcript (R-1205).
+    Usage {
+        session: String,
+        tokens: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -139,6 +144,8 @@ pub struct ActorSettings {
     pub verify_timeout: Duration,
     /// Code tripwires (R-115), from the config at daemon start.
     pub max_session_minutes: u64,
+    pub agent_token_budget: u64,
+    pub daily_token_budget: u64,
     pub max_diff_lines: usize,
     pub sensitive_paths: Vec<String>,
 }
@@ -156,6 +163,8 @@ impl Default for ActorSettings {
             toolchain_install: false,
             verify_timeout: VERIFY_TIMEOUT,
             max_session_minutes: 0,
+            agent_token_budget: 0,
+            daily_token_budget: 0,
             max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
             sensitive_paths: Vec::new(),
         }
@@ -414,8 +423,11 @@ impl Actor {
                     }
                 }
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
-                // Token usage, auto-approval, parking: later milestones.
-                Effect::AfterStop => self.after_ship().await,
+                // Auto-approval: with autonomy (M4).
+                Effect::AfterStop => {
+                    self.measure_usage();
+                    self.after_ship().await;
+                }
             }
         }
         if result == ReportResult::Applied && r.event == ReportEvent::SessionStart {
@@ -428,6 +440,88 @@ impl Actor {
             self.send_first_prompt().await;
         }
         result
+    }
+
+    /// Read the session's tokens from the runtime's transcript (slow: spawned,
+    /// back as `WorkDone`). Cumulative, so a dropped result is made up by the
+    /// next stop. Without a session id or a runtime that has transcripts there
+    /// is nothing to measure.
+    fn measure_usage(&self) {
+        let (Some(session), Some(r)) = (self.agent.session.clone(), self.env.resume.clone()) else {
+            return;
+        };
+        let env = |v: &str| std::env::var(v).ok();
+        let Some(path) = r.transcript(&session, &env) else {
+            return;
+        };
+        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        tokio::spawn(async move {
+            let tokens = tokio::task::spawn_blocking(move || {
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .map(|t| xherd_core::usage::transcript_tokens(&t))
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(tokens) = tokens {
+                let _ = tx.send(Msg::WorkDone {
+                    generation,
+                    result: WorkResult::Usage { session, tokens },
+                });
+            }
+        });
+    }
+
+    /// Add a measurement to the agent and the day's total, then check the
+    /// budgets (R-1205): a notification at 80 %, a pause at 100 % (this is the
+    /// agent's stop, so "at its next stop" is now).
+    async fn on_usage(&mut self, session: &str, tokens: u64) {
+        use xherd_core::usage::{Level, day, level};
+        let delta = self.agent.record_usage(session, tokens);
+        let today = day(self.now());
+        if delta > 0
+            && let Err(e) = self.env.store.add_usage("all", &today, delta).await
+        {
+            tracing::warn!(agent = %self.agent.name, %e, "usage not stored");
+        }
+        let daily = self.env.store.usage("all", &today).await.unwrap_or(0);
+        let s = &self.env.settings;
+        let checks = [
+            ("agent", self.agent.tokens_total(), s.agent_token_budget),
+            ("daily", daily, s.daily_token_budget),
+        ];
+        let before = self.agent.status;
+        let hit = checks
+            .iter()
+            .find(|(_, used, budget)| level(*used, *budget) == Level::Exceeded);
+        if let Some((scope, used, budget)) = hit {
+            if next_status(self.agent.status, Trigger::Pause).is_some() {
+                self.end_session().await;
+                self.agent.fire(Trigger::Pause, self.now());
+                self.log(
+                    None,
+                    "budget-exhausted",
+                    Some(json!({"scope": scope, "used": used, "budget": budget})),
+                )
+                .await;
+                self.notify(format!(
+                    "{} paused: the {scope} token budget is used up ({used} of {budget})",
+                    self.agent.name
+                ));
+            }
+        } else if !self.agent.budget_warned
+            && let Some((scope, used, budget)) = checks
+                .iter()
+                .find(|(_, used, budget)| level(*used, *budget) == Level::Warn)
+        {
+            self.agent.budget_warned = true;
+            self.notify(format!(
+                "{}: 80% of the {scope} token budget is used ({used} of {budget})",
+                self.agent.name
+            ));
+        }
+        self.commit(before).await;
     }
 
     /// After ship (R-301): an agent following a flow that stopped with its PR
@@ -1686,6 +1780,7 @@ impl Actor {
                 };
                 self.on_report(r, Origin::Daemon).await;
             }
+            WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
             WorkResult::PrLookup(Ok(None)) => {}
             WorkResult::PrLookup(Ok(Some(url))) => {
                 let before = self.agent.status;

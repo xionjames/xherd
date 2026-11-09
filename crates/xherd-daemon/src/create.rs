@@ -174,13 +174,23 @@ pub struct Resumer(pub runtime::Resume);
 impl Resumer {
     pub fn argv(&self, session: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<Vec<String>> {
         let args = self.0.argv(session)?;
+        self.transcript(session, env).map(|_| args)
+    }
+
+    /// The transcript file of `session`, when the runtime has it.
+    pub fn transcript(
+        &self,
+        session: &str,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Option<PathBuf> {
+        runtime::plain_id(session).then_some(())?;
         let dir = xherd_flow::install::expand(&self.0.transcripts, env).ok()?;
         let file = self.0.file.replace("{session}", session);
         std::fs::read_dir(dir)
             .ok()?
             .flatten()
-            .any(|p| p.path().join(&file).is_file())
-            .then_some(args)
+            .map(|p| p.path().join(&file))
+            .find(|p| p.is_file())
     }
 }
 

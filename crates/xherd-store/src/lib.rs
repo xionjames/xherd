@@ -329,6 +329,36 @@ impl Store {
         .await
     }
 
+    // ---- usage ---------------------------------------------------------------
+
+    /// Add tokens to `scope`'s total for `day` (`YYYY-MM-DD`, UTC).
+    pub async fn add_usage(&self, scope: &str, day: &str, tokens: u64) -> Result<()> {
+        let (s, d, t) = (scope.to_string(), day.to_string(), tokens as i64);
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO budgets (scope, day, tokens) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(scope, day) DO UPDATE SET tokens = tokens + excluded.tokens",
+                params![s, d, t],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn usage(&self, scope: &str, day: &str) -> Result<u64> {
+        let (s, d) = (scope.to_string(), day.to_string());
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT tokens FROM budgets WHERE scope = ?1 AND day = ?2",
+                params![s, d],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0) as u64)
+        })
+        .await
+    }
+
     // ---- installs ----------------------------------------------------------
 
     /// Hash of what `xherd install` last wrote at `path` (design §6.7).

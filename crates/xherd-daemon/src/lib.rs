@@ -207,6 +207,8 @@ impl Daemon {
             toolchain_install: opts.sandbox,
             verify_timeout: opts.verify_timeout,
             max_session_minutes: config.max_session_minutes,
+            agent_token_budget: config.agent_token_budget,
+            daily_token_budget: config.daily_token_budget,
             max_diff_lines: config.max_diff_lines,
             sensitive_paths: config.sensitive_paths.clone(),
         };

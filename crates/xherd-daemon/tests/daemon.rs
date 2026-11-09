@@ -480,3 +480,65 @@ async fn a_session_over_the_limit_is_paused() {
     d.sup.tick(TickKind::SessionLimit);
     wait_status(&d, "SC-1", Status::Paused).await;
 }
+
+#[tokio::test]
+async fn token_budget_warns_then_pauses_at_a_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    let cfg = xherd_core::config::Config {
+        agent_token_budget: 1000,
+        ..Default::default()
+    };
+    paths.ensure().unwrap();
+    cfg.save(&paths.config()).unwrap();
+    let projects = dir.path().join("projects");
+    std::fs::create_dir_all(projects.join("p")).unwrap();
+    let transcript = projects.join("p/s1.jsonl");
+    let mut o = Options::new(
+        Arc::new(FakeDriver::default()),
+        Arc::new(ManualClock::new(1_000_000)),
+    );
+    let rt = o
+        .builtin_plugins
+        .iter_mut()
+        .find(|m| m.name == "claude-code")
+        .unwrap();
+    rt.data["terminal"]["resume"]["transcripts"] = projects.to_string_lossy().into();
+    let d = Daemon::start(paths, o).await.unwrap();
+    let a = d.create_agent(agent("SC-1", 1)).await.unwrap();
+    wait_status(&d, "SC-1", Status::Running).await;
+    let line =
+        |n: u64| format!("{{\"message\":{{\"id\":\"m\",\"usage\":{{\"output_tokens\":{n}}}}}}}\n");
+    let stop = |id: &str, seq: u64| {
+        rep(
+            &a,
+            id,
+            ReportEvent::Stop,
+            seq,
+            json!({"session_id": "s1", "message": "ok"}),
+        )
+    };
+
+    std::fs::write(&transcript, line(850)).unwrap();
+    d.report(stop("b1", 1)).await;
+    for _ in 0..200 {
+        if d.action("SC-1", UserAction::Get)
+            .await
+            .unwrap()
+            .tokens_session
+            == 850
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let ag = d.action("SC-1", UserAction::Get).await.unwrap();
+    assert_eq!((ag.tokens_total(), ag.budget_warned), (850, true));
+    assert_ne!(ag.status, Status::Paused);
+
+    std::fs::write(&transcript, line(1200)).unwrap();
+    d.report(stop("b2", 2)).await;
+    wait_status(&d, "SC-1", Status::Paused).await;
+    let events = d.store.events(&a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "budget-exhausted"));
+}

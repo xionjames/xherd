@@ -689,7 +689,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`; the callers come with PR follow-up (PR comments) and ticket fetching
     - [x] Max session length (R-1206): `maxSessionMinutes`, pauses (no handoff yet)
     - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; autonomy, budgets and branch protection are listed as not reported yet and join when those exist
-    - [ ] Budgets and run limits (R-1205, R-120)
+    - [x] Token budgets (R-1205): `agentTokenBudget` / `dailyTokenBudget` (global until profiles), usage read from the runtime transcript after each stop, 80 % notification, pause at 100 %
+    - [ ] Run limits (R-120): `maxReviewLoops` needs a review→fix loop in the pack, `maxAutoApprovalsInRow` needs autonomy
   - [ ] Backups
   - [ ] Autonomy `important`
   - [ ] PR follow-up
