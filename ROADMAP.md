@@ -76,7 +76,8 @@ by theme; update it together with them.
 - [ ] Guardrails still open: daemon/agent user split (R-1203), `maxAutoApprovalsInRow` (R-120, with autonomy), `diff_viewed` marks
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
-- [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI
+- [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel
+- [ ] PR follow-up, rest: comments into the agent (R-304, wrap with `untrusted::wrap`), triage decisions and replies (R-306), `pr.merged` hooks, `pr-template`
 - [ ] Notifications (browser, desktop, ntfy) and phones
 
 ## v1.x

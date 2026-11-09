@@ -64,6 +64,8 @@ pub struct Options {
     pub local_peers: Vec<std::net::IpAddr>,
     /// Limit for a task's `verify:` command (tests shorten it).
     pub verify_timeout: std::time::Duration,
+    /// Time between PR polls; `None` = `prPollMinutes` of the config (tests).
+    pub pr_poll: Option<std::time::Duration>,
 }
 
 impl Options {
@@ -79,6 +81,7 @@ impl Options {
             sandbox: false,
             local_peers: Vec::new(),
             verify_timeout: actor::VERIFY_TIMEOUT,
+            pr_poll: None,
         }
     }
 }
@@ -206,6 +209,9 @@ impl Daemon {
             screen_rules: opts.screen_rules,
             toolchain_install: opts.sandbox,
             verify_timeout: opts.verify_timeout,
+            pr_poll: opts
+                .pr_poll
+                .unwrap_or(std::time::Duration::from_secs(config.pr_poll_minutes * 60)),
             max_session_minutes: config.max_session_minutes,
             max_review_loops: config.max_review_loops,
             agent_token_budget: config.agent_token_budget,

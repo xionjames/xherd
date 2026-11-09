@@ -67,6 +67,7 @@ async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
     if let Some(t) = verify_timeout {
         o.verify_timeout = t;
     }
+    o.pr_poll = Some(Duration::from_millis(1));
     let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
     let mut a = Agent::new("SC-1", "SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
@@ -1746,4 +1747,77 @@ async fn review_gate_is_held_by_open_review_tasks_and_the_round_limit() {
     assert!(!why.contains("F02"), "minor findings do not hold: {why}");
     assert!(why.contains("review tasks not done: T02"), "{why}");
     assert!(why.contains("2 review→fix rounds, limit 1"), "{why}");
+}
+
+/// A `gh` that answers `pr list`, `pr view` and `pr checks` from files in its
+/// folder (`view.json`, `checks.json`, `checks.code` = exit code of checks).
+fn fake_gh_pr(dir: &Path, url: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join("gh");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\ncd '{d}'\ncase \"$2\" in\nlist) echo '[{{\"url\":\"{url}\"}}]';;\nview) cat view.json;;\nchecks) cat checks.json; exit $(cat checks.code 2>/dev/null || echo 0);;\nesac\n",
+            d = dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+#[tokio::test]
+async fn a_watched_pr_is_polled_for_ci_conflicts_and_merge() {
+    use xherd_daemon::actor::TickKind;
+    let bin_dir = tempfile::tempdir().unwrap();
+    let d = bin_dir.path();
+    let gh = fake_gh_pr(d, "https://github.com/acme/app/pull/7");
+    let put = |f: &str, v: &str| std::fs::write(d.join(f), v).unwrap();
+    put("view.json", r#"{"state":"OPEN","mergeable":"MERGEABLE"}"#);
+    put("checks.json", r#"[{"name":"build","bucket":"pass"}]"#);
+    let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
+    let mut rx = t.d.hub.subscribe();
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    until(&t, |a| a.status == Status::Watching).await;
+
+    let poll = |t: &T| {
+        t.d.sup.tick(TickKind::PrPoll);
+    };
+
+    // Healthy: nothing to say.
+    poll(&t);
+    let a = until(&t, |a| a.pr_state.is_some()).await;
+    assert_eq!(a.pr_ci, Some(xherd_core::pr::Ci::Passing));
+    assert_eq!(a.status, Status::Watching);
+
+    // A check fails (gh exits 1 with the list on stdout) and the PR conflicts.
+    put("checks.json", r#"[{"name":"build","bucket":"fail"}]"#);
+    put("checks.code", "1");
+    put("view.json", r#"{"state":"OPEN","mergeable":"CONFLICTING"}"#);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    poll(&t);
+    let a = until(&t, |a| a.pr_conflict).await;
+    assert_eq!(a.pr_ci, Some(xherd_core::pr::Ci::Failing));
+
+    // Merged: the agent is done.
+    put("view.json", r#"{"state":"MERGED","mergeable":"UNKNOWN"}"#);
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    poll(&t);
+    let a = until(&t, |a| a.status == Status::Done).await;
+    assert_eq!(a.pr_state, Some(xherd_core::pr::PrState::Merged));
+
+    let mut said = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { text, .. } = c {
+            said.push(text);
+        }
+    }
+    let said = said.join("\n");
+    assert!(said.contains("checks are failing: build"), "{said}");
+    assert!(said.contains("merge conflict"), "{said}");
+    assert!(said.contains("pull request was merged"), "{said}");
+    assert_eq!(said.matches("merge conflict").count(), 1);
 }

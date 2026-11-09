@@ -73,6 +73,11 @@ export interface Agent {
   tasks?: Task[];
   commits?: Commit[];
   prUrl?: string;
+  /** What the last poll of the pull request found (R-303). */
+  prState?: 'open' | 'merged' | 'closed';
+  prCi?: 'pending' | 'failing' | 'passing';
+  prConflict?: boolean;
+  prPolledAt?: number;
   lastMessage?: string;
   nextPrompt?: string;
 }

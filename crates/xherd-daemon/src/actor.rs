@@ -91,6 +91,8 @@ pub enum WorkResult {
     },
     /// The host plugin's answer to `pr-for-branch` (R-302).
     PrLookup(Result<Option<String>, String>),
+    /// The host's answer to a poll of the pull request (R-303).
+    PrPoll(Result<xherd_core::pr::Snapshot, String>),
     /// Tokens of a runtime session, read from its transcript (R-1205).
     Usage {
         session: String,
@@ -142,6 +144,8 @@ pub struct ActorSettings {
     pub toolchain_install: bool,
     /// Longest a task's `verify:` command may run.
     pub verify_timeout: Duration,
+    /// Time between polls of a watched PR (R-303); zero = never.
+    pub pr_poll: Duration,
     /// Code tripwires (R-115), from the config at daemon start.
     pub max_session_minutes: u64,
     pub max_review_loops: u32,
@@ -163,6 +167,7 @@ impl Default for ActorSettings {
             screen_rules: None,
             toolchain_install: false,
             verify_timeout: VERIFY_TIMEOUT,
+            pr_poll: Duration::from_secs(300),
             max_session_minutes: 0,
             max_review_loops: 3,
             agent_token_budget: 0,
@@ -479,6 +484,66 @@ impl Actor {
                 });
             }
         });
+    }
+
+    /// Poll the pull request of a watching agent through the host plugin when
+    /// `prPollMinutes` have passed (R-303; slow: spawned, back as `WorkDone`).
+    /// Comments come with the rest of PR follow-up.
+    fn poll_pr(&mut self) {
+        let every = self.env.settings.pr_poll;
+        let now = self.now();
+        let due = self
+            .agent
+            .pr_polled_at
+            .is_none_or(|t| now - t >= every.as_millis() as i64);
+        let (Some(host), Ok(wd), Some(url), true) = (
+            self.env.host.clone(),
+            self.workdir(),
+            self.agent.pr_url.clone(),
+            self.agent.status == Status::Watching && !every.is_zero() && due,
+        ) else {
+            return;
+        };
+        // Set here so a slow host is not asked again by the next tick.
+        self.agent.pr_polled_at = Some(now);
+        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        tokio::spawn(async move {
+            let result = host.pr_snapshot(&wd, &url).await.map_err(|e| e.to_string());
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::PrPoll(result),
+            });
+        });
+    }
+
+    /// What a poll found: tell the user what is new (R-305) and finish the
+    /// agent when the PR was merged or closed (R-307).
+    async fn on_pr_poll(&mut self, snap: xherd_core::pr::Snapshot) {
+        use xherd_core::pr::{Event, PrState};
+        let before = self.agent.status;
+        let name = self.agent.name.clone();
+        for e in self.agent.apply_pr(&snap) {
+            let text = match e {
+                Event::Finished(state) => {
+                    self.agent.fire(Trigger::PrFinished, self.now());
+                    let what = if state == PrState::Merged {
+                        "merged"
+                    } else {
+                        "closed"
+                    };
+                    self.log(None, "pr-finished", Some(json!({"state": what})))
+                        .await;
+                    format!("{name}: the pull request was {what}")
+                }
+                Event::CiFailing(names) => {
+                    format!("{name}: checks are failing: {}", names.join(", "))
+                }
+                Event::CiPassingAgain => format!("{name}: all checks pass again"),
+                Event::Conflict => format!("{name}: the pull request has a merge conflict"),
+            };
+            self.notify(text);
+        }
+        self.commit(before).await;
     }
 
     /// Add a measurement to the agent and the day's total, then check the
@@ -1824,7 +1889,8 @@ impl Actor {
                     });
                 }
             }
-            TickKind::TodoTick | TickKind::PrPoll => {}
+            TickKind::PrPoll => self.poll_pr(),
+            TickKind::TodoTick => {}
         }
     }
 
@@ -1849,6 +1915,12 @@ impl Actor {
                     at: self.now(),
                 };
                 self.on_report(r, Origin::Daemon).await;
+            }
+            WorkResult::PrPoll(Ok(snap)) => self.on_pr_poll(snap).await,
+            WorkResult::PrPoll(Err(e)) => {
+                tracing::warn!(agent = %self.agent.name, error = %e, "PR poll failed");
+                self.log(None, "pr-poll-failed", Some(json!({"error": e})))
+                    .await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
             WorkResult::PrLookup(Ok(None)) => {}

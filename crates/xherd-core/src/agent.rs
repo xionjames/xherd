@@ -103,6 +103,19 @@ pub struct Agent {
     pub tokens_session: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens_session_id: Option<String>,
+    /// What the last poll of the pull request found (R-303): its state, the
+    /// rolled-up checks, whether failing checks and a merge conflict were
+    /// already announced, and when it was polled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<crate::pr::PrState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_ci: Option<crate::pr::Ci>,
+    #[serde(default)]
+    pub pr_ci_failed: bool,
+    #[serde(default)]
+    pub pr_conflict: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_polled_at: Option<Millis>,
     /// Times the agent came back to review after fixing (R-120).
     #[serde(default)]
     pub review_rounds: u32,
@@ -150,6 +163,11 @@ impl Agent {
             tokens_session_id: None,
             budget_warned: false,
             review_rounds: 0,
+            pr_state: None,
+            pr_ci: None,
+            pr_ci_failed: false,
+            pr_conflict: false,
+            pr_polled_at: None,
         }
     }
 

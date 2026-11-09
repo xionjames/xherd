@@ -696,6 +696,10 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Backups
   - [ ] Autonomy `important`
   - [ ] PR follow-up
+    - [x] Polling of a watching agent's PR: status, checks, mergeable (R-303); CI and conflict notifications (R-305); merged or closed finishes the agent (R-307); shown in the Pull request panel
+    - [ ] Comments: `pr-comments`, `pr-comments.json`, the PR review command and the pack's `pr-review`/`pr-apply` prompts, comments wrapped with `untrusted::wrap` (R-304)
+    - [ ] Decisions and replies: resolve/skip per comment, `pr-reply`, the `pr-triage` / `pr-replies` gates (R-306)
+    - [ ] `pr.merged` stage hooks (R-307), `pr-template` (R-153)
   - [ ] Notifications
   - [ ] Phones
 - [ ] **v1.x**
