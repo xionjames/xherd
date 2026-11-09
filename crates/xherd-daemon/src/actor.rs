@@ -2103,7 +2103,16 @@ impl Actor {
                 });
             }
         }
-        if let Some((gate, reopened)) = xherd_flow::approve::infer_gate(flow, &seen) {
+        if let Some((mut gate, reopened)) = xherd_flow::approve::infer_gate(flow, &seen) {
+            // The agent did not declare this gate, so it could not say whether
+            // a human is needed: autonomy never approves it (R-112).
+            if let Gate::Docs { needs_human, .. } = &mut gate {
+                *needs_human = Some(if reopened {
+                    "an approved document was edited".into()
+                } else {
+                    "the agent did not declare this gate".into()
+                });
+            }
             let kind = if reopened {
                 "gate-reopened"
             } else {

@@ -2345,3 +2345,39 @@ async fn changing_the_level_rewrites_instructions_and_approves_a_waiting_gate() 
         "autonomy_unavailable"
     );
 }
+
+#[tokio::test]
+async fn a_gate_the_agent_did_not_declare_is_never_auto_approved() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    // No `gate open`: the stop finds a finished document and infers the gate.
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# spec\n").unwrap();
+    std::fs::write(t.wt.path().join(".xherd/spec/design.md"), "# design\n").unwrap();
+    xap(&t, "c1", "stage.enter", json!({"stage": "design"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    let Some(Gate::Docs { needs_human, .. }) = &a.gate else {
+        panic!("a gate should be inferred")
+    };
+    assert!(needs_human.as_deref().unwrap().contains("did not declare"));
+    assert!(ledger_lines(&t).is_empty());
+}
+
+#[tokio::test]
+async fn auto_approvals_are_listed_for_review() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    let list = t.d.store.auto_approvals(10).await.unwrap();
+    assert_eq!(list.len(), 1);
+    let p = list[0].payload.as_ref().unwrap();
+    assert_eq!(p["gate"], "design");
+    assert!(p["reason"].as_str().unwrap().contains("autonomy important"));
+    // A human approval is not listed.
+    act(&t, level("ask")).await.unwrap();
+    open_stop(&t, "c2", "tasks", "tasks.md", 2).await;
+    act(&t, approve(None)).await.unwrap();
+    assert_eq!(t.d.store.auto_approvals(10).await.unwrap().len(), 1);
+}

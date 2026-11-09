@@ -452,6 +452,41 @@ impl Store {
         .await
     }
 
+    /// Automatic approvals (`approval` events with `auto: true`), newest
+    /// first, across agents (R-111).
+    pub async fn auto_approvals(&self, limit: usize) -> Result<Vec<Event>> {
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT id, agent_id, kind, payload, at FROM events
+                 WHERE kind = 'approval' AND json_extract(payload, '$.auto') = 1
+                 ORDER BY at DESC, id DESC LIMIT ?1",
+            )?;
+            let rows = st.query_map(params![limit as i64], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get(4)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, agent_id, kind, payload, at) = row?;
+                let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
+                out.push(Event {
+                    id,
+                    agent_id,
+                    kind,
+                    payload,
+                    at,
+                });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     /// Delete events older than `before`. Returns how many were removed.
     pub async fn prune_events(&self, before: Millis) -> Result<usize> {
         self.write(move |c| Ok(c.execute("DELETE FROM events WHERE at < ?1", [before])?))
