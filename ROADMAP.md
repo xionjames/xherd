@@ -69,7 +69,8 @@ by theme; update it together with them.
 - [ ] Move `sensitivePaths` / `maxDiffLines` into repo profiles and add the profile test command tripwire (R-115), with profiles (v1.x)
 - [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
 - [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asking for a handoff first waits for R-026
-- [ ] Guardrails still open: daemon/agent user split (R-1203), budgets and run limits, `xherd security check`, `diff_viewed` marks
+- [x] `xherd security check` (R-1210), first version; add autonomy, budgets and branch protection findings when those exist (`security::PENDING`)
+- [ ] Guardrails still open: daemon/agent user split (R-1203), budgets and run limits, `diff_viewed` marks
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
 - [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI

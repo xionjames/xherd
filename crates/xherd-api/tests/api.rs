@@ -640,3 +640,24 @@ async fn git_access_and_credentials() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn security_overview_needs_the_user_and_lists_findings() {
+    let (_dir, d, _a) = setup().await;
+    let remote = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 5], 5555))));
+    let local =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let req = || get("/api/v1/security").body(Body::empty()).unwrap();
+    assert_eq!(call(remote, req()).await.0, StatusCode::UNAUTHORIZED);
+    let (s, v) = call(local, req()).await;
+    assert_eq!(s, StatusCode::OK);
+    let ids: Vec<&str> = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"network") && ids.contains(&"session-limit"));
+    assert!(!v["pending"].as_array().unwrap().is_empty());
+}

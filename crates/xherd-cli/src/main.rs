@@ -91,6 +91,9 @@ enum Cmd {
     /// Git access.
     #[command(subcommand)]
     Git(GitCmd),
+    /// Security overview.
+    #[command(subcommand)]
+    Security(SecurityCmd),
     /// Checks behind xherd's git hooks.
     #[command(subcommand)]
     Guard(GuardCmd),
@@ -152,6 +155,12 @@ enum Cmd {
     /// XAP: record an out-of-scope finding.
     #[command(subcommand)]
     Issue(xap::IssueCmd),
+}
+
+#[derive(Subcommand)]
+enum SecurityCmd {
+    /// Summarise the current exposure: network binding, plugins, limits.
+    Check,
 }
 
 #[derive(Subcommand)]
@@ -294,6 +303,7 @@ fn main() -> ExitCode {
         Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),
         Cmd::Companion => with_client(open_in::companion),
         Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
+        Cmd::Security(SecurityCmd::Check) => with_client(security_check),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -405,6 +415,33 @@ async fn shutdown_signal() {
 }
 
 // ---- user client ----------------------------------------------------------------
+
+/// `xherd security check` (R-1210): informational, exit 0 when it answered.
+fn security_check(c: &Client) -> i32 {
+    let v = match c.call("GET", "/security", None) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("xherd security check: {e}");
+            return 2;
+        }
+    };
+    for f in v["findings"].as_array().into_iter().flatten() {
+        println!(
+            "{} {:<18} {}",
+            if f["ok"].as_bool().unwrap_or(false) {
+                "ok  "
+            } else {
+                "WARN"
+            },
+            f["label"].as_str().unwrap_or("?"),
+            f["detail"].as_str().unwrap_or("")
+        );
+    }
+    for p in v["pending"].as_array().into_iter().flatten() {
+        println!("n/a  {}", p.as_str().unwrap_or(""));
+    }
+    0
+}
 
 fn with_client(f: impl FnOnce(&Client) -> i32) -> i32 {
     match Client::new() {

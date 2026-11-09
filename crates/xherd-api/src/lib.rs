@@ -47,6 +47,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/install", post(install))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
+        .route("/api/v1/security", get(security))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
@@ -409,6 +410,13 @@ async fn put_config(
     Json(patch): Json<xherd_daemon::settings::ConfigPatch>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.save_config(patch)?))
+}
+
+async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {
+    Json(json!({
+        "findings": d.security_check(),
+        "pending": xherd_daemon::security::PENDING,
+    }))
 }
 
 async fn checks(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {

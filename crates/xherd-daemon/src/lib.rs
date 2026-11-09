@@ -23,6 +23,7 @@ pub mod install;
 pub mod open_in;
 pub mod repos;
 pub mod scheduler;
+pub mod security;
 pub mod settings;
 pub mod supervisor;
 pub mod support;
