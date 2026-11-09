@@ -697,8 +697,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Autonomy `important`
   - [ ] PR follow-up
     - [x] Polling of a watching agent's PR: status, checks, mergeable (R-303); CI and conflict notifications (R-305); merged or closed finishes the agent (R-307); shown in the Pull request panel
-    - [ ] Comments: `pr-comments`, `pr-comments.json`, the PR review command and the pack's `pr-review`/`pr-apply` prompts, comments wrapped with `untrusted::wrap` (R-304)
-    - [ ] Decisions and replies: resolve/skip per comment, `pr-reply`, the `pr-triage` / `pr-replies` gates (R-306)
+    - [x] Comments (R-304, R-1201): `pr-comments` host command, `pr-comments.json` with every body wrapped by `untrusted::wrap`, the agent queued with `/xherd:pr-review` in a fresh session, stage `pr-review` (gate on `pr-review.md`) then `/xherd:pr-apply`; flow `none` is only notified
+    - [ ] Decisions and replies: xherd parses the decisions of `pr-review.md` (today it is free-form Markdown the user approves), resolves/skips with a note per comment in the UI, `pr-reply` posts approved replies with the marker, `pr-triage` / `pr-replies` gates (R-306)
     - [ ] `pr.merged` stage hooks (R-307), `pr-template` (R-153)
   - [ ] Notifications
   - [ ] Phones

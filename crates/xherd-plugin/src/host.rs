@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use xherd_core::exec::{Cmd, run};
-use xherd_core::pr::{CheckRun, Mergeable, PrState, Snapshot};
+use xherd_core::pr::{CheckRun, Comment, Mergeable, PrState, Snapshot};
 
 use crate::{Context, Plugin, PluginError, run_command};
 
@@ -127,6 +127,56 @@ impl Host {
         })
     }
 
+    /// `pr-comments {url}` (R-304): every comment on the pull request at
+    /// `url`: line comments, review texts and the conversation. Built-in
+    /// `github` reads three endpoints through `gh api`.
+    pub async fn pr_comments(&self, dir: &Path, url: &str) -> Result<Vec<Comment>, PluginError> {
+        let name = "pr-comments";
+        if !self.plugin.builtin() {
+            let v = run_command(
+                &self.plugin,
+                name,
+                json!({"url": url, "worktree": dir}),
+                &self.ctx,
+            )
+            .await?;
+            return serde_json::from_value(v).map_err(|e| self.shape(name, &e.to_string()));
+        }
+        let (host, owner, repo, number) = parse_pr_url(url)
+            .ok_or_else(|| self.shape(name, &format!("{url} is not a pull request URL")))?;
+        let gh = self
+            .ctx
+            .settings
+            .get("gh")
+            .and_then(Value::as_str)
+            .unwrap_or("gh");
+        let mut out = Vec::new();
+        for (kind, path) in [
+            (
+                "review-comment",
+                format!("repos/{owner}/{repo}/pulls/{number}/comments"),
+            ),
+            (
+                "issue",
+                format!("repos/{owner}/{repo}/issues/{number}/comments"),
+            ),
+            (
+                "review",
+                format!("repos/{owner}/{repo}/pulls/{number}/reviews"),
+            ),
+        ] {
+            let mut args = vec!["api", "--paginate"];
+            if host != "github.com" {
+                args.extend(["--hostname", &host]);
+            }
+            args.push(&path);
+            let bytes = self.gh(gh, dir, &args).await?;
+            let items = parse_stream(&bytes).map_err(|e| self.shape(name, &e))?;
+            out.extend(items.iter().filter_map(|v| github_comment(kind, v)));
+        }
+        Ok(out)
+    }
+
     fn json(&self, name: &str, bytes: &[u8]) -> Result<Value, PluginError> {
         serde_json::from_slice(bytes).map_err(|e| PluginError::BadJson {
             plugin: self.plugin.name().into(),
@@ -230,9 +280,99 @@ pub fn parse_checks(v: &Value) -> Result<Vec<CheckRun>, String> {
         .collect()
 }
 
+/// `https://host/owner/repo/pull/7` → (host, owner, repo, 7). Plain names
+/// only: the parts go into an API path.
+pub fn parse_pr_url(url: &str) -> Option<(String, String, String, u64)> {
+    let rest = url.strip_prefix("https://")?;
+    let parts: Vec<&str> = rest.trim_end_matches('/').split('/').collect();
+    let [host, owner, repo, "pull", number] = parts[..] else {
+        return None;
+    };
+    let plain = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+    };
+    (plain(host) && plain(owner) && plain(repo))
+        .then(|| number.parse().ok())
+        .flatten()
+        .map(|n| (host.into(), owner.into(), repo.into(), n))
+}
+
+/// `gh api --paginate` prints one JSON array per page, back to back: all
+/// their items.
+pub fn parse_stream(bytes: &[u8]) -> Result<Vec<Value>, String> {
+    let mut out = Vec::new();
+    for page in serde_json::Deserializer::from_slice(bytes).into_iter::<Value>() {
+        match page.map_err(|e| e.to_string())? {
+            Value::Array(items) => out.extend(items),
+            other => return Err(format!("expected a list, got {other}")),
+        }
+    }
+    Ok(out)
+}
+
+/// A GitHub comment, review or issue comment, as a `Comment`; reviews
+/// without text are skipped. Ids carry the kind, since the three lists number
+/// independently.
+fn github_comment(kind: &str, v: &Value) -> Option<Comment> {
+    let body = v["body"].as_str().filter(|b| !b.trim().is_empty())?;
+    let id = v["id"].as_u64()?;
+    Some(Comment {
+        id: format!("{kind}:{id}"),
+        kind: kind.into(),
+        author: v["user"]["login"].as_str().unwrap_or("unknown").into(),
+        body: body.into(),
+        url: v["html_url"].as_str().unwrap_or_default().into(),
+        created_at: v["created_at"]
+            .as_str()
+            .or_else(|| v["submitted_at"].as_str())
+            .unwrap_or_default()
+            .into(),
+        path: v["path"].as_str().map(str::to_string),
+        line: v["line"]
+            .as_u64()
+            .or_else(|| v["original_line"].as_u64())
+            .map(|n| n as u32),
+        in_reply_to: v["in_reply_to_id"].as_u64().map(|n| format!("{kind}:{n}")),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pr_urls() {
+        assert_eq!(
+            parse_pr_url("https://github.com/acme/app/pull/7"),
+            Some(("github.com".into(), "acme".into(), "app".into(), 7))
+        );
+        assert!(parse_pr_url("https://ghe.corp:8443/a/b.c/pull/12/").is_some());
+        assert_eq!(parse_pr_url("http://github.com/a/b/pull/7"), None);
+        assert_eq!(parse_pr_url("https://github.com/a/b/issues/7"), None);
+        assert_eq!(parse_pr_url("https://github.com/a/b c/pull/7"), None);
+        assert_eq!(parse_pr_url("https://github.com/a/../pull/x"), None);
+    }
+
+    #[test]
+    fn paginated_pages_and_github_comments() {
+        let pages = br#"[{"id":1,"user":{"login":"bo"},"body":"rename","path":"a.rs","line":4,"html_url":"u","created_at":"t","in_reply_to_id":9}]
+[{"id":2,"user":{"login":"cy"},"body":"   "},{"id":3,"user":{"login":"cy"},"body":"ok","submitted_at":"s"}]"#;
+        let items = parse_stream(pages).unwrap();
+        assert_eq!(items.len(), 3);
+        let c = github_comment("review-comment", &items[0]).unwrap();
+        assert_eq!(c.id, "review-comment:1");
+        assert_eq!((c.path.as_deref(), c.line), (Some("a.rs"), Some(4)));
+        assert_eq!(c.in_reply_to.as_deref(), Some("review-comment:9"));
+        assert!(
+            github_comment("review", &items[1]).is_none(),
+            "empty review text"
+        );
+        assert_eq!(github_comment("review", &items[2]).unwrap().created_at, "s");
+        assert!(parse_stream(b"{}").is_err());
+        assert!(parse_stream(b"").unwrap().is_empty());
+    }
 
     #[test]
     fn status_parses_gh_and_plugin_shapes() {

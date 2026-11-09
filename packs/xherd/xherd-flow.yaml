@@ -13,7 +13,7 @@ install:
     commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xherd/{name}.md", format: command }
     args: "$ARGUMENTS"
 
-commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status" }
+commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review" }
 
 flows:
   feature:
@@ -32,4 +32,5 @@ flows:
       - { id: implement, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
       - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
       - { id: ship, role: ship, class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship", autoApproved: "{prefix}ship --no-ticket-update" }] }
+      - { id: pr-review, role: pr, class: routine, gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
       - { id: pr, role: pr, class: human-only }

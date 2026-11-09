@@ -116,6 +116,9 @@ pub struct Agent {
     pub pr_conflict: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_polled_at: Option<Millis>,
+    /// Ids of the PR comments already handled or ignored (R-304).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pr_comments_seen: Vec<String>,
     /// Times the agent came back to review after fixing (R-120).
     #[serde(default)]
     pub review_rounds: u32,
@@ -164,6 +167,7 @@ impl Agent {
             budget_warned: false,
             review_rounds: 0,
             pr_state: None,
+            pr_comments_seen: Vec::new(),
             pr_ci: None,
             pr_ci_failed: false,
             pr_conflict: false,

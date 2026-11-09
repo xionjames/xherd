@@ -92,7 +92,16 @@ pub enum WorkResult {
     /// The host plugin's answer to `pr-for-branch` (R-302).
     PrLookup(Result<Option<String>, String>),
     /// The host's answer to a poll of the pull request (R-303).
-    PrPoll(Result<xherd_core::pr::Snapshot, String>),
+    /// `None` comments: they could not be read (the status still counts).
+    PrPoll(
+        Result<
+            (
+                xherd_core::pr::Snapshot,
+                Option<Vec<xherd_core::pr::Comment>>,
+            ),
+            String,
+        >,
+    ),
     /// Tokens of a runtime session, read from its transcript (R-1205).
     Usage {
         session: String,
@@ -508,7 +517,17 @@ impl Actor {
         self.agent.pr_polled_at = Some(now);
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
         tokio::spawn(async move {
-            let result = host.pr_snapshot(&wd, &url).await.map_err(|e| e.to_string());
+            let result = match host.pr_snapshot(&wd, &url).await {
+                Ok(snap) => {
+                    let comments = host
+                        .pr_comments(&wd, &url)
+                        .await
+                        .map_err(|e| tracing::warn!(error = %e, "PR comments not read"))
+                        .ok();
+                    Ok((snap, comments))
+                }
+                Err(e) => Err(e.to_string()),
+            };
             let _ = tx.send(Msg::WorkDone {
                 generation,
                 result: WorkResult::PrPoll(result),
@@ -518,7 +537,11 @@ impl Actor {
 
     /// What a poll found: tell the user what is new (R-305) and finish the
     /// agent when the PR was merged or closed (R-307).
-    async fn on_pr_poll(&mut self, snap: xherd_core::pr::Snapshot) {
+    async fn on_pr_poll(
+        &mut self,
+        snap: xherd_core::pr::Snapshot,
+        comments: Option<Vec<xherd_core::pr::Comment>>,
+    ) {
         use xherd_core::pr::{Event, PrState};
         let before = self.agent.status;
         let name = self.agent.name.clone();
@@ -543,7 +566,71 @@ impl Actor {
             };
             self.notify(text);
         }
+        if self.agent.status == Status::Watching
+            && let Some(all) = comments
+        {
+            let fresh = self.agent.new_comments(&all);
+            if !fresh.is_empty() {
+                self.on_new_comments(fresh).await;
+            }
+        }
         self.commit(before).await;
+    }
+
+    /// New comments on the pull request (R-304): save them for the agent in
+    /// `pr-comments.json` (each body in an untrusted block, R-1201) and queue
+    /// it with the pack's PR review command, in a fresh session. Without a
+    /// flow (flow `none`) the user is only told.
+    async fn on_new_comments(&mut self, fresh: Vec<xherd_core::pr::Comment>) {
+        let n = fresh.len();
+        let name = self.agent.name.clone();
+        let written = self.write_pr_comments(&fresh);
+        let command = self.pack_command("prReview");
+        if let Err(e) = &written {
+            // Not handled: they are new again at the next poll.
+            self.agent
+                .pr_comments_seen
+                .retain(|id| !fresh.iter().any(|c| &c.id == id));
+            tracing::warn!(agent = %name, error = %e, "pr-comments.json not written");
+            return;
+        }
+        self.log(None, "pr-comments", Some(json!({"count": n})))
+            .await;
+        let s = if n == 1 { "" } else { "s" };
+        match command {
+            Some(cmd) => {
+                self.agent.next_prompt = Some(cmd);
+                self.agent.fire(Trigger::PrComments, self.now());
+                self.notify(format!(
+                    "{name}: {n} new PR comment{s}; the agent will triage them"
+                ));
+            }
+            None => self.notify(format!("{name}: {n} new PR comment{s}")),
+        }
+    }
+
+    /// `.xherd/spec/pr-comments.json`: `{"comments": [...]}` with every body
+    /// wrapped as untrusted data. Replaced each time: the agent is queued
+    /// right after, and polling resumes only when it is watching again.
+    fn write_pr_comments(&self, fresh: &[xherd_core::pr::Comment]) -> Result<(), String> {
+        let dir = self
+            .workdir()
+            .map_err(|e| e.message)?
+            .join(xherd_flow::xap::SPEC_DIR);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let comments: Vec<_> = fresh
+            .iter()
+            .map(|c| {
+                let mut c = c.clone();
+                c.body =
+                    xherd_core::untrusted::wrap(&format!("PR comment by {}", c.author), &c.body);
+                c
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&json!({"comments": comments}))
+            .map_err(|e| e.to_string())?;
+        xherd_core::paths::write_atomic(&dir.join("pr-comments.json"), text.as_bytes(), None)
+            .map_err(|e| e.to_string())
     }
 
     /// Add a measurement to the agent and the day's total, then check the
@@ -1633,14 +1720,22 @@ impl Actor {
     }
 
     fn resume_command(&self) -> Option<String> {
+        self.pack_command("resume")
+    }
+
+    /// The pack's command `key` (`resume`, `prReview`…) for the agent's
+    /// runtime; `None` for flow `none` or a pack without it.
+    fn pack_command(&self, key: &str) -> Option<String> {
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
         let runtime = self
             .agent
             .runtime
             .as_deref()
             .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
-        pack.command(runtime, pack.commands.get("resume")?, &[])
-            .map_err(|e| tracing::warn!(agent = %self.agent.name, error = %e, "no resume command"))
+        pack.command(runtime, pack.commands.get(key)?, &[])
+            .map_err(
+                |e| tracing::warn!(agent = %self.agent.name, key, error = %e, "no pack command"),
+            )
             .ok()
     }
 
@@ -1916,7 +2011,7 @@ impl Actor {
                 };
                 self.on_report(r, Origin::Daemon).await;
             }
-            WorkResult::PrPoll(Ok(snap)) => self.on_pr_poll(snap).await,
+            WorkResult::PrPoll(Ok((snap, comments))) => self.on_pr_poll(snap, comments).await,
             WorkResult::PrPoll(Err(e)) => {
                 tracing::warn!(agent = %self.agent.name, error = %e, "PR poll failed");
                 self.log(None, "pr-poll-failed", Some(json!({"error": e})))

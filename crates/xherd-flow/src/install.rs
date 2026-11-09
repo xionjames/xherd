@@ -29,6 +29,14 @@ pub const BUILTIN_FILES: &[(&str, &str)] = &[
         include_str!("../../../packs/xherd/commands/next.md"),
     ),
     (
+        "commands/pr-apply.md",
+        include_str!("../../../packs/xherd/commands/pr-apply.md"),
+    ),
+    (
+        "commands/pr-review.md",
+        include_str!("../../../packs/xherd/commands/pr-review.md"),
+    ),
+    (
         "commands/resume.md",
         include_str!("../../../packs/xherd/commands/resume.md"),
     ),

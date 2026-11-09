@@ -45,6 +45,34 @@ pub struct Snapshot {
     pub checks: Vec<CheckRun>,
 }
 
+/// Hidden marker xherd puts in the comments it posts, so it never reads its
+/// own replies as new comments (R-304).
+pub const MARKER: &str = "<!-- xherd -->";
+
+/// A comment on the pull request, as the host plugin reports it (spec §10.1
+/// `pr-comments`). `body` is untrusted text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comment {
+    /// Unique on the PR.
+    pub id: String,
+    /// `review` (a review's own text), `review-comment` (on a line of the
+    /// diff) or `issue` (the conversation).
+    pub kind: String,
+    pub author: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<String>,
+}
+
 /// Something new in a snapshot, to tell the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -74,6 +102,23 @@ impl Snapshot {
 }
 
 impl Agent {
+    /// The comments of `all` not seen before and not written by xherd
+    /// (R-304); they count as seen from now on. Comments xherd wrote are
+    /// remembered too, so they stay out later.
+    pub fn new_comments(&mut self, all: &[Comment]) -> Vec<Comment> {
+        let mut fresh = Vec::new();
+        for c in all {
+            if self.pr_comments_seen.contains(&c.id) {
+                continue;
+            }
+            self.pr_comments_seen.push(c.id.clone());
+            if !c.body.contains(MARKER) {
+                fresh.push(c.clone());
+            }
+        }
+        fresh
+    }
+
     /// Take a poll's result in and return what is new.
     pub fn apply_pr(&mut self, s: &Snapshot) -> Vec<Event> {
         let mut out = Vec::new();
@@ -171,6 +216,37 @@ mod tests {
         assert_eq!(a.apply_pr(&bad), []);
         a.apply_pr(&snap(PrState::Open, Mergeable::Yes, &[]));
         assert_eq!(a.apply_pr(&bad), [Event::Conflict]);
+    }
+
+    fn comment(id: &str, body: &str) -> Comment {
+        Comment {
+            id: id.into(),
+            kind: "issue".into(),
+            author: "alice".into(),
+            body: body.into(),
+            url: String::new(),
+            created_at: String::new(),
+            path: None,
+            line: None,
+            in_reply_to: None,
+        }
+    }
+
+    #[test]
+    fn comments_are_new_once_and_never_ours() {
+        let mut a = Agent::new("A", "A", 1);
+        let all = vec![
+            comment("1", "please rename"),
+            comment("2", &format!("done {MARKER}")),
+        ];
+        let fresh = a.new_comments(&all);
+        assert_eq!(
+            fresh.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["1"]
+        );
+        assert_eq!(a.new_comments(&all), [], "seen already, ours included");
+        let more = [all, vec![comment("3", "and this")]].concat();
+        assert_eq!(a.new_comments(&more).len(), 1);
     }
 
     #[test]

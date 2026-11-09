@@ -25,7 +25,7 @@
         {:else if agent.status === 'watching'}
           <p class="muted">Waiting for the first check of the pull request.</p>
         {/if}
-        <p class="muted">Review comments come with the next part of PR follow-up.</p>
+        <p class="muted">New comments on the pull request wake the agent to triage them; you approve its plan before it changes anything.</p>
       {:else}
         <p class="muted">No pull request yet. The agent opens a draft PR after you approve the ship step.</p>
       {/if}
