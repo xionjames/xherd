@@ -15,7 +15,7 @@ Decisions in `doc/design.md` §19 are settled; do not re-open them in code. Cite
 
 ## Status
 
-**M4** (guardrails first) is on branch `m4-guardrails`. Done: secret tripwire (R-117: `xherd_core::tripwire`, run by `Actor::secret_tripwire` on `commit propose`, sets the commit's `needs_human` with masked matches, shown as "Held:" in the UI) and the pre-push guard (R-1204: `xherd_core::guard` rules, `xherd guard pre-push --branch B` in the CLI, `Git::install_push_guard` called from `new_agent`). The guard exists only for agents created after it shipped.
+**M4** (guardrails first) is on branch `m4-guardrails`. Done: secret tripwire (R-117: `xherd_core::tripwire`, run by `Actor::secret_tripwire` on `commit propose`, sets the commit's `needs_human` with masked matches, shown as "Held:" in the UI; the same pass holds a proposal touching a `sensitivePaths` glob or over `maxDiffLines` (default 1000) changed lines, R-115, both global in `config.json` and read at daemon start into `ActorSettings` until repo profiles exist (`tripwire::glob_match`: `*` in a folder, `**` across, no `/` = file name anywhere); the scope fence R-116 was already a refusal, `files_outside_scope`) and the pre-push guard (R-1204: `xherd_core::guard` rules, `xherd guard pre-push --branch B` in the CLI, `Git::install_push_guard` called from `new_agent`). The guard exists only for agents created after it shipped.
 
 Finished M2: after "Request changes" the gate documents are remembered (`reviewed` table) and the Documents panel marks the blocks that changed; open questions have one answer box each (sent as a change request).
 

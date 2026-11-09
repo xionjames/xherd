@@ -65,7 +65,9 @@ by theme; update it together with them.
 ## M4 → v1.0
 
 - [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for agents created from now on
-- [ ] Guardrails still open: daemon/agent user split (R-1203), the other code tripwires (R-115, R-116), untrusted-text blocks (R-1201), budgets and run limits, `xherd security check`, `diff_viewed` marks
+- [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence is a refusal (R-116)
+- [ ] Move `sensitivePaths` / `maxDiffLines` into repo profiles and add the profile test command tripwire (R-115), with profiles (v1.x)
+- [ ] Guardrails still open: daemon/agent user split (R-1203), untrusted-text blocks (R-1201), budgets and run limits, `xherd security check`, `diff_viewed` marks
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
 - [ ] PR follow-up: PR polling, comment triage and replies, CI status in the UI

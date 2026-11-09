@@ -1648,3 +1648,43 @@ async fn secret_in_a_proposed_commit_holds_it_for_a_human() {
     };
     assert_eq!(c.needs_human, None);
 }
+
+#[tokio::test]
+async fn a_very_large_commit_is_held() {
+    let t = setup().await;
+    std::fs::write(t.wt.path().join("b.txt"), "b\n".repeat(1100)).unwrap();
+    let why = propose_reason(&t, "f1", &["b.txt"]).await;
+    assert!(
+        why.contains("large diff: 1100 changed lines, limit 1000"),
+        "{why}"
+    );
+}
+
+#[tokio::test]
+async fn configured_limit_and_sensitive_paths_hold_a_commit() {
+    let t = setup_config(json!({
+        "freshSessions": true, "maxDiffLines": 3, "sensitivePaths": ["infra/**", "*.pem"]
+    }))
+    .await;
+    std::fs::create_dir_all(t.wt.path().join("infra")).unwrap();
+    std::fs::write(t.wt.path().join("infra/prod.tf"), "a\nb\nc\nd\n").unwrap();
+    std::fs::write(t.wt.path().join("ok.txt"), "x\n").unwrap();
+    let why = propose_reason(&t, "g1", &["infra/prod.tf", "ok.txt"]).await;
+    assert!(why.contains("sensitive path: infra/prod.tf"), "{why}");
+    assert!(why.contains("5 changed lines, limit 3"), "{why}");
+}
+
+async fn propose_reason(t: &T, id: &str, files: &[&str]) -> String {
+    xap(
+        t,
+        id,
+        "commit.propose",
+        json!({"id": "C01", "subject": "x", "files": files}),
+    )
+    .await
+    .unwrap();
+    let Some(Gate::Commit(c)) = get(t).await.gate else {
+        panic!("no commit gate")
+    };
+    c.needs_human.unwrap()
+}

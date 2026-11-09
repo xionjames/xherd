@@ -74,6 +74,14 @@ pub struct Config {
     /// Identities by remote (`github.com/my-company`), over the global one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_identities: Vec<GitIdentity>,
+    /// Code gates hold a commit proposal with more changed lines than this
+    /// (R-115 `maxDiffLines`). Global until repo profiles exist.
+    pub max_diff_lines: usize,
+    /// Globs of sensitive paths: a commit proposal touching one is held
+    /// (R-115). `*` stays in a folder, `**` crosses folders, a pattern
+    /// without `/` matches the file name anywhere. Global until profiles.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sensitive_paths: Vec<String>,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -105,6 +113,8 @@ impl Default for Config {
             git_user_email: None,
             git_identities: Vec::new(),
             git_hosts: Vec::new(),
+            max_diff_lines: 1000,
+            sensitive_paths: Vec::new(),
             extra: Map::new(),
         }
     }

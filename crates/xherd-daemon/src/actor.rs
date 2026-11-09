@@ -135,6 +135,9 @@ pub struct ActorSettings {
     pub toolchain_install: bool,
     /// Longest a task's `verify:` command may run.
     pub verify_timeout: Duration,
+    /// Code tripwires (R-115), from the config at daemon start.
+    pub max_diff_lines: usize,
+    pub sensitive_paths: Vec<String>,
 }
 
 impl Default for ActorSettings {
@@ -149,6 +152,8 @@ impl Default for ActorSettings {
             screen_rules: None,
             toolchain_install: false,
             verify_timeout: VERIFY_TIMEOUT,
+            max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
+            sensitive_paths: Vec::new(),
         }
     }
 }
@@ -540,7 +545,7 @@ impl Actor {
         if self.env.store.event_exists(&call.id).await.unwrap_or(false) {
             return Ok(json!({"changed": false, "duplicate": true}));
         }
-        self.secret_tripwire(&mut call.cmd).await;
+        self.commit_tripwires(&mut call.cmd).await;
         let packs = self.env.packs.clone();
         let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
         let obs = self.observe(pack, &call.cmd).await?;
@@ -566,25 +571,32 @@ impl Actor {
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
     }
 
-    /// Secret tripwire (R-117): a commit proposal whose diff looks like it
-    /// holds a secret is held for a human (`needs_human`, masked). Reads the
-    /// diff only; a failing git leaves the proposal as it was.
-    async fn secret_tripwire(&self, cmd: &mut XapCmd) {
+    /// Tripwires on a commit proposal: secret (R-117), sensitive paths and diff size (R-115). Any hit holds it for a human (`needs_human`,
+    /// masked). Reads the diff only; a failing git skips the diff checks.
+    async fn commit_tripwires(&self, cmd: &mut XapCmd) {
         let XapCmd::CommitPropose {
             files, needs_human, ..
         } = cmd
         else {
             return;
         };
-        let Ok(wd) = self.workdir() else { return };
-        let diff = match self.env.git.diff_proposed(&wd, files).await {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::debug!(agent = %self.agent.name, %e, "secret tripwire: no diff");
-                return;
+        use xherd_core::tripwire as tw;
+        let mut hits = Vec::new();
+        let st = &self.env.settings;
+        hits.extend(tw::sensitive_summary(files, &st.sensitive_paths));
+        if let Ok(wd) = self.workdir() {
+            match self.env.git.diff_proposed(&wd, files).await {
+                Ok(diff) => {
+                    hits.extend(tw::summary(&tw::scan_diff(&diff)));
+                    hits.extend(tw::size_summary(&diff, st.max_diff_lines));
+                }
+                Err(e) => {
+                    tracing::debug!(agent = %self.agent.name, %e, "commit tripwires: no diff");
+                }
             }
-        };
-        if let Some(why) = xherd_core::tripwire::summary(&xherd_core::tripwire::scan_diff(&diff)) {
+        }
+        if !hits.is_empty() {
+            let why = hits.join("; ");
             *needs_human = Some(match needs_human.take() {
                 Some(own) => format!("{own}; {why}"),
                 None => why,

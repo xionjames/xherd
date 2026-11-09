@@ -685,7 +685,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Secret tripwire on commit proposals (R-117)
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
     - [ ] Daemon/agent user split (R-1203)
-    - [ ] Code tripwires: sensitive paths, diff size, tests, scope fence (R-115, R-116)
+    - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a refusal)
     - [ ] Untrusted-text blocks (R-1201), budgets and run limits (R-1205, R-120, R-1206), `xherd security check`
   - [ ] Backups
   - [ ] Autonomy `important`
@@ -693,6 +693,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Notifications
   - [ ] Phones
 - [ ] **v1.x**
+  - [ ] Repo profiles: move `sensitivePaths` and `maxDiffLines` (global since M4) into each profile, with the global values as defaults; add the profile's test command as a code tripwire (R-115)
   - [ ] Codex and opencode
   - [ ] Kanban / To review / Work log
   - [ ] Toolchain plugins and Welcome installer
