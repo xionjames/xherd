@@ -77,7 +77,7 @@ by theme; update it together with them.
 - [ ] Guardrails still open: `diff_viewed` marks, a Setup check for the runner dying after start
 - [ ] Backups
 - [x] Autonomy `ask` / `important` (R-109…R-111) with `maxAutoApprovalsInRow` (R-120), per agent, changeable live; the ship stage's auto-approved variant (`--no-ticket-update`) is only reachable at `never` (v1.x), since ship is critical
-- [ ] "To review" list of auto-approvals (R-111): for now they are in the ledger, the log and a notification
+- [x] "To review" list of auto-approvals (R-111): `GET /reviews` and the page `#/review`; a mark-as-reviewed state and the agent's stated assumptions come with the v1.x views
 - [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel
 - [x] PR comments into the agent (R-304): new comments saved wrapped as untrusted data, agent queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
 - [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
