@@ -74,9 +74,9 @@ by theme; update it together with them.
 ## v1.x
 
 - [ ] Codex and opencode runtimes
-- [ ] Kanban, To review and Work log views
+- [ ] Kanban, To review and Work log views (per-ticket cycle time, review loops and rework)
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
-- [ ] TODOs, budgets, `never` autonomy
+- [ ] TODOs, `never` autonomy (budgets and run limits belong to the M4 guardrails)
 
 ## Later
 

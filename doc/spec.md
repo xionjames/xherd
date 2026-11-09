@@ -45,6 +45,7 @@ Key properties:
 - **Agents outlive the daemon**: they run in tmux; the daemon can restart without stopping them.
 - **The SDD is pluggable**: xherd ships built in; other SDDs plug in as flow packs or by calling the xherd agent protocol (XAP) from their own commands.
 - **You stay in control** through gates, autonomy levels with tripwires, and an audit trail of what was approved.
+- **The human reads what matters**: the spec, the diff and the review findings are reviewed by the user, not summarised away — the honest answer to the review-fatigue and skill-erosion complaints around AI coding.
 - **Docker-first**, single Rust binary, MIT licensed.
 
 ## 2. Goals, non-goals and MVP scope
@@ -687,6 +688,8 @@ Browser notifications (permission asked on the first click), the desktop app lat
 
 Agent time (time in `running`) and the user's time on an agent page, per day and ticket. Token usage per runtime session from the runtime's `usage` command or the stop payload; totals per agent; cost estimate where known.
 
+**Delivery metrics per ticket.** Agents can feel faster than they measure, so the Work log also records, per ticket: cycle time (agent created → PR merged or closed), the review→fix rounds the agent went through (the R-120 counters), and how many auto-approvals were later followed by a change request on the same gate (rework). The measured result, not the feeling, is what the UI shows.
+
 ### 16.5 `instructions.md`
 
 Rewritten on every start, resume and autonomy change: workspace notes (folder agents), autonomy level and what it means for the agent, ticket key and link with the tracker's fragment, git host fragment, repo commands (or a note to use the project's usual ones and state them in evidence), repo instructions from the profile, the XAP commands the agent must call, its port block, and the untrusted-content rule.
@@ -719,7 +722,7 @@ The review step may propose updates to the repo's `CLAUDE.md` / `AGENTS.md` (ful
 | **New agent / New TODO** | Generated form including pack inputs; ticket link preview; repo picker or clone; branch list. |
 | **Settings** | General, Notifications, Open in, Git access, Toolchains, Repo profiles, Plugins (install, settings, ACP badges), Runtime per step, Backups, Remote access. |
 | **Setup checks / Welcome** | First-run wizard: where it runs → tools (runtime, tracker, host) → git access → toolchains → checks → ready. Until required checks pass, other screens are disabled. |
-| **Work log** | Agent time and user time per day and ticket. |
+| **Work log** | Agent time and user time per day and ticket; per-ticket cycle time, review–fix rounds and auto-approval rework (§16.4). |
 
 ### 17.3 Phones
 

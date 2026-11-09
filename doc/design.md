@@ -694,11 +694,10 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Phones
 - [ ] **v1.x**
   - [ ] Codex and opencode
-  - [ ] Kanban / To review / Work log
+  - [ ] Kanban / To review / Work log (per-ticket delivery metrics: cycle time, review–fix rounds, rework; spec §16.4)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [ ] TODOs
-  - [ ] Budgets
   - [ ] `never` autonomy
 - [ ] **Later**
   - [ ] ACP driver
