@@ -3,6 +3,7 @@
 //! not a failure.
 
 use serde::Serialize;
+use xherd_core::autonomy::Autonomy;
 use xherd_core::config::Config;
 
 use crate::Daemon;
@@ -16,10 +17,7 @@ pub struct Finding {
 }
 
 /// What R-1210 lists that this version cannot report yet.
-pub const PENDING: &[&str] = &[
-    "autonomy levels in use (autonomy comes later in M4)",
-    "branch protection of the base branch (host command not built yet)",
-];
+pub const PENDING: &[&str] = &["branch protection of the base branch (host command not built yet)"];
 
 fn f(id: &'static str, ok: bool, label: &'static str, detail: impl Into<String>) -> Finding {
     Finding {
@@ -45,12 +43,32 @@ fn budget_text(n: u64) -> String {
     }
 }
 
-/// Pure part: everything but the plugin list comes from the config.
+/// Autonomy (R-1210): the default for new agents and the levels of the agents
+/// that have not finished. `never` is the only level that is a warning.
+fn autonomy_finding(c: &Config, levels: &[Autonomy]) -> Finding {
+    let count = |l: Autonomy| levels.iter().filter(|x| **x == l).count();
+    let detail = format!(
+        "new agents start at {}; active agents: {} ask, {} important, {} never; important still waits at spec and ship, and any tripwire holds a gate",
+        c.autonomy,
+        count(Autonomy::Ask),
+        count(Autonomy::Important),
+        count(Autonomy::Never)
+    );
+    f(
+        "autonomy",
+        count(Autonomy::Never) == 0 && c.autonomy != Autonomy::Never,
+        "Autonomy",
+        detail,
+    )
+}
+
+/// Pure part: everything but the plugin list and the agents' levels comes from the config.
 pub fn findings(
     c: &Config,
     sandbox: bool,
     split: bool,
     external_plugins: &[String],
+    levels: &[Autonomy],
 ) -> Vec<Finding> {
     let mut out = Vec::new();
     out.push(match (loopback(&c.bind), sandbox) {
@@ -120,6 +138,7 @@ pub fn findings(
             ),
         )
     });
+    out.push(autonomy_finding(c, levels));
     out.push(if c.max_session_minutes > 0 {
         f(
             "session-limit",
@@ -173,7 +192,17 @@ pub fn findings(
 }
 
 impl Daemon {
-    pub fn security_check(&self) -> Vec<Finding> {
+    pub async fn security_check(&self) -> Vec<Finding> {
+        use xherd_core::Status;
+        let levels: Vec<Autonomy> = self
+            .store
+            .list_agents()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|a| !matches!(a.status, Status::Done | Status::Cancelled | Status::Error))
+            .map(|a| a.autonomy)
+            .collect();
         let external: Vec<String> = self
             .plugins
             .all()
@@ -185,6 +214,7 @@ impl Daemon {
             self.sandbox,
             self.sandbox && xherd_core::runner::runner_socket().is_some(),
             &external,
+            &levels,
         )
     }
 }
@@ -199,7 +229,7 @@ mod tests {
 
     #[test]
     fn defaults_warn_about_what_is_unset() {
-        let v = findings(&Config::default(), false, false, &[]);
+        let v = findings(&Config::default(), false, false, &[], &[]);
         assert!(get(&v, "network").ok);
         assert!(get(&v, "plugins").ok);
         assert!(!get(&v, "session-limit").ok);
@@ -209,13 +239,27 @@ mod tests {
     }
 
     #[test]
+    fn autonomy_lists_levels_and_warns_only_about_never() {
+        let c = Config::default();
+        let v = findings(&c, false, false, &[], &[Autonomy::Ask, Autonomy::Important]);
+        let a = get(&v, "autonomy");
+        assert!(
+            a.ok && a.detail.contains("1 ask, 1 important, 0 never"),
+            "{}",
+            a.detail
+        );
+        let v = findings(&c, false, false, &[], &[Autonomy::Never]);
+        assert!(!get(&v, "autonomy").ok);
+    }
+
+    #[test]
     fn open_bind_warns_outside_the_container_only() {
         let c = Config {
             bind: "0.0.0.0".into(),
             ..Default::default()
         };
-        assert!(!get(&findings(&c, false, false, &[]), "network").ok);
-        assert!(get(&findings(&c, true, false, &[]), "network").ok);
+        assert!(!get(&findings(&c, false, false, &[], &[]), "network").ok);
+        assert!(get(&findings(&c, true, false, &[], &[]), "network").ok);
     }
 
     #[test]
@@ -226,7 +270,7 @@ mod tests {
             sensitive_paths: vec!["infra/**".into()],
             ..Default::default()
         };
-        let v = findings(&c, false, false, &["mine".into()]);
+        let v = findings(&c, false, false, &["mine".into()], &[]);
         assert!(get(&v, "session-limit").ok && get(&v, "sensitive-paths").ok);
         assert!(get(&v, "budgets").detail.contains("per agent off"));
         let p = get(&v, "plugins");

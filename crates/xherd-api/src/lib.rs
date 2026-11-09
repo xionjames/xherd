@@ -424,7 +424,7 @@ async fn put_config(
 
 async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {
     Json(json!({
-        "findings": d.security_check(),
+        "findings": d.security_check().await,
         "pending": xherd_daemon::security::PENDING,
     }))
 }
@@ -707,6 +707,8 @@ struct ActionBody {
     expect: Option<std::collections::BTreeMap<String, String>>,
     /// Approve (commit gate): the commit message as edited.
     message: Option<String>,
+    /// Autonomy: `ask` or `important`.
+    level: Option<xherd_core::autonomy::Autonomy>,
 }
 
 async fn agent_action(
@@ -739,6 +741,15 @@ async fn agent_action(
         },
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
+        },
+        "autonomy" => UserAction::SetAutonomy {
+            level: b.level.ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "body {\"level\": \"ask\"|\"important\"} required",
+                )
+            })?,
         },
         _ => {
             return Err(ApiError::new(

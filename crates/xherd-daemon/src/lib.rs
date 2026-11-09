@@ -233,6 +233,7 @@ impl Daemon {
                 .unwrap_or(std::time::Duration::from_secs(config.pr_poll_minutes * 60)),
             max_session_minutes: config.max_session_minutes,
             max_review_loops: config.max_review_loops,
+            max_auto_approvals_in_row: config.max_auto_approvals_in_row,
             agent_token_budget: config.agent_token_budget,
             daily_token_budget: config.daily_token_budget,
             max_diff_lines: config.max_diff_lines,

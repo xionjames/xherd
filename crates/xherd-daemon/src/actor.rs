@@ -61,6 +61,10 @@ pub enum UserAction {
     RequestChanges {
         comment: String,
     },
+    /// Change what xherd may approve by itself (R-109).
+    SetAutonomy {
+        level: xherd_core::autonomy::Autonomy,
+    },
     Get,
 }
 
@@ -160,6 +164,8 @@ pub struct ActorSettings {
     /// Code tripwires (R-115), from the config at daemon start.
     pub max_session_minutes: u64,
     pub max_review_loops: u32,
+    /// Consecutive automatic approvals allowed (R-120); 0 = no limit.
+    pub max_auto_approvals_in_row: u32,
     pub agent_token_budget: u64,
     pub daily_token_budget: u64,
     pub max_diff_lines: usize,
@@ -181,6 +187,7 @@ impl Default for ActorSettings {
             pr_poll: Duration::from_secs(300),
             max_session_minutes: 0,
             max_review_loops: 3,
+            max_auto_approvals_in_row: 10,
             agent_token_budget: 0,
             daily_token_budget: 0,
             max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
@@ -443,9 +450,9 @@ impl Actor {
                     }
                 }
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
-                // Auto-approval: with autonomy (M4).
                 Effect::AfterStop => {
                     self.measure_usage();
+                    self.try_auto_approve().await;
                     self.after_ship().await;
                 }
             }
@@ -1358,13 +1365,17 @@ impl Actor {
                 expect,
                 message,
             } => {
-                self.approve(reason.clone(), expect, message.clone())
+                self.approve(reason.clone(), expect, message.clone(), false)
                     .await?;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
                 self.request_changes(comment).await?;
                 "user.request-changes"
+            }
+            UserAction::SetAutonomy { level } => {
+                self.set_autonomy(*level).await?;
+                "user.autonomy"
             }
         };
         self.log(None, kind, None).await;
@@ -1566,6 +1577,165 @@ impl Actor {
         }
     }
 
+    /// Autonomy class of the open gate's stage (spec §6.3). `None`: unknown
+    /// (flow `none`, a stage the pack does not declare), so a human decides.
+    /// Pull-request rounds and the ship stage of a `hotfix` flow are always
+    /// `human-only` (R-121, T1), whatever the pack says.
+    fn gate_class(&self, gate: &Gate) -> Option<xherd_core::domain::Class> {
+        use xherd_core::domain::{Class, Role};
+        let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
+        let flow_name = self.agent.flow.as_deref()?;
+        let flow = pack.flow(flow_name)?;
+        let stage = match gate {
+            Gate::Docs { stage, .. } => flow.stage(stage)?,
+            Gate::Commit(_) => flow.stages.iter().find(|s| s.role == Role::Implement)?,
+            _ => return None,
+        };
+        let human_only =
+            stage.role == Role::Pr || (flow_name == "hotfix" && stage.role == Role::Ship);
+        Some(if human_only {
+            Class::HumanOnly
+        } else {
+            stage.class
+        })
+    }
+
+    /// Auto-approval (R-110, R-111): when the agent stops at a gate its class
+    /// allows at the agent's autonomy level, approve it unless a tripwire
+    /// holds it. The tripwires that look at the work (secrets, sensitive
+    /// paths, diff size, scope, `verify:`, review findings) ran when the gate
+    /// was opened and left `needs_human`; the run limit is checked here. This
+    /// runs inline in the actor on the stop itself, so the gate cannot change
+    /// meanwhile and a user message queued behind it is handled afterwards.
+    async fn try_auto_approve(&mut self) {
+        use xherd_core::autonomy::{may_auto_approve, run_limit};
+        let level = self.agent.autonomy;
+        if level == xherd_core::autonomy::Autonomy::Ask
+            || !matches!(self.agent.status, Status::WaitingInput | Status::Idle)
+        {
+            return;
+        }
+        let Some(gate) = self.agent.gate.clone() else {
+            return;
+        };
+        let Some(class) = self.gate_class(&gate) else {
+            return;
+        };
+        if !may_auto_approve(level, class) {
+            return;
+        }
+        let (label, held) = match &gate {
+            Gate::Docs {
+                stage,
+                needs_human,
+                questions,
+                ..
+            } => (
+                stage.clone(),
+                needs_human.clone().or_else(|| {
+                    (!questions.is_empty()).then(|| "the document has open questions".to_string())
+                }),
+            ),
+            Gate::Commit(c) => (format!("commit {}", c.id), c.needs_human.clone()),
+            _ => return,
+        };
+        if held.is_some() {
+            // Already shown as "Held:"; nothing more to say.
+            self.log(None, "auto-held", Some(json!({"gate": label, "why": held})))
+                .await;
+            return;
+        }
+        if let Some(why) = run_limit(
+            self.agent.auto_in_row,
+            self.env.settings.max_auto_approvals_in_row,
+        ) {
+            // Make the reason visible on the gate, and say so once.
+            match &mut self.agent.gate {
+                Some(Gate::Docs { needs_human, .. }) => *needs_human = Some(why.clone()),
+                Some(Gate::Commit(c)) => c.needs_human = Some(why.clone()),
+                _ => {}
+            }
+            if let Some(Gate::Commit(c)) = &self.agent.gate
+                && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
+            {
+                mine.needs_human = Some(why.clone());
+            }
+            self.agent.generation += 1;
+            self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
+                .await;
+            self.notify(format!("{}: {label} waits for you: {why}", self.agent.name));
+            let status = self.agent.status;
+            self.commit(status).await;
+            return;
+        }
+        let before = self.agent.status;
+        let reason =
+            format!("autonomy {level}: {label} is a {class:?} gate and no tripwire held it");
+        match self
+            .approve(Some(reason), &BTreeMap::new(), None, true)
+            .await
+        {
+            Ok(()) => {
+                self.notify(format!(
+                    "{}: approved {label} automatically (autonomy {level}); see the log",
+                    self.agent.name
+                ));
+            }
+            Err(e) => {
+                self.log(
+                    None,
+                    "auto-approval-failed",
+                    Some(json!({"gate": label, "error": e.message})),
+                )
+                .await;
+                self.notify(format!(
+                    "{}: could not approve {label} automatically: {}",
+                    self.agent.name, e.message
+                ));
+            }
+        }
+        self.commit(before).await;
+    }
+
+    /// Change the autonomy level (R-109): rewrite `instructions.md`, and
+    /// approve at once a gate the agent is already waiting at that the new
+    /// level allows (no further stop would come).
+    async fn set_autonomy(
+        &mut self,
+        level: xherd_core::autonomy::Autonomy,
+    ) -> Result<(), ActionError> {
+        if !level.selectable() {
+            return Err(refuse(
+                "autonomy_unavailable",
+                "autonomy never is not available yet (v1.x, R-1209)",
+            ));
+        }
+        if self.agent.autonomy == level {
+            return Ok(());
+        }
+        self.agent.autonomy = level;
+        self.agent.auto_in_row = 0;
+        self.agent.generation += 1;
+        if let Ok(wd) = self.workdir() {
+            let file = wd.join(".xherd").join("instructions.md");
+            if let Err(e) = xherd_core::paths::write_atomic(
+                &file,
+                xherd_core::new::instructions_md(&self.agent).as_bytes(),
+                None,
+            ) {
+                tracing::warn!(agent = %self.agent.name, %e, "instructions.md not rewritten");
+            }
+        }
+        self.log(None, "autonomy", Some(json!({"level": level})))
+            .await;
+        let before = self.agent.status;
+        self.commit(before).await;
+        // The agent learns the new level when its next session starts and
+        // reads instructions.md; a running session keeps what it was told.
+        self.try_auto_approve().await;
+        Ok(())
+    }
+
     /// Approve by content hash (R-104, R-106): ledger file first (fsync),
     /// then the database, then hand on the next command.
     async fn approve(
@@ -1573,6 +1743,7 @@ impl Actor {
         reason: Option<String>,
         expect: &std::collections::BTreeMap<String, String>,
         message: Option<String>,
+        auto: bool,
     ) -> Result<(), ActionError> {
         let gate = self.gate_for_user(true)?;
         let wd = self.workdir().map_err(|e| refuse(e.code, e.message))?;
@@ -1625,10 +1796,11 @@ impl Actor {
         let next = self.next_command(&wd, &gate)?;
         let now = self.now();
         let head = self.env.git.rev_parse(&wd, "HEAD").await.ok();
+        let actor = if auto { "auto" } else { "user" };
         let lines: Vec<Value> = approved
             .iter()
             .map(|(file, sha, _)| {
-                json!({"gate": label, "file": file, "sha256": sha, "actor": "user", "auto": false,
+                json!({"gate": label, "file": file, "sha256": sha, "actor": actor, "auto": auto,
                        "reason": reason, "at": now, "commit": head})
             })
             .collect();
@@ -1639,8 +1811,8 @@ impl Actor {
                 file: file.clone(),
                 sha256: sha.clone(),
                 at: now,
-                actor: "user".into(),
-                auto: false,
+                actor: actor.into(),
+                auto,
                 reason: reason.clone(),
             };
             let stored = self.env.store.insert_approval(row).await;
@@ -1662,10 +1834,12 @@ impl Actor {
         }
         self.agent.gate = None;
         self.agent.generation += 1;
+        // A human approval restarts the run-limit count (R-120).
+        self.agent.auto_in_row = if auto { self.agent.auto_in_row + 1 } else { 0 };
         self.log(
             None,
             "approval",
-            Some(json!({"gate": label, "files": files, "reason": reason, "next": next.as_ref().map(|n| &n.0)})),
+            Some(json!({"gate": label, "files": files, "reason": reason, "auto": auto, "next": next.as_ref().map(|n| &n.0)})),
         )
         .await;
         // xherd makes the approved commit itself; the agent only records it
