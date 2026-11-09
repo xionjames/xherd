@@ -442,6 +442,9 @@ async fn prepare() -> Result<Plan, String> {
     }
     let agent = ensure_user(env_id("XHERD_UID")?, env_id("XHERD_GID")?).await?;
     let daemon = ensure_daemon_user(&agent).await?;
+    // The host's group in /etc/group too, so a shell started later for this
+    // user (`docker exec -u xherd-daemon`) has what the daemon process has.
+    let _ = sh(&["usermod", "-aG", &agent.gid.to_string(), DAEMON_USER]).await;
     prepare_daemon(&daemon).await?;
     prepare_home(&agent).await?;
     prepare_run(&agent)?;

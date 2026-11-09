@@ -441,12 +441,9 @@ async fn serve_one(mut s: UnixStream) {
 pub async fn supervise_tmux(socket: PathBuf, allow: Option<String>) {
     use std::process::Stdio;
     let conf = socket.with_extension("conf");
-    // `-D` already turns exit-empty off; say it anyway.
-    let mut text = String::from("set -s exit-empty off\n");
-    if let Some(u) = &allow {
-        text.push_str(&format!("server-access -aw {u}\n"));
-    }
-    if let Err(e) = std::fs::write(&conf, text) {
+    // `-D` already turns exit-empty off; say it anyway. The access rule is
+    // not in this file: tmux reads it only when the first client comes.
+    if let Err(e) = std::fs::write(&conf, "set -s exit-empty off\n") {
         eprintln!("xherd runner: {}: {e}", conf.display());
         return;
     }
@@ -464,7 +461,7 @@ pub async fn supervise_tmux(socket: PathBuf, allow: Option<String>) {
             .spawn()
         {
             Ok(mut child) => {
-                tokio::spawn(open_to_group(socket.clone()));
+                tokio::spawn(open_to_group(socket.clone(), allow.clone()));
                 let _ = child.wait().await;
                 eprintln!("xherd runner: the tmux server exited; starting it again");
             }
@@ -480,16 +477,34 @@ pub async fn supervise_tmux(socket: PathBuf, allow: Option<String>) {
 }
 
 /// The server creates its socket for its owner only; the daemon's user is in
-/// our group and needs to write to it.
-async fn open_to_group(socket: PathBuf) {
+/// our group and needs to write to it, and the server has to let that user
+/// run commands (`server-access`, asked of the running server, with retries
+/// while it starts).
+async fn open_to_group(socket: PathBuf, allow: Option<String>) {
     use std::os::unix::fs::PermissionsExt;
     for _ in 0..100 {
         if socket.exists() {
             let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660));
-            return;
+            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    let Some(user) = allow else { return };
+    for _ in 0..50 {
+        let ok = tokio::process::Command::new("tmux")
+            .arg("-S")
+            .arg(&socket)
+            .args(["server-access", "-aw", &user])
+            .stdin(std::process::Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|s| s.success());
+        if ok {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    eprintln!("xherd runner: could not give {user} access to the tmux server");
 }
 
 /// Bind `socket` (a stale file is replaced) with `mode`, then answer

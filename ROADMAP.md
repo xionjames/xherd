@@ -73,7 +73,8 @@ by theme; update it together with them.
 - [x] Token budgets (R-1205), global until profiles; per-profile budgets and a cost estimate come with profiles
 - [x] Review→fix loop with `maxReviewLoops` (R-120); the review gate is held while review tasks are open
 - [x] R-114 first half: findings in `review.md` are Markdown with a field list; major/blocker findings not fixed hold the review gate; severity colours in the UI
-- [ ] Guardrails still open: daemon/agent user split (R-1203), `maxAutoApprovalsInRow` (R-120, with autonomy), `diff_viewed` marks
+- [x] Daemon/agent user split in the container (R-1203, branch `m4-user-split`): `xherd runner`, `xherd-daemon` user and volume, loopback is not the user; **check on Linux and Docker Desktop** (file permissions are not enforced on Colima's mounts)
+- [ ] Guardrails still open: `maxAutoApprovalsInRow` (R-120, with autonomy), `diff_viewed` marks, a Setup check for the runner dying after start
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant
 - [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel
