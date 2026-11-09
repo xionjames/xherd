@@ -12,6 +12,7 @@ pub mod paths;
 pub mod pr;
 pub mod queue;
 pub mod report;
+pub mod runner;
 pub mod status;
 pub mod tripwire;
 pub mod untrusted;
