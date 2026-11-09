@@ -20,6 +20,19 @@ export interface Task {
   blockedReason?: string;
 }
 
+export type Severity = 'minor' | 'major' | 'blocker';
+
+/** A finding of `review.md`; `resolved`: the tasks that fix it are done. */
+export interface Finding {
+  id: string;
+  title: string;
+  severity: Severity;
+  location?: string;
+  fixed?: string[];
+  left?: string;
+  resolved: boolean;
+}
+
 export interface Commit {
   id: string;
   subject: string;

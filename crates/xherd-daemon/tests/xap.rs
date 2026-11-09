@@ -1721,16 +1721,29 @@ async fn review_gate_is_held_by_open_review_tasks_and_the_round_limit() {
 
     std::fs::write(
         spec.join("review.md"),
-        "---\nstage: review\n---\n# Review\n",
+        "---\nstage: review\n---\n# Review\n### F01: no severity\n",
     )
     .unwrap();
-    xap(&t, "r2", "gate.open", json!({"stage": "review"}))
+    let e = xap(&t, "r2", "gate.open", json!({"stage": "review"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "doc_schema");
+    assert!(e.message.contains("review.md:5"), "{}", e.message);
+
+    std::fs::write(
+        spec.join("review.md"),
+        "---\nstage: review\n---\n# Review\n### F01: race\n- severity: blocker\n### F02: typo\n- severity: minor\n",
+    )
+    .unwrap();
+    xap(&t, "r3", "gate.open", json!({"stage": "review"}))
         .await
         .unwrap();
     let Some(Gate::Docs { needs_human, .. }) = get(&t).await.gate else {
         panic!("no docs gate")
     };
     let why = needs_human.unwrap();
+    assert!(why.contains("findings not fixed: F01 (blocker)"), "{why}");
+    assert!(!why.contains("F02"), "minor findings do not hold: {why}");
     assert!(why.contains("review tasks not done: T02"), "{why}");
     assert!(why.contains("2 review→fix rounds, limit 1"), "{why}");
 }

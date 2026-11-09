@@ -661,3 +661,46 @@ async fn security_overview_needs_the_user_and_lists_findings() {
     assert!(ids.contains(&"network") && ids.contains(&"session-limit"));
     assert!(!v["pending"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn findings_endpoint_reads_review_md() {
+    let (dir, d, _a) = setup().await;
+    let wt = dir.path().join("wt");
+    let spec = wt.join(".xherd/spec");
+    std::fs::create_dir_all(&spec).unwrap();
+    let mut b = Agent::new("SC-2", "SC-2", 2);
+    b.launch = Some(vec!["rt".into()]);
+    b.workdir = Some(wt.to_string_lossy().into_owned());
+    d.create_agent(b).await.unwrap();
+    let local =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let req = || {
+        get("/api/v1/agents/SC-2/findings")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (s, v) = call(local.clone(), req()).await;
+    assert_eq!(
+        (s, v["findings"].as_array().map(Vec::len)),
+        (StatusCode::OK, Some(0))
+    );
+
+    std::fs::write(
+        spec.join("review.md"),
+        "### F01: race\n- severity: blocker\n- location: `a.rs:3`\n",
+    )
+    .unwrap();
+    let (_, v) = call(local.clone(), req()).await;
+    let f = &v["findings"][0];
+    assert_eq!(f["id"], "F01");
+    assert_eq!(f["severity"], "blocker");
+    assert_eq!(f["location"], "a.rs:3");
+    assert_eq!(f["resolved"], false);
+
+    std::fs::write(spec.join("review.md"), "### F01: race\n").unwrap();
+    let (_, v) = call(local, req()).await;
+    assert!(
+        v["error"].as_str().unwrap().contains("no `- severity"),
+        "{v}"
+    );
+}

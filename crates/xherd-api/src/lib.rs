@@ -37,6 +37,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
+        .route("/api/v1/agents/{id}/findings", get(findings))
         .route("/api/v1/agents/{id}/file", get(file))
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
         .route("/api/v1/agents/{id}/open", post(open_in))
@@ -627,6 +628,15 @@ async fn diff(
     Ok(Json(
         d.diff(&id, q.view.as_deref(), q.commit.as_deref()).await?,
     ))
+}
+
+/// `GET /agents/:id/findings`: the findings of `review.md`.
+async fn findings(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.findings(&id).await?))
 }
 
 /// `GET /agents/:id/docs`: the agent's documents, open gate's first.

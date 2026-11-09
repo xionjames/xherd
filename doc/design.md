@@ -691,7 +691,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; autonomy, budgets and branch protection are listed as not reported yet and join when those exist
     - [x] Token budgets (R-1205): `agentTokenBudget` / `dailyTokenBudget` (global until profiles), usage read from the runtime transcript after each stop, 80 % notification, pause at 100 %
     - [x] Review→fix loop and `maxReviewLoops` (R-114 second half, R-120): `Task.source`, `Agent.review_rounds`, review gate held for a human by open review tasks or too many rounds
-    - [ ] `maxAutoApprovalsInRow` (R-120) and blocker/major findings (R-114 first half): with autonomy
+    - [x] Findings in `review.md` as Markdown (`### F01: title` + `- severity:` / `location:` / `fixed:` / `left:`), parsed by `xherd_flow::review`; the review gate is refused when malformed and held while major or blocker findings are not fixed (R-114); the UI lists them with a colour per severity
+    - [ ] `maxAutoApprovalsInRow` (R-120): with autonomy
   - [ ] Backups
   - [ ] Autonomy `important`
   - [ ] PR follow-up

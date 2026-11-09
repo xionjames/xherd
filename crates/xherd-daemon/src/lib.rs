@@ -353,6 +353,33 @@ impl Daemon {
         Ok(out)
     }
 
+    /// The findings of the agent's `review.md` for the UI, each with whether
+    /// its fixing tasks are done. No review yet: an empty list. A malformed
+    /// document: `error` says where (the gate refuses it, so this is the
+    /// agent's work in progress).
+    pub async fn findings(&self, who: &str) -> Result<serde_json::Value, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        let text = match self.doc(who, "review.md").await {
+            Ok(d) => d["text"].as_str().unwrap_or_default().to_string(),
+            Err(e) if e.code == "no_such_doc" => String::new(),
+            Err(e) => return Err(e),
+        };
+        Ok(match xherd_flow::review::parse(&text) {
+            Ok(list) => {
+                let rows: Vec<_> = list
+                    .iter()
+                    .map(|f| {
+                        let mut v = serde_json::to_value(f).unwrap_or_default();
+                        v["resolved"] = xherd_flow::review::resolved(f, &a.tasks).into();
+                        v
+                    })
+                    .collect();
+                serde_json::json!({"findings": rows})
+            }
+            Err(e) => serde_json::json!({"findings": [], "error": e}),
+        })
+    }
+
     /// One document as the UI shows it (R-107): its text, the hash an
     /// approval would record (`doc_sha256`), and the text last approved, if
     /// any, for "changed since you reviewed". `path` as in XAP calls.

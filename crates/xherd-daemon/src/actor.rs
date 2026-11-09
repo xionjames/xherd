@@ -654,7 +654,7 @@ impl Actor {
         self.commit_tripwires(&mut call.cmd).await;
         let packs = self.env.packs.clone();
         let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
-        self.review_hold(&mut call.cmd, pack);
+        self.review_hold(&mut call.cmd, pack)?;
         let obs = self.observe(pack, &call.cmd).await?;
         let (before, now) = (self.agent.status, self.now());
         let changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
@@ -678,15 +678,21 @@ impl Actor {
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
     }
 
-    /// Review gate (R-114, R-120): hold it for a human while review-sourced
-    /// tasks are open or the review→fix loop ran past `maxReviewLoops`.
-    fn review_hold(&self, cmd: &mut XapCmd, pack: Option<&xherd_flow::Pack>) {
+    /// Review gate (R-114, R-120): `review.md` must have well-formed findings
+    /// (`doc_schema` otherwise); the gate is held for a human while major or
+    /// blocker findings are not fixed, review-sourced tasks are open, or the
+    /// review→fix loop ran past `maxReviewLoops`.
+    fn review_hold(
+        &self,
+        cmd: &mut XapCmd,
+        pack: Option<&xherd_flow::Pack>,
+    ) -> Result<(), Refusal> {
         use xherd_core::domain::{Role, TaskSource, TaskStatus};
         let XapCmd::GateOpen {
             stage, needs_human, ..
         } = cmd
         else {
-            return;
+            return Ok(());
         };
         let is_review = pack
             .zip(self.agent.flow.as_deref())
@@ -694,8 +700,23 @@ impl Actor {
             .and_then(|f| f.stage(stage))
             .is_some_and(|s| s.role == Role::Review);
         if !is_review {
-            return;
+            return Ok(());
         }
+        // Without a review.md the gate refuses on its own (`doc_missing`).
+        let path = self
+            .workdir()?
+            .join(xherd_flow::xap::SPEC_DIR)
+            .join("review.md");
+        let findings = match std::fs::read_to_string(path) {
+            Ok(text) => xherd_flow::review::parse(&text)
+                .map_err(|e| xherd_core::xap::refuse("doc_schema", e))?,
+            Err(_) => Vec::new(),
+        };
+        let open_findings: Vec<String> =
+            xherd_flow::review::open_findings(&findings, &self.agent.tasks)
+                .iter()
+                .map(|f| format!("{} ({})", f.id, f.severity.label()))
+                .collect();
         let open: Vec<&str> = self
             .agent
             .tasks
@@ -704,14 +725,18 @@ impl Actor {
             .map(|t| t.id.as_str())
             .collect();
         let max = self.env.settings.max_review_loops;
-        if let Some(why) =
-            xherd_core::tripwire::review_summary(&open, self.agent.review_rounds, max)
-        {
+        if let Some(why) = xherd_core::tripwire::review_summary(
+            &open_findings,
+            &open,
+            self.agent.review_rounds,
+            max,
+        ) {
             *needs_human = Some(match needs_human.take() {
                 Some(own) => format!("{own}; {why}"),
                 None => why,
             });
         }
+        Ok(())
     }
 
     /// Tripwires on a commit proposal: secret (R-117), sensitive paths and diff size (R-115). Any hit holds it for a human (`needs_human`,

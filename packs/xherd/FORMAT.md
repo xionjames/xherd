@@ -144,9 +144,31 @@ Ids are `C01`, `C02`… and never reused, even when a proposal is dropped.
 ## review.md
 
 Frontmatter (`stage: review`). Sections: `## Summary` (what the branch does),
-`## Requirements` (each `Rn` and where it is met), `## Findings` (each with
-severity `minor`, `major` or `blocker`, file and line, and the task that fixed
-it, or why it is left), `## Tests` (what ran), `## Assumptions`.
+`## Requirements` (each `Rn` and where it is met), `## Findings`, `## Tests`
+(what ran), `## Assumptions`.
+
+Under `## Findings`, one `###` heading per finding with a stable id (`F01`,
+`F02`…) and a bullet list of fields, as in `tasks.md`; xherd parses this and
+refuses `gate open review` when a finding has no valid `severity`:
+
+```markdown
+### F01: Missing error handling in the store
+- severity: major
+- location: `src/store.rs:42`
+- fixed: T05
+```
+
+| Field | Meaning |
+|---|---|
+| `severity` | required: `minor`, `major` or `blocker` |
+| `location` | optional: `file:line` |
+| `fixed` | the task ids (comma-separated) that fix it, once they exist |
+| `left` | why it is left as it is, for a finding you do not fix |
+
+Write the explanation under the field list as ordinary Markdown. A `major` or
+`blocker` finding with no `fixed` task, or whose tasks are not all done, holds
+the review gate for the user (it shows as "Held"). Write `None.` under the
+heading when there are no findings.
 
 ## pr.md
 

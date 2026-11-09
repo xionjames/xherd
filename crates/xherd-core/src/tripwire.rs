@@ -230,10 +230,19 @@ pub fn sensitive_summary(files: &[String], globs: &[String]) -> Option<String> {
     ))
 }
 
-/// Review gate (R-114, R-120): tasks that came from the review and are not
-/// done, and review→fix rounds beyond `max_rounds` (0 = no limit).
-pub fn review_summary(open_tasks: &[&str], rounds: u32, max_rounds: u32) -> Option<String> {
+/// Review gate (R-114, R-120): major or blocker findings not fixed (`F01
+/// (blocker)`), tasks that came from the review and are not done, and
+/// review→fix rounds beyond `max_rounds` (0 = no limit).
+pub fn review_summary(
+    open_findings: &[String],
+    open_tasks: &[&str],
+    rounds: u32,
+    max_rounds: u32,
+) -> Option<String> {
     let mut why = Vec::new();
+    if !open_findings.is_empty() {
+        why.push(format!("findings not fixed: {}", open_findings.join(", ")));
+    }
     if !open_tasks.is_empty() {
         why.push(format!("review tasks not done: {}", open_tasks.join(", ")));
     }
@@ -367,9 +376,10 @@ mod tests {
 
     #[test]
     fn review_hold() {
-        assert_eq!(review_summary(&[], 3, 3), None);
-        assert_eq!(review_summary(&[], 9, 0), None, "0 = no limit");
-        let s = review_summary(&["T05", "T06"], 4, 3).unwrap();
+        assert_eq!(review_summary(&[], &[], 3, 3), None);
+        assert_eq!(review_summary(&[], &[], 9, 0), None, "0 = no limit");
+        let s = review_summary(&["F03 (blocker)".into()], &["T05", "T06"], 4, 3).unwrap();
+        assert!(s.contains("findings not fixed: F03 (blocker)"), "{s}");
         assert!(
             s.contains("T05, T06") && s.contains("4 review→fix rounds, limit 3"),
             "{s}"

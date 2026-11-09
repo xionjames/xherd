@@ -8,6 +8,7 @@ pub mod install;
 pub mod manifest;
 pub mod memory;
 pub mod progress;
+pub mod review;
 pub mod tasks;
 pub mod template;
 pub mod xap;

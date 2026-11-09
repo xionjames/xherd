@@ -72,7 +72,7 @@ by theme; update it together with them.
 - [x] `xherd security check` (R-1210), first version; add autonomy, budgets and branch protection findings when those exist (`security::PENDING`)
 - [x] Token budgets (R-1205), global until profiles; per-profile budgets and a cost estimate come with profiles
 - [x] Review→fix loop with `maxReviewLoops` (R-120); the review gate is held while review tasks are open
-- [ ] R-114 first half: hold the review gate on blocker/major findings (needs a machine-readable findings format in `review.md`)
+- [x] R-114 first half: findings in `review.md` are Markdown with a field list; major/blocker findings not fixed hold the review gate; severity colours in the UI
 - [ ] Guardrails still open: daemon/agent user split (R-1203), `maxAutoApprovalsInRow` (R-120, with autonomy), `diff_viewed` marks
 - [ ] Backups
 - [ ] Autonomy `important` and the ship stage's auto-approved variant

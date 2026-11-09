@@ -59,6 +59,48 @@ pub enum TaskStatus {
     Blocked,
 }
 
+/// How serious a review finding is (`- severity:` in `review.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Severity {
+    Minor,
+    Major,
+    Blocker,
+}
+
+impl Severity {
+    /// Major and blocker findings hold the review gate (R-114).
+    pub fn holds(self) -> bool {
+        self >= Severity::Major
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Severity::Minor => "minor",
+            Severity::Major => "major",
+            Severity::Blocker => "blocker",
+        }
+    }
+}
+
+/// One finding of `review.md`: a `### F01: title` heading with a field list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Finding {
+    pub id: String,
+    pub title: String,
+    pub severity: Severity,
+    /// `src/store.rs:42`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    /// Tasks that fix it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixed: Vec<String>,
+    /// Why it is left as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<String>,
+}
+
 /// Where a task came from (`- source:` in `tasks.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
