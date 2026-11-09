@@ -2,6 +2,7 @@
 //! paths and config, and the external command runner.
 
 pub mod agent;
+pub mod autonomy;
 pub mod config;
 pub mod container;
 pub mod domain;

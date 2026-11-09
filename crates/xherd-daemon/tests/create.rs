@@ -87,6 +87,7 @@ fn req(t: &T, key: &str) -> NewAgent {
         base: None,
         flow: None,
         prompt: Some("add login".into()),
+        autonomy: None,
     }
 }
 
@@ -376,6 +377,7 @@ async fn refuses_without_a_runtime_plugin() {
         base: None,
         flow: None,
         prompt: None,
+        autonomy: None,
     };
     assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
 }
