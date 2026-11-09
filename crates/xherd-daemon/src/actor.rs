@@ -1443,7 +1443,8 @@ impl Actor {
         // The prompts call plain `xherd …`: a command with a variable in it
         // cannot be checked by the runtime and asks every time.
         if let Some(dir) = Path::new(&s.xherd_bin).parent().filter(|d| d.is_absolute()) {
-            let old = std::env::var("PATH").unwrap_or_default();
+            // The agents' PATH, not ours: the daemon's is the system's (R-1203).
+            let old = xherd_core::runner::agent_env("PATH").unwrap_or_default();
             ctx.env.push((
                 "PATH".into(),
                 format!("{}:{old}", dir.display())

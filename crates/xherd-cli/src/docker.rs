@@ -108,6 +108,7 @@ pub fn compose_file(s: &Setup) -> String {
     let mut vols = vec![
         "      - ${XHERD_WORKSPACE}:${XHERD_WORKSPACE}".to_string(),
         "      - xherd-home:/home/xherd".to_string(),
+        "      - xherd-data:/var/lib/xherd-daemon".to_string(),
     ];
     for p in &s.extra_paths {
         vols.push(format!("      - {0}:{0}", p.display()));
@@ -141,7 +142,8 @@ services:\n  \
     volumes:\n\
 {vols}\n\
 volumes:\n  \
-  xherd-home: {{}}\n",
+  xherd-home: {{}}\n  \
+  xherd-data: {{}}\n",
         vols = vols.join("\n")
     )
 }
@@ -682,6 +684,8 @@ mod tests {
         assert!(c.contains("- ${XHERD_WORKSPACE}:${XHERD_WORKSPACE}"));
         assert!(c.contains("- ${XHERD_SSH_SOCK}:/run/host-ssh-agent.sock"));
         assert!(c.contains("xherd-home: {}"));
+        assert!(c.contains("xherd-data:/var/lib/xherd-daemon"));
+        assert!(c.contains("xherd-data: {}"));
         let no_ssh = compose_file(&setup(None));
         assert!(!no_ssh.contains("XHERD_SSH_SOCK"));
         let mut s = setup(None);

@@ -1,19 +1,25 @@
 //! `xherd init`: the container entrypoint (design §8.4), run as root under
-//! tini. It prepares the one user that runs the daemon and the agents (the
-//! host's UID/GID, R-603; single-user mode, the design's fallback until the
-//! two-user split of R-1203), its home on the `xherd-home` volume (R-604),
-//! the forwarded SSH agent (R-682), git and SSH config, then drops privileges
-//! and replaces itself with `xherd daemon`.
+//! tini. Two users (R-1203): the agents' user has the host's UID/GID (R-603)
+//! and its home on the `xherd-home` volume (R-604); the daemon has its own
+//! (`xherd-daemon`) with its data on another volume, unreadable by agents.
+//! Init prepares both homes, the forwarded SSH agent (R-682), git and SSH
+//! config, starts `xherd runner` as the agents' user (it runs what the daemon
+//! needs done as that user and keeps their tmux server), then drops to the
+//! daemon's user and replaces itself with `xherd daemon`. Nothing stays root.
 
 use std::net::Ipv4Addr;
 use std::os::unix::fs::chown;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use xherd_core::container::{
+    AGENT_HOME, DAEMON_DATA, DAEMON_HOME, DAEMON_USER, QUEUE, RUN_DIR, RUNNER_SOCK, SHARED,
+    TMUX_SOCK,
+};
 use xherd_core::exec::{Cmd, run};
 use xherd_core::paths::write_atomic;
 
-pub const HOME: &str = "/home/xherd";
+pub const HOME: &str = AGENT_HOME;
 /// Image copies of the version managers, copied into the home volume once.
 const SEED: &str = "/opt/xherd/seed";
 const KNOWN_HOSTS: &str = "/opt/xherd/known_hosts";
@@ -203,12 +209,9 @@ async fn prepare_home(w: &Who) -> Result<(), String> {
         std::os::unix::fs::PermissionsExt::from_mode(0o700),
     );
 
-    // git: an include of xherd's managed file (the daemon rewrites it from
-    // Settings → Git access). Single user: everything belongs to this user.
-    let managed = xdir.join("gitconfig");
-    if !managed.exists() {
-        write_as(&managed, "[safe]\n\tdirectory = *\n", w)?;
-    }
+    // git: an include of xherd's managed file, which the daemon rewrites from
+    // Settings → Git access in its own shared folder (read-only for this user).
+    let managed = Path::new(SHARED).join("gitconfig");
     let gc = home.join(".gitconfig");
     let old = std::fs::read_to_string(&gc).unwrap_or_default();
     write_as(
@@ -264,7 +267,7 @@ pub fn init() -> i32 {
         }
     };
     match rt.block_on(prepare()) {
-        Ok((w, env)) => exec_daemon(&w, env),
+        Ok(plan) => exec_daemon(&plan),
         Err(e) => {
             eprintln!("xherd init: {e}");
             1
@@ -272,7 +275,160 @@ pub fn init() -> i32 {
     }
 }
 
-async fn prepare() -> Result<(Who, Vec<(String, String)>), String> {
+/// The two users, their folders and what the daemon is started with.
+struct Plan {
+    agent: Who,
+    daemon: Who,
+    /// The environment of the daemon.
+    daemon_env: Vec<(String, String)>,
+}
+
+/// The daemon's user, created on the first start (its ids come from 10001 up,
+/// never the host's); its own group, and no shell.
+async fn ensure_daemon_user(agent: &Who) -> Result<Who, String> {
+    if let Ok(line) = sh(&["getent", "passwd", DAEMON_USER]).await {
+        let f: Vec<&str> = line.trim().split(':').collect();
+        if let (Some(uid), Some(gid)) = (
+            f.get(2).and_then(|v| v.parse().ok()),
+            f.get(3).and_then(|v| v.parse().ok()),
+        ) {
+            return Ok(Who {
+                uid,
+                gid,
+                name: DAEMON_USER.into(),
+            });
+        }
+    }
+    let mut id = 10001u32;
+    loop {
+        let s = id.to_string();
+        if id != agent.uid
+            && id != agent.gid
+            && sh(&["getent", "passwd", &s]).await.is_err()
+            && sh(&["getent", "group", &s]).await.is_err()
+        {
+            break;
+        }
+        id += 1;
+    }
+    let s = id.to_string();
+    sh(&["groupadd", "-g", &s, DAEMON_USER]).await?;
+    sh(&[
+        "useradd",
+        "-u",
+        &s,
+        "-g",
+        &s,
+        "-d",
+        DAEMON_HOME,
+        "-M",
+        "-s",
+        "/usr/sbin/nologin",
+        DAEMON_USER,
+    ])
+    .await?;
+    Ok(Who {
+        uid: id,
+        gid: id,
+        name: DAEMON_USER.into(),
+    })
+}
+
+fn chmod(p: &Path, mode: u32) -> Result<(), String> {
+    std::fs::set_permissions(p, std::os::unix::fs::PermissionsExt::from_mode(mode))
+        .map_err(|e| format!("{}: {e}", p.display()))
+}
+
+/// The daemon's folders: `data` only for it (0700), `shared` readable by the
+/// agents' user (what the daemon writes for them), the home traversable only.
+async fn prepare_daemon(d: &Who) -> Result<(), String> {
+    let home = Path::new(DAEMON_HOME);
+    std::fs::create_dir_all(home).map_err(|e| format!("{DAEMON_HOME}: {e}"))?;
+    // A new volume is root-owned.
+    if !owned_by(home, d.uid) {
+        eprintln!("xherd init: giving {DAEMON_HOME} to {}:{}", d.uid, d.gid);
+        chown_r(home, d).await?;
+    }
+    chmod(home, 0o711)?;
+    for (dir, mode) in [(DAEMON_DATA, 0o700), (SHARED, 0o755)] {
+        let p = Path::new(dir);
+        std::fs::create_dir_all(p).map_err(|e| format!("{dir}: {e}"))?;
+        chown(p, Some(d.uid), Some(d.gid)).map_err(|e| format!("{dir}: {e}"))?;
+        chmod(p, mode)?;
+    }
+    let gc = Path::new(SHARED).join("gitconfig");
+    if !gc.exists() {
+        write_atomic(&gc, b"[safe]\n\tdirectory = *\n", Some(0o644))
+            .map_err(|e| format!("{}: {e}", gc.display()))?;
+        chown(&gc, Some(d.uid), Some(d.gid)).map_err(|e| format!("{}: {e}", gc.display()))?;
+    }
+    Ok(())
+}
+
+/// Sockets of the runner, the tmux server and the SSH proxy: the agents'
+/// user's, in the host's group, which the daemon's user is in.
+fn prepare_run(agent: &Who) -> Result<(), String> {
+    let p = Path::new(RUN_DIR);
+    std::fs::create_dir_all(p).map_err(|e| format!("{RUN_DIR}: {e}"))?;
+    chown(p, Some(agent.uid), Some(agent.gid)).map_err(|e| format!("{RUN_DIR}: {e}"))?;
+    chmod(p, 0o2770)
+}
+
+/// `worktrees/` and `repos/` are made by the agents' user (git) and by the
+/// daemon (folders, renames): group-writable with the host's group. The
+/// daemon's user must also get into the workspace (group execute).
+fn prepare_workspace(ws: &Path, agent: &Who) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(m) = std::fs::metadata(ws) {
+        let mode = m.mode() & 0o7777;
+        if mode & 0o010 == 0
+            && let Err(e) = chmod(ws, mode | 0o010)
+        {
+            eprintln!("xherd init: {e}; the daemon may not get into the workspace");
+        }
+    }
+    for sub in ["worktrees", "repos"] {
+        let p = ws.join(sub);
+        let made = std::fs::create_dir_all(&p)
+            .map_err(|e| format!("{}: {e}", p.display()))
+            .and_then(|()| {
+                chown(&p, Some(agent.uid), Some(agent.gid))
+                    .map_err(|e| format!("{}: {e}", p.display()))
+            })
+            .and_then(|()| chmod(&p, 0o2775));
+        if let Err(e) = made {
+            eprintln!("xherd init: {e}");
+        }
+    }
+}
+
+/// `xherd runner` as the agents' user: their commands and files for the
+/// daemon, and the tmux server their sessions live in. A long-running helper
+/// like socat: spawned directly, not waited for.
+fn start_runner(agent: &Who, env: &[(String, String)]) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new("setpriv")
+        .args([
+            "--reuid",
+            &agent.uid.to_string(),
+            "--regid",
+            &agent.gid.to_string(),
+            "--groups",
+            &agent.gid.to_string(),
+            "--",
+        ])
+        .arg(exe)
+        .args(["runner", "--socket", RUNNER_SOCK, "--mode", "660"])
+        .args(["--tmux", TMUX_SOCK, "--tmux-allow", DAEMON_USER])
+        .current_dir(AGENT_HOME)
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("starting the runner (setpriv): {e}"))
+}
+
+async fn prepare() -> Result<Plan, String> {
     if !nix::unistd::Uid::effective().is_root() {
         return Err("must run as root (it is the container entrypoint)".into());
     }
@@ -284,45 +440,83 @@ async fn prepare() -> Result<(Who, Vec<(String, String)>), String> {
             ws.display()
         ));
     }
-    let w = ensure_user(env_id("XHERD_UID")?, env_id("XHERD_GID")?).await?;
-    prepare_home(&w).await?;
-    let mut env = vec![
-        ("HOME".to_string(), HOME.to_string()),
-        ("USER".into(), w.name.clone()),
-        ("LOGNAME".into(), w.name.clone()),
+    let agent = ensure_user(env_id("XHERD_UID")?, env_id("XHERD_GID")?).await?;
+    let daemon = ensure_daemon_user(&agent).await?;
+    prepare_daemon(&daemon).await?;
+    prepare_home(&agent).await?;
+    prepare_run(&agent)?;
+    prepare_workspace(&ws, &agent);
+
+    let agent_path = std::env::var("PATH").unwrap_or_default();
+    let mut agent_env = vec![
+        ("HOME".to_string(), AGENT_HOME.to_string()),
+        ("USER".into(), agent.name.clone()),
+        ("LOGNAME".into(), agent.name.clone()),
         ("SHELL".into(), "/bin/bash".into()),
+        // Hooks the daemon cannot take wait in a folder both users write.
+        ("XHERD_QUEUE".into(), QUEUE.into()),
     ];
-    if let Some(sock) = ssh_proxy(&w) {
-        env.push(("SSH_AUTH_SOCK".into(), sock));
+    let mut daemon_env = vec![
+        ("HOME".to_string(), DAEMON_HOME.to_string()),
+        ("USER".into(), daemon.name.clone()),
+        ("LOGNAME".into(), daemon.name.clone()),
+        ("SHELL".into(), "/bin/sh".into()),
+        // System folders only: the agents' PATH has folders they can write,
+        // and the daemon runs programs by name.
+        (
+            "PATH".into(),
+            "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin".into(),
+        ),
+        ("XHERD_HOME".into(), DAEMON_DATA.into()),
+        ("XHERD_QUEUE".into(), QUEUE.into()),
+        ("XHERD_SHARED".into(), SHARED.into()),
+        ("XHERD_RUNNER".into(), RUNNER_SOCK.into()),
+        ("XHERD_TMUX_SOCKET".into(), TMUX_SOCK.into()),
+        ("XHERD_AGENT_HOME".into(), AGENT_HOME.into()),
+        ("XHERD_AGENT_PATH".into(), agent_path),
+    ];
+    if let Some(sock) = ssh_proxy(&agent) {
+        agent_env.push(("SSH_AUTH_SOCK".into(), sock.clone()));
+        daemon_env.push(("SSH_AUTH_SOCK".into(), sock));
     }
     let route = std::fs::read_to_string("/proc/net/route").unwrap_or_default();
     if let Some(gw) = default_gateway(&route) {
-        env.push(("XHERD_LOCAL_PEERS".into(), gw.to_string()));
+        daemon_env.push(("XHERD_LOCAL_PEERS".into(), gw.to_string()));
     }
-    Ok((w, env))
+    start_runner(&agent, &agent_env)?;
+    Ok(Plan {
+        agent,
+        daemon,
+        daemon_env,
+    })
 }
 
-fn exec_daemon(w: &Who, env: Vec<(String, String)>) -> i32 {
+fn exec_daemon(p: &Plan) -> i32 {
     use nix::unistd::{Gid, Uid, setgid, setuid};
     use std::os::unix::process::CommandExt;
-    let gid = Gid::from_raw(w.gid);
+    let (d, a) = (&p.daemon, &p.agent);
+    // The daemon is in the host's group too: that is how it shares `.xherd/`
+    // folders and the runner's sockets with the agents' user.
+    let groups = [Gid::from_raw(d.gid), Gid::from_raw(a.gid)];
     // Only the container (Linux) runs `init`; macOS lacks `setgroups`.
     #[cfg(target_os = "linux")]
-    let groups = nix::unistd::setgroups(&[gid]);
+    let res = nix::unistd::setgroups(&groups);
     #[cfg(not(target_os = "linux"))]
-    let groups: nix::Result<()> = Err(nix::errno::Errno::ENOTSUP);
-    if let Err(e) = groups
-        .and_then(|_| setgid(gid))
-        .and_then(|_| setuid(Uid::from_raw(w.uid)))
+    let res: nix::Result<()> = Err(nix::errno::Errno::ENOTSUP);
+    if let Err(e) = res
+        .and_then(|_| setgid(groups[0]))
+        .and_then(|_| setuid(Uid::from_raw(d.uid)))
     {
         eprintln!("xherd init: dropping privileges: {e}");
         return 1;
     }
+    // Files the daemon makes in shared folders are group-writable.
+    nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o002));
     let exe = std::env::current_exe().unwrap_or_else(|_| "xherd".into());
     let err = std::process::Command::new(exe)
         .arg("daemon")
-        .current_dir(HOME)
-        .envs(env)
+        .current_dir(DAEMON_HOME)
+        .envs(p.daemon_env.iter().map(|(k, v)| (k, v)))
         .exec();
     eprintln!("xherd init: starting the daemon: {err}");
     1

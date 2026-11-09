@@ -357,7 +357,7 @@ fn permission_rules(pack: Option<&xherd_flow::Pack>) -> Vec<String> {
 /// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
 /// plan cannot be made (no HOME).
 fn command_dirs(pack: &xherd_flow::Pack) -> Vec<String> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     let plan = pack
         .plan_install(
             xherd_flow::approve::DEFAULT_RUNTIME,

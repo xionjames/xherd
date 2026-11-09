@@ -72,7 +72,7 @@ pub async fn setup_terminal(
 }
 
 async fn attach(d: &Daemon, session: &str, size: Size, ws: WebSocketUpgrade) -> Response {
-    let tmux = Tmux::new(d.config.tmux_socket.clone());
+    let tmux = Tmux::new(d.config.tmux_server());
     if !tmux.has_session(session).await {
         return ApiError::new(
             StatusCode::CONFLICT,

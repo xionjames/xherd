@@ -402,7 +402,7 @@ async fn install(
     State(d): State<Daemon>,
     Json(req): Json<InstallReq>,
 ) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     let installed = d
         .install(req.runtime.as_deref(), req.pack.as_deref(), &env)
         .await?;
@@ -430,7 +430,7 @@ async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {
 }
 
 async fn checks(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     Ok(Json(json!({"checks": d.checks(&env).await})))
 }
 
@@ -439,7 +439,7 @@ async fn fix_check(
     State(d): State<Daemon>,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let env = |k: &str| std::env::var(k).ok();
+    let env = xherd_core::runner::agent_env;
     d.fix_check(&id, &env).await?;
     Ok(Json(json!({"checks": d.checks(&env).await})))
 }

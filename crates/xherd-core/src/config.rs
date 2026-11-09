@@ -239,6 +239,15 @@ impl Config {
         write_atomic(path, &bytes, Some(0o600))
     }
 
+    /// The tmux server to use: `$XHERD_TMUX_SOCKET` (the container's, a path)
+    /// wins over the saved name.
+    pub fn tmux_server(&self) -> Option<String> {
+        std::env::var("XHERD_TMUX_SOCKET")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.tmux_socket.clone())
+    }
+
     pub fn workspace_root(&self) -> std::path::PathBuf {
         let nonempty = |s: Option<String>| s.filter(|s| !s.is_empty());
         nonempty(self.workspace.clone())

@@ -242,18 +242,14 @@ pub async fn find_in_subdirs_as_agent(dir: &Path, name: &str) -> Option<PathBuf>
     }
 }
 
-/// An environment variable as the agent user sees it: its `HOME` is
-/// `XHERD_AGENT_HOME` when set (the daemon's own home is another folder in
-/// the container, R-1203).
+/// An environment variable as the agent user sees it: `XHERD_AGENT_<NAME>`
+/// when set (`XHERD_AGENT_HOME`, `XHERD_AGENT_PATH`: in the container the
+/// daemon's own home and PATH are not the agents', R-1203), else ours.
 pub fn agent_env(name: &str) -> Option<String> {
-    if name == "HOME"
-        && let Some(h) = std::env::var("XHERD_AGENT_HOME")
-            .ok()
-            .filter(|h| !h.is_empty())
-    {
-        return Some(h);
-    }
-    std::env::var(name).ok()
+    std::env::var(format!("XHERD_AGENT_{name}"))
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var(name).ok())
 }
 
 fn make_dir(path: &Path, mode: u32) -> std::io::Result<()> {
@@ -434,6 +430,65 @@ async fn serve_one(mut s: UnixStream) {
     };
     if let Ok(body) = serde_json::to_vec(&reply) {
         let _ = write_frame(&mut s, &body).await;
+    }
+}
+
+/// Keep a tmux server running on `socket`, as the user this runner is, and
+/// let `allow` (the daemon's user) use it: tmux (>= 3.3) `server-access` for
+/// the commands, and the socket opened to the group. The agents' sessions
+/// live in this server, so they are this user's processes (R-1203). Never
+/// returns; a server that exits is started again.
+pub async fn supervise_tmux(socket: PathBuf, allow: Option<String>) {
+    use std::process::Stdio;
+    let conf = socket.with_extension("conf");
+    // `-D` already turns exit-empty off; say it anyway.
+    let mut text = String::from("set -s exit-empty off\n");
+    if let Some(u) = &allow {
+        text.push_str(&format!("server-access -aw {u}\n"));
+    }
+    if let Err(e) = std::fs::write(&conf, text) {
+        eprintln!("xherd runner: {}: {e}", conf.display());
+        return;
+    }
+    loop {
+        let _ = std::fs::remove_file(&socket);
+        let started = std::time::Instant::now();
+        match tokio::process::Command::new("tmux")
+            .arg("-S")
+            .arg(&socket)
+            .arg("-f")
+            .arg(&conf)
+            .arg("-D")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(mut child) => {
+                tokio::spawn(open_to_group(socket.clone()));
+                let _ = child.wait().await;
+                eprintln!("xherd runner: the tmux server exited; starting it again");
+            }
+            Err(e) => eprintln!("xherd runner: cannot start tmux: {e}"),
+        }
+        let pause = if started.elapsed() < Duration::from_secs(5) {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_millis(500)
+        };
+        tokio::time::sleep(pause).await;
+    }
+}
+
+/// The server creates its socket for its owner only; the daemon's user is in
+/// our group and needs to write to it.
+async fn open_to_group(socket: PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    for _ in 0..100 {
+        if socket.exists() {
+            let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o660));
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 

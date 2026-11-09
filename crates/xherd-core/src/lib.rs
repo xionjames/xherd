@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod config;
+pub mod container;
 pub mod domain;
 pub mod exec;
 pub mod guard;

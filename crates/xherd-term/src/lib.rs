@@ -26,7 +26,9 @@ pub enum TermError {
 
 pub type Result<T> = std::result::Result<T, TermError>;
 
-/// tmux client bound to one server (`-L <socket>`, or the default server).
+/// tmux client bound to one server: `-L <name>`, `-S <path>` when the socket
+/// has a `/` (the container: the server runs as another user, R-1203), or the
+/// default server.
 #[derive(Debug, Clone, Default)]
 pub struct Tmux {
     socket: Option<String>,
@@ -47,21 +49,26 @@ impl Tmux {
         Tmux { socket }
     }
 
+    /// The flags that select the server.
+    fn server_args(&self) -> Vec<String> {
+        match &self.socket {
+            Some(s) if s.contains('/') => vec!["-S".into(), s.clone()],
+            Some(s) => vec!["-L".into(), s.clone()],
+            None => Vec::new(),
+        }
+    }
+
     /// argv of a tmux client attached to the session (browser terminal).
     pub fn attach_argv(&self, name: &str) -> Vec<String> {
         let mut argv = vec!["tmux".to_string()];
-        if let Some(s) = &self.socket {
-            argv.extend(["-L".into(), s.clone()]);
-        }
+        argv.extend(self.server_args());
         argv.extend(["attach-session".into(), "-t".into(), session(name)]);
         argv
     }
 
     pub async fn run(&self, args: &[&str]) -> Result<String> {
         let mut argv = vec!["tmux".to_string()];
-        if let Some(s) = &self.socket {
-            argv.extend(["-L".into(), s.clone()]);
-        }
+        argv.extend(self.server_args());
         argv.extend(args.iter().map(|s| s.to_string()));
         let out = run(Cmd::new(argv).timeout(Duration::from_secs(10))).await?;
         if !out.success() {

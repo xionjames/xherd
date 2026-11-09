@@ -32,15 +32,34 @@ impl From<XapCall> for Queued {
     }
 }
 
+/// 0660 when the queue is shared between two users (`XHERD_QUEUE`, the
+/// container), else 0600.
+#[cfg(unix)]
+fn queue_mode() -> u32 {
+    if std::env::var_os("XHERD_QUEUE").is_some_and(|p| !p.is_empty()) {
+        0o660
+    } else {
+        0o600
+    }
+}
+
 fn open_locked_append(path: &Path) -> std::io::Result<fd_lock::RwLock<File>> {
     let mut opts = OpenOptions::new();
     opts.create(true).append(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+        opts.mode(queue_mode());
     }
-    Ok(fd_lock::RwLock::new(opts.open(path)?))
+    let f = opts.open(path)?;
+    // The umask may have taken the group's write bit away; the other user
+    // must be able to open the file too. Not the owner: nothing to do.
+    #[cfg(unix)]
+    if queue_mode() == 0o660 {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(0o660));
+    }
+    Ok(fd_lock::RwLock::new(f))
 }
 
 #[cfg(unix)]
