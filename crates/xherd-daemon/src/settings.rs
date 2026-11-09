@@ -31,6 +31,7 @@ pub struct ConfigPatch {
     /// Replaces the list of identities by remote.
     pub git_identities: Option<Vec<GitIdentity>>,
     pub welcomed: Option<bool>,
+    pub max_session_minutes: Option<u64>,
     pub max_diff_lines: Option<usize>,
     /// Replaces the list of sensitive path globs.
     pub sensitive_paths: Option<Vec<String>>,
@@ -105,6 +106,9 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             }
             c.plugin_settings.insert(name, v);
         }
+    }
+    if let Some(n) = p.max_session_minutes {
+        c.max_session_minutes = n;
     }
     if let Some(n) = p.max_diff_lines {
         if !(1..=1_000_000).contains(&n) {

@@ -455,3 +455,28 @@ async fn queued_reports_are_replayed_on_start() {
     assert!(!d.paths.hook_queue().exists());
     assert_eq!(d.replay_queue().await.unwrap(), 0);
 }
+
+#[tokio::test]
+async fn a_session_over_the_limit_is_paused() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    let cfg = xherd_core::config::Config {
+        max_session_minutes: 30,
+        ..Default::default()
+    };
+    paths.ensure().unwrap();
+    cfg.save(&paths.config()).unwrap();
+    let clock = Arc::new(ManualClock::new(1_000_000));
+    let o = Options::new(Arc::new(FakeDriver::default()), clock.clone());
+    let d = Daemon::start(paths, o).await.unwrap();
+    d.create_agent(agent("SC-1", 1)).await.unwrap();
+    wait_status(&d, "SC-1", Status::Running).await;
+
+    clock.advance(29 * 60_000);
+    d.sup.tick(TickKind::SessionLimit);
+    assert_eq!(status(&d, "SC-1").await, Status::Running);
+
+    clock.advance(2 * 60_000);
+    d.sup.tick(TickKind::SessionLimit);
+    wait_status(&d, "SC-1", Status::Paused).await;
+}

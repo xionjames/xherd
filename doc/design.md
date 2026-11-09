@@ -687,7 +687,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [ ] Daemon/agent user split (R-1203)
     - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a refusal)
     - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`; the callers come with PR follow-up (PR comments) and ticket fetching
-    - [ ] Budgets and run limits (R-1205, R-120, R-1206), `xherd security check`
+    - [x] Max session length (R-1206): `maxSessionMinutes`, pauses (no handoff yet)
+    - [ ] Budgets and run limits (R-1205, R-120), `xherd security check`
   - [ ] Backups
   - [ ] Autonomy `important`
   - [ ] PR follow-up

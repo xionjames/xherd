@@ -69,6 +69,8 @@ pub enum TickKind {
     ScreenScan,
     IdleCheck,
     ParkCheck,
+    /// `maxSessionMinutes` (R-1206).
+    SessionLimit,
     /// `recover`: the daemon just started, so a missing session means the
     /// terminal server went away with a container restart, not that the
     /// agent died; the agent is parked or resumed instead of failed.
@@ -136,6 +138,7 @@ pub struct ActorSettings {
     /// Longest a task's `verify:` command may run.
     pub verify_timeout: Duration,
     /// Code tripwires (R-115), from the config at daemon start.
+    pub max_session_minutes: u64,
     pub max_diff_lines: usize,
     pub sensitive_paths: Vec<String>,
 }
@@ -152,6 +155,7 @@ impl Default for ActorSettings {
             screen_rules: None,
             toolchain_install: false,
             verify_timeout: VERIFY_TIMEOUT,
+            max_session_minutes: 0,
             max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
             sensitive_paths: Vec::new(),
         }
@@ -1042,7 +1046,9 @@ impl Actor {
             .driver
             .start(&ctx, &self.session_argv(argv))
             .await
-            .map_err(|e| refuse("driver", e.0))
+            .map_err(|e| refuse("driver", e.0))?;
+        self.agent.session_since = Some(self.now());
+        Ok(())
     }
 
     /// The argv of a new session: the runtime, wrapped in `xherd toolchain
@@ -1371,6 +1377,7 @@ impl Actor {
             .map_err(|e| refuse("driver", e.0))?;
         self.delivery = None;
         self.agent.session = None;
+        self.agent.session_since = Some(self.now());
         self.agent.next_prompt = Some(cmd.to_string());
         self.log(None, "fresh-session", Some(json!({"next": cmd})))
             .await;
@@ -1586,6 +1593,27 @@ impl Actor {
                     self.agent.idle_alerted = true;
                     self.log(None, "idle-alert", None).await;
                     self.notify(format!("{} has been idle for {m} min", self.agent.name));
+                    self.commit(before).await;
+                }
+            }
+            TickKind::SessionLimit => {
+                let m = self.env.settings.max_session_minutes;
+                if m > 0
+                    && self.agent.status.is_live()
+                    && self
+                        .agent
+                        .session_since
+                        .is_some_and(|s| now - s >= minutes(m))
+                {
+                    // No handoff yet (R-026): pause just ends the session.
+                    self.end_session().await;
+                    self.agent.fire(Trigger::Pause, now);
+                    self.log(None, "session-limit", Some(json!({"minutes": m})))
+                        .await;
+                    self.notify(format!(
+                        "{} paused: its session ran longer than {m} min",
+                        self.agent.name
+                    ));
                     self.commit(before).await;
                 }
             }

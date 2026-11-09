@@ -74,6 +74,9 @@ pub struct Config {
     /// Identities by remote (`github.com/my-company`), over the global one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_identities: Vec<GitIdentity>,
+    /// A session running longer than this many minutes is ended and the agent
+    /// paused (R-1206). 0 = off.
+    pub max_session_minutes: u64,
     /// Code gates hold a commit proposal with more changed lines than this
     /// (R-115 `maxDiffLines`). Global until repo profiles exist.
     pub max_diff_lines: usize,
@@ -113,6 +116,7 @@ impl Default for Config {
             git_user_email: None,
             git_identities: Vec::new(),
             git_hosts: Vec::new(),
+            max_session_minutes: 0,
             max_diff_lines: 1000,
             sensitive_paths: Vec::new(),
             extra: Map::new(),

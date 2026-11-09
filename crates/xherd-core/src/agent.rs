@@ -92,6 +92,9 @@ pub struct Agent {
     pub screen_blocked: bool,
     #[serde(default)]
     pub idle_alerted: bool,
+    /// When the current runtime session started (R-1206).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_since: Option<Millis>,
 }
 
 impl Agent {
@@ -127,6 +130,7 @@ impl Agent {
             last_message: None,
             screen_blocked: false,
             idle_alerted: false,
+            session_since: None,
         }
     }
 
