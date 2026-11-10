@@ -7,9 +7,10 @@
   import { setup, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
   import GitAccess from '../components/GitAccess.svelte';
+  import Backups from '../components/Backups.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const TABS = ['general', 'gates', 'notifications', 'git', 'plugins'];
+  const TABS = ['general', 'gates', 'notifications', 'git', 'backups', 'plugins'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
@@ -76,6 +77,7 @@
     <a class="tb" class:on={tab === 'gates'} aria-current={tab === 'gates' ? 'page' : undefined} href={href('/settings', { tab: 'gates' })}>Gates &amp; autonomy</a>
     <a class="tb" class:on={tab === 'notifications'} aria-current={tab === 'notifications' ? 'page' : undefined} href={href('/settings', { tab: 'notifications' })}>Notifications</a>
     <a class="tb" class:on={tab === 'git'} aria-current={tab === 'git' ? 'page' : undefined} href={href('/settings', { tab: 'git' })}>Git access</a>
+    <a class="tb" class:on={tab === 'backups'} aria-current={tab === 'backups' ? 'page' : undefined} href={href('/settings', { tab: 'backups' })}>Backups</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
   </nav>
@@ -89,6 +91,8 @@
   {/if}
   {#if tab === 'git'}
     <GitAccess />
+  {:else if tab === 'backups'}
+    <Backups />
   {:else if !setup.config || !ready}
     <p class="muted">Loading…</p>
   {:else if tab === 'general'}
@@ -201,7 +205,7 @@
       {/each}
     </div>
   {/if}
-  {#if setup.config && ready && tab !== 'git'}
+  {#if setup.config && ready && tab !== 'git' && tab !== 'backups'}
     <div class="savebar">
       <span class="muted">{dirty ? `${dirty} unsaved change${dirty > 1 ? 's' : ''}` : 'No unsaved changes'}</span>
       <span class="grow"></span>

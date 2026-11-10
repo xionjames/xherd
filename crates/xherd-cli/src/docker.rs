@@ -526,7 +526,7 @@ pub fn doctor() -> i32 {
 }
 
 /// Pause live agents, pull, restart, wait for the daemon, resume them
-/// (design §10.2; backups before updates arrive with backups, M4).
+/// (design §10.2); a backup is taken first (R-1405).
 pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
     let dir = config_dir();
     let (cf, ef) = (
@@ -608,6 +608,27 @@ pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
             }
         }
     };
+    // R-1405: a backup first; without one the update stops (unless --force).
+    println!("backing up…");
+    match client.call_slow(
+        "POST",
+        "/backups",
+        Some(serde_json::json!({"label": "update"})),
+    ) {
+        Ok(v) => {
+            println!("  {}", v["path"].as_str().unwrap_or("done"));
+            for w in v["warnings"].as_array().into_iter().flatten() {
+                eprintln!("  note: {}", w.as_str().unwrap_or(""));
+            }
+        }
+        Err(e) if force => eprintln!("  backup failed ({e}); updating anyway (--force)"),
+        Err(e) => {
+            eprintln!("xherd docker update: backup failed: {e} (pass --force to update anyway)");
+            resume(&live);
+            let _ = std::fs::remove_file(&drained);
+            return 1;
+        }
+    }
     let steps: Vec<&[&str]> = if pull {
         vec![&["pull"], &["up", "-d"]]
     } else {

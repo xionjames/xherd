@@ -15,6 +15,7 @@ use xherd_plugin::Registry;
 use xherd_store::Store;
 
 pub mod actor;
+pub mod backup;
 pub mod checks;
 mod create;
 pub mod driver;
@@ -304,6 +305,7 @@ impl Daemon {
             companion: open_in::Companion::default(),
         };
         d.import_ledgers().await;
+        d.repair_restored().await;
         let replayed = d.replay_queue().await?;
         if replayed > 0 {
             tracing::info!(replayed, "replayed queued reports");

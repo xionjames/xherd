@@ -12,6 +12,7 @@ hex = "0.4.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
+tar = "0.4.46"
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["sync", "rt", "time", "macros"] }
 tracing = "0.1.44"
@@ -21,6 +22,7 @@ xherd-git = { version = "0.1.0", path = "../xherd-git" }
 xherd-plugin = { version = "0.1.0", path = "../xherd-plugin" }
 xherd-store = { version = "0.1.0", path = "../xherd-store" }
 xherd-term = { version = "0.1.0", path = "../xherd-term" }
+zstd = "0.14.3"
 
 [lints]
 workspace = true

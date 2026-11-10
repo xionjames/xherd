@@ -20,7 +20,9 @@ ureq = { version = "3.5.1", features = ["json"] }
 xherd-api = { version = "0.1.0", path = "../xherd-api" }
 xherd-core = { version = "0.1.0", path = "../xherd-core" }
 xherd-daemon = { version = "0.1.0", path = "../xherd-daemon" }
+xherd-git = { version = "0.1.0", path = "../xherd-git" }
 xherd-plugin = { version = "0.1.0", path = "../xherd-plugin" }
+xherd-store = { version = "0.1.0", path = "../xherd-store" }
 xherd-term = { version = "0.1.0", path = "../xherd-term" }
 
 [lints]
@@ -30,5 +32,3 @@ workspace = true
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
 xherd-flow = { path = "../xherd-flow" }
-xherd-git = { path = "../xherd-git" }
-xherd-store = { path = "../xherd-store" }

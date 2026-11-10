@@ -9,6 +9,7 @@ use serde_json::Value;
 use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
+mod backup;
 mod docker;
 mod git;
 mod guard;
@@ -117,6 +118,9 @@ enum Cmd {
     /// Security overview.
     #[command(subcommand)]
     Security(SecurityCmd),
+    /// Back up and restore xherd's data and the agents' unfinished work.
+    #[command(subcommand)]
+    Backup(BackupCmd),
     /// Checks behind xherd's git hooks.
     #[command(subcommand)]
     Guard(GuardCmd),
@@ -178,6 +182,31 @@ enum Cmd {
     /// XAP: record an out-of-scope finding.
     #[command(subcommand)]
     Issue(xap::IssueCmd),
+}
+
+#[derive(Subcommand)]
+enum BackupCmd {
+    /// Write one archive: database, config, plugins, archive, and each live agent's .xherd, branch bundle and uncommitted work. No secrets or logins.
+    Create {
+        /// Folder for the archive (default: the data root's backups/, in the container <workspace>/xherd-backups).
+        #[arg(long)]
+        to: Option<std::path::PathBuf>,
+    },
+    /// Check an archive (hashes, database, bundles) without restoring it.
+    Verify { archive: std::path::PathBuf },
+    /// Restore an archive into the data root (daemon stopped). Agents come back paused.
+    Restore {
+        archive: std::path::PathBuf,
+        /// Workspace on this machine, when it differs from the one in the backup.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Also rewrite a path prefix of the agents' repositories: OLD=NEW (repeatable).
+        #[arg(long = "map")]
+        maps: Vec<String>,
+        /// Replace an existing database (it is kept in backups/).
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -339,6 +368,14 @@ fn main() -> ExitCode {
         Cmd::Companion => with_client(open_in::companion),
         Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
         Cmd::Security(SecurityCmd::Check) => with_client(security_check),
+        Cmd::Backup(BackupCmd::Create { to }) => backup::create(to),
+        Cmd::Backup(BackupCmd::Verify { archive }) => backup::verify(&archive),
+        Cmd::Backup(BackupCmd::Restore {
+            archive,
+            workspace,
+            maps,
+            force,
+        }) => backup::restore(&archive, workspace, maps, force),
         Cmd::Hook { .. } => 0,
         Cmd::Report {
             state,
@@ -554,16 +591,37 @@ impl Client {
     }
 
     fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
+        self.call_with(&self.agent, method, path, body)
+    }
+
+    /// For calls that take minutes (a backup): a 30-minute limit instead of 30 seconds.
+    fn call_slow(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
+        let slow = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_connect(Some(Duration::from_secs(1)))
+            .timeout_global(Some(Duration::from_secs(30 * 60)))
+            .build()
+            .new_agent();
+        self.call_with(&slow, method, path, body)
+    }
+
+    fn call_with(
+        &self,
+        agent: &ureq::Agent,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, String> {
         let url = format!("{}/api/v1{path}", self.url.trim_end_matches('/'));
         let auth = self.token.as_ref().map(|t| format!("Bearer {t}"));
         let res = if method == "GET" {
-            let mut r = self.agent.get(&url);
+            let mut r = agent.get(&url);
             if let Some(a) = &auth {
                 r = r.header("Authorization", a);
             }
             r.call()
         } else {
-            let mut r = self.agent.post(&url);
+            let mut r = agent.post(&url);
             if let Some(a) = &auth {
                 r = r.header("Authorization", a);
             }
