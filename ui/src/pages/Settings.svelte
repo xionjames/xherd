@@ -90,36 +90,49 @@
   {:else if !setup.config || !ready}
     <p class="muted">Loading…</p>
   {:else if tab === 'general'}
-    <section class="sec">
-      <div class="sh"><h2>Agents</h2><span class="hint">Slots, files and housekeeping.</span></div>
-      <div class="bd">
-        <div class="g3">
+    <div class="secs">
+      <section class="sec">
+        <div class="sh"><h2>Agents</h2><span class="hint">How many run at once.</span></div>
+        <div class="bd">
           <label class="f">Max agents running at once
             <span class="unit"><input type="number" min="1" max="64" bind:value={form.maxConcurrentAgents} /><span>agents</span></span>
             <span class="hint">More wait in Queued.</span></label>
           <label class="f">Pause timeout
             <span class="unit"><input type="number" min="5" max="3600" bind:value={form.pauseTimeoutSec} /><span>sec</span></span>
             <span class="hint">How long a pause waits for the agent to stop.</span></label>
+        </div>
+      </section>
+      <section class="sec">
+        <div class="sh"><h2>Files and history</h2><span class="hint">Where work lives and how long events are kept.</span></div>
+        <div class="bd">
+          <label class="f">Workspace folder
+            <input class="mono" bind:value={form.workspace} placeholder="$XHERD_WORKSPACE, else ~/xherd" />
+            <span class="hint">Holds <span class="mono">worktrees/&lt;repo&gt;/&lt;agent&gt;</span>. Absolute path; empty for the default.</span></label>
           <label class="f">Keep events
             <span class="unit"><input type="number" min="1" bind:value={form.eventRetentionDays} /><span>days</span></span></label>
         </div>
-        <label class="f">Workspace folder
-          <input class="mono" bind:value={form.workspace} placeholder="$XHERD_WORKSPACE, else ~/xherd" />
-          <span class="hint">Holds <span class="mono">worktrees/&lt;repo&gt;/&lt;agent&gt;</span>. Absolute path; empty for the default.</span></label>
-      </div>
-    </section>
-    <section class="sec">
-      <div class="sh"><h2>Waiting for you</h2><span class="hint">What happens while an agent sits at a gate.</span></div>
-      <div class="bd">
-        <div class="g3">
+      </section>
+      <section class="sec">
+        <div class="sh"><h2>Waiting at a gate</h2><span class="hint">What happens while an agent sits at a gate.</span></div>
+        <div class="bd">
           <label class="f">Idle alert after
             <span class="unit"><input type="number" min="0" bind:value={form.idleAlertMinutes} /><span>min</span></span>
             <span class="hint">0 turns it off.</span></label>
           <label class="f">Park at a gate after
             <span class="unit"><input type="number" min="0" bind:value={form.gateParkMinutes} /><span>min</span></span>
             <span class="hint">Frees the slot; stays in Needs you. 0 never parks.</span></label>
+          {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.']] as [k, title, hint] (k)}
+            <div class="tog">
+              <button class="sw" class:on={form[k] === true} role="switch" aria-checked={form[k] === true} aria-label={title}
+                onclick={() => (form[k] = !form[k])}></button>
+              <div><b style="font-weight:500">{title}</b><div class="hint">{hint}</div></div>
+            </div>
+          {/each}
         </div>
-        <div class="g3">
+      </section>
+      <section class="sec">
+        <div class="sh"><h2>Autonomy</h2><span class="hint">What xherd may approve without you.</span></div>
+        <div class="bd">
           <label class="f">Autonomy of new agents
             <select bind:value={form.autonomy}><option value="ask">ask</option><option value="important">important</option></select>
             <span class="hint">important: xherd approves design, tasks, review and commit gates when no tripwire holds them. Spec and ship always wait. Each agent can change it.</span></label>
@@ -127,15 +140,8 @@
             <span class="unit"><input type="number" min="0" bind:value={form.maxAutoApprovalsInRow} /><span>in a row</span></span>
             <span class="hint">The next gate waits for you. 0 = no limit.</span></label>
         </div>
-        {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.']] as [k, title, hint] (k)}
-          <div class="tog">
-            <button class="sw" class:on={form[k] === true} role="switch" aria-checked={form[k] === true} aria-label={title}
-              onclick={() => (form[k] = !form[k])}></button>
-            <div><b style="font-weight:500">{title}</b><div class="hint">{hint}</div></div>
-          </div>
-        {/each}
-      </div>
-    </section>
+      </section>
+    </div>
   {:else}
     <div class="cards">
       {#each app.state?.plugins ?? [] as p (p.name)}
