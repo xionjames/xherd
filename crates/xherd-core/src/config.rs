@@ -101,6 +101,10 @@ pub struct Config {
     /// without `/` matches the file name anywhere. Global until profiles.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sensitive_paths: Vec<String>,
+    /// Tool name → version that agents get when the worktree has no version
+    /// file for it (R-653). Read at daemon start.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub toolchain_defaults: std::collections::BTreeMap<String, String>,
     /// ntfy server (`https://ntfy.example.com`) and topic that notifications
     /// are also sent to (spec §16.3). Both are needed; off until set. Read
     /// live, no restart.
@@ -150,6 +154,7 @@ impl Default for Config {
             daily_token_budget: 0,
             max_diff_lines: 1000,
             sensitive_paths: Vec::new(),
+            toolchain_defaults: Default::default(),
             extra: Map::new(),
         }
     }

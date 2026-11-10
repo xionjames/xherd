@@ -162,6 +162,8 @@ pub struct ActorSettings {
     /// Install missing toolchain versions before the runtime starts
     /// (container); native installs only resolve (R-653).
     pub toolchain_install: bool,
+    /// Default versions for tools without a version file (`toolchainDefaults`).
+    pub toolchain_defaults: std::collections::BTreeMap<String, String>,
     /// Longest a task's `verify:` command may run.
     pub verify_timeout: Duration,
     /// Time between polls of a watched PR (R-303); zero = never.
@@ -189,6 +191,7 @@ impl Default for ActorSettings {
             xherd_url: "http://127.0.0.1:4740".into(),
             screen_rules: None,
             toolchain_install: false,
+            toolchain_defaults: Default::default(),
             verify_timeout: VERIFY_TIMEOUT,
             pr_poll: Duration::from_secs(300),
             max_session_minutes: 0,
@@ -1534,6 +1537,7 @@ impl Actor {
             wd,
             &self.env.toolchains,
             self.env.settings.toolchain_install,
+            &self.env.settings.toolchain_defaults,
         );
         let file = wd.join(PLAN_FILE);
         if p.steps.is_empty() {

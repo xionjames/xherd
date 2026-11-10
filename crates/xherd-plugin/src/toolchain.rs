@@ -97,6 +97,11 @@ static RUST_CHANNEL: LazyLock<Regex> =
 static VERSION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z0-9<>=~^!][A-Za-z0-9._+*/~=<>^,!-]{0,63}$").unwrap());
 
+/// Whether `v` is a version xherd would accept from a version file.
+pub fn valid_version(v: &str) -> bool {
+    VERSION.is_match(v)
+}
+
 /// The version a file's text names, if any.
 pub fn read_version(text: &str, format: Format, key: &str) -> Option<String> {
     let plain = || {
@@ -158,14 +163,19 @@ pub struct Plan {
 /// Worktree-relative file where the plan is written.
 pub const PLAN_FILE: &str = ".xherd/toolchain.json";
 
-fn subst(argv: &[String], v: &str) -> Vec<String> {
+pub fn subst(argv: &[String], v: &str) -> Vec<String> {
     argv.iter().map(|a| a.replace("{v}", v)).collect()
 }
 
 /// The plan for a worktree: for each tool of each toolchain plugin, the first
 /// version file that names a valid version. When two plugins claim a tool,
 /// the first (registry order) wins (profiles choose later, R-532).
-pub fn plan(worktree: &Path, toolchains: &[(String, Toolchain)], install: bool) -> Plan {
+pub fn plan(
+    worktree: &Path,
+    toolchains: &[(String, Toolchain)],
+    install: bool,
+    defaults: &BTreeMap<String, String>,
+) -> Plan {
     let mut steps: Vec<Step> = Vec::new();
     for (plugin, tc) in toolchains {
         for tool in &tc.tools {
@@ -176,6 +186,11 @@ pub fn plan(worktree: &Path, toolchains: &[(String, Toolchain)], install: bool) 
                 let text = std::fs::read_to_string(worktree.join(&f.path)).ok()?;
                 let key = f.key.as_deref().unwrap_or(&tool.name);
                 read_version(&text, f.format, key).map(|v| (f.path.clone(), v))
+            });
+            // No version file: the user's default for the tool (R-653), if any.
+            let found = found.or_else(|| {
+                let v = defaults.get(&tool.name)?;
+                valid_version(v).then(|| ("xherd default".to_string(), v.clone()))
             });
             let Some((file, v)) = found else { continue };
             steps.push(Step {
@@ -311,7 +326,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join(".node-version"), "20\n").unwrap();
         std::fs::write(d.path().join("go.mod"), "module x\ngo 1.22.1\n").unwrap();
-        let p = plan(d.path(), &tc(), true);
+        let p = plan(d.path(), &tc(), true, &BTreeMap::new());
         assert!(p.install);
         assert_eq!(p.steps.len(), 2);
         let n = &p.steps[0];
@@ -326,14 +341,35 @@ mod tests {
         assert_eq!(p.steps[1].tool, "go");
 
         std::fs::write(d.path().join(".nvmrc"), "lts/iron\n").unwrap();
-        assert_eq!(plan(d.path(), &tc(), false).steps[0].version, "lts/iron");
+        assert_eq!(
+            plan(d.path(), &tc(), false, &BTreeMap::new()).steps[0].version,
+            "lts/iron"
+        );
         let empty = tempfile::tempdir().unwrap();
-        assert!(plan(empty.path(), &tc(), false).steps.is_empty());
+        let defaults = BTreeMap::from([
+            ("go".to_string(), "1.23".to_string()),
+            ("node".into(), "$(x)".into()),
+        ]);
+        let dp = plan(empty.path(), &tc(), false, &defaults);
+        assert_eq!(dp.steps.len(), 1, "an invalid default is ignored");
+        assert_eq!(
+            (
+                dp.steps[0].tool.as_str(),
+                dp.steps[0].version.as_str(),
+                dp.steps[0].file.as_str()
+            ),
+            ("go", "1.23", "xherd default")
+        );
+        assert!(
+            plan(empty.path(), &tc(), false, &BTreeMap::new())
+                .steps
+                .is_empty()
+        );
     }
 
     #[test]
     fn env_uses_the_resolved_dir() {
-        let mut s = plan(Path::new("/nonexistent"), &tc(), false);
+        let mut s = plan(Path::new("/nonexistent"), &tc(), false, &BTreeMap::new());
         assert!(s.steps.is_empty());
         let step = Step {
             plugin: "p".into(),

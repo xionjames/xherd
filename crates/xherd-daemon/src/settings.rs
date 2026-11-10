@@ -44,6 +44,8 @@ pub struct ConfigPatch {
     pub max_diff_lines: Option<usize>,
     /// Replaces the list of sensitive path globs.
     pub sensitive_paths: Option<Vec<String>>,
+    /// Tool → default version; an empty version removes the tool's default.
+    pub toolchain_defaults: Option<std::collections::BTreeMap<String, String>>,
 }
 
 fn bad(message: impl Into<String>) -> ActionError {
@@ -162,6 +164,22 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             }
         }
         c.sensitive_paths = out;
+    }
+    if let Some(defaults) = p.toolchain_defaults {
+        let mut out = std::collections::BTreeMap::new();
+        for (tool, v) in defaults {
+            let v: String = v.chars().filter(|c| !c.is_whitespace()).collect();
+            if v.is_empty() {
+                continue;
+            }
+            if !xherd_plugin::toolchain::valid_version(&v) || tool.len() > 40 {
+                return Err(bad(format!(
+                    "toolchainDefaults: {tool}: not a valid version"
+                )));
+            }
+            out.insert(tool, v);
+        }
+        c.toolchain_defaults = out;
     }
     if let Some(v) = p.ntfy_server {
         let v = v.trim().trim_end_matches('/');

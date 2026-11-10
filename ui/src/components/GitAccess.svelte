@@ -155,8 +155,14 @@
       <span class="mono" style="user-select:all">[include] path = {view.gitconfig}</span> to <span class="mono">~/.gitconfig</span> to use them.</p>
   {/if}
 
+  <div class="gdiv"><h2>1 · Commit identity</h2></div>
+  <div class="gstat" class:ok={!idDirty && idName && idEmail} class:bad={!idName || !idEmail} role="status">
+    {#if !idName || !idEmail}<span class="ckst bad" aria-hidden="true">✕</span><span>Not set: git refuses to commit without a name and email.</span>
+    {:else if idDirty}<span class="ckst opt" aria-hidden="true">•</span><span>Unsaved changes to the identity.</span>
+    {:else}<span class="ckst ok" aria-hidden="true">✓</span><span>Agents commit as <b>{idName}</b> &lt;{idEmail}&gt;</span>{/if}
+  </div>
   <section class="sec"><div class="bd stack">
-    <h3>Commit identity</h3>
+    <h3>Name and email</h3>
     <p class="hint">Agents commit as this name and email. Without it git refuses to commit ("unable to auto-detect email address").</p>
     <div class="g3">
       <label class="f">Name <input bind:value={idName} placeholder="Your Name" autocomplete="off" /></label>
@@ -176,6 +182,20 @@
     <div><button class="btn" disabled={idBusy || !idDirty} onclick={saveIdentity}>{idBusy ? 'Saving…' : 'Save identity'}</button>
       {#if !idDirty && idName && idEmail}<span class="hint">Saved; applies to new commits at once.</span>{/if}</div>
   </div></section>
+
+  <div class="gdiv"><h2>2 · Git hosts</h2></div>
+  <p class="hint">How agents reach each host to fetch and push. This is separate from the identity above: it only decides access.</p>
+  {#if rows.length}
+    {@const bad = rows.filter((r) => status(doctor[r.host]) === 'bad')}
+    {@const pending = rows.filter((r) => ['checking', 'unknown'].includes(status(doctor[r.host])))}
+    <div class="gstat" class:ok={!bad.length && !pending.length} class:bad={bad.length > 0} role="status">
+      {#if bad.length}<span class="ckst bad" aria-hidden="true">✕</span><span>Access fails for {bad.map((r) => r.host).join(', ')}.</span>
+      {:else if pending.length}<span class="ckst opt" aria-hidden="true">…</span><span>Checking access…</span>
+      {:else}<span class="ckst ok" aria-hidden="true">✓</span><span>Access works for {rows.map((r) => r.host).join(', ')}.</span>{/if}
+    </div>
+  {:else}
+    <div class="gstat bad" role="status"><span class="ckst bad" aria-hidden="true">✕</span><span>No host yet: add the hosts your repositories live on.</span></div>
+  {/if}
 
   {#each rows as r (r.host)}
     {@const d = doctor[r.host]}

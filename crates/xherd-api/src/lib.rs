@@ -67,6 +67,8 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
+        .route("/api/v1/toolchains", get(toolchains))
+        .route("/api/v1/toolchains/install", post(toolchain_install))
         .route("/api/v1/git/credential", post(git_credential))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
@@ -634,6 +636,29 @@ async fn plugin_login(
     d.start_plugin_login(&name).await?;
     Ok(Json(
         json!({"session": xherd_daemon::git_access::PLUGIN_LOGIN_ID}),
+    ))
+}
+
+/// Settings → Toolchains: the tools and their default versions.
+async fn toolchains(_: User, State(d): State<Daemon>) -> Json<Value> {
+    Json(json!({"tools": d.toolchain_tools(), "sandbox": d.sandbox}))
+}
+
+#[derive(Deserialize)]
+struct ToolchainInstallReq {
+    tool: String,
+    version: String,
+}
+
+/// Install a toolchain version in a terminal (`/ws/setup/plugin-login` shows it).
+async fn toolchain_install(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<ToolchainInstallReq>,
+) -> ApiResult<Json<Value>> {
+    d.start_toolchain_install(&r.tool, &r.version).await?;
+    Ok(Json(
+        json!({"session": xherd_daemon::toolchains::INSTALL_ID}),
     ))
 }
 

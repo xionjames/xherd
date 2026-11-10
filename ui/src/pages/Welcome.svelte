@@ -103,11 +103,13 @@
           {#each plugins.filter((p) => p.kind === k) as p (p.name)}
             {@const lc = p.enabled && p.login ? loginCheck(p) : undefined}
             <div class="tool" class:on={p.enabled}>
-              <label class="tp"><input type="checkbox" style="width:auto;height:auto;margin-top:4px" checked={p.enabled}
+              <label class="tp"><input type="checkbox" checked={p.enabled}
                   disabled={lastOn(p)} title={lastOn(p) ? 'At least one is needed' : ''} onchange={() => toggle(p)} />
+                <span class="tick" aria-hidden="true">✓</span>
                 <div><h3>{p.label || p.name}</h3><p class="hint">{p.description}</p></div></label>
               <div class="tf">
-                <span class="grow">{p.builtin ? 'Built in' : 'Installed'}</span>
+                <span class="state">{p.enabled ? 'On' : 'Off'}</span>
+                <span class="grow">· {p.builtin ? 'Built in' : 'Installed'}</span>
                 {#if lc}
                   <span class="ckst {lc.ok ? 'ok' : 'bad'}" aria-label={lc.ok ? 'logged in' : 'not logged in'}>{lc.ok ? '✓' : '✕'}</span>
                   {lc.ok ? 'Logged in' : 'Not logged in'}

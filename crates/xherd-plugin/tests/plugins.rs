@@ -230,7 +230,7 @@ fn builtin_toolchains_parse_and_match_the_plugins_folder() {
         "[toolchain]\nchannel = \"1.80.0\"\n",
     )
     .unwrap();
-    let plan = xherd_plugin::toolchain::plan(d.path(), &tcs, true);
+    let plan = xherd_plugin::toolchain::plan(d.path(), &tcs, true, &Default::default());
     let got: Vec<(&str, &str)> = plan
         .steps
         .iter()
