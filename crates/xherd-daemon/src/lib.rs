@@ -30,6 +30,7 @@ pub mod security;
 pub mod settings;
 pub mod supervisor;
 pub mod support;
+pub mod toolchains;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
 pub use create::{Resumer, TrustWriter};
@@ -230,6 +231,7 @@ impl Daemon {
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
             toolchain_install: opts.sandbox,
+            toolchain_defaults: config.toolchain_defaults.clone(),
             verify_timeout: opts.verify_timeout,
             pr_poll: opts
                 .pr_poll
