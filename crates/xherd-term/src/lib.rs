@@ -50,12 +50,16 @@ impl Tmux {
     }
 
     /// The flags that select the server.
+    /// `-u` always: without a UTF-8 locale (a container has none) tmux draws
+    /// every non-ASCII character as `_`, which breaks Claude Code's logo.
     fn server_args(&self) -> Vec<String> {
+        let mut a = vec!["-u".to_string()];
         match &self.socket {
-            Some(s) if s.contains('/') => vec!["-S".into(), s.clone()],
-            Some(s) => vec!["-L".into(), s.clone()],
-            None => Vec::new(),
+            Some(s) if s.contains('/') => a.extend(["-S".into(), s.clone()]),
+            Some(s) => a.extend(["-L".into(), s.clone()]),
+            None => {}
         }
+        a
     }
 
     /// argv of a tmux client attached to the session (browser terminal).

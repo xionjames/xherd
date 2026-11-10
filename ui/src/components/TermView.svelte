@@ -3,6 +3,14 @@
   // binary frames both ways, a JSON frame on resize.
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
+  import { WebglAddon } from '@xterm/addon-webgl';
+  import { Unicode11Addon } from '@xterm/addon-unicode11';
+  import { WebLinksAddon } from '@xterm/addon-web-links';
+
+  // Links (typed URLs and OSC 8 hyperlinks) open in a new tab, http(s) only.
+  const open = (_e: MouseEvent, uri: string) => {
+    if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer');
+  };
 
   let {
     path,
@@ -25,12 +33,32 @@
       fontSize: 12.5,
       cursorBlink: true,
       scrollback: 5000,
+      allowProposedApi: true, // the Unicode 11 addon needs it
+      macOptionClickForcesSelection: true, // Option+drag selects even when the app grabs the mouse
+      rightClickSelectsWord: true,
+      linkHandler: { activate: open },
       theme: { background: '#0c0a1f', foreground: '#d6d2f2', cursor: '#d6d2f2', selectionBackground: '#3a3370' },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    term.loadAddon(new WebLinksAddon(open));
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = '11'; // widths of newer glyphs (the runtime's logo)
     term.open(host);
+    // The WebGL renderer draws block and box characters itself (the DOM one
+    // leaves them to the font); without WebGL the DOM renderer stays.
+    try {
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => gl.dispose());
+      term.loadAddon(gl);
+    } catch { /* no WebGL */ }
     fit.fit();
+    // Copy on select: programs that grab the mouse (Claude Code) need Shift+drag
+    // (Option+drag on a Mac) to select; the selection then lands on the clipboard.
+    const picked = term.onSelectionChange(() => {
+      const t = term.getSelection();
+      if (t) navigator.clipboard?.writeText(t).catch(() => {});
+    });
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/api/v1${url}?cols=${term.cols}&rows=${term.rows}`);
     ws.binaryType = 'arraybuffer';
@@ -47,6 +75,7 @@
     return () => {
       ro.disconnect();
       input.dispose();
+      picked.dispose();
       resized.dispose();
       ws.onclose = null;
       ws.close();
@@ -65,6 +94,7 @@
   <div class="tfoot">
     <span>{conn === 'open' ? '● attached' : conn === 'connecting' ? 'connecting…' : 'detached'}</span>
     {#if hint}<span>{hint}</span>{/if}
+    <span>Select text with Shift+drag (Option+drag on a Mac); it is copied.</span>
   </div>
 </section>
 
