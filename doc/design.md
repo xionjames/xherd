@@ -715,7 +715,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
   - [ ] Repo profiles: move `sensitivePaths` and `maxDiffLines` (global since M4) into each profile, with the global values as defaults; add the profile's test command as a code tripwire (R-115)
   - [ ] Codex and opencode
-  - [ ] Kanban / To review / Work log
+  - [ ] Kanban / To review / Work log (per-ticket delivery metrics: cycle time, review–fix rounds, rework; spec §16.4)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [ ] TODOs

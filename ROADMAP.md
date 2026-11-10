@@ -88,7 +88,7 @@ by theme; update it together with them.
 ## v1.x
 
 - [ ] Codex and opencode runtimes
-- [ ] Kanban, To review and Work log views
+- [ ] Kanban, To review and Work log views (per-ticket cycle time, review loops and rework)
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
 - [ ] TODOs, budgets, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
 
