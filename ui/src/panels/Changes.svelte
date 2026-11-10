@@ -3,6 +3,7 @@
   // the proposed commit, the branch at a ship gate, else every uncommitted change.
   import type { Agent, DiffAnswer } from '../lib/types';
   import { get, post } from '../lib/api';
+  import { mdNoteText, type MdNote } from '../lib/notes';
   import { showError } from '../lib/errors.svelte';
   import { route, go } from '../lib/router.svelte';
   import { parseUnified } from '../lib/diff';
@@ -23,7 +24,16 @@
     if (text) n[key] = text; else delete n[key];
     notes[path] = n;
   };
-  const count = $derived(Object.values(notes).reduce((a, n) => a + Object.keys(n).length, 0));
+  let mdNotes = $state<Record<string, Record<string, MdNote>>>({});
+  const setMd = (path: string) => (key: string, text: string | null, quote: string) => {
+    const n = { ...(mdNotes[path] ?? {}) };
+    if (text) n[key] = { text, quote }; else delete n[key];
+    mdNotes[path] = n;
+  };
+  const count = $derived(
+    Object.values(notes).reduce((a, n) => a + Object.keys(n).length, 0) +
+    Object.values(mdNotes).reduce((a, n) => a + Object.keys(n).length, 0),
+  );
   async function sendNotes() {
     const out: string[] = [];
     for (const f of files) {
@@ -32,10 +42,11 @@
         if (t) out.push(`${f.path}:${l.new ?? l.old}${l.kind === 'd' ? ' (removed line)' : ''}\n> ${l.text}\n${t}`);
       }
     }
+    for (const [path, n] of Object.entries(mdNotes)) out.push(...mdNoteText(path, n));
     sending = true;
     try {
       await post(`/agents/${id}/request-changes`, { comment: `Review comments on the diff:\n\n${out.join('\n\n')}` });
-      notes = {};
+      notes = {}; mdNotes = {};
     } catch (e) { showError('Could not send the comments', e); }
     finally { sending = false; }
   }
@@ -131,7 +142,7 @@
           </div>
           {#if !collapsed[f.path]}
             {@const k = previewKind(f.path)}
-            {#if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} />{:else}<DiffLines lines={f.lines} notes={notes[f.path]} onnote={setNote(f.path)} />{/if}
+            {#if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} notes={mdNotes[f.path]} onnote={setMd(f.path)} />{:else}<DiffLines lines={f.lines} notes={notes[f.path]} onnote={setNote(f.path)} />{/if}
           {/if}
         </section>
       {/each}

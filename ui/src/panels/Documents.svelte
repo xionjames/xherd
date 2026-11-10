@@ -2,7 +2,10 @@
   // `documents` panel: the agent's spec documents, rendered as paper, with
   // "changed since you approved" against the last approved text (R-107).
   import type { Agent } from '../lib/types';
-  import { get } from '../lib/api';
+  import { get, post } from '../lib/api';
+  import { showError } from '../lib/errors.svelte';
+  import { mdNoteText, type MdNote } from '../lib/notes';
+  import MdBlocks from '../components/MdBlocks.svelte';
   import { frontmatter, render } from '../lib/markdown';
   import { lineDiff } from '../lib/diff';
   import { markRead } from '../lib/reads.svelte';
@@ -41,6 +44,25 @@
     );
   });
 
+  // Inline review comments (#25), per document, sent as one change request.
+  let notes = $state<Record<string, Record<string, MdNote>>>({});
+  let sending = $state(false);
+  const setNote = (key: string, text: string | null, quote: string) => {
+    if (!selected) return;
+    const n = { ...(notes[selected] ?? {}) };
+    if (text) n[key] = { text, quote }; else delete n[key];
+    notes[selected] = n;
+  };
+  const count = $derived(Object.values(notes).reduce((a, n) => a + Object.keys(n).length, 0));
+  async function sendNotes() {
+    const out = Object.entries(notes).flatMap(([p, n]) => mdNoteText(p, n));
+    sending = true;
+    try {
+      await post(`/agents/${id}/request-changes`, { comment: `Review comments on the documents:\n\n${out.join('\n\n')}` });
+      notes = {};
+    } catch (e) { showError('Could not send the comments', e); }
+    finally { sending = false; }
+  }
   const parsed = $derived(doc ? frontmatter(doc.text) : null);
   const changed = $derived(!!doc?.reviewed && doc.reviewed !== doc.text);
   const added = $derived(
@@ -64,6 +86,10 @@
           </button>
         {/each}
         <span class="grow"></span>
+        {#if count}
+          <button class="btn gate sm" onclick={sendNotes} disabled={sending || !agent.gate}
+            title={agent.gate ? '' : 'The agent is not waiting at a gate'}>Send {count} comment{count === 1 ? '' : 's'}</button>
+        {/if}
         {#if changed}
           <span style="color:var(--accent)">Changed since you last reviewed it</span>
           <button class="btn sm" onclick={() => (showDiff = !showDiff)}>{showDiff ? 'Show document' : 'Show changes'}</button>
@@ -86,7 +112,7 @@
             {#each parsed.meta as [k, v] (k)}<span class="pill">{k}: {v}</span>{/each}
           </div>
         {/if}
-        <div class="md">{@html rendered.html}</div>
+        <div class="md"><MdBlocks blocks={rendered.blocks} notes={selected ? notes[selected] : undefined} onnote={setNote} /></div>
       </article>
     {/if}
   </div>
