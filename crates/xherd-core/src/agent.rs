@@ -86,6 +86,10 @@ pub struct Agent {
     /// When the agent last confirmed a handoff note (`handoff written`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff_at: Option<Millis>,
+    /// A pause is waiting for the agent's handoff note (R-026); cleared when
+    /// the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_requested_at: Option<Millis>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
     /// The current `blocked` status came from a screen rule, not a real report.
@@ -164,6 +168,7 @@ impl Agent {
             commits: Vec::new(),
             pr_url: None,
             handoff_at: None,
+            pause_requested_at: None,
             last_message: None,
             screen_blocked: false,
             idle_alerted: false,

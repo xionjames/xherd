@@ -15,13 +15,13 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `workspace` | `$XHERD_WORKSPACE`, else `~/xherd` | Absolute path holding `repos/` and `worktrees/` |
 | `tmuxSocket` | default server | tmux socket name (`tmux -L`) |
 | `maxConcurrentAgents` | `4` | Live agents at once (1–64). The rest wait in *queued* |
-| `pauseTimeoutSec` | `120` | How long a pause waits for the agent to stop (5–3600) |
+| `pauseTimeoutSec` | `120` | How long a pause waits for the agent's handoff note (5–3600); then it pauses without one |
 | `eventRetentionDays` | `90` | Events older than this are pruned daily (≥ 1) |
 | `idleAlertMinutes` | `15` | Notify when an agent has been idle this long; `0` = off |
 | `gateParkMinutes` | `30` | A gate waiting this long parks the agent (frees its slot, stays in *Needs you*); `0` = never |
 | `freshSessions` | `true` | Each approved gate starts a new runtime session; `memory.md` carries over |
 | `ntfyServer` / `ntfyTopic` | unset | Also send every notification to this ntfy topic (both needed; messages carry agent names and reasons, in plain text). Applies at once; Settings → Notifications |
-| `maxSessionMinutes` | `0` | End a session and pause the agent after this many minutes; `0` = off (no handoff is written first) |
+| `maxSessionMinutes` | `0` | End a session and pause the agent after this many minutes; `0` = off (after the agent writes a handoff note, like Pause) |
 | `prPollMinutes` | `5` | How often a watched pull request is polled; `0` = off |
 | `maxReviewLoops` | `3` | Review → fix rounds before the review gate is held for a human; `0` = no limit |
 | `autonomy` | `ask` | Default for new agents: `ask` or `important`. `never` is not available yet |

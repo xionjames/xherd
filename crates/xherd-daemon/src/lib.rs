@@ -225,6 +225,7 @@ impl Daemon {
             fresh_sessions: config.fresh_sessions,
             xherd_bin: opts.xherd_bin.clone(),
             xherd_url: config.url(),
+            pause_timeout: std::time::Duration::from_secs(config.pause_timeout_sec),
             delivery_ack: opts.delivery_ack,
             screen_rules: opts.screen_rules,
             toolchain_install: opts.sandbox,

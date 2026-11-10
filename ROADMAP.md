@@ -42,7 +42,8 @@ by theme; update it together with them.
 - [x] Auto-resume a vanished session, at most twice per hour
 - [x] Fewer permission prompts: pack commands readable, plain `xherd` calls with allow rules, `edits` as the default mode
 - [ ] Plugins switched off apply live to toolchains, the host plugin and the trust writer (today: at daemon start)
-- [ ] Pause with a handoff (R-026); background-task guard (R-024); runtime change between steps (R-025)
+- [x] Pause with a handoff (R-026): the agent is asked for a note, the session ends after it or after `pauseTimeoutSec`; resume starts a fresh session from the note
+- [ ] Background-task guard (R-024); runtime change between steps (R-025)
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
 - [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)
 - [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the agent's until guardrails)
@@ -68,7 +69,7 @@ by theme; update it together with them.
 - [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence is a refusal (R-116)
 - [ ] Move `sensitivePaths` / `maxDiffLines` into repo profiles and add the profile test command tripwire (R-115), with profiles (v1.x)
 - [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
-- [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asking for a handoff first waits for R-026
+- [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asks for a handoff first
 - [x] `xherd security check` (R-1210), first version; autonomy and budgets are in; the branch protection finding waits for the host command (`security::PENDING`)
 - [x] Token budgets (R-1205), global until profiles; per-profile budgets and a cost estimate come with profiles
 - [x] Review→fix loop with `maxReviewLoops` (R-120); the review gate is held while review tasks are open

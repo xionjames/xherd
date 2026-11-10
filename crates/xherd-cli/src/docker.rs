@@ -567,10 +567,37 @@ pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
             serde_json::to_vec(&live).expect("json").as_slice(),
             None,
         );
+        let mut asked = Vec::new();
         for a in &live {
-            if let Err(e) = client.call("POST", &format!("/agents/{a}/pause"), None) {
-                eprintln!("  {a}: {e}");
+            match client.call("POST", &format!("/agents/{a}/pause"), None) {
+                Ok(_) => asked.push(a.as_str()),
+                Err(e) => eprintln!("  {a}: {e}"),
             }
+        }
+        // A pause waits for each agent's handoff note (R-026, up to
+        // `pauseTimeoutSec`); the container must not go before it is written.
+        if !asked.is_empty() {
+            println!("waiting for the handoff notes…");
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(3600 + 30);
+        let mut pending = asked;
+        while !pending.is_empty() && std::time::Instant::now() < deadline {
+            pending.retain(|a| {
+                client
+                    .call("GET", &format!("/agents/{a}"), None)
+                    .is_ok_and(|v| {
+                        matches!(
+                            v["agent"]["status"].as_str().or(v["status"].as_str()),
+                            Some("running" | "waiting-input" | "idle")
+                        )
+                    })
+            });
+            if !pending.is_empty() {
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
+        for a in &pending {
+            eprintln!("  {a}: no handoff note yet; going on");
         }
     }
     let resume = |live: &[String]| {
