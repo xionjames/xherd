@@ -5,6 +5,12 @@
   import { FitAddon } from '@xterm/addon-fit';
   import { WebglAddon } from '@xterm/addon-webgl';
   import { Unicode11Addon } from '@xterm/addon-unicode11';
+  import { WebLinksAddon } from '@xterm/addon-web-links';
+
+  // Links (typed URLs and OSC 8 hyperlinks) open in a new tab, http(s) only.
+  const open = (_e: MouseEvent, uri: string) => {
+    if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer');
+  };
 
   let {
     path,
@@ -30,10 +36,12 @@
       allowProposedApi: true, // the Unicode 11 addon needs it
       macOptionClickForcesSelection: true, // Option+drag selects even when the app grabs the mouse
       rightClickSelectsWord: true,
+      linkHandler: { activate: open },
       theme: { background: '#0c0a1f', foreground: '#d6d2f2', cursor: '#d6d2f2', selectionBackground: '#3a3370' },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    term.loadAddon(new WebLinksAddon(open));
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = '11'; // widths of newer glyphs (the runtime's logo)
     term.open(host);
