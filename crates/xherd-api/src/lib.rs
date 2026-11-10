@@ -44,6 +44,10 @@ pub fn router(d: Daemon) -> Router {
             axum::routing::put(put_pr_decisions),
         )
         .route("/api/v1/agents/{id}/file", get(file))
+        .route(
+            "/api/v1/agents/{id}/viewed",
+            get(get_viewed).post(post_viewed),
+        )
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
         .route("/api/v1/agents/{id}/open", post(open_in))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
@@ -712,6 +716,34 @@ async fn file(
     Query(q): Query<FileQuery>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.doc(&id, &q.path).await?))
+}
+
+/// `GET /agents/:id/viewed`: the files of the Changes panel marked viewed.
+async fn get_viewed(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"viewed": d.viewed(&id).await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewedBody {
+    path: String,
+    /// The UI's fingerprint of the file's diff; absent clears the mark.
+    fingerprint: Option<String>,
+}
+
+/// `POST /agents/:id/viewed`: mark a file viewed, or clear the mark.
+async fn post_viewed(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<ViewedBody>,
+) -> ApiResult<Json<Value>> {
+    d.set_viewed(&id, &b.path, b.fingerprint.as_deref()).await?;
+    Ok(Json(json!({"ok": true})))
 }
 
 #[derive(Deserialize, Default)]

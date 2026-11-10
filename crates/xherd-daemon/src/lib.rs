@@ -406,6 +406,36 @@ impl Daemon {
         })
     }
 
+    /// Files of the Changes panel the user marked viewed: path → fingerprint.
+    pub async fn viewed(
+        &self,
+        who: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        self.store.viewed(&a.id).await.map_err(|e| ActionError {
+            code: "store",
+            message: e.to_string(),
+        })
+    }
+
+    /// Mark a file viewed with the UI's fingerprint of its diff, or clear the
+    /// mark (`fingerprint` = `None`).
+    pub async fn set_viewed(
+        &self,
+        who: &str,
+        path: &str,
+        fingerprint: Option<&str>,
+    ) -> Result<(), ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        self.store
+            .put_viewed(&a.id, path, fingerprint)
+            .await
+            .map_err(|e| ActionError {
+                code: "store",
+                message: e.to_string(),
+            })
+    }
+
     /// One document as the UI shows it (R-107): its text, the hash an
     /// approval would record (`doc_sha256`), and the text last approved, if
     /// any, for "changed since you reviewed". `path` as in XAP calls.

@@ -690,6 +690,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Git access setup and doctor
 - [ ] **M4 → v1.0**
   - [ ] Guardrails
+    - [x] "Viewed" marks per file in the Changes panel (`diff_viewed`, `/agents/:id/viewed`) and a Setup check `runner` that pings the runner
     - [x] Secret tripwire on commit proposals (R-117)
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
     - [x] Daemon/agent user split (R-1203): runner, shared folders, two users in the container; checked on Colima, to check on Linux

@@ -329,6 +329,54 @@ impl Store {
         .await
     }
 
+    /// The "viewed" mark of a file in the Changes panel: `fingerprint` is the
+    /// UI's fingerprint of the file's diff, so a later change un-marks it.
+    /// `None` removes the mark.
+    pub async fn put_viewed(
+        &self,
+        agent_id: &str,
+        path: &str,
+        fingerprint: Option<&str>,
+    ) -> Result<()> {
+        let (a, p, f) = (
+            agent_id.to_string(),
+            path.to_string(),
+            fingerprint.map(str::to_string),
+        );
+        self.write(move |c| {
+            match f {
+                Some(f) => c.execute(
+                    "INSERT INTO diff_viewed (agent_id, path, fingerprint) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(agent_id, path) DO UPDATE SET fingerprint = excluded.fingerprint",
+                    params![a, p, f],
+                )?,
+                None => c.execute(
+                    "DELETE FROM diff_viewed WHERE agent_id = ?1 AND path = ?2",
+                    params![a, p],
+                )?,
+            };
+            Ok(())
+        })
+        .await
+    }
+
+    /// Path → fingerprint of every file the user marked viewed.
+    pub async fn viewed(
+        &self,
+        agent_id: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>> {
+        let a = agent_id.to_string();
+        self.read(move |c| {
+            let mut st =
+                c.prepare("SELECT path, fingerprint FROM diff_viewed WHERE agent_id = ?1")?;
+            let rows = st.query_map([a], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
     // ---- usage ---------------------------------------------------------------
 
     /// Add tokens to `scope`'s total for `day` (`YYYY-MM-DD`, UTC).
@@ -592,6 +640,19 @@ mod tests {
     #[test]
     fn migrations_are_valid() {
         migrations().validate().unwrap();
+    }
+
+    #[tokio::test]
+    async fn viewed_marks_are_set_replaced_and_cleared() {
+        let (_d, s) = open();
+        s.put_viewed("a", "x.rs", Some("1")).await.unwrap();
+        s.put_viewed("a", "y.rs", Some("2")).await.unwrap();
+        s.put_viewed("a", "x.rs", Some("3")).await.unwrap();
+        s.put_viewed("b", "x.rs", Some("9")).await.unwrap();
+        s.put_viewed("a", "y.rs", None).await.unwrap();
+        let v = s.viewed("a").await.unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v["x.rs"], "3");
     }
 
     #[tokio::test]
