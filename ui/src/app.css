@@ -351,3 +351,11 @@ label.f,div.f{display:flex;flex-direction:column;gap:5px;font-size:12px;font-wei
 .tool .tf{display:flex;align-items:center;gap:8px;padding:8px 14px;border-top:1px solid var(--fence-soft);font-size:12px;color:var(--ink-2);background:var(--pen-2)}
 .tool.on .tf{background:var(--accent-wash)}
 
+.lnc{all:unset;cursor:pointer;color:inherit}
+.lnc:hover,.lnc:focus-visible{color:var(--ink);text-decoration:underline}
+.lnote{margin:4px 0 4px 108px;padding:8px 10px;border:1px solid var(--fence);border-radius:6px;background:var(--pen-2);font:13px/1.45 system-ui,sans-serif;white-space:normal;display:flex;gap:8px;flex-direction:column}
+.lnote.saved{flex-direction:row;justify-content:space-between;align-items:flex-start}
+.lnote textarea{width:100%;min-height:60px}
+.blk{position:relative}
+.blk .bc{position:absolute;top:0;right:-4px;opacity:0}
+.blk:hover .bc,.blk .bc:focus-visible{opacity:1}

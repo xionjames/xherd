@@ -2,10 +2,12 @@
   // `diff` panel: what the user reviews before approving (GET /agents/:id/diff):
   // the proposed commit, the branch at a ship gate, else every uncommitted change.
   import type { Agent, DiffAnswer } from '../lib/types';
-  import { get } from '../lib/api';
+  import { get, post } from '../lib/api';
+  import { mdNoteText, type MdNote } from '../lib/notes';
+  import { showError } from '../lib/errors.svelte';
   import { route, go } from '../lib/router.svelte';
   import { parseUnified } from '../lib/diff';
-  import DiffLines from '../components/DiffLines.svelte';
+  import DiffLines, { lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
 
   let { agent }: { agent: Agent } = $props();
@@ -14,6 +16,40 @@
   let d = $state<DiffAnswer | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(false);
+  // Inline review comments (#25): kept here until sent as one change request.
+  let notes = $state<Record<string, Record<string, string>>>({});
+  let sending = $state(false);
+  const setNote = (path: string) => (key: string, text: string | null) => {
+    const n = { ...(notes[path] ?? {}) };
+    if (text) n[key] = text; else delete n[key];
+    notes[path] = n;
+  };
+  let mdNotes = $state<Record<string, Record<string, MdNote>>>({});
+  const setMd = (path: string) => (key: string, text: string | null, quote: string) => {
+    const n = { ...(mdNotes[path] ?? {}) };
+    if (text) n[key] = { text, quote }; else delete n[key];
+    mdNotes[path] = n;
+  };
+  const count = $derived(
+    Object.values(notes).reduce((a, n) => a + Object.keys(n).length, 0) +
+    Object.values(mdNotes).reduce((a, n) => a + Object.keys(n).length, 0),
+  );
+  async function sendNotes() {
+    const out: string[] = [];
+    for (const f of files) {
+      for (const l of f.lines) {
+        const t = notes[f.path]?.[lineKey(l)];
+        if (t) out.push(`${f.path}:${l.new ?? l.old}${l.kind === 'd' ? ' (removed line)' : ''}\n> ${l.text}\n${t}`);
+      }
+    }
+    for (const [path, n] of Object.entries(mdNotes)) out.push(...mdNoteText(path, n));
+    sending = true;
+    try {
+      await post(`/agents/${id}/request-changes`, { comment: `Review comments on the diff:\n\n${out.join('\n\n')}` });
+      notes = {}; mdNotes = {};
+    } catch (e) { showError('Could not send the comments', e); }
+    finally { sending = false; }
+  }
   let collapsed = $state<Record<string, boolean>>({});
   let previewing = $state<Record<string, boolean>>({});
   const previewKind = (p: string) => {
@@ -81,6 +117,10 @@
         <h2>{what}</h2>
         <span class="grow"></span>
         <span class="mono muted">HEAD {d.head.slice(0, 8)}</span>
+        {#if count}
+          <button class="btn gate sm" onclick={sendNotes} disabled={sending || !agent.gate}
+            title={agent.gate ? '' : 'The agent is not waiting at a gate'}>Send {count} comment{count === 1 ? '' : 's'}</button>
+        {/if}
         <button class="btn sm" onclick={load} disabled={loading}>Refresh</button>
       </div>
       {#if !files.length}<div class="card cb muted">No changes.</div>{/if}
@@ -102,7 +142,7 @@
           </div>
           {#if !collapsed[f.path]}
             {@const k = previewKind(f.path)}
-            {#if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} />{:else}<DiffLines lines={f.lines} />{/if}
+            {#if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} notes={mdNotes[f.path]} onnote={setMd(f.path)} />{:else}<DiffLines lines={f.lines} notes={notes[f.path]} onnote={setNote(f.path)} />{/if}
           {/if}
         </section>
       {/each}

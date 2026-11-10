@@ -5,8 +5,13 @@
   // images as <img> from a data URL (scripts in SVG do not run there).
   import { get } from '../lib/api';
   import { render, frontmatter } from '../lib/markdown';
+  import MdBlocks from './MdBlocks.svelte';
+  import type { MdNote } from '../lib/notes';
 
-  let { id, path, kind }: { id: string; path: string; kind: 'markdown' | 'html' | 'image' } = $props();
+  let { id, path, kind, notes, onnote }: {
+    id: string; path: string; kind: 'markdown' | 'html' | 'image';
+    notes?: Record<string, MdNote>; onnote?: (key: string, text: string | null, quote: string) => void;
+  } = $props();
   let text = $state('');
   let dataUrl = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -22,7 +27,7 @@
 {#if error}
   <div class="cb muted">{error}</div>
 {:else if kind === 'markdown'}
-  <div class="cb md">{@html render(frontmatter(text).body).html}</div>
+  <div class="cb md"><MdBlocks blocks={render(frontmatter(text).body).blocks} {notes} {onnote} /></div>
 {:else if kind === 'html'}
   <iframe title="Preview of {path}" sandbox="" srcdoc={text} style="width:100%;height:480px;border:0;background:#fff"></iframe>
 {:else if dataUrl}
