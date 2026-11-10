@@ -116,7 +116,7 @@ pub fn next_status(from: Status, trigger: Trigger) -> Option<Status> {
         (T::UserInput, S::Idle | S::WaitingInput) => Some(S::Running),
         (T::Park, S::WaitingInput) => Some(S::Parked),
         (T::Unpark, S::Parked) => Some(S::Queued),
-        (T::Pause, S::Running | S::Blocked | S::Idle | S::WaitingInput | S::Parked) => {
+        (T::Pause, S::Queued | S::Running | S::Blocked | S::Idle | S::WaitingInput | S::Parked) => {
             Some(S::Paused)
         }
         (T::Resume, S::Paused | S::Cancelled | S::Error) => Some(S::Queued),

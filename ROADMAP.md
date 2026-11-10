@@ -43,6 +43,7 @@ by theme; update it together with them.
 - [x] Fewer permission prompts: pack commands readable, plain `xherd` calls with allow rules, `edits` as the default mode
 - [ ] Plugins switched off apply live to toolchains, the host plugin and the trust writer (today: at daemon start)
 - [x] Pause with a handoff (R-026): the agent is asked for a note, the session ends after it or after `pauseTimeoutSec`; resume starts a fresh session from the note
+- [x] Kill switch (R-032): `xherd pause --all`, `POST /agents/pause-all`, "Pause all" in the Herd; immediate, no handoff (also for the budget pause, on purpose)
 - [ ] Background-task guard (R-024); runtime change between steps (R-025)
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
 - [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)

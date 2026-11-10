@@ -35,6 +35,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/state", get(state))
         .route("/api/v1/backups", get(backups).post(new_backup))
         .route("/api/v1/agents", get(list_agents).post(new_agent))
+        .route("/api/v1/agents/pause-all", post(pause_all))
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
@@ -786,6 +787,11 @@ async fn post_viewed(
 ) -> ApiResult<Json<Value>> {
     d.set_viewed(&id, &b.path, b.fingerprint.as_deref()).await?;
     Ok(Json(json!({"ok": true})))
+}
+
+/// `POST /api/v1/agents/pause-all` (R-032): the kill switch.
+async fn pause_all(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"paused": d.pause_all().await?})))
 }
 
 #[derive(Deserialize, Default)]

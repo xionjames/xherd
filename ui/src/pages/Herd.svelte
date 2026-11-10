@@ -7,6 +7,8 @@
   import { app } from '../lib/store.svelte';
   import { href, route, go } from '../lib/router.svelte';
   import { ago, needsYou, waitText, repoName, shortBase } from '../lib/format';
+  import { post } from '../lib/api';
+  import { showError } from '../lib/errors.svelte';
   import type { Agent } from '../lib/types';
 
   const agents = $derived(app.state?.agents ?? []);
@@ -56,6 +58,17 @@
     if (!g) parts.push('asked in the terminal');
     return parts.join(' · ');
   }
+
+  // The kill switch (R-032): no handoff notes, nothing new starts.
+  const pausable = $derived((app.state?.agents ?? []).filter((a) => ['queued', 'running', 'idle', 'blocked', 'waiting-input'].includes(a.status)).length);
+  async function pauseAll() {
+    if (!confirm(`Pause all ${pausable} agents now? Their sessions end without a handoff note.`)) return;
+    try {
+      await post('/agents/pause-all');
+    } catch (e) {
+      showError('Could not pause the agents', e);
+    }
+  }
 </script>
 
 <div class="phead notabs">
@@ -68,6 +81,7 @@
     {#if count((a) => a.status === 'done')}<span class="pill">{count((a) => a.status === 'done')} done</span>{/if}
     <span class="grow"></span>
     {#if slots}<span class="muted num">{busy} of {slots} slots busy</span>{/if}
+    {#if pausable}<button class="btn ghost" onclick={pauseAll} title="Kill switch: pause every running and queued agent now">Pause all</button>{/if}
   </div>
 </div>
 
