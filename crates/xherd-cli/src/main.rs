@@ -91,8 +91,12 @@ enum Cmd {
         agent: String,
         level: xherd_core::autonomy::Autonomy,
     },
-    /// Pause an agent (ends its session).
-    Pause { agent: String },
+    /// Pause an agent (it writes a handoff note first), or with --all every live agent at once, with no note (kill switch).
+    Pause {
+        agent: Option<String>,
+        #[arg(long, conflicts_with = "agent")]
+        all: bool,
+    },
     /// Resume a paused, cancelled or failed agent.
     Resume { agent: String },
     /// Cancel an agent (ends its session, keeps the worktree).
@@ -313,7 +317,14 @@ fn main() -> ExitCode {
             "autonomy",
             Some(serde_json::json!({"level": level})),
         ),
-        Cmd::Pause { agent } => action(&agent, "pause", None),
+        Cmd::Pause {
+            agent: Some(agent), ..
+        } => action(&agent, "pause", None),
+        Cmd::Pause { all: true, .. } => with_client(pause_all),
+        Cmd::Pause { .. } => {
+            eprintln!("xherd pause: give an agent name, or --all");
+            2
+        }
         Cmd::Resume { agent } => action(&agent, "resume", None),
         Cmd::Cancel { agent } => action(&agent, "cancel", None),
         Cmd::Send { agent, text } => {
@@ -491,6 +502,25 @@ async fn shutdown_signal() {
 // ---- user client ----------------------------------------------------------------
 
 /// `xherd security check` (R-1210): informational, exit 0 when it answered.
+fn pause_all(c: &Client) -> i32 {
+    match c.call("POST", "/agents/pause-all", None) {
+        Ok(v) => {
+            let names: Vec<&str> = v["paused"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|n| n.as_str())
+                .collect();
+            println!("paused {}: {}", names.len(), names.join(", "));
+            0
+        }
+        Err(e) => {
+            eprintln!("xherd pause --all: {e}");
+            1
+        }
+    }
+}
+
 fn security_check(c: &Client) -> i32 {
     let v = match c.call("GET", "/security", None) {
         Ok(v) => v,

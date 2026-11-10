@@ -105,6 +105,27 @@ async fn slots_queue_and_start_order() {
 }
 
 #[tokio::test]
+async fn pause_all_stops_everything_and_starts_nothing() {
+    let t = daemon(1).await;
+    t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    t.d.create_agent(agent("SC-2", 2)).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
+    assert_eq!(status(&t.d, "SC-2").await, Status::Queued);
+
+    let mut paused = t.d.pause_all().await.unwrap();
+    paused.sort();
+    assert_eq!(paused, ["SC-1", "SC-2"]);
+    assert_eq!(status(&t.d, "SC-1").await, Status::Paused);
+    assert_eq!(status(&t.d, "SC-2").await, Status::Paused);
+    // The slot SC-1 freed did not start SC-2, and nothing was asked of the agent.
+    assert_eq!(
+        t.drv.calls(),
+        vec!["start SC-1 fake-runtime --go", "stop SC-1"]
+    );
+    assert!(t.d.pause_all().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn failed_start_is_an_error_and_frees_the_slot() {
     let t = daemon(1).await;
     t.drv.fail_start.store(true, Ordering::SeqCst);

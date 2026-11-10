@@ -42,6 +42,9 @@ pub enum UserAction {
         port_base: u16,
     },
     Pause,
+    /// The kill switch (R-032): pause now, with no handoff note and ending a
+    /// pause that still waits for one.
+    PauseNow,
     Resume,
     Cancel,
     Send {
@@ -1350,6 +1353,20 @@ impl Actor {
                 } else {
                     "user.pause"
                 }
+            }
+            UserAction::PauseNow => {
+                if next_status(self.agent.status, Trigger::Pause).is_none() {
+                    return Err(refuse(
+                        "not_allowed",
+                        format!("{} is {}", self.agent.name, self.agent.status),
+                    ));
+                }
+                if self.agent.status.is_live() {
+                    self.end_session().await;
+                }
+                self.agent.pause_requested_at = None;
+                self.agent.fire(Trigger::Pause, now);
+                "user.pause-all"
             }
             UserAction::Resume => {
                 if self.agent.fire(Trigger::Resume, now).is_none() {

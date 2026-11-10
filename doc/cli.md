@@ -30,6 +30,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `xherd approve <agent>` | Approve the open gate (documents or commit) as they are on disk now |
 | `xherd changes <agent> "<comment>"` | Ask the agent to revise its open gate |
 | `xherd send <agent> "<text>"` | Type into the session; the answer to a question gate |
+| `xherd pause --all` | Kill switch: pause every queued and live agent now, with no handoff note; nothing new starts |
 | `xherd pause\|resume\|cancel <agent>` | Lifecycle. Pause asks the agent for a handoff note first (up to `pauseTimeoutSec`), then ends the session; cancel ends it at once. Both keep the worktree |
 | `xherd autonomy <agent> <ask\|important>` | Change what xherd may approve by itself (rewrites the agent's instructions and tries an auto-approval at once) |
 | `xherd attach <agent>` | Attach this terminal to the agent's tmux session (in the container when using Docker) |

@@ -9,7 +9,7 @@ use xherd_core::paths::Paths;
 use xherd_core::queue::Queued;
 use xherd_core::report::{Origin, Report};
 use xherd_core::xap::{Refusal, XapCall};
-use xherd_core::{Agent, queue};
+use xherd_core::{Agent, Status, queue};
 use xherd_flow::Pack;
 use xherd_plugin::Registry;
 use xherd_store::Store;
@@ -346,6 +346,25 @@ impl Daemon {
 
     pub async fn action(&self, who: &str, a: UserAction) -> Result<Agent, ActionError> {
         self.sup.action(who, a).await
+    }
+
+    /// The kill switch (R-032): pause every live agent now, without asking
+    /// for handoff notes. Returns the names paused.
+    pub async fn pause_all(&self) -> Result<Vec<String>, ActionError> {
+        let agents = self.store.list_agents().await.map_err(|e| ActionError {
+            code: "store",
+            message: e.to_string(),
+        })?;
+        let mut paused = Vec::new();
+        // Queued agents first: a freed slot must not start one of them.
+        let queued = agents.iter().filter(|a| a.status == Status::Queued);
+        let live = agents.iter().filter(|a| a.status.is_live());
+        for a in queued.chain(live) {
+            if self.action(&a.id, UserAction::PauseNow).await.is_ok() {
+                paused.push(a.name.clone());
+            }
+        }
+        Ok(paused)
     }
 
     pub(crate) fn plugin_context(&self, p: &xherd_plugin::Plugin) -> xherd_plugin::Context {
