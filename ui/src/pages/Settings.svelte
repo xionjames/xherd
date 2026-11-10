@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Settings: General (agents, waiting for you) and Plugins. Saved to
+  // Settings: General, Gates & autonomy, Git access and Plugins. Saved to
   // config.json; the daemon applies them at its next start.
   import { app } from '../lib/store.svelte';
   import { put } from '../lib/api';
@@ -9,7 +9,7 @@
   import GitAccess from '../components/GitAccess.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const TABS = ['general', 'git', 'plugins'];
+  const TABS = ['general', 'gates', 'git', 'plugins'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
@@ -73,6 +73,7 @@
   </div>
   <nav class="tabs" aria-label="Settings">
     <a class="tb" class:on={tab === 'general'} aria-current={tab === 'general' ? 'page' : undefined} href={href('/settings')}>General</a>
+    <a class="tb" class:on={tab === 'gates'} aria-current={tab === 'gates' ? 'page' : undefined} href={href('/settings', { tab: 'gates' })}>Gates &amp; autonomy</a>
     <a class="tb" class:on={tab === 'git'} aria-current={tab === 'git' ? 'page' : undefined} href={href('/settings', { tab: 'git' })}>Git access</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
@@ -112,6 +113,9 @@
             <span class="unit"><input type="number" min="1" bind:value={form.eventRetentionDays} /><span>days</span></span></label>
         </div>
       </section>
+    </div>
+  {:else if tab === 'gates'}
+    <div class="secs">
       <section class="sec">
         <div class="sh"><h2>Waiting at a gate</h2><span class="hint">What happens while an agent sits at a gate.</span></div>
         <div class="bd">
