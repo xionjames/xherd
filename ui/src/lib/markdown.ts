@@ -1,6 +1,6 @@
 // Agent-written content is untrusted (spec §13): Markdown is rendered with
 // marked and sanitised with DOMPurify before it reaches the page.
-import { marked } from 'marked';
+import { marked, type Token, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 
 export interface Heading { id: string; text: string; level: number }
@@ -38,14 +38,26 @@ export function render(md: string, added?: Set<string>): { html: string; heading
   // Top-level blocks, each sanitised on its own: the page can comment on one.
   const clean = (h: string) => DOMPurify.sanitize(h, { FORBID_TAGS: ['style', 'form', 'input'], FORBID_ATTR: ['style'] });
   const tokens = marked.lexer(md, { gfm: true });
-  const blocks = tokens
+  // A list is split into one block per item (a nested list stays in its item),
+  // so each item can be commented on; an ordered list keeps its numbers.
+  const parts: Token[] = tokens
     .filter((t) => t.type !== 'space')
-    .map((t) => {
-      const part = Object.assign([t], { links: tokens.links });
-      let html = marked.parser(part, { renderer, gfm: true });
-      if (added?.size && t.raw.split('\n').some((l) => l.trim() && added.has(l.trim()))) html = `<div class="chg">${html}</div>`;
-      return { html: clean(html), raw: t.raw.trim() };
-    });
+    .flatMap((t) =>
+      t.type === 'list' && t.items.length > 1
+        ? t.items.map((item: Tokens.ListItem, i: number) => ({
+            ...t,
+            items: [item],
+            raw: item.raw,
+            start: t.ordered ? (Number(t.start) || 1) + i : t.start,
+          }))
+        : [t],
+    );
+  const blocks = parts.map((t) => {
+    const part = Object.assign([t], { links: tokens.links });
+    let html = marked.parser(part, { renderer, gfm: true });
+    if (added?.size && t.raw.split('\n').some((l) => l.trim() && added.has(l.trim()))) html = `<div class="chg">${html}</div>`;
+    return { html: clean(html), raw: t.raw.trim() };
+  });
   const html = blocks.map((b) => b.html).join('');
   return { html, headings, blocks };
 }
