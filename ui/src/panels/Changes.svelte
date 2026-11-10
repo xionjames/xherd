@@ -50,6 +50,8 @@
   $effect(() => { void key; load(); });
 
   const files = $derived(d ? parseUnified(d.diff) : []);
+  // Only the commit awaiting approval (no sha yet): its files are what is in the worktree.
+  const canPreview = $derived(!!d?.commit && !d.commit.sha);
   const what = $derived(
     !d ? '' : d.commit ? (d.commit.sha ? `Commit ${d.commit.id} (${d.commit.sha.slice(0, 8)})` : `Commit ${d.commit.id}: the proposed files against HEAD`)
       : d.branch ? (d.view === 'branch' ? `Everything changed since the base (${d.branch})` : `The branch as it will be pushed (${d.branch})`)
@@ -91,7 +93,7 @@
             <span class="mono">{f.path}</span>
             {#if f.status !== 'modified'}<span class="pill">{f.status}</span>{/if}
             <span class="grow"></span>
-            {#if previewKind(f.path) && f.status !== 'deleted'}
+            {#if canPreview && previewKind(f.path) && f.status !== 'deleted'}
               <button class="btn sm" aria-pressed={!!previewing[f.path]} onclick={() => (previewing[f.path] = !previewing[f.path])}>
                 {previewing[f.path] ? 'Diff' : 'Preview'}
               </button>
