@@ -436,8 +436,31 @@ impl Daemon {
             .reviewed(&a.id, &canon)
             .await
             .map_err(|e| fail("store", e.to_string()))?;
+        // Images (diff preview) travel as a data URL; their bytes are not text.
+        let mime = match abs
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("png") => Some("image/png"),
+            Some("jpg" | "jpeg") => Some("image/jpeg"),
+            Some("gif") => Some("image/gif"),
+            Some("webp") => Some("image/webp"),
+            Some("svg") => Some("image/svg+xml"),
+            _ => None,
+        };
+        let data_url = mime.map(|m| {
+            use base64::Engine;
+            format!(
+                "data:{m};base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            )
+        });
         Ok(serde_json::json!({
-            "path": canon, "text": String::from_utf8_lossy(&bytes), "sha256": sha,
+            "path": canon,
+            "text": if mime.is_some() { String::new() } else { String::from_utf8_lossy(&bytes).into_owned() },
+            "dataUrl": data_url, "sha256": sha,
             "reviewed": reviewed,
         }))
     }
