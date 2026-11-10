@@ -101,6 +101,13 @@ pub struct Config {
     /// without `/` matches the file name anywhere. Global until profiles.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sensitive_paths: Vec<String>,
+    /// ntfy server (`https://ntfy.example.com`) and topic that notifications
+    /// are also sent to (spec §16.3). Both are needed; off until set. Read
+    /// live, no restart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ntfy_server: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ntfy_topic: Option<String>,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -132,6 +139,8 @@ impl Default for Config {
             git_user_email: None,
             git_identities: Vec::new(),
             git_hosts: Vec::new(),
+            ntfy_server: None,
+            ntfy_topic: None,
             max_session_minutes: 0,
             pr_poll_minutes: 5,
             max_review_loops: 3,

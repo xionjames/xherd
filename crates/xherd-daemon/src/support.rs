@@ -47,8 +47,16 @@ impl Clock for ManualClock {
     rename_all_fields = "camelCase"
 )]
 pub enum Change {
-    Agent { agent: Box<Agent> },
-    Notify { agent_id: String, text: String },
+    Agent {
+        agent: Box<Agent>,
+    },
+    /// `kind` (`gate`, `blocked`, `idle`…) tells which notification a new one
+    /// replaces: one per agent and kind (spec §16.3).
+    Notify {
+        agent_id: String,
+        kind: String,
+        text: String,
+    },
 }
 
 pub type Hub = broadcast::Sender<Change>;

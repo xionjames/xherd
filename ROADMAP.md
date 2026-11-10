@@ -83,7 +83,8 @@ by theme; update it together with them.
 - [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
 - [x] `pr-template` (R-153): templates looked up on entering the ship stage, `pr-templates.json` read by the `ship` prompt
 - [ ] Stage hooks (R-401…R-404), including `pr.merged` (R-307): v1.x, with profiles / pack `stageHooks`
-- [ ] Notifications (browser, desktop, ntfy) and phones
+- [x] Notifications: typed (one per agent and kind), the bell and browser notifications in the UI, ntfy from Settings → Notifications
+- [ ] Desktop OS notifications, phones, per-kind filters, notifier plugins
 
 ## v1.x
 

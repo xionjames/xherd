@@ -351,9 +351,10 @@ impl Actor {
         }
     }
 
-    fn notify(&self, text: String) {
+    fn notify(&self, kind: &str, text: String) {
         let _ = self.env.hub.send(Change::Notify {
             agent_id: self.agent.id.clone(),
+            kind: kind.into(),
             text,
         });
     }
@@ -439,7 +440,7 @@ impl Actor {
             match e {
                 Effect::Notify(text) => {
                     self.log(None, "notify", Some(json!({"text": text}))).await;
-                    self.notify(text);
+                    self.notify("blocked", text);
                 }
                 Effect::DeliveryAck => {
                     self.delivery = None;
@@ -569,7 +570,7 @@ impl Actor {
                 Event::CiPassingAgain => format!("{name}: all checks pass again"),
                 Event::Conflict => format!("{name}: the pull request has a merge conflict"),
             };
-            self.notify(text);
+            self.notify("pr", text);
         }
         if self.agent.status == Status::Watching
             && let Some(all) = comments
@@ -606,11 +607,12 @@ impl Actor {
             Some(cmd) => {
                 self.agent.next_prompt = Some(cmd);
                 self.agent.fire(Trigger::PrComments, self.now());
-                self.notify(format!(
-                    "{name}: {n} new PR comment{s}; the agent will triage them"
-                ));
+                self.notify(
+                    "pr-comments",
+                    format!("{name}: {n} new PR comment{s}; the agent will triage them"),
+                );
             }
-            None => self.notify(format!("{name}: {n} new PR comment{s}")),
+            None => self.notify("pr-comments", format!("{name}: {n} new PR comment{s}")),
         }
     }
 
@@ -671,10 +673,13 @@ impl Actor {
                     Some(json!({"scope": scope, "used": used, "budget": budget})),
                 )
                 .await;
-                self.notify(format!(
-                    "{} paused: the {scope} token budget is used up ({used} of {budget})",
-                    self.agent.name
-                ));
+                self.notify(
+                    "budget",
+                    format!(
+                        "{} paused: the {scope} token budget is used up ({used} of {budget})",
+                        self.agent.name
+                    ),
+                );
             }
         } else if !self.agent.budget_warned
             && let Some((scope, used, budget)) = checks
@@ -682,10 +687,13 @@ impl Actor {
                 .find(|(_, used, budget)| level(*used, *budget) == Level::Warn)
         {
             self.agent.budget_warned = true;
-            self.notify(format!(
-                "{}: 80% of the {scope} token budget is used ({used} of {budget})",
-                self.agent.name
-            ));
+            self.notify(
+                "budget",
+                format!(
+                    "{}: 80% of the {scope} token budget is used ({used} of {budget})",
+                    self.agent.name
+                ),
+            );
         }
         self.commit(before).await;
     }
@@ -787,10 +795,10 @@ impl Actor {
                     Some(json!({"text": cmd, "error": e.message})),
                 )
                 .await;
-                self.notify(format!(
-                    "{}: could not send {cmd:?}: {}",
-                    self.agent.name, e.message
-                ));
+                self.notify(
+                    "delivery",
+                    format!("{}: could not send {cmd:?}: {}", self.agent.name, e.message),
+                );
             }
         }
     }
@@ -1398,10 +1406,10 @@ impl Actor {
             self.agent.fire(Trigger::SessionLost, self.now());
             self.log(None, "start-failed", Some(json!({"error": e.message})))
                 .await;
-            self.notify(format!(
-                "{} could not start: {}",
-                self.agent.name, e.message
-            ));
+            self.notify(
+                "error",
+                format!("{} could not start: {}", self.agent.name, e.message),
+            );
         } else {
             self.log(
                 None,
@@ -1663,7 +1671,10 @@ impl Actor {
             self.agent.generation += 1;
             self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
                 .await;
-            self.notify(format!("{}: {label} waits for you: {why}", self.agent.name));
+            self.notify(
+                "gate",
+                format!("{}: {label} waits for you: {why}", self.agent.name),
+            );
             let status = self.agent.status;
             self.commit(status).await;
             return;
@@ -1676,10 +1687,13 @@ impl Actor {
             .await
         {
             Ok(()) => {
-                self.notify(format!(
-                    "{}: approved {label} automatically (autonomy {level}); see the log",
-                    self.agent.name
-                ));
+                self.notify(
+                    "auto-approved",
+                    format!(
+                        "{}: approved {label} automatically (autonomy {level}); see the log",
+                        self.agent.name
+                    ),
+                );
             }
             Err(e) => {
                 self.log(
@@ -1688,10 +1702,13 @@ impl Actor {
                     Some(json!({"gate": label, "error": e.message})),
                 )
                 .await;
-                self.notify(format!(
-                    "{}: could not approve {label} automatically: {}",
-                    self.agent.name, e.message
-                ));
+                self.notify(
+                    "error",
+                    format!(
+                        "{}: could not approve {label} automatically: {}",
+                        self.agent.name, e.message
+                    ),
+                );
             }
         }
         self.commit(before).await;
@@ -1865,10 +1882,13 @@ impl Actor {
                             Some(json!({"next": cmd, "error": e.message})),
                         )
                         .await;
-                        self.notify(format!(
-                            "{}: approved, but could not start a fresh session for {cmd:?}: {}",
-                            self.agent.name, e.message
-                        ));
+                        self.notify(
+                            "delivery",
+                            format!(
+                                "{}: approved, but could not start a fresh session for {cmd:?}: {}",
+                                self.agent.name, e.message
+                            ),
+                        );
                     }
                 }
             }
@@ -1884,10 +1904,13 @@ impl Actor {
                         Some(json!({"next": cmd, "error": e.message})),
                     )
                     .await;
-                    self.notify(format!(
-                        "{}: approved, but could not send {cmd:?}: {}",
-                        self.agent.name, e.message
-                    ));
+                    self.notify(
+                        "delivery",
+                        format!(
+                            "{}: approved, but could not send {cmd:?}: {}",
+                            self.agent.name, e.message
+                        ),
+                    );
                 }
             },
             (_, None) => {}
@@ -1933,10 +1956,13 @@ impl Actor {
                     Some(json!({"id": id, "error": text})),
                 )
                 .await;
-                self.notify(format!(
-                    "{}: git refused commit {id}; the agent will fix it",
-                    self.agent.name
-                ));
+                self.notify(
+                    "error",
+                    format!(
+                        "{}: git refused commit {id}; the agent will fix it",
+                        self.agent.name
+                    ),
+                );
             }
         }
     }
@@ -2145,10 +2171,13 @@ impl Actor {
                         self.agent.fire(Trigger::Park, now);
                         self.log(None, "parked", Some(json!({"why": "interrupted"})))
                             .await;
-                        self.notify(format!(
-                            "{}: xherd restarted; approve the gate to continue",
-                            self.agent.name
-                        ));
+                        self.notify(
+                            "recovery",
+                            format!(
+                                "{}: xherd restarted; approve the gate to continue",
+                                self.agent.name
+                            ),
+                        );
                     } else {
                         self.agent.fire(Trigger::SessionLost, now);
                         self.log(None, "session-lost", None).await;
@@ -2156,7 +2185,10 @@ impl Actor {
                             // Same as Resume: a new session reloads the state.
                             self.agent.fire(Trigger::Resume, now);
                             self.prepare_resume().await;
-                            self.notify(format!("{}: xherd restarted; resuming", self.agent.name));
+                            self.notify(
+                                "recovery",
+                                format!("{}: xherd restarted; resuming", self.agent.name),
+                            );
                         } else {
                             // A session that vanishes while xherd runs is
                             // resumed by itself a couple of times per hour, so
@@ -2174,17 +2206,23 @@ impl Actor {
                                     Some(json!({"n": self.auto_resumes.len(), "of": AUTO_RESUMES})),
                                 )
                                 .await;
-                                self.notify(format!(
-                                    "{}: terminal session disappeared; resuming ({}/{})",
-                                    self.agent.name,
-                                    self.auto_resumes.len(),
-                                    AUTO_RESUMES
-                                ));
+                                self.notify(
+                                    "recovery",
+                                    format!(
+                                        "{}: terminal session disappeared; resuming ({}/{})",
+                                        self.agent.name,
+                                        self.auto_resumes.len(),
+                                        AUTO_RESUMES
+                                    ),
+                                );
                             } else {
-                                self.notify(format!(
-                                    "{}: terminal session disappeared again; press Resume",
-                                    self.agent.name
-                                ));
+                                self.notify(
+                                    "recovery",
+                                    format!(
+                                        "{}: terminal session disappeared again; press Resume",
+                                        self.agent.name
+                                    ),
+                                );
                             }
                         }
                     }
@@ -2200,7 +2238,10 @@ impl Actor {
                 {
                     self.agent.idle_alerted = true;
                     self.log(None, "idle-alert", None).await;
-                    self.notify(format!("{} has been idle for {m} min", self.agent.name));
+                    self.notify(
+                        "idle",
+                        format!("{} has been idle for {m} min", self.agent.name),
+                    );
                     self.commit(before).await;
                 }
             }
@@ -2218,10 +2259,13 @@ impl Actor {
                     self.agent.fire(Trigger::Pause, now);
                     self.log(None, "session-limit", Some(json!({"minutes": m})))
                         .await;
-                    self.notify(format!(
-                        "{} paused: its session ran longer than {m} min",
-                        self.agent.name
-                    ));
+                    self.notify(
+                        "limit",
+                        format!(
+                            "{} paused: its session ran longer than {m} min",
+                            self.agent.name
+                        ),
+                    );
                     self.commit(before).await;
                 }
             }
@@ -2346,10 +2390,13 @@ impl Actor {
                     let _ = self.env.driver.send(&self.ctx(), "", 1).await;
                     self.delivery = Some((d, true));
                     self.log(None, "delivery-retry", None).await;
-                    self.notify(format!(
-                        "{}: message not acknowledged; pressed Enter again",
-                        self.agent.name
-                    ));
+                    self.notify(
+                        "delivery",
+                        format!(
+                            "{}: message not acknowledged; pressed Enter again",
+                            self.agent.name
+                        ),
+                    );
                 }
                 _ => {}
             },

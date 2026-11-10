@@ -9,12 +9,12 @@
   import GitAccess from '../components/GitAccess.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const TABS = ['general', 'gates', 'git', 'plugins'];
+  const TABS = ['general', 'gates', 'notifications', 'git', 'plugins'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow'];
+  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic'];
   let form = $state<Form>({});
   let plugins = $state<Record<string, Record<string, string>>>({});
   let saving = $state(false);
@@ -47,7 +47,7 @@
   async function save() {
     saving = true;
     const body: Record<string, unknown> = {};
-    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'workspace' || k === 'autonomy' ? form[k] : Number(form[k]);
+    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'workspace' || k === 'autonomy' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : Number(form[k]);
     if (changedPlugins.length) {
       body.pluginSettings = Object.fromEntries(
         changedPlugins.map((p) => [p, Object.fromEntries(Object.entries(plugins[p]).filter(([, v]) => v !== ''))]),
@@ -74,6 +74,7 @@
   <nav class="tabs" aria-label="Settings">
     <a class="tb" class:on={tab === 'general'} aria-current={tab === 'general' ? 'page' : undefined} href={href('/settings')}>General</a>
     <a class="tb" class:on={tab === 'gates'} aria-current={tab === 'gates' ? 'page' : undefined} href={href('/settings', { tab: 'gates' })}>Gates &amp; autonomy</a>
+    <a class="tb" class:on={tab === 'notifications'} aria-current={tab === 'notifications' ? 'page' : undefined} href={href('/settings', { tab: 'notifications' })}>Notifications</a>
     <a class="tb" class:on={tab === 'git'} aria-current={tab === 'git' ? 'page' : undefined} href={href('/settings', { tab: 'git' })}>Git access</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
@@ -143,6 +144,26 @@
           <label class="f">Stop auto-approving after
             <span class="unit"><input type="number" min="0" bind:value={form.maxAutoApprovalsInRow} /><span>in a row</span></span>
             <span class="hint">The next gate waits for you. 0 = no limit.</span></label>
+        </div>
+      </section>
+    </div>
+  {:else if tab === 'notifications'}
+    <div class="secs">
+      <section class="sec">
+        <div class="sh"><h2>In this browser</h2><span class="hint">The bell in the top bar lists what happened while xherd was open.</span></div>
+        <div class="bd">
+          <p class="muted">Turn browser notifications on from the bell; the browser asks for permission then. Each agent has one per kind (gate, blocked, idle…); a new one replaces the previous.</p>
+        </div>
+      </section>
+      <section class="sec">
+        <div class="sh"><h2>ntfy</h2><span class="hint">Also send them to your phone through an ntfy topic.</span></div>
+        <div class="bd">
+          <label class="f">Server
+            <input class="mono" bind:value={form.ntfyServer} placeholder="https://ntfy.example.com" />
+            <span class="hint">Off until server and topic are both set. Messages carry agent names and reasons (never PR comments or documents) and go to this server, in plain text: use your own, or treat the topic as a password.</span></label>
+          <label class="f">Topic
+            <input class="mono" bind:value={form.ntfyTopic} placeholder="xherd-your-secret-name" />
+            <span class="hint">Letters, digits, - and _. Applies at once, no restart.</span></label>
         </div>
       </section>
     </div>

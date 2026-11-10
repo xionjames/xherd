@@ -20,6 +20,7 @@ mod create;
 pub mod driver;
 pub mod git_access;
 pub mod install;
+pub mod notifier;
 pub mod open_in;
 pub mod pr_round;
 pub mod repos;
@@ -321,6 +322,7 @@ impl Daemon {
                 tracing::warn!(error = %e.message, "installing the xherd commands failed");
             }
         }
+        notifier::spawn(d.clone());
         if let Some(iv) = opts.scheduler {
             scheduler::spawn(d.clone(), iv);
         }

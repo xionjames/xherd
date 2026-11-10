@@ -710,7 +710,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Decisions and replies (R-306): `xherd_flow::pr_review` parses `pr-review.md`; the user decides fix / reply / skip with a note per comment in the Pull request panel (`PUT /agents/:id/pr-decisions`); approving the `pr-review` gate posts the `reply` answers through the host (`pr-reply`, marker appended, never twice) and writes `pr-decisions.json` for `pr-apply`. Separate `pr-triage` / `pr-replies` gates were not needed: one gate covers both
     - [x] `pr-template` (R-153): `Host::pr_template` (built-in `github` reads the worktree's template files and folders, GitLab's too; no organisation defaults), looked up when the agent enters the ship stage, written to `pr-templates.json` for the `ship` prompt
     - `pr.merged` hooks (R-307) belong to the stage-hook engine (R-401…R-404), listed under v1.x: nothing declares hooks until profiles or pack `stageHooks` exist
-  - [ ] Notifications
+  - [x] Notifications: kinds on hub `Notify`, bell + browser notifications, ntfy (`ntfyServer`/`ntfyTopic`, live); desktop OS notifications and notifier plugins later
   - [ ] Phones
 - [ ] **v1.x**
   - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
