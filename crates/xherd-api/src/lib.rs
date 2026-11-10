@@ -33,6 +33,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/ws/term/{id}", get(term::terminal))
         .route("/api/v1/ws/setup/{id}", get(term::setup_terminal))
         .route("/api/v1/state", get(state))
+        .route("/api/v1/backups", get(backups).post(new_backup))
         .route("/api/v1/agents", get(list_agents).post(new_agent))
         .route("/api/v1/agents/{id}", get(get_agent))
         .route("/api/v1/agents/{id}/diff", get(diff))
@@ -441,6 +442,47 @@ async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         })
         .collect();
     Ok(Json(json!({"reviews": items})))
+}
+
+/// `GET /api/v1/backups` (R-1402): the archives in the backup folder, newest first.
+async fn backups(_: User, State(d): State<Daemon>) -> Json<Value> {
+    let dir = d.backup_dir();
+    let items: Vec<Value> = xherd_daemon::backup::list(&dir)
+        .into_iter()
+        .map(|(name, size, at)| json!({"name": name, "size": size, "at": at}))
+        .collect();
+    Json(json!({"dir": dir, "backups": items}))
+}
+
+#[derive(serde::Deserialize, Default)]
+struct NewBackup {
+    /// `manual` (default) or `update` (before an update; the last 3 are kept, R-1405).
+    label: Option<String>,
+}
+
+/// `POST /api/v1/backups` (R-1401): take a backup now.
+async fn new_backup(
+    _: User,
+    State(d): State<Daemon>,
+    body: Option<Json<NewBackup>>,
+) -> ApiResult<Json<Value>> {
+    let label = body
+        .and_then(|b| b.0.label)
+        .unwrap_or_else(|| "manual".into());
+    if !matches!(label.as_str(), "manual" | "update") {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_label",
+            "label is manual or update",
+        ));
+    }
+    let c = d
+        .backup_create(&label)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "backup_failed", e))?;
+    Ok(Json(
+        json!({"path": c.path, "agents": c.agents, "warnings": c.warnings}),
+    ))
 }
 
 async fn security(_: User, State(d): State<Daemon>) -> Json<Value> {

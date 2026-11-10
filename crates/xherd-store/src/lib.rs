@@ -78,6 +78,20 @@ fn migrations() -> Migrations<'static> {
     Migrations::new(schema::MIGRATIONS.iter().map(|sql| M::up(sql)).collect())
 }
 
+/// `PRAGMA integrity_check` on a database file, opened read-only (R-1404):
+/// `Ok(())` when it says `ok`, else the first complaint.
+pub fn check_integrity(db: &Path) -> Result<()> {
+    let c = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let first: String = c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+    if first == "ok" {
+        Ok(())
+    } else {
+        Err(StoreError::Io(std::io::Error::other(format!(
+            "integrity_check: {first}"
+        ))))
+    }
+}
+
 fn configure(conn: &Connection) -> rusqlite::Result<()> {
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "foreign_keys", "ON")
@@ -154,6 +168,17 @@ impl Store {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// A consistent copy of the live database into `out` (`VACUUM INTO`, so
+    /// it is safe while the daemon writes; R-1401). `out` must not exist.
+    pub async fn snapshot(&self, out: &Path) -> Result<()> {
+        let out = out.to_path_buf();
+        self.write(move |c| {
+            c.execute("VACUUM INTO ?1", [out.to_string_lossy()])?;
+            Ok(())
+        })
+        .await
     }
 
     /// Run `f` on the writer connection; requests are served in order.

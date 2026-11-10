@@ -223,6 +223,20 @@ impl Git {
         .map(drop)
     }
 
+    /// `git worktree add <path> <branch>` for a branch that already exists
+    /// (a restore, where the branch came from a bundle).
+    pub async fn worktree_add_existing(
+        &self,
+        repo: &Path,
+        path: &Path,
+        branch: &str,
+    ) -> Result<()> {
+        let p = path.to_string_lossy();
+        self.run(repo, &["worktree", "add", "--quiet", &p, branch])
+            .await
+            .map(drop)
+    }
+
     pub async fn worktree_remove(&self, repo: &Path, path: &Path, force: bool) -> Result<()> {
         let p = path.to_string_lossy();
         let mut args = vec!["worktree", "remove"];

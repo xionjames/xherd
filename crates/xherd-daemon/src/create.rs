@@ -55,12 +55,12 @@ impl Daemon {
         }
 
         let rt_name = xherd_flow::approve::DEFAULT_RUNTIME;
-        let (label, rt) = self
+        let rt = self
             .plugins
             .get(rt_name)
             .filter(|_| self.plugin_enabled(rt_name))
             .ok_or_else(|| format!("runtime plugin {rt_name} is not installed or is switched off"))
-            .and_then(|p| Ok((p.manifest.label.clone(), Terminal::of(&p.manifest)?)))
+            .and_then(|p| Terminal::of(&p.manifest))
             .map_err(|e| refuse("runtime_unusable", e))?;
         let launch = rt
             .argv(runtime::DEFAULT_PERMISSION_MODE)
@@ -138,29 +138,7 @@ impl Daemon {
         }
 
         let res = async {
-            if let Some(t) = &rt.trust {
-                let w = TrustWriter {
-                    trust: t.clone(),
-                    root: self.config.workspace_root().join("worktrees"),
-                };
-                w.ensure(&workdir)
-                    .await
-                    .map_err(|e| refuse("runtime_trust", format!("{label}: {e}")))?;
-            }
-            prepare_xherd_dir(&git, &workdir, &a).await?;
-            // R-1204: this worktree's pushes go through `xherd guard pre-push`.
-            git.install_push_guard(
-                &workdir,
-                &workdir.join(".xherd/hooks"),
-                &self.xherd_bin,
-                &c.name,
-            )
-            .await
-            .map_err(|e| refuse("push_guard", e.to_string()))?;
-            if let Some(h) = &rt.hooks {
-                let rules = permission_rules(pack);
-                install_hooks(&git, &workdir, h, &self.xherd_bin, &rules).await?;
-            }
+            self.prepare_worktree(&a).await?;
             self.create_agent(a).await
         }
         .await;
@@ -172,6 +150,82 @@ impl Daemon {
         let a = res?;
         debug_assert_eq!(a.status, Status::Queued);
         Ok(a)
+    }
+}
+
+impl Daemon {
+    /// What every agent worktree needs besides the checkout: the runtime's
+    /// trust entry, `.xherd/` (R-005c), the pre-push guard (R-1204) and the
+    /// runtime's hook file (R-005b). Idempotent; also finishes a worktree that
+    /// a restore created (`repair_restored`).
+    pub(crate) async fn prepare_worktree(&self, a: &Agent) -> Result<(), ActionError> {
+        let workdir = PathBuf::from(
+            a.workdir
+                .as_deref()
+                .ok_or_else(|| refuse("io", format!("agent {} has no worktree", a.name)))?,
+        );
+        let rt_name = a
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let (label, rt) = self
+            .plugins
+            .get(rt_name)
+            .filter(|_| self.plugin_enabled(rt_name))
+            .ok_or_else(|| format!("runtime plugin {rt_name} is not installed or is switched off"))
+            .and_then(|p| Ok((p.manifest.label.clone(), Terminal::of(&p.manifest)?)))
+            .map_err(|e| refuse("runtime_unusable", e))?;
+        let pack = a
+            .pack
+            .is_some()
+            .then(|| self.packs.get(xherd_flow::BUILTIN))
+            .flatten();
+        let git = Git::new("git");
+        if let Some(t) = &rt.trust {
+            let w = TrustWriter {
+                trust: t.clone(),
+                root: self.config.workspace_root().join("worktrees"),
+            };
+            w.ensure(&workdir)
+                .await
+                .map_err(|e| refuse("runtime_trust", format!("{label}: {e}")))?;
+        }
+        prepare_xherd_dir(&git, &workdir, a).await?;
+        git.install_push_guard(
+            &workdir,
+            &workdir.join(".xherd/hooks"),
+            &self.xherd_bin,
+            &a.name,
+        )
+        .await
+        .map_err(|e| refuse("push_guard", e.to_string()))?;
+        if let Some(h) = &rt.hooks {
+            let rules = permission_rules(pack);
+            install_hooks(&git, &workdir, h, &self.xherd_bin, &rules).await?;
+        }
+        Ok(())
+    }
+
+    /// A worktree a backup restore recreated has no `.xherd/agent.json` (it is
+    /// not in the backup): finish it like a new agent's, once, at daemon start.
+    pub(crate) async fn repair_restored(&self) {
+        let Ok(agents) = self.store.list_agents().await else {
+            return;
+        };
+        for a in agents {
+            let Some(w) = a.workdir.as_deref().map(PathBuf::from) else {
+                continue;
+            };
+            let live = !matches!(a.status, Status::Done | Status::Cancelled);
+            if live && w.join(".xherd").is_dir() && !w.join(".xherd/agent.json").exists() {
+                match self.prepare_worktree(&a).await {
+                    Ok(()) => tracing::info!(agent = %a.name, "restored worktree prepared"),
+                    Err(e) => {
+                        tracing::warn!(agent = %a.name, error = %e.message, "restored worktree not prepared")
+                    }
+                }
+            }
+        }
     }
 }
 

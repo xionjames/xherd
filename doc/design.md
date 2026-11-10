@@ -702,7 +702,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Review→fix loop and `maxReviewLoops` (R-114 second half, R-120): `Task.source`, `Agent.review_rounds`, review gate held for a human by open review tasks or too many rounds
     - [x] Findings in `review.md` as Markdown (`### F01: title` + `- severity:` / `location:` / `fixed:` / `left:`), parsed by `xherd_flow::review`; the review gate is refused when malformed and held while major or blocker findings are not fixed (R-114); the UI lists them with a colour per severity
     - [x] `maxAutoApprovalsInRow` (R-120): with autonomy
-  - [ ] Backups
+  - [x] Backups (R-1401, R-1403, R-1404, R-1405): `xherd backup create|verify|restore`, `GET/POST /backups`, Settings → Backups, a backup before `xherd docker update`; no secrets or logins (no `age`); restore remaps the workspace for another machine. Not done: scheduled backups and the destination command (R-1402), restore inside the container, migration backups (R-1405 second half)
   - [x] Autonomy `ask` / `important` (R-109…R-111, R-121): `xherd_core::autonomy` policy table, per-agent level (`xherd new --autonomy`, `xherd autonomy`, agent page), auto-approval when the agent stops at a gate its class allows and no tripwire holds it; the `never` level exists in the table but is not selectable until v1.x
   - [x] PR follow-up
     - [x] Polling of a watching agent's PR: status, checks, mergeable (R-303); CI and conflict notifications (R-305); merged or closed finishes the agent (R-307); shown in the Pull request panel

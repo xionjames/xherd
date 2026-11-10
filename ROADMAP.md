@@ -76,7 +76,8 @@ by theme; update it together with them.
 - [x] R-114 first half: findings in `review.md` are Markdown with a field list; major/blocker findings not fixed hold the review gate; severity colours in the UI
 - [x] Daemon/agent user split in the container (R-1203, branch `m4-user-split`): `xherd runner`, `xherd-daemon` user and volume, loopback is not the user; **check on Linux and Docker Desktop** (file permissions are not enforced on Colima's mounts)
 - [x] Guardrails: "Viewed" marks per file in the Changes panel; Setup check `runner` pings the runner on every run
-- [ ] Backups
+- [x] Backups and restore (R-1401, R-1403…R-1405): `xherd backup create|verify|restore`, `/backups` API and Settings → Backups, a backup before `xherd docker update`; the restore can move agents to another computer (`--workspace`, `--map`); secrets and logins are left out
+- [ ] Scheduled backups with keep-N and a destination command (R-1402), restore inside the container, backups before database migrations (R-1305), encrypted secrets/logins (`age`)
 - [x] Autonomy `ask` / `important` (R-109…R-111) with `maxAutoApprovalsInRow` (R-120), per agent, changeable live; the ship stage's auto-approved variant (`--no-ticket-update`) is only reachable at `never` (v1.x), since ship is critical
 - [x] "To review" list of auto-approvals (R-111): `GET /reviews` and the page `#/review`; a mark-as-reviewed state and the agent's stated assumptions come with the v1.x views
 - [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel

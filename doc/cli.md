@@ -13,8 +13,11 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `xherd install [--runtime R] [--pack P]` | Install the pack's commands (`/xherd:*`) for agent runtimes. Default: the xherd pack, every runtime. Runs in the daemon, so commands land where agents run |
 | `xherd docker init` | Write `~/.config/xherd/compose.yaml` and `.env` for the detected engine |
 | `xherd docker doctor` | Check engine, mounts, ownership, SSH agent and port binding; each finding has a fix |
-| `xherd docker update [--no-pull]` | Pause live agents, pull and recreate the container, wait for health, resume |
+| `xherd docker update [--no-pull]` | Pause live agents, take a backup (the last 3 of these are kept; a failed backup stops the update unless `--force`), pull and recreate the container, wait for health, resume |
 | `xherd security check` | Exposure overview: network binding, user split, plugins, limits, autonomy. Informational: warnings do not change the exit code |
+| `xherd backup create [--to DIR]` | One `tar.zst`: database, config (no user token), plugins, `archive/`, and for each unfinished agent its `.xherd/` notes, a git bundle of its commits beyond the base, a patch of uncommitted changes and its untracked files. No secrets, logins, toolchains or clones. Default folder: `<data>/backups`; in the container `<workspace>/xherd-backups` |
+| `xherd backup verify ARCHIVE` | Check hashes, the database and the bundles without restoring |
+| `xherd backup restore ARCHIVE [--workspace DIR] [--map OLD=NEW]… [--force]` | With the daemon stopped. Agents come back `paused`. Missing worktrees are recreated (the repository is cloned from its remote when absent); existing ones are only completed. `--workspace` is the new machine's workspace; `--map` rewrites other repository paths. An existing database needs `--force` (kept in `backups/`). Git tokens and logins are entered again |
 | `xherd git doctor [host] [--repo URL]` | Check SSH and HTTPS access to a host, in order, with the fix for the first failure |
 | `xherd credential get` | git credential helper that answers with the token of Settings → Git access. Silent on any failure |
 
