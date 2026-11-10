@@ -295,6 +295,7 @@ label.f,div.f{display:flex;flex-direction:column;gap:5px;font-size:12px;font-wei
 .sec{background:var(--pen);border:1px solid var(--fence);border-radius:12px}
 .sh{padding:14px 18px 12px;border-bottom:1px solid var(--fence-soft);display:flex;flex-direction:column;gap:2px}
 .bd{padding:16px 18px;display:flex;flex-direction:column;gap:16px}
+.secs{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:16px;align-items:start}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
 .pcard{display:flex;flex-direction:column;background:var(--pen);border:1px solid var(--fence);border-radius:12px}
 .pcard.err{border-color:var(--halt)}
