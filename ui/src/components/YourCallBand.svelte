@@ -156,7 +156,7 @@
         <span class="lbl">Open questions · {g.questions.length}</span>
         {#if reviewing}
           {#each g.questions as q, i (i)}
-            <label class="gbox">
+            <label class="gbox" style="flex:none">
               <span>{q}</span>
               <textarea rows="2" bind:value={answers[i]} aria-label={`Answer: ${q}`} placeholder="Your answer"
                 style="background:var(--pen);resize:vertical"></textarea>
