@@ -150,6 +150,8 @@ pub struct ActorSettings {
     pub idle_alert_minutes: u64,
     pub gate_park_minutes: u64,
     pub fresh_sessions: bool,
+    /// Longest a pause waits for the handoff note (`pauseTimeoutSec`, R-026).
+    pub pause_timeout: Duration,
     pub delivery_ack: Duration,
     pub xherd_bin: String,
     pub xherd_url: String,
@@ -178,6 +180,7 @@ impl Default for ActorSettings {
             idle_alert_minutes: 15,
             gate_park_minutes: 30,
             fresh_sessions: true,
+            pause_timeout: Duration::from_secs(120),
             delivery_ack: Duration::from_secs(10),
             xherd_bin: "xherd".into(),
             xherd_url: "http://127.0.0.1:4740".into(),
@@ -362,6 +365,9 @@ impl Actor {
     /// Persist and publish; tell the supervisor when the status moved.
     async fn commit(&mut self, before: Status) {
         self.agent.note_stage();
+        if !self.agent.status.is_live() {
+            self.agent.pause_requested_at = None;
+        }
         if let Err(err) = self.env.store.put_agent(&self.agent).await {
             tracing::error!(agent = %self.agent.name, %err, "agent not stored");
         }
@@ -453,6 +459,15 @@ impl Actor {
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
                 Effect::AfterStop => {
                     self.measure_usage();
+                    // A pause waits for the handoff note; the stop after it
+                    // ends the session. Earlier stops (the turn that was
+                    // running) change nothing, and no approval happens now.
+                    if let Some(asked) = self.agent.pause_requested_at {
+                        if self.agent.handoff_at.is_some_and(|h| h >= asked) {
+                            self.finish_pause(false).await;
+                        }
+                        continue;
+                    }
                     self.try_auto_approve().await;
                     self.after_ship().await;
                 }
@@ -763,23 +778,28 @@ impl Actor {
     /// R-005d, R-028). It is cleared once Claude accepts a prompt (the
     /// `user-prompt-submit` ack), so later session starts (`/clear`, resume)
     /// do not repeat it, while a start that loses the typed text does.
-    async fn send_first_prompt(&mut self) {
-        let Some(cmd) = self.agent.next_prompt.clone() else {
-            return;
-        };
+    /// Enters needed to submit `cmd`: the pack's `slashEnters` for its own
+    /// commands, else one.
+    fn enters_for(&self, cmd: &str) -> u32 {
         let runtime = self
             .agent
             .runtime
             .as_deref()
             .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
-        let enters = self
-            .agent
+        self.agent
             .pack
             .as_deref()
             .and_then(|p| self.env.packs.get(p))
             .and_then(|p| p.install.get(runtime))
             .filter(|i| cmd.starts_with(&i.prefix))
-            .map_or(1, |i| i.slash_enters);
+            .map_or(1, |i| i.slash_enters)
+    }
+
+    async fn send_first_prompt(&mut self) {
+        let Some(cmd) = self.agent.next_prompt.clone() else {
+            return;
+        };
+        let enters = self.enters_for(&cmd);
         let before = self.agent.status;
         match self.send(&cmd, enters).await {
             Ok(()) => {
@@ -1319,18 +1339,17 @@ impl Actor {
                 return Ok(());
             }
             UserAction::Pause => {
-                // M0 implements the flow-`none` pause (R-026): no handoff yet.
                 if next_status(self.agent.status, Trigger::Pause).is_none() {
                     return Err(refuse(
                         "not_allowed",
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
-                if self.agent.status.is_live() {
-                    self.end_session().await;
+                if self.begin_pause().await {
+                    "user.pause-requested"
+                } else {
+                    "user.pause"
                 }
-                self.agent.fire(Trigger::Pause, now);
-                "user.pause"
             }
             UserAction::Resume => {
                 if self.agent.fire(Trigger::Resume, now).is_none() {
@@ -1347,6 +1366,7 @@ impl Actor {
                     if self.agent.status.is_live() {
                         self.end_session().await;
                     }
+                    self.agent.pause_requested_at = None;
                     self.agent.fire(Trigger::Cancel, now);
                 } else {
                     return Err(refuse(
@@ -2005,13 +2025,79 @@ impl Actor {
     /// wins, R-027) and, when the runtime still has the last conversation, a
     /// session that continues it. If the last resume of that kind never
     /// reached `session-start`, this one is a clean session instead.
+    /// Pause (R-026). A live flow agent is asked for a handoff note with the
+    /// pack's `handoff` command and paused at the stop that follows
+    /// `handoff written` (or after `pauseTimeoutSec`); anything else, or a
+    /// command that cannot be sent, pauses at once. Returns whether it waits.
+    async fn begin_pause(&mut self) -> bool {
+        let now = self.now();
+        if self.agent.pause_requested_at.is_some() {
+            return true;
+        }
+        if matches!(
+            self.agent.status,
+            Status::Running | Status::Idle | Status::WaitingInput
+        ) && let Some(cmd) = self.pack_command("handoff")
+        {
+            let enters = self.enters_for(&cmd);
+            match self.send(&cmd, enters).await {
+                Ok(()) => {
+                    self.agent.pause_requested_at = Some(now);
+                    return true;
+                }
+                Err(e) => {
+                    self.notify(
+                        "error",
+                        format!(
+                            "{}: could not ask for a handoff ({}); paused without one",
+                            self.agent.name, e.message
+                        ),
+                    );
+                }
+            }
+        }
+        if self.agent.status.is_live() {
+            self.end_session().await;
+        }
+        self.agent.fire(Trigger::Pause, now);
+        false
+    }
+
+    /// End the session of a pause that waited for a handoff.
+    async fn finish_pause(&mut self, timed_out: bool) {
+        let before = self.agent.status;
+        self.end_session().await;
+        self.agent.pause_requested_at = None;
+        self.agent.fire(Trigger::Pause, self.now());
+        self.log(
+            None,
+            "user.pause",
+            Some(json!({"handoff": !timed_out, "timedOut": timed_out})),
+        )
+        .await;
+        if timed_out {
+            let s = self.env.settings.pause_timeout.as_secs();
+            self.notify(
+                "limit",
+                format!(
+                    "{}: paused without a handoff note (none within {s} s)",
+                    self.agent.name
+                ),
+            );
+        }
+        self.commit(before).await;
+    }
+
     async fn prepare_resume(&mut self) {
         if self.agent.next_prompt.is_none() {
             self.agent.next_prompt = self.resume_command();
         }
+        // After a handoff the next session starts fresh from the note (R-027).
+        let handed_off = self.agent.handoff_at.take().is_some() && self.env.settings.fresh_sessions;
         self.resume_session = match (&self.env.resume, &self.agent.session) {
             (Some(r), Some(id))
-                if !self.resume_unconfirmed
+                if !handed_off
+                    && !self.resume_unconfirmed
                     && r.argv(id, &xherd_core::runner::agent_env).await.is_some() =>
             {
                 Some(id.clone())
@@ -2249,21 +2335,25 @@ impl Actor {
                 let m = self.env.settings.max_session_minutes;
                 if m > 0
                     && self.agent.status.is_live()
+                    && self.agent.pause_requested_at.is_none()
                     && self
                         .agent
                         .session_since
                         .is_some_and(|s| now - s >= minutes(m))
                 {
-                    // No handoff yet (R-026): pause just ends the session.
-                    self.end_session().await;
-                    self.agent.fire(Trigger::Pause, now);
                     self.log(None, "session-limit", Some(json!({"minutes": m})))
                         .await;
+                    let waits = self.begin_pause().await;
                     self.notify(
                         "limit",
                         format!(
-                            "{} paused: its session ran longer than {m} min",
-                            self.agent.name
+                            "{} {}: its session ran longer than {m} min",
+                            self.agent.name,
+                            if waits {
+                                "is being paused after a handoff"
+                            } else {
+                                "paused"
+                            }
                         ),
                     );
                     self.commit(before).await;
@@ -2282,6 +2372,12 @@ impl Actor {
                 }
             }
             TickKind::ScreenScan => {
+                if let Some(asked) = self.agent.pause_requested_at
+                    && self.agent.status.is_live()
+                    && now - asked >= self.env.settings.pause_timeout.as_millis() as i64
+                {
+                    self.finish_pause(true).await;
+                }
                 if self.agent.status.is_live()
                     && self
                         .env

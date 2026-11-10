@@ -83,6 +83,8 @@ export interface Agent {
   createdAt: number;
   statusSince: number;
   lastActivity: number;
+  /** A pause is waiting for the agent's handoff note. */
+  pauseRequestedAt?: number;
   workdir?: string;
   repo?: string;
   base?: string;

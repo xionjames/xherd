@@ -350,7 +350,7 @@ async fn issue_ledger_and_queued_calls() {
 #[tokio::test]
 async fn refused_when_not_live_or_without_flow() {
     let t = setup().await;
-    t.d.action("SC-1", UserAction::Pause).await.unwrap();
+    t.d.action("SC-1", UserAction::Cancel).await.unwrap();
     let e = xap(&t, "c1", "stage.enter", json!({"stage": "spec"}))
         .await
         .unwrap_err();
@@ -804,7 +804,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
 #[tokio::test]
 async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
     let t = setup().await;
-    act(&t, UserAction::Pause).await.unwrap();
+    act(&t, UserAction::Cancel).await.unwrap();
     let a = act(&t, UserAction::Resume).await.unwrap();
     assert_eq!(a.next_prompt.as_deref(), Some("/xherd:resume"));
 
@@ -2380,4 +2380,65 @@ async fn auto_approvals_are_listed_for_review() {
     open_stop(&t, "c2", "tasks", "tasks.md", 2).await;
     act(&t, approve(None)).await.unwrap();
     assert_eq!(t.d.store.auto_approvals(10).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn pause_asks_for_a_handoff_and_ends_at_the_stop_after_it() {
+    let t = setup().await;
+    session_start(&t, 1).await;
+    stop(&t, 2).await;
+    assert_eq!(get(&t).await.status, Status::Idle);
+
+    // R-026: the agent is asked, and stays live until it has written the note.
+    let a = act(&t, UserAction::Pause).await.unwrap();
+    assert_eq!(a.status, Status::Idle);
+    assert!(a.pause_requested_at.is_some());
+    assert!(sends(&t).iter().any(|s| s.contains("/xherd:handoff")));
+
+    // A stop before the note (the turn that was running) changes nothing.
+    stop(&t, 3).await;
+    assert_eq!(get(&t).await.status, Status::Idle);
+
+    std::fs::write(t.wt.path().join(".xherd/HANDOFF.md"), "done: x\n").unwrap();
+    xap(&t, "h1", "handoff.written", json!({})).await.unwrap();
+    stop(&t, 4).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::Paused);
+    assert_eq!(a.pause_requested_at, None);
+    assert!(t.drv.calls().iter().any(|c| c.starts_with("stop")));
+
+    // Resume starts from the note: the handoff mark is used up.
+    let a = act(&t, UserAction::Resume).await.unwrap();
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:resume"));
+    assert_eq!(a.handoff_at, None);
+}
+
+#[tokio::test]
+async fn pause_without_a_handoff_note_ends_after_the_timeout() {
+    let t = setup_config(json!({"freshSessions": true, "pauseTimeoutSec": 0})).await;
+    session_start(&t, 1).await;
+    stop(&t, 2).await;
+    let a = act(&t, UserAction::Pause).await.unwrap();
+    assert_eq!(a.status, Status::Idle);
+    t.d.sup.tick(xherd_daemon::actor::TickKind::ScreenScan);
+    for _ in 0..200 {
+        if get(&t).await.status == Status::Paused {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::Paused);
+    assert_eq!(a.pause_requested_at, None);
+}
+
+#[tokio::test]
+async fn cancel_while_a_pause_waits_for_the_note() {
+    let t = setup().await;
+    session_start(&t, 1).await;
+    stop(&t, 2).await;
+    act(&t, UserAction::Pause).await.unwrap();
+    let a = act(&t, UserAction::Cancel).await.unwrap();
+    assert_eq!(a.status, Status::Cancelled);
+    assert_eq!(a.pause_requested_at, None);
 }
