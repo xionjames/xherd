@@ -51,6 +51,9 @@ Planned:
 - [Getting started](doc/getting-started.md): run it (Docker recommended), first agent, everyday commands
 - [Docker](doc/docker.md): topology, the two-user container, git access, toolchains, operating
 - [Architecture](doc/architecture.md): crates, actors, gates, sessions, plugins, guardrails
+- [CLI reference](doc/cli.md) and [Configuration](doc/configuration.md)
+- [Security model](doc/security.md)
+- [Plugins and flow packs](doc/plugins-and-packs.md): extending xherd
 - [Development](doc/development.md): build, test, conventions, how to add things
 - [XAP reference](doc/xap.md): the protocol agents and SDDs use to talk to xherd
 - [Add xherd support to your SDD](doc/integrate-your-sdd.md)
