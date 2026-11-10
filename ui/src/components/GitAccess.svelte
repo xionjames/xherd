@@ -37,9 +37,15 @@
     saved = snapshot();
   }
   async function load() {
-    try { fill(await get<GitHostsView>('/git/hosts')); } catch (e) { showError('Could not load git access', e); }
+    try { fill(await get<GitHostsView>('/git/hosts')); checkAll(); } catch (e) { showError('Could not load git access', e); }
   }
   $effect(() => { load(); });
+
+  // Check every host as soon as the screen opens and after each save, so the
+  // status in the header is current without pressing "Check access".
+  function checkAll() { for (const r of rows) runDoctor(r.host); }
+  const status = (d?: { findings: GitFinding[] | null; running: boolean }) =>
+    d?.running ? 'checking' : !d?.findings ? 'unknown' : d.findings.every((f) => f.ok) ? 'ok' : 'bad';
 
   // Who agents commit as: git refuses to commit without it, and the container
   // has no identity of its own.
@@ -83,6 +89,7 @@
     const tokens = Object.fromEntries(rows.filter((r) => r.token !== '').map((r) => [r.host, r.token]));
     try {
       fill(await put<GitHostsView>('/git/hosts', { hosts: rows.map(strip), tokens }));
+      checkAll();
     } catch (e) {
       showError('Could not save git access', e);
     } finally {
@@ -173,8 +180,11 @@
   {#each rows as r (r.host)}
     {@const d = doctor[r.host]}
     <section class="sec">
-      <div class="sh"><h2 class="mono">{r.host}</h2>
+      <div class="sh" style="flex-direction:row;align-items:center;gap:10px;flex-wrap:wrap"><h2 class="mono">{r.host}</h2>
         <span class="hint">{r.protocols.length ? r.protocols.join(' + ').toUpperCase() : 'no protocol'}</span>
+        {#if status(d) === 'checking'}<span class="hint">Checking…</span>
+        {:else if status(d) === 'ok'}<span class="ckst ok" aria-label="access works">✓</span><span class="hint">Access works</span>
+        {:else if status(d) === 'bad'}<span class="ckst bad" aria-label="access fails">✕</span><span class="hint">{d?.findings?.find((f) => !f.ok)?.label}</span>{/if}
         <span class="grow"></span>
         <button class="btn ghost sm" onclick={() => (rows = rows.filter((x) => x !== r))}>Remove</button></div>
       <div class="bd">

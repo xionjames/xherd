@@ -19,7 +19,8 @@
   const KIND: Record<string, string> = { runtime: 'Coding agents', host: 'Git hosts', tracker: 'Issue trackers', toolchain: 'Languages' };
   const kinds = $derived([...new Set((app.state?.plugins ?? []).map((p) => p.kind))]);
 
-  $effect(() => { if ((step === 3 || step === 5) && !setup.checks) loadChecks(); });
+  // The checks decide whether setup can be skipped, so load them on every step.
+  $effect(() => { if (!setup.checks && !setup.running) loadChecks(); });
 
   const plugins = $derived(app.state?.plugins ?? []);
   // The last plugin on in its kind cannot be switched off.
@@ -60,7 +61,9 @@
 <div class="x">
   <header class="bar" style="flex-direction:column;align-items:stretch;padding:16px 28px 22px;gap:22px">
     <div class="row"><span class="logo row" style="gap:9px"><Logo /><b>XHERD</b></span><span class="grow"></span>
-      <button class="btn ghost sm" style="color:var(--bar-ink-2)" onclick={() => finish('/')}>Skip setup</button></div>
+      {#if setup.checks && !blocked}
+        <button class="btn ghost sm" style="color:var(--bar-ink-2)" onclick={() => finish('/')}>Skip setup</button>
+      {/if}</div>
     <ol class="row" style="list-style:none;margin:0;padding:0;gap:10px;flex-wrap:nowrap;overflow-x:auto">
       {#each STEPS as s, i (s)}
         {#if i > 0}<li class="wsep" aria-hidden="true"></li>{/if}
