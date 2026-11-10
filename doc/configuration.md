@@ -20,6 +20,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `idleAlertMinutes` | `15` | Notify when an agent has been idle this long; `0` = off |
 | `gateParkMinutes` | `30` | A gate waiting this long parks the agent (frees its slot, stays in *Needs you*); `0` = never |
 | `freshSessions` | `true` | Each approved gate starts a new runtime session; `memory.md` carries over |
+| `ntfyServer` / `ntfyTopic` | unset | Also send every notification to this ntfy topic (both needed; messages carry agent names and reasons, in plain text). Applies at once; Settings → Notifications |
 | `maxSessionMinutes` | `0` | End a session and pause the agent after this many minutes; `0` = off (no handoff is written first) |
 | `prPollMinutes` | `5` | How often a watched pull request is polled; `0` = off |
 | `maxReviewLoops` | `3` | Review → fix rounds before the review gate is held for a human; `0` = no limit |
@@ -42,7 +43,7 @@ The "held for a human" settings (`maxDiffLines`, `sensitivePaths`, the secret tr
 
 ## What the UI can change
 
-Settings → General, Gates & autonomy, Git access and Plugins cover: `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays`, `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `maxAutoApprovalsInRow`, the commit identities, git hosts and plugin settings. The remaining keys (`maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, the budgets, `maxDiffLines`, `sensitivePaths`) are accepted by `PUT /api/v1/config` with range checks but have no form yet; edit `config.json` and restart.
+Settings → General, Gates & autonomy, Notifications, Git access and Plugins cover: `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays`, `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `maxAutoApprovalsInRow`, `ntfyServer`, `ntfyTopic`, the commit identities, git hosts and plugin settings. The remaining keys (`maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, the budgets, `maxDiffLines`, `sensitivePaths`) are accepted by `PUT /api/v1/config` with range checks but have no form yet; edit `config.json` and restart.
 
 ## Per-agent files
 

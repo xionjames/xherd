@@ -50,6 +50,28 @@
     } catch (e) { showError('Could not send the comments', e); }
     finally { sending = false; }
   }
+  // "Viewed" marks (spec §16): a file's mark holds while its diff is unchanged.
+  let viewed = $state<Record<string, string>>({});
+  const fingerprint = (f: { lines: { kind: string; text: string }[] }) => {
+    let h = 5381;
+    for (const l of f.lines) for (const c of l.kind + l.text + '\n') h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
+    return String(h);
+  };
+  const isViewed = (f: { path: string; lines: { kind: string; text: string }[] }) => viewed[f.path] === fingerprint(f);
+  async function toggleViewed(f: { path: string; lines: { kind: string; text: string }[] }) {
+    const fp = isViewed(f) ? undefined : fingerprint(f);
+    try {
+      await post(`/agents/${id}/viewed`, { path: f.path, ...(fp ? { fingerprint: fp } : {}) });
+      const v = { ...viewed };
+      if (fp) v[f.path] = fp; else delete v[f.path];
+      viewed = v;
+      if (fp) collapsed[f.path] = true;
+    } catch (e) { showError('Could not save the mark', e); }
+  }
+  $effect(() => {
+    const a = id;
+    get<{ viewed: Record<string, string> }>(`/agents/${a}/viewed`).then((r) => { if (a === id) viewed = r.viewed; }, () => {});
+  });
   let collapsed = $state<Record<string, boolean>>({});
   let previewing = $state<Record<string, boolean>>({});
   const previewKind = (p: string) => {
@@ -138,6 +160,9 @@
                 {previewing[f.path] ? 'Diff' : 'Preview'}
               </button>
             {/if}
+            <label class="row" style="gap:4px;font-size:12.5px">
+              <input type="checkbox" checked={isViewed(f)} onchange={() => toggleViewed(f)} /> Viewed
+            </label>
             <span class="num" style="color:var(--live)">+{f.adds}</span><span class="num" style="color:var(--halt)">−{f.dels}</span>
           </div>
           {#if !collapsed[f.path]}

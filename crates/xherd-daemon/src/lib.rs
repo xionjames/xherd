@@ -20,6 +20,7 @@ mod create;
 pub mod driver;
 pub mod git_access;
 pub mod install;
+pub mod notifier;
 pub mod open_in;
 pub mod pr_round;
 pub mod repos;
@@ -321,6 +322,7 @@ impl Daemon {
                 tracing::warn!(error = %e.message, "installing the xherd commands failed");
             }
         }
+        notifier::spawn(d.clone());
         if let Some(iv) = opts.scheduler {
             scheduler::spawn(d.clone(), iv);
         }
@@ -404,6 +406,36 @@ impl Daemon {
             }
             Err(e) => serde_json::json!({"findings": [], "error": e}),
         })
+    }
+
+    /// Files of the Changes panel the user marked viewed: path → fingerprint.
+    pub async fn viewed(
+        &self,
+        who: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        self.store.viewed(&a.id).await.map_err(|e| ActionError {
+            code: "store",
+            message: e.to_string(),
+        })
+    }
+
+    /// Mark a file viewed with the UI's fingerprint of its diff, or clear the
+    /// mark (`fingerprint` = `None`).
+    pub async fn set_viewed(
+        &self,
+        who: &str,
+        path: &str,
+        fingerprint: Option<&str>,
+    ) -> Result<(), ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        self.store
+            .put_viewed(&a.id, path, fingerprint)
+            .await
+            .map_err(|e| ActionError {
+                code: "store",
+                message: e.to_string(),
+            })
     }
 
     /// One document as the UI shows it (R-107): its text, the hash an

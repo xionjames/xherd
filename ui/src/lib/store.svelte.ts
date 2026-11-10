@@ -2,6 +2,7 @@
 // reloaded on every (re)connect (design §13.1).
 import { get } from './api';
 import type { Agent, AppState } from './types';
+import { addNotice } from './notices.svelte';
 
 export const app = $state<{
   state: AppState | null;
@@ -30,7 +31,7 @@ export function agentByName(idOrName: string): Agent | undefined {
   return app.state?.agents.find((a) => a.id === idOrName || a.name === idOrName);
 }
 
-type WsMsg = { type: 'agent'; agent: Agent } | { type: 'notify'; agentId: string; text: string };
+type WsMsg = { type: 'agent'; agent: Agent } | { type: 'notify'; agentId: string; kind: string; text: string };
 
 let retry = 500;
 let opened = false;
@@ -54,6 +55,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data) as WsMsg;
     if (m.type === 'agent') upsertAgent(m.agent);
+    else if (m.type === 'notify') addNotice(m.agentId, m.kind, m.text);
   };
   ws.onclose = () => {
     app.connected = false;

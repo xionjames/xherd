@@ -1,6 +1,7 @@
 // Inline icon paths (24×24, stroke). Drawn for xherd.
 export const ICONS: Record<string, string> = {
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.3-4.3',
+  bell: 'M6 9a6 6 0 0 1 12 0c0 6 2 7 2 7H4s2-1 2-7M10 20a2 2 0 0 0 4 0',
   settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
   plus: 'M12 5v14M5 12h14',
   hand: 'M8 13V6.5a1.5 1.5 0 0 1 3 0V12M11 11V5a1.5 1.5 0 0 1 3 0v6M14 11V6.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L3.5 15a1.5 1.5 0 0 1 2.4-1.8L8 15',

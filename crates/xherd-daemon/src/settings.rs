@@ -31,6 +31,9 @@ pub struct ConfigPatch {
     /// Replaces the list of identities by remote.
     pub git_identities: Option<Vec<GitIdentity>>,
     pub welcomed: Option<bool>,
+    /// Empty string = off.
+    pub ntfy_server: Option<String>,
+    pub ntfy_topic: Option<String>,
     pub max_session_minutes: Option<u64>,
     pub pr_poll_minutes: Option<u64>,
     pub max_review_loops: Option<u32>,
@@ -160,6 +163,20 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
         }
         c.sensitive_paths = out;
     }
+    if let Some(v) = p.ntfy_server {
+        let v = v.trim().trim_end_matches('/');
+        if !v.is_empty() && !crate::notifier::valid_server(v) {
+            return Err(bad("ntfyServer must be an http(s) URL without spaces"));
+        }
+        c.ntfy_server = (!v.is_empty()).then(|| v.to_string());
+    }
+    if let Some(v) = p.ntfy_topic {
+        let v = v.trim();
+        if !v.is_empty() && !crate::notifier::valid_topic(v) {
+            return Err(bad("ntfyTopic: letters, digits, - and _ only (up to 64)"));
+        }
+        c.ntfy_topic = (!v.is_empty()).then(|| v.to_string());
+    }
     if let Some(mut names) = p.disabled_plugins {
         names.sort();
         names.dedup();
@@ -243,6 +260,8 @@ impl Daemon {
         a.git_user_name = self.config.git_user_name.clone();
         a.git_user_email = self.config.git_user_email.clone();
         a.git_identities = self.config.git_identities.clone();
+        a.ntfy_server = self.config.ntfy_server.clone();
+        a.ntfy_topic = self.config.ntfy_topic.clone();
         a.user_token = self.config.user_token.clone();
         Ok(json!({
             "config": shown(&saved),
@@ -325,5 +344,28 @@ mod tests {
         }
         assert!(serde_json::from_value::<ConfigPatch>(json!({"port": 1})).is_err());
         assert!(serde_json::from_value::<ConfigPatch>(json!({"userToken": "x"})).is_err());
+    }
+
+    #[test]
+    fn ntfy_settings_are_validated_and_cleared_by_empty() {
+        let mut c = Config::default();
+        let p: ConfigPatch = serde_json::from_value(
+            json!({"ntfyServer": " https://ntfy.example.com/ ", "ntfyTopic": "my-topic_1"}),
+        )
+        .unwrap();
+        apply(&mut c, p).unwrap();
+        assert_eq!(c.ntfy_server.as_deref(), Some("https://ntfy.example.com"));
+        assert_eq!(c.ntfy_topic.as_deref(), Some("my-topic_1"));
+        for bad in [
+            json!({"ntfyServer": "ntfy.sh"}),
+            json!({"ntfyTopic": "a/b"}),
+        ] {
+            let p: ConfigPatch = serde_json::from_value(bad).unwrap();
+            assert_eq!(apply(&mut c, p).unwrap_err().code, "bad_config");
+        }
+        let p: ConfigPatch =
+            serde_json::from_value(json!({"ntfyServer": "", "ntfyTopic": ""})).unwrap();
+        apply(&mut c, p).unwrap();
+        assert_eq!((c.ntfy_server, c.ntfy_topic), (None, None));
     }
 }

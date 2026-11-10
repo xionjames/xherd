@@ -3,6 +3,7 @@
   import Logo from './Logo.svelte';
   import JumpBox from './JumpBox.svelte';
   import ThemeButton from './ThemeButton.svelte';
+  import Bell from './Bell.svelte';
   import { route, href } from '../lib/router.svelte';
   import { failingRequired } from '../lib/setup.svelte';
   let { blocked = false }: { blocked?: boolean } = $props();
@@ -22,6 +23,7 @@
   </nav>
   <div class="grow"></div>
   {#if !blocked}<JumpBox />{/if}
+  {#if !blocked}<Bell />{/if}
   <ThemeButton />
   <a class="bb" class:on={route.path === '/settings'} href={href('/settings')} aria-label="Settings"
      aria-current={route.path === '/settings' ? 'page' : undefined}><Icon name="settings" /></a>

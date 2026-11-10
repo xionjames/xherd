@@ -74,7 +74,7 @@ by theme; update it together with them.
 - [x] Review→fix loop with `maxReviewLoops` (R-120); the review gate is held while review tasks are open
 - [x] R-114 first half: findings in `review.md` are Markdown with a field list; major/blocker findings not fixed hold the review gate; severity colours in the UI
 - [x] Daemon/agent user split in the container (R-1203, branch `m4-user-split`): `xherd runner`, `xherd-daemon` user and volume, loopback is not the user; **check on Linux and Docker Desktop** (file permissions are not enforced on Colima's mounts)
-- [ ] Guardrails still open: `diff_viewed` marks, a Setup check for the runner dying after start
+- [x] Guardrails: "Viewed" marks per file in the Changes panel; Setup check `runner` pings the runner on every run
 - [ ] Backups
 - [x] Autonomy `ask` / `important` (R-109…R-111) with `maxAutoApprovalsInRow` (R-120), per agent, changeable live; the ship stage's auto-approved variant (`--no-ticket-update`) is only reachable at `never` (v1.x), since ship is critical
 - [x] "To review" list of auto-approvals (R-111): `GET /reviews` and the page `#/review`; a mark-as-reviewed state and the agent's stated assumptions come with the v1.x views
@@ -83,7 +83,8 @@ by theme; update it together with them.
 - [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
 - [x] `pr-template` (R-153): templates looked up on entering the ship stage, `pr-templates.json` read by the `ship` prompt
 - [ ] Stage hooks (R-401…R-404), including `pr.merged` (R-307): v1.x, with profiles / pack `stageHooks`
-- [ ] Notifications (browser, desktop, ntfy) and phones
+- [x] Notifications: typed (one per agent and kind), the bell and browser notifications in the UI, ntfy from Settings → Notifications
+- [ ] Desktop OS notifications, phones, per-kind filters, notifier plugins
 
 ## v1.x
 
