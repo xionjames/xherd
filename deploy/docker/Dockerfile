@@ -79,7 +79,8 @@ RUN diff <(ssh-keygen -lf /opt/xherd/known_hosts | awk '{print $2, $3}') /opt/xh
 
 COPY --from=build /usr/local/bin/xherd /usr/local/bin/xherd
 
-ENV XHERD_SANDBOX=1 \
+ENV LANG=C.UTF-8 \
+    XHERD_SANDBOX=1 \
     XHERD_HEADLESS=1 \
     XHERD_BIND=0.0.0.0 \
     PATH=/home/xherd/.cargo/bin:/home/xherd/.local/bin:/usr/local/go/bin:/home/xherd/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
