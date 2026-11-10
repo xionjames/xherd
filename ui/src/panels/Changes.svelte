@@ -6,6 +6,7 @@
   import { route, go } from '../lib/router.svelte';
   import { parseUnified } from '../lib/diff';
   import DiffLines from '../components/DiffLines.svelte';
+  import FilePreview from '../components/FilePreview.svelte';
 
   let { agent }: { agent: Agent } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -14,6 +15,12 @@
   let error = $state<string | null>(null);
   let loading = $state(false);
   let collapsed = $state<Record<string, boolean>>({});
+  let previewing = $state<Record<string, boolean>>({});
+  const previewKind = (p: string) => {
+    const e = p.split('.').pop()?.toLowerCase() ?? '';
+    return e === 'md' || e === 'markdown' ? 'markdown' : e === 'html' || e === 'htm' ? 'html'
+      : ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(e) ? 'image' : null;
+  };
 
   // Tabs: Uncommitted · All changes (branch against its base) · one commit.
   // Without a `view` in the URL the open gate decides, as before.
@@ -84,9 +91,17 @@
             <span class="mono">{f.path}</span>
             {#if f.status !== 'modified'}<span class="pill">{f.status}</span>{/if}
             <span class="grow"></span>
+            {#if previewKind(f.path) && f.status !== 'deleted'}
+              <button class="btn sm" aria-pressed={!!previewing[f.path]} onclick={() => (previewing[f.path] = !previewing[f.path])}>
+                {previewing[f.path] ? 'Diff' : 'Preview'}
+              </button>
+            {/if}
             <span class="num" style="color:var(--live)">+{f.adds}</span><span class="num" style="color:var(--halt)">−{f.dels}</span>
           </div>
-          {#if !collapsed[f.path]}<DiffLines lines={f.lines} />{/if}
+          {#if !collapsed[f.path]}
+            {@const k = previewKind(f.path)}
+            {#if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} />{:else}<DiffLines lines={f.lines} />{/if}
+          {/if}
         </section>
       {/each}
     {:else}
