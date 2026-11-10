@@ -48,10 +48,15 @@ Planned:
 
 ## Documentation
 
-- [Product specification](doc/spec.md): what xherd does, MVP scope, guardrails, updates, backups
-- [Design](doc/design.md): architecture, Rust stack, Docker setup, implementation notes
+- [Getting started](doc/getting-started.md): run it (Docker recommended), first agent, everyday commands
+- [Docker](doc/docker.md): topology, the two-user container, git access, toolchains, operating
+- [Architecture](doc/architecture.md): crates, actors, gates, sessions, plugins, guardrails
+- [Development](doc/development.md): build, test, conventions, how to add things
 - [XAP reference](doc/xap.md): the protocol agents and SDDs use to talk to xherd
 - [Add xherd support to your SDD](doc/integrate-your-sdd.md)
+- [Roadmap](ROADMAP.md)
+
+Working documents, to be removed when the final documentation is complete: [Product specification](doc/spec.md) and [Design](doc/design.md).
 
 ## License
 
