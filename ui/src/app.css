@@ -121,6 +121,7 @@ html, body { margin: 0; background: var(--pasture); }
 .x input[type=checkbox],.x input[type=radio]{width:15px;height:15px;padding:0;accent-color:var(--accent);flex:none}
 .x input:focus,.x select:focus,.x textarea:focus{outline:none;border-color:var(--link);box-shadow:0 0 0 3px var(--focus)}
 label.f,div.f{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:500;color:var(--ink-2)}
+label.f.chk{flex-direction:row;align-items:center;gap:8px}
 .seg{display:inline-flex;padding:2px;gap:2px;background:var(--pen-2);border-radius:7px}
 .seg button{height:26px;padding:0 11px;border:0;border-radius:5px;background:transparent;font:500 12px Inter,system-ui,sans-serif;color:var(--ink-2);cursor:pointer}
 .seg button.on{background:var(--pen);color:var(--ink);box-shadow:0 0 0 1px var(--fence-strong)}
