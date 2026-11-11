@@ -39,6 +39,7 @@
       offered[tool] = e instanceof Error ? e.message : 'could not list versions';
     }
   }
+  const isInstalled = (tool: string) => !!list(tool)?.some((v) => v.version === versions[tool]?.trim() && v.installed);
   const list = (tool: string) => { const o = offered[tool]; return Array.isArray(o) ? o : null; };
   $effect(() => { load(); });
 
@@ -89,7 +90,7 @@
         <button class="btn" disabled={(versions[t.tool] ?? '').trim() === (t.default ?? '')} onclick={() => saveDefault(t, versions[t.tool].trim())}>
           {versions[t.tool]?.trim() ? 'Set as default' : 'Clear default'}</button>
         {#if t.canInstall}
-          <button class="btn" disabled={!versions[t.tool]?.trim() || installing !== null} onclick={() => install(t)}>Install this version</button>
+          <button class="btn" disabled={!versions[t.tool]?.trim() || installing !== null || isInstalled(t.tool)} onclick={() => install(t)}>{isInstalled(t.tool) ? 'Installed' : 'Install this version'}</button>
         {/if}
         {#if t.default}<span class="hint">Default: <span class="mono">{t.default}</span></span>{/if}
       </div>
@@ -98,6 +99,6 @@
 </section>
 
 {#if installing}
-  <TermView path="/ws/setup/plugin-login" title={`Install ${installing}`} height="360px" onclose={() => (installing = null)}
+  <TermView path="/ws/setup/plugin-login" title={`Install ${installing}`} height="360px" onclose={() => { const t = installing; installing = null; if (t) loadVersions(t); }}
     hint="The install runs here; close it when it ends." />
 {/if}
