@@ -5,7 +5,7 @@
   // place of the implement stage. Fix tasks from a review or the PR carry a
   // tag; a pending task names the tasks it waits on. Where an agent waits for
   // you the card is outlined. Read-only. Filters and swimlanes live in the URL:
-  // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=agent|repo|none`.
+  // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=none|agent|repo`.
   import PageHead from '../components/PageHead.svelte';
   import Seg from '../components/Seg.svelte';
   import { app } from '../lib/store.svelte';
@@ -22,7 +22,7 @@
     | { kind: 'task'; key: string; lane: string; col: Col; agent: Agent; task: Task; needs: boolean }
     | { kind: 'todo'; key: string; lane: string; col: Col; todo: Todo; needs: boolean };
 
-  const lanes = $derived((['repo', 'none'] as const).find((l) => l === route.query.get('lanes')) ?? 'agent');
+  const lanes = $derived((['agent', 'repo'] as const).find((l) => l === route.query.get('lanes')) ?? 'none');
   const only = $derived(route.query.get('agent') ?? '');
   const repo = $derived(route.query.get('repo') ?? '');
   const needsOnly = $derived(route.query.get('needs') === '1');
@@ -152,8 +152,8 @@
       <label class="f chk"><input type="checkbox" checked={upcoming} onchange={(e) => go({ upcoming: e.currentTarget.checked === (lanes === 'agent') ? undefined : e.currentTarget.checked ? '1' : '0' })} /> Upcoming stages</label>
       <label class="f chk"><input type="checkbox" checked={finished} onchange={(e) => go({ finished: e.currentTarget.checked ? '1' : undefined })} /> Finished</label>
     </span>
-    <select aria-label="Swimlanes" value={lanes} onchange={(e) => go({ lanes: e.currentTarget.value === 'agent' ? undefined : e.currentTarget.value })}>
-      <option value="agent">Lanes by agent</option><option value="repo">Lanes by repository</option><option value="none">No swimlanes</option>
+    <select aria-label="Swimlanes" value={lanes} onchange={(e) => go({ lanes: e.currentTarget.value === 'none' ? undefined : e.currentTarget.value })}>
+      <option value="none">No swimlanes</option><option value="agent">Lanes by agent</option><option value="repo">Lanes by repository</option>
     </select>
     <select aria-label="Agent" value={only} onchange={(e) => go({ agent: e.currentTarget.value || undefined })}>
       <option value="">All agents</option>
