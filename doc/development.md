@@ -43,6 +43,10 @@ Debug builds serve `ui/dist` from disk; release builds embed it at compile time,
 
 xherd marks each new worktree trusted in Claude Code's config, so no trust step is needed. Claude Code must be logged in once (`claude`, then `/login`).
 
+### Demo data for screenshots
+
+`scripts/demo.sh [dir]` runs a throwaway daemon on <http://127.0.0.1:4741/> with fake agents (`scripts/demo-seed.py`): two waiting at a gate, one watching a PR, one paused, one done. It uses its own data root, workspace and `HOME` plus stub `claude`/`gh` commands, so nothing of yours is touched. It needs a built daemon and `ui/dist`. Agents are never "running" (that needs a live tmux session). Warnings about "restored worktree not prepared" are expected: the fake worktrees are plain folders.
+
 ### Tests
 
 - Unit and property tests in `xherd-core` and `xherd-flow` cover the pure logic (lifecycle table, report ordering, XAP validation, hashing, tripwires).
