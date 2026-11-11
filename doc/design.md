@@ -720,7 +720,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Profile fields still to build: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, stage hooks, spec folder mode, colour, default flow/pack, ticket prefix, tool permissions, per-profile daily budget and cost estimate
   - [ ] Codex and opencode
   - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
-  - [x] Kanban: the Board with stage cards by role, tasks, TODOs and swimlanes (cards declared by packs and profiles, R-1101, come with profiles)
+  - [x] Kanban: the Board with stages and tasks as work units (Pending / In progress / Done), TODOs and swimlanes; the Herd's By stage layout with agents in columns by role (cards declared by packs and profiles, R-1101, come with profiles)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [x] TODOs: reminders, once or repeating (`/todos`, 30 s tick, kind `todo`)

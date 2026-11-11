@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Overview: "Needs you" (oldest first) then every agent (spec §17.2).
+  // Overview: "Needs you" (oldest first) then every agent (spec §17.2), as a
+  // list or in columns by stage (R-210, `?layout=stages`).
   import AgentDot from '../components/AgentDot.svelte';
   import Mini from '../components/Mini.svelte';
   import TaskBar from '../components/TaskBar.svelte';
@@ -8,6 +9,7 @@
   import Panel from '../components/Panel.svelte';
   import Seg from '../components/Seg.svelte';
   import Dialog from '../components/Dialog.svelte';
+  import StageColumns from '../components/StageColumns.svelte';
   import { app } from '../lib/store.svelte';
   import { href, route, go } from '../lib/router.svelte';
   import { ago, needsYou, waitText, repoName, shortBase } from '../lib/format';
@@ -30,6 +32,9 @@
     ['done', 'Done', (a) => a.status === 'done' || a.status === 'cancelled'],
   ];
   const filter = $derived(route.query.get('f') ?? 'all');
+  const layout = $derived(route.query.get('layout') === 'stages' ? 'stages' : 'list');
+  const nav = (q: { f?: string; layout?: string }) =>
+    go('/', { f: route.query.get('f') ?? undefined, layout: route.query.get('layout') ?? undefined, ...q });
   const shown = $derived(
     agents
       .filter(FILTERS.find((f) => f[0] === filter)?.[2] ?? (() => true))
@@ -112,10 +117,14 @@
 
   <Panel title="All agents" flush>
     {#snippet head()}
-      <Seg label="Filter" value={filter} onchange={(id) => go('/', { f: id === 'all' ? undefined : id })}
+      <Seg label="Filter" value={filter} onchange={(id) => nav({ f: id === 'all' ? undefined : id })}
         options={FILTERS.map(([id, label, f]) => ({ value: id, label: `${label} ${count(f)}` }))} />
+      <Seg label="Layout" value={layout} onchange={(id) => nav({ layout: id === 'stages' ? 'stages' : undefined })}
+        options={[{ value: 'list', label: 'List' }, { value: 'stages', label: 'By stage' }]} />
     {/snippet}
-    {#if shown.length}
+    {#if shown.length && layout === 'stages'}
+      <StageColumns agents={shown} />
+    {:else if shown.length}
       <div class="tscroll">
         <table class="tbl">
           <thead><tr><th>Agent</th><th>Status</th><th class="hide-sm">Progress</th><th class="hide-sm">Tasks</th><th class="hide-sm">Branch</th><th class="r">Active</th></tr></thead>
