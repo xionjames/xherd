@@ -41,6 +41,7 @@ pub fn spawn(d: Daemon, iv: Intervals) -> tokio::task::JoinHandle<()> {
                 _ = screen.tick() => d.sup.tick(TickKind::ScreenScan),
                 _ = poll.tick() => {
                     d.sup.tick(TickKind::TodoTick);
+                    d.todo_tick().await;
                     d.sup.tick(TickKind::PrPoll);
                 }
                 _ = minute.tick() => {

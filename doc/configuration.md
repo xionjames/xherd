@@ -20,7 +20,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `idleAlertMinutes` | `15` | Notify when an agent has been idle this long; `0` = off |
 | `gateParkMinutes` | `30` | A gate waiting this long parks the agent (frees its slot, stays in *Needs you*); `0` = never |
 | `freshSessions` | `true` | Each approved gate starts a new runtime session; `memory.md` carries over |
-| `mutedNotifications` | `[]` | Notification kinds (`gate`, `blocked`, `idle`, `delivery`, `error`, `recovery`, `budget`, `limit`, `auto-approved`, `pr`, `pr-comments`) that are not sent anywhere. Applies at once |
+| `mutedNotifications` | `[]` | Notification kinds (`gate`, `blocked`, `idle`, `delivery`, `error`, `recovery`, `budget`, `limit`, `auto-approved`, `pr`, `pr-comments`, `todo`) that are not sent anywhere. Applies at once |
 | `desktopNotifications` | `false` | The daemon also shows system notifications (`osascript` on macOS, `notify-send` on Linux); not in the Docker image. Applies at once |
 | `ntfyServer` / `ntfyTopic` | unset | Also send every notification to this ntfy topic (both needed; messages carry agent names and reasons, in plain text). Applies at once; Settings → Notifications |
 | `maxSessionMinutes` | `0` | End a session and pause the agent after this many minutes; `0` = off (after the agent writes a handoff note, like Pause) |

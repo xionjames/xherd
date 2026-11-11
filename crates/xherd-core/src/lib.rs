@@ -17,6 +17,7 @@ pub mod queue;
 pub mod report;
 pub mod runner;
 pub mod status;
+pub mod todo;
 pub mod tripwire;
 pub mod untrusted;
 pub mod usage;

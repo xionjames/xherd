@@ -492,6 +492,67 @@ async fn worklog_books_running_time_and_user_time() {
 }
 
 #[tokio::test]
+async fn todos_come_due_notify_once_and_repeat() {
+    use xherd_core::todo::TodoStatus;
+    use xherd_daemon::todos::TodoInput;
+    let t = daemon(4).await;
+    let mut rx = t.d.hub.subscribe();
+    let now = t.d.clock.now();
+    let input = |title: &str, due, repeat| TodoInput {
+        title: title.into(),
+        note: None,
+        due,
+        repeat_minutes: repeat,
+    };
+    let later =
+        t.d.create_todo(input("later", now + 3_600_000, None))
+            .await
+            .unwrap();
+    let once =
+        t.d.create_todo(input("renew cert", now - 1, None))
+            .await
+            .unwrap();
+    let again =
+        t.d.create_todo(input("water plants", now - 1, Some(60)))
+            .await
+            .unwrap();
+    assert!(t.d.create_todo(input(" ", now, None)).await.is_err());
+
+    t.d.todo_tick().await;
+    t.d.todo_tick().await; // a second tick must not notify again
+    let mut texts = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind, text, .. } = c {
+            assert_eq!(kind, "todo");
+            texts.push(text);
+        }
+    }
+    texts.sort();
+    assert_eq!(texts, ["TODO: renew cert", "TODO: water plants"]);
+
+    let status = |list: &[xherd_core::todo::Todo], id: &str| {
+        list.iter().find(|x| x.id == id).unwrap().status
+    };
+    let list = t.d.todos().await.unwrap();
+    assert_eq!(status(&list, &later.id), TodoStatus::Open);
+    assert_eq!(status(&list, &once.id), TodoStatus::Due);
+
+    t.d.complete_todo(&once.id).await.unwrap();
+    t.d.complete_todo(&again.id).await.unwrap();
+    let list = t.d.todos().await.unwrap();
+    assert_eq!(status(&list, &once.id), TodoStatus::Done);
+    assert_eq!(status(&list, &again.id), TodoStatus::Open, "repeats");
+
+    t.d.reschedule_todo(&once.id, now + 1_000).await.unwrap();
+    assert_eq!(
+        status(&t.d.todos().await.unwrap(), &once.id),
+        TodoStatus::Open
+    );
+    t.d.delete_todo(&later.id).await.unwrap();
+    assert!(t.d.delete_todo(&later.id).await.is_err());
+}
+
+#[tokio::test]
 async fn queued_reports_are_replayed_on_start() {
     let t = daemon(4).await;
     let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();

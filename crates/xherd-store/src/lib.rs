@@ -402,6 +402,45 @@ impl Store {
         .await
     }
 
+    // ---- todos ---------------------------------------------------------------
+
+    pub async fn put_todo(&self, t: &xherd_core::todo::Todo) -> Result<()> {
+        let data = serde_json::to_string(t)?;
+        let (id, created) = (t.id.clone(), t.created_at);
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO todos (id, created_at, data) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+                params![id, created, data],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Oldest first; rows that no longer parse are skipped.
+    pub async fn list_todos(&self) -> Result<Vec<xherd_core::todo::Todo>> {
+        self.read(|c| {
+            let mut st = c.prepare("SELECT data FROM todos ORDER BY created_at, id")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                if let Ok(t) = serde_json::from_str(&row?) {
+                    out.push(t);
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Whether a row was removed.
+    pub async fn delete_todo(&self, id: &str) -> Result<bool> {
+        let id = id.to_string();
+        self.write(move |c| Ok(c.execute("DELETE FROM todos WHERE id = ?1", [id])? == 1))
+            .await
+    }
+
     // ---- work log ------------------------------------------------------------
 
     /// Add `ms` to the work log of `ticket` on `day` (`YYYY-MM-DD`, UTC);

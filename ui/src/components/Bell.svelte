@@ -22,7 +22,7 @@
       <ul>
         {#each notices.list as n (n.key)}
           <li class:unread={!n.read}>
-            <button class="item" onclick={() => go(n)} disabled={!agentByName(n.agentId)}>
+            <button class="item" onclick={() => go(n)} disabled={!agentByName(n.agentId) && !n.agentId.startsWith('todo:')}>
               <span>{n.text}</span><span class="muted num">{ago(n.at)}</span>
             </button>
           </li>

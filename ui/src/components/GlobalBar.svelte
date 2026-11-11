@@ -20,6 +20,8 @@
        href={href('/board')}>Board</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/time'} aria-current={route.path === '/time' ? 'page' : undefined}
        href={href('/time')}>Time</a>{/if}
+    {#if !blocked}<a class="gt" class:on={route.path === '/todos'} aria-current={route.path === '/todos' ? 'page' : undefined}
+       href={href('/todos')}>TODOs</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/review'} aria-current={route.path === '/review' ? 'page' : undefined}
        href={href('/review')}>To review</a>{/if}
     {#if failing || route.path === '/setup'}<a class="gt" class:on={route.path === '/setup'} aria-current={route.path === '/setup' ? 'page' : undefined}

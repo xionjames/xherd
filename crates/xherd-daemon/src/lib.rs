@@ -30,6 +30,7 @@ pub mod security;
 pub mod settings;
 pub mod supervisor;
 pub mod support;
+pub mod todos;
 pub mod toolchains;
 pub mod worklog;
 

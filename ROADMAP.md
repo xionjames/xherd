@@ -21,7 +21,8 @@ by theme; update it together with them.
 - [x] Gate documents: highlight what changed after a change request (spec, design, tasks…), without keeping version history
 - [x] Open questions: a text box per question to answer them inline
 - [x] Board (tasks of all agents by status) and Review with "Mark seen"; the notification bell is in
-- [ ] Screens still hidden: Time (work log: needs agent/user time recorded per day and ticket), TODOs (reminders and condition checks, spec §16.2); Board stage cards and swimlanes
+- [x] Time (work log: agent and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
+- [ ] Board stage cards and swimlanes; TODO condition checks (a read-only runtime session needs a headless launch the runtime plugins do not declare yet)
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [ ] Plugin secrets and plugin install from the UI
 
@@ -94,9 +95,11 @@ by theme; update it together with them.
 ## v1.x
 
 - [ ] Codex and opencode runtimes
-- [ ] Kanban, To review and Work log views (per-ticket cycle time, review loops and rework)
+- [x] To review and Work log views (per-ticket cycle time, review loops and rework)
+- [ ] Kanban beyond the task Board (stage cards, TODOs, swimlanes)
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
-- [ ] TODOs, budgets, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
+- [x] TODO reminders
+- [ ] Budgets per profile, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
 
 ## Later
 

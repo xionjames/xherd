@@ -60,6 +60,13 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/security", get(security))
+        .route("/api/v1/todos", get(todos_list).post(todo_create))
+        .route(
+            "/api/v1/todos/{id}",
+            axum::routing::put(todo_update).delete(todo_delete),
+        )
+        .route("/api/v1/todos/{id}/complete", post(todo_complete))
+        .route("/api/v1/todos/{id}/reschedule", post(todo_reschedule))
         .route("/api/v1/worklog", get(worklog))
         .route("/api/v1/agents/{id}/user-time", post(user_time))
         .route("/api/v1/reviews", get(reviews))
@@ -437,6 +444,59 @@ async fn put_config(
     Json(patch): Json<xherd_daemon::settings::ConfigPatch>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.save_config(patch)?))
+}
+
+async fn todos_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"todos": d.todos().await?})))
+}
+
+async fn todo_create(
+    _: User,
+    State(d): State<Daemon>,
+    Json(i): Json<xherd_daemon::todos::TodoInput>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.create_todo(i).await?)))
+}
+
+async fn todo_update(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(i): Json<xherd_daemon::todos::TodoInput>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.update_todo(&id, i).await?)))
+}
+
+async fn todo_delete(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    d.delete_todo(&id).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn todo_complete(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.complete_todo(&id).await?)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RescheduleBody {
+    due: i64,
+}
+
+async fn todo_reschedule(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<RescheduleBody>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.reschedule_todo(&id, b.due).await?)))
 }
 
 #[derive(Deserialize)]

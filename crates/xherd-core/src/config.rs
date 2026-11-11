@@ -240,6 +240,7 @@ pub const NOTIFY_KINDS: &[&str] = &[
     "auto-approved",
     "pr",
     "pr-comments",
+    "todo",
 ];
 
 impl Config {

@@ -19,7 +19,7 @@
   type Form = Record<string, string | boolean>;
   const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
   let form = $state<Form>({});
-  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['auto-approved', 'Something was approved for you'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments']];
+  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['auto-approved', 'Something was approved for you'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
   function toggleKind(k: string, on: boolean) {
     const next = new Set(muted);
