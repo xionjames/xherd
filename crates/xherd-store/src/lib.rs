@@ -441,6 +441,45 @@ impl Store {
             .await
     }
 
+    // ---- profiles --------------------------------------------------------------
+
+    pub async fn put_profile(&self, p: &xherd_core::profile::Profile) -> Result<()> {
+        let data = serde_json::to_string(p)?;
+        let id = p.id.clone();
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO profiles (id, data) VALUES (?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+                params![id, data],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// In creation order (rowid); rows that no longer parse are skipped.
+    pub async fn list_profiles(&self) -> Result<Vec<xherd_core::profile::Profile>> {
+        self.read(|c| {
+            let mut st = c.prepare("SELECT data FROM profiles ORDER BY rowid")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                if let Ok(p) = serde_json::from_str(&row?) {
+                    out.push(p);
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Whether a row was removed.
+    pub async fn delete_profile(&self, id: &str) -> Result<bool> {
+        let id = id.to_string();
+        self.write(move |c| Ok(c.execute("DELETE FROM profiles WHERE id = ?1", [id])? == 1))
+            .await
+    }
+
     // ---- work log ------------------------------------------------------------
 
     /// Add `ms` to the work log of `ticket` on `day` (`YYYY-MM-DD`, UTC);

@@ -35,7 +35,7 @@ by theme; update it together with them.
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
 - [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`
 - [x] Block an agent on git auth failures (R-688): an auth error on the screen or from a host command blocks a live agent with reason `git access` (UI: "Fix git access"); the band shows the doctor's first failure and fix (`GET /agents/{id}/git-access`)
-- [ ] Profile `toolchain:` / `setup:` (R-654, needs profiles) and the Welcome toolchain step (R-653; each toolchain plugin's page in Settings → Plugins has defaults, a version dropdown and installs)
+- [ ] Profile `toolchain:` / `setup:` (R-654; profiles exist, these fields do not yet) and the Welcome toolchain step (R-653; each toolchain plugin's page in Settings → Plugins has defaults, a version dropdown and installs)
 
 ## Agents that survive and recover
 
@@ -71,7 +71,8 @@ by theme; update it together with them.
 
 - [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for agents created from now on
 - [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence is a refusal (R-116)
-- [ ] Move `sensitivePaths` / `maxDiffLines` into repo profiles and add the profile test command tripwire (R-115), with profiles (v1.x)
+- [x] Repo profiles, first slice: matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-agent token budget, test command tripwire (R-115) and repo instructions, with the global values as defaults; Settings → Repo profiles, JSON export/import (R-1407)
+- [ ] More profile fields: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, spec folder mode, default flow/pack, ticket prefix, tool permissions; the daily budget and a cost estimate per profile
 - [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
 - [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asks for a handoff first
 - [x] `xherd security check` (R-1210), first version; autonomy and budgets are in; the branch protection finding waits for the host command (`security::PENDING`)
@@ -101,7 +102,7 @@ by theme; update it together with them.
 - [ ] Pack-declared Kanban cards (R-1101)
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
 - [x] TODO reminders
-- [ ] Budgets per profile, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
+- [ ] Daily budget per profile, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
 
 ## Later
 

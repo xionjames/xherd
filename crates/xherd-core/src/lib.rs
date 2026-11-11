@@ -13,6 +13,7 @@ pub mod hash;
 pub mod new;
 pub mod paths;
 pub mod pr;
+pub mod profile;
 pub mod queue;
 pub mod report;
 pub mod runner;

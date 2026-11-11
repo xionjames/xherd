@@ -57,6 +57,10 @@ pub struct Agent {
     /// Base the branch was created from (resolved ref, e.g. `origin/main`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// Repo profile matched at creation (R-002); unset or deleted = the
+    /// global settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Runtime plugin name (`claude-code` when unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
@@ -161,6 +165,7 @@ impl Agent {
             launch: None,
             repo: None,
             base: None,
+            profile: None,
             runtime: None,
             next_prompt: None,
             pack: None,

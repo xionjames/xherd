@@ -37,8 +37,7 @@ impl Daemon {
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
     pub async fn new_agent(&self, req: NewAgent) -> Result<Agent, ActionError> {
         let c = new::check(&req)?;
-        let autonomy = req.autonomy.unwrap_or(self.live_config().autonomy);
-        if !autonomy.selectable() {
+        if req.autonomy.is_some_and(|a| !a.selectable()) {
             return Err(refuse(
                 "autonomy_unavailable",
                 "autonomy never is not available yet (v1.x, R-1209)",
@@ -70,6 +69,12 @@ impl Daemon {
         // A URL is cloned (or fetched) here, before the other checks: the
         // clone is kept for the next agent even if a later check fails.
         let repo = self.locate_repo(&req.repo).await?.path;
+        // Request, then profile, then Settings (R-002, R-109, R-135).
+        let profile = self.profile_for_repo(&repo).await;
+        let autonomy = req
+            .autonomy
+            .or(profile.as_ref().and_then(|p| p.autonomy))
+            .unwrap_or(self.live_config().autonomy);
         let agents = self
             .store
             .list_agents()
@@ -96,7 +101,14 @@ impl Daemon {
                 format!("{} already exists", workdir.display()),
             ));
         }
-        let base = resolve_base(&git, &repo, req.base.as_deref()).await?;
+        let base = resolve_base(
+            &git,
+            &repo,
+            req.base
+                .as_deref()
+                .or(profile.as_ref().and_then(|p| p.base_branch.as_deref())),
+        )
+        .await?;
 
         // Everything checked; create.
         if let Some(parent) = workdir.parent() {
@@ -109,6 +121,7 @@ impl Daemon {
 
         let mut a = Agent::new(&c.name, &c.ticket_key, self.clock.now());
         a.autonomy = autonomy;
+        a.profile = profile.as_ref().map(|p| p.id.clone());
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);
@@ -190,7 +203,8 @@ impl Daemon {
                 .await
                 .map_err(|e| refuse("runtime_trust", format!("{label}: {e}")))?;
         }
-        prepare_xherd_dir(&git, &workdir, a).await?;
+        let repo_instructions = self.profile_of(a).await.and_then(|p| p.instructions);
+        prepare_xherd_dir(&git, &workdir, a, repo_instructions.as_deref()).await?;
         git.install_push_guard(
             &workdir,
             &workdir.join(".xherd/hooks"),
@@ -363,7 +377,12 @@ const SHARED_DIR_MODE: u32 = 0o2775;
 
 /// `.xherd/` with `agent.json`, `instructions.md` and `spec/`, excluded from
 /// git (R-005b exclude part, R-005c).
-async fn prepare_xherd_dir(git: &Git, workdir: &Path, a: &Agent) -> Result<(), ActionError> {
+async fn prepare_xherd_dir(
+    git: &Git,
+    workdir: &Path,
+    a: &Agent,
+    repo_instructions: Option<&str>,
+) -> Result<(), ActionError> {
     let io = |p: &Path, e: std::io::Error| refuse("io", format!("{}: {e}", p.display()));
     let dir: PathBuf = workdir.join(".xherd");
     let spec = workdir.join(xherd_flow::xap::SPEC_DIR);
@@ -378,7 +397,12 @@ async fn prepare_xherd_dir(git: &Git, workdir: &Path, a: &Agent) -> Result<(), A
     let f = dir.join("agent.json");
     write_atomic(&f, &json, None).map_err(|e| io(&f, e))?;
     let f = dir.join("instructions.md");
-    write_atomic(&f, new::instructions_md(a).as_bytes(), None).map_err(|e| io(&f, e))?;
+    write_atomic(
+        &f,
+        new::instructions_md(a, repo_instructions).as_bytes(),
+        None,
+    )
+    .map_err(|e| io(&f, e))?;
     git.add_excludes(workdir, &[".xherd/"])
         .await
         .map_err(|e| refuse("git", e.to_string()))

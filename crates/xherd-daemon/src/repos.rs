@@ -80,10 +80,26 @@ impl Daemon {
         let r = self.locate_repo(input).await?;
         let git = Git::new("git");
         let branches = git.branches(&r.path).await.unwrap_or_default();
-        let base = resolve_base(&git, &r.path, None).await.ok();
+        let profile = self.profile_for_repo(&r.path).await;
+        let base = resolve_base(
+            &git,
+            &r.path,
+            profile.as_ref().and_then(|p| p.base_branch.as_deref()),
+        )
+        .await
+        .ok();
         Ok(json!({
             "path": r.path, "cloned": r.cloned, "warning": r.warning,
             "branches": branches, "base": base,
+            // What a new profile for this repository would match: its
+            // remote (`host/owner/repo`), else its folder.
+            "suggestedMatch": match crate::profiles::repo_origin(&r.path).await {
+                Some(o) => xherd_core::profile::normalize_url(&o),
+                None => r.path.to_string_lossy().into_owned(),
+            },
+            "profile": profile.as_ref().map(|p| json!({
+                "id": p.id, "name": p.name, "autonomy": p.autonomy,
+            })),
         }))
     }
 
