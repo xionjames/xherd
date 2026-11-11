@@ -90,3 +90,13 @@ export function repoName(a: Agent): string {
 export function shortBase(a: Agent): string {
   return a.base?.replace(/^origin\//, '') ?? '';
 }
+
+/** `1h 05m`, `12m`, `45s`: a span of work for the work log. */
+export function span(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ${String(m % 60).padStart(2, '0')}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+}

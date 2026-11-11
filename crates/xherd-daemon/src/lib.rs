@@ -31,6 +31,7 @@ pub mod settings;
 pub mod supervisor;
 pub mod support;
 pub mod toolchains;
+pub mod worklog;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
 pub use create::{Resumer, TrustWriter};
@@ -164,6 +165,8 @@ pub struct Daemon {
     pub local_peers: Arc<Vec<std::net::IpAddr>>,
     /// Open-in requests for the host companion (R-704).
     pub companion: open_in::Companion,
+    /// When the work log last booked agent time (ms; 0 = not yet).
+    pub worklog_flushed: Arc<std::sync::atomic::AtomicI64>,
 }
 
 impl Daemon {
@@ -302,6 +305,7 @@ impl Daemon {
             sandbox: opts.sandbox,
             local_peers: Arc::new(opts.local_peers),
             companion: open_in::Companion::default(),
+            worklog_flushed: Arc::default(),
         };
         d.import_ledgers().await;
         d.repair_restored().await;

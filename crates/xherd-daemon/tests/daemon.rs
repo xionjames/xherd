@@ -468,6 +468,30 @@ async fn git_auth_failure_on_screen_blocks_with_reason() {
 }
 
 #[tokio::test]
+async fn worklog_books_running_time_and_user_time() {
+    let t = daemon(4).await;
+    t.d.create_agent(agent("WL-1", 1)).await.unwrap();
+    wait_status(&t.d, "WL-1", Status::Running).await;
+
+    // The first flush only starts the clock; the next books the span.
+    t.d.flush_worklog().await;
+    t.d.worklog_flushed.store(
+        t.d.clock.now() - 60_000,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    t.d.flush_worklog().await;
+    t.d.add_user_time("WL-1", 30_000).await.unwrap();
+    t.d.add_user_time("WL-1", 10_000_000).await.unwrap(); // clamped
+
+    let v = t.d.worklog(1).await.unwrap();
+    let row = &v["days"][0]["tickets"][0];
+    assert!(row["agentMs"].as_u64().unwrap() >= 60_000);
+    assert_eq!(row["userMs"], 30_000 + 120_000);
+    assert_eq!(v["tickets"][0]["agent"], "WL-1");
+    assert_eq!(v["tickets"][0]["cycleMs"], Value::Null);
+}
+
+#[tokio::test]
 async fn queued_reports_are_replayed_on_start() {
     let t = daemon(4).await;
     let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();

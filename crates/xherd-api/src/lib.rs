@@ -60,6 +60,8 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/security", get(security))
+        .route("/api/v1/worklog", get(worklog))
+        .route("/api/v1/agents/{id}/user-time", post(user_time))
         .route("/api/v1/reviews", get(reviews))
         .route("/api/v1/reviews/seen", post(reviews_seen))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
@@ -435,6 +437,38 @@ async fn put_config(
     Json(patch): Json<xherd_daemon::settings::ConfigPatch>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.save_config(patch)?))
+}
+
+#[derive(Deserialize)]
+struct WorklogQuery {
+    days: Option<u32>,
+}
+
+/// `GET /api/v1/worklog?days=N` (spec §16.4): time per day and ticket, and
+/// the delivery metrics per ticket.
+async fn worklog(
+    _: User,
+    State(d): State<Daemon>,
+    axum::extract::Query(q): axum::extract::Query<WorklogQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.worklog(q.days.unwrap_or(14)).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserTimeBody {
+    ms: u64,
+}
+
+/// `POST /agents/:id/user-time`: the agent page was open for `ms` (heartbeat).
+async fn user_time(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<UserTimeBody>,
+) -> ApiResult<Json<Value>> {
+    d.add_user_time(&id, b.ms).await?;
+    Ok(Json(json!({"ok": true})))
 }
 
 /// `GET /api/v1/reviews` (R-111): what xherd approved by itself, newest first.

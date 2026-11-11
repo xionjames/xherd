@@ -17,6 +17,16 @@
   import { showError } from '../lib/errors.svelte';
 
   let { agent }: { agent: Agent } = $props();
+  // Work log (spec §16.4): while this page is visible and focused, tell the
+  // daemon every 30 s so the user's time on the agent is counted.
+  const timeId = $derived(agent.id);
+  $effect(() => {
+    const id = timeId;
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) post(`/agents/${id}/user-time`, { ms: 30000 }).catch(() => {});
+    }, 30000);
+    return () => clearInterval(t);
+  });
   let confirmCancel = $state(false);
   let menu = $state(false);
   // Open in… (R-701, R-702, R-704): links that work because the workspace

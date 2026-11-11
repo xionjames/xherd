@@ -2318,6 +2318,14 @@ impl Actor {
         }
         let text = xherd_flow::approve::changes_message(&gate, comment);
         self.send(&text, 1).await?;
+        // For the work log's rework count (spec §16.4): which gate it was.
+        let label = match &gate {
+            Gate::Docs { stage, .. } => stage.clone(),
+            Gate::Commit(c) => format!("commit {}", c.id),
+            _ => String::new(),
+        };
+        self.log(None, "change-request", Some(json!({"gate": label})))
+            .await;
         self.agent.fire(Trigger::UserInput, self.now());
         Ok(())
     }

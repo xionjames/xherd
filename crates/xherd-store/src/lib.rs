@@ -402,6 +402,65 @@ impl Store {
         .await
     }
 
+    // ---- work log ------------------------------------------------------------
+
+    /// Add `ms` to the work log of `ticket` on `day` (`YYYY-MM-DD`, UTC);
+    /// `kind` is `agent` (time in `running`) or `user` (time on the agent page).
+    pub async fn add_worklog(&self, day: &str, ticket: &str, kind: &str, ms: u64) -> Result<()> {
+        let (d, t, k, ms) = (
+            day.to_string(),
+            ticket.to_string(),
+            kind.to_string(),
+            ms as i64,
+        );
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO worklog (day, ticket_key, kind, ms) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(day, ticket_key, kind) DO UPDATE SET ms = ms + excluded.ms",
+                params![d, t, k, ms],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// `(day, ticket, kind, ms)` from `since_day` on, newest day first.
+    pub async fn worklog(&self, since_day: &str) -> Result<Vec<(String, String, String, u64)>> {
+        let since = since_day.to_string();
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT day, ticket_key, kind, ms FROM worklog WHERE day >= ?1
+                 ORDER BY day DESC, ticket_key, kind",
+            )?;
+            let rows = st.query_map([since], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? as u64))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
+    /// Every event of `kind`, oldest first (delivery metrics).
+    pub async fn events_of_kind(&self, kind: &str) -> Result<Vec<Event>> {
+        let k = kind.to_string();
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT id, agent_id, kind, payload, at FROM events WHERE kind = ?1 ORDER BY at, id",
+            )?;
+            let rows = st.query_map([k], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, Option<String>>(3)?, r.get(4)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, agent_id, kind, payload, at) = row?;
+                let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
+                out.push(Event { id, agent_id, kind, payload, at });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     // ---- usage ---------------------------------------------------------------
 
     /// Add tokens to `scope`'s total for `day` (`YYYY-MM-DD`, UTC).
