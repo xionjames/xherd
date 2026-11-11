@@ -10,7 +10,7 @@ use std::time::Duration;
 use xherd_core::exec::{Cmd, run};
 use xherd_core::paths::write_atomic;
 
-pub const DEFAULT_IMAGE: &str = "ghcr.io/xherd/xherd:1";
+pub const DEFAULT_IMAGE: &str = "ghcr.io/xionjames/xherd:latest";
 const SERVICE: &str = "xherd";
 /// Docker Desktop and OrbStack forward the host's SSH agent here.
 const VM_SSH_SOCK: &str = "/run/host-services/ssh-auth.sock";
@@ -689,7 +689,7 @@ mod tests {
 
     fn setup(ssh: Option<&str>) -> Setup {
         Setup {
-            image: "ghcr.io/xherd/xherd:1".into(),
+            image: "ghcr.io/xionjames/xherd:latest".into(),
             workspace: "/Users/me/xherd".into(),
             uid: 501,
             gid: 20,

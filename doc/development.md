@@ -56,7 +56,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 ## Conventions
 
-- Workspace lints: `unsafe_code = "forbid"`; clippy `all` is a warning. There is no CI workflow in the repository yet, so run the checks above with `-D warnings` yourself.
+- Workspace lints: `unsafe_code = "forbid"`; clippy `all` is a warning. CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, the tests, the UI check/test/build and an image build on pushes to main and PRs into main; run the same checks before pushing.
 - External commands only through `xherd_core::exec::run`. Exceptions: the interactive tmux client of the browser terminal (`xherd_term::pty`), processes that replace the CLI (`toolchain exec`, `attach`, `shell`, `init` → daemon), and long-lived helpers (`socat`, apps launched by `open`/`companion`).
 - Agent state changes only inside the agent's actor, through pure functions in `xherd-core`. Slow work returns as `WorkDone` tagged with the generation.
 - `xherd hook` and `xherd report` must never print to stdout or exit non-zero, and must not start tokio. `hook` is handled before clap, inside `catch_unwind`.
@@ -84,11 +84,15 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 ## Docker image
 
 ```sh
-docker build -f deploy/docker/Dockerfile -t ghcr.io/xherd/xherd:dev .
+docker build -f deploy/docker/Dockerfile -t ghcr.io/xionjames/xherd:dev .
 cd deploy/compose && docker compose up -d --build
 ```
 
 Inside the container, `XHERD_SANDBOX=1` enables toolchain installs and installs the xherd commands at every start. Tests never set `Options::sandbox`, so they cannot write into a real home.
+
+## Releases
+
+Push a tag `vX.Y.Z` on a commit of main (`git tag v0.2.0 && git push origin v0.2.0`). `.github/workflows/release.yml` refuses a tag not on main, runs CI, then publishes the Linux binaries (static musl, x86_64 and arm64, as `.tar.gz`, `.deb` and `.rpm`, the packages from `deploy/nfpm/nfpm.yaml`; no macOS binaries yet) on a GitHub release and the image `ghcr.io/xionjames/xherd` (amd64 + arm64) as `X.Y.Z`, `X.Y`, `X` (not for 0.x) and `latest`. A tag with a suffix (`v0.2.0-rc.1`) is a prerelease and only gets `X.Y.Z-suffix`. Nothing is published from main.
 
 ## Git workflow
 
