@@ -12,6 +12,7 @@
   import { route, go } from '../lib/router.svelte';
   import DiffLines from '../components/DiffLines.svelte';
   import Findings from '../components/Findings.svelte';
+  import Seg from '../components/Seg.svelte';
 
   let { agent }: { agent: Agent } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -79,19 +80,15 @@
   <div class="colmain">
     {#if docs.length}
       <div class="row">
-        {#each docs as d (d)}
-          <button class="chip" class:on={d === selected} aria-pressed={d === selected}
-            onclick={() => go(`/agent/${agent.name}`, { s: 'spec', doc: d })}>
-            {d}{#if gateFiles.includes(d)} ✋{/if}
-          </button>
-        {/each}
+        <Seg label="Document" value={selected ?? ''} onchange={(d) => go(`/agent/${agent.name}`, { s: 'spec', doc: d })}
+          options={docs.map((d) => ({ value: d, label: gateFiles.includes(d) ? `${d} ✋` : d }))} />
         <span class="grow"></span>
         {#if count}
           <button class="btn gate sm" onclick={sendNotes} disabled={sending || !agent.gate}
             title={agent.gate ? '' : 'The agent is not waiting at a gate'}>Send {count} comment{count === 1 ? '' : 's'}</button>
         {/if}
         {#if changed}
-          <span style="color:var(--accent)">Changed since you last reviewed it</span>
+          <span class="pill acc">Changed since you last reviewed it</span>
           <button class="btn sm" onclick={() => (showDiff = !showDiff)}>{showDiff ? 'Show document' : 'Show changes'}</button>
         {:else if doc?.reviewed}
           <span class="pill live">✓ as you last reviewed it</span>
@@ -99,16 +96,16 @@
       </div>
     {/if}
     {#if error}
-      <div class="card cb muted">{error}</div>
+      <div class="card cb"><p class="err">{error}</p></div>
     {:else if !docs.length}
-      <div class="card cb muted">No documents yet.</div>
+      <div class="card cb"><p class="empty">No documents yet.</p></div>
     {:else if doc && showDiff && changed}
       <div class="card"><DiffLines lines={lineDiff(doc.reviewed ?? '', doc.text)} /></div>
     {:else if parsed && rendered}
       {#if doc?.path === 'review.md'}<Findings {agent} />{/if}
       <article class="paper">
         {#if parsed.meta.length}
-          <div class="row" style="margin-bottom:12px">
+          <div class="row meta">
             {#each parsed.meta as [k, v] (k)}<span class="pill">{k}: {v}</span>{/each}
           </div>
         {/if}
@@ -138,4 +135,5 @@
   .md :global(h3) { font-size: 13px; margin: 6px 0 0; }
   .md :global(.chg) { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); padding-left: 10px; margin-left: -13px; border-radius: 2px; }
   .md :global(p), .md :global(ul), .md :global(ol) { margin: 0; }
+  .meta { margin-bottom: 12px; }
 </style>

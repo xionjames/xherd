@@ -22,7 +22,7 @@
   }
 </script>
 
-<div class="ck" class:first style={st === 'bad' ? 'background:var(--halt-wash)' : ''}>
+<div class="ck" class:first class:fail={st === 'bad'}>
   <span class="ckst {st}" aria-label={check.ok ? 'passes' : check.required ? 'fails' : 'optional, fails'}>
     {check.ok ? '✓' : check.required ? '✕' : '–'}
   </span>
@@ -33,8 +33,8 @@
       {#if check.ok}<span class="mono muted">{check.detail}</span>{/if}
     </div>
     {#if !check.ok}
-      <p style="color:{check.required ? 'var(--halt)' : 'var(--ink-3)'};word-break:break-word">{check.detail}</p>
-      {#if check.fix?.kind === 'command'}<div class="fix"><span style="user-select:all">{check.fix.text}</span></div>{/if}
+      <p class="wrap-any" class:muted={!check.required}>{check.detail}</p>
+      {#if check.fix?.kind === 'command'}<div class="fix"><span>{check.fix.text}</span></div>{/if}
       {#if check.fix?.kind === 'session'}<p class="hint" style="margin-top:6px">{check.fix.explain}</p>{/if}
     {/if}
   </div>
@@ -43,7 +43,7 @@
   {:else}<span></span>{/if}
 </div>
 {#if session}
-  <div style="padding:0 18px 16px">
+  <div style="padding:0 var(--pad) var(--pad)">
     <TermView path={`/ws/setup/${check.id}`} title={check.label} height="420px" onclose={ended}
       hint="Quit when done; the check runs again." />
   </div>

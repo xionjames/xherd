@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Panel from '../components/Panel.svelte';
   // `log` panel: the agent's recent events (GET /agents/:id).
   import type { Agent, AgentEvent } from '../lib/types';
   import { get } from '../lib/api';
@@ -20,18 +21,20 @@
 </script>
 
 <div class="stack">
-  <section class="card">
-    <div class="ch"><h2>Activity</h2><span class="muted">latest first</span></div>
+  <Panel title="Activity" flush>
+    {#snippet head()}<span class="hint">latest first</span>{/snippet}
     {#if events.length}
-      <table class="tbl">
-        <tbody>
-          {#each events as e (e.id)}
-            <tr><td class="num muted" style="white-space:nowrap">{time(e.at)}</td><td class="mono">{e.kind}</td><td class="mono muted" style="word-break:break-all">{summary(e.payload)}</td></tr>
-          {/each}
-        </tbody>
-      </table>
+      <div class="tscroll">
+        <table class="tbl">
+          <tbody>
+            {#each events as e (e.id)}
+              <tr><td class="num muted" style="white-space:nowrap">{time(e.at)}</td><td class="mono">{e.kind}</td><td class="mono muted hide-sm" style="word-break:break-all">{summary(e.payload)}</td></tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {:else}
-      <div class="cb muted">Nothing yet.</div>
+      <div class="cb"><p class="empty">Nothing yet.</p></div>
     {/if}
-  </section>
+  </Panel>
 </div>

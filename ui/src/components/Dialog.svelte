@@ -12,6 +12,6 @@
   <div class="dlg" role="dialog" aria-modal="true" aria-label={title} tabindex="-1" bind:this={box}>
     <div class="ch"><h2>{title}</h2></div>
     <div class="cb">{@render children()}</div>
-    {#if actions}<div class="ch row" style="justify-content:flex-end;border-top:1px solid var(--fence-soft);border-bottom:0">{@render actions()}</div>{/if}
+    {#if actions}<div class="cf">{@render actions()}</div>{/if}
   </div>
 </div>

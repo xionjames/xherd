@@ -9,6 +9,7 @@
   import { loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
   import TermView from './TermView.svelte';
+  import Panel from './Panel.svelte';
 
   interface Tool { plugin: string; pluginLabel: string; tool: string; default: string | null; canInstall: boolean }
   let tools = $state<Tool[]>([]);
@@ -59,46 +60,54 @@
   }
 </script>
 
-<p class="muted" style="max-width:72ch">A worktree's own version files (<span class="mono">.nvmrc</span>, <span class="mono">.sdkmanrc</span>, <span class="mono">go.mod</span>…) always win.
-  The default is what an agent gets for a tool its repository does not pin. Leave it empty for no default.</p>
-{#if !sandbox}
-  <p class="hint">xherd runs natively: it never installs toolchains on your computer, so only the defaults can be set here. Run xherd in Docker to install versions.</p>
-{/if}
-
-<section class="sec">
-  <div class="sh"><h2>Tools</h2></div>
-  <div class="bd">
-    {#each tools as t (t.tool)}
-      <div class="row" style="gap:10px;flex-wrap:wrap">
-        <b class="mono" style="min-width:90px">{t.tool}</b>
-        {#if list(t.tool)}
-          <select class="mono" style="max-width:240px" aria-label={`${t.tool} version`} bind:value={versions[t.tool]}>
-            <option value="">(none)</option>
-            {#if versions[t.tool] && !list(t.tool)?.some((v) => v.version === versions[t.tool])}
-              <option value={versions[t.tool]}>{versions[t.tool]}</option>
-            {/if}
-            {#each list(t.tool) ?? [] as v (v.version)}
-              <option value={v.version}>{v.version}{v.installed ? ' · installed' : ''}</option>
-            {/each}
-          </select>
-        {:else}
-          <input class="mono" style="max-width:200px" aria-label={`${t.tool} version`} placeholder="version, e.g. 21.0.2-tem"
-            bind:value={versions[t.tool]} autocomplete="off" />
-          {#if offered[t.tool] === 'loading'}<span class="hint">Listing versions…</span>
-          {:else if typeof offered[t.tool] === 'string'}<span class="hint">Could not list versions ({offered[t.tool]}); type one.</span>{/if}
-        {/if}
-        <button class="btn" disabled={(versions[t.tool] ?? '').trim() === (t.default ?? '')} onclick={() => saveDefault(t, versions[t.tool].trim())}>
-          {versions[t.tool]?.trim() ? 'Set as default' : 'Clear default'}</button>
-        {#if t.canInstall}
-          <button class="btn" disabled={!versions[t.tool]?.trim() || installing !== null || isInstalled(t.tool)} onclick={() => install(t)}>{isInstalled(t.tool) ? 'Installed' : 'Install this version'}</button>
-        {/if}
-        {#if t.default}<span class="hint">Default: <span class="mono">{t.default}</span></span>{/if}
-      </div>
-    {/each}
+<Panel title="Tools" flush>
+  <div class="cb tight">
+    <p class="muted">A worktree's own version files (<span class="mono">.nvmrc</span>, <span class="mono">.sdkmanrc</span>, <span class="mono">go.mod</span>…) always win.
+      The default is what an agent gets for a tool its repository does not pin. Leave it empty for no default.</p>
+    {#if !sandbox}
+      <p class="hint">xherd runs natively: it never installs toolchains on your computer, so only the defaults can be set here. Run xherd in Docker to install versions.</p>
+    {/if}
   </div>
-</section>
+  <ul class="list">
+    {#each tools as t (t.tool)}
+      <li>
+        <div class="row">
+          <b class="mono tname">{t.tool}</b>
+          {#if list(t.tool)}
+            <select class="mono tver" aria-label={`${t.tool} version`} bind:value={versions[t.tool]}>
+              <option value="">(none)</option>
+              {#if versions[t.tool] && !list(t.tool)?.some((v) => v.version === versions[t.tool])}
+                <option value={versions[t.tool]}>{versions[t.tool]}</option>
+              {/if}
+              {#each list(t.tool) ?? [] as v (v.version)}
+                <option value={v.version}>{v.version}{v.installed ? ' · installed' : ''}</option>
+              {/each}
+            </select>
+          {:else}
+            <input class="mono tver" aria-label={`${t.tool} version`} placeholder="version, e.g. 21.0.2-tem"
+              bind:value={versions[t.tool]} autocomplete="off" />
+          {/if}
+          <button class="btn" disabled={(versions[t.tool] ?? '').trim() === (t.default ?? '')} onclick={() => saveDefault(t, versions[t.tool].trim())}>
+            {versions[t.tool]?.trim() ? 'Set as default' : 'Clear default'}</button>
+          {#if t.canInstall}
+            <button class="btn" disabled={!versions[t.tool]?.trim() || installing !== null || isInstalled(t.tool)} onclick={() => install(t)}>{isInstalled(t.tool) ? 'Installed' : 'Install this version'}</button>
+          {/if}
+        </div>
+        {#if offered[t.tool] === 'loading'}<span class="hint">Listing versions…</span>
+        {:else if typeof offered[t.tool] === 'string'}<span class="hint">Could not list versions ({offered[t.tool]}); type one.</span>{/if}
+        {#if t.default}<span class="hint">Default: <span class="mono">{t.default}</span></span>{/if}
+      </li>
+    {/each}
+  </ul>
+</Panel>
 
 {#if installing}
   <TermView path="/ws/setup/plugin-login" title={`Install ${installing}`} height="360px" onclose={() => { const t = installing; installing = null; if (t) loadVersions(t); }}
     hint="The install runs here; close it when it ends." />
 {/if}
+
+<style>
+  .tname { min-width: 90px; }
+  .tver { flex: 1 1 180px; max-width: 260px; }
+  @media (max-width: 560px) { .tver { max-width: none; flex-basis: 100%; } }
+</style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // One dot per stage: teal done, coral waiting, violet running, grey to do.
+  // One dot per stage: green done, ember waiting, cobalt running, grey to do.
   import type { Agent } from '../lib/types';
   import { app } from '../lib/store.svelte';
   import { flowOf, steps, stageLabel } from '../lib/flow';

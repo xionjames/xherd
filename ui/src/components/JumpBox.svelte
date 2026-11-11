@@ -66,6 +66,8 @@
 
 <style>
   .jwrap { position: relative; margin-right: 8px; }
+  /* No ⌘K on a phone; the herd strip lists the agents there. */
+  @media (max-width: 760px) { .jwrap { display: none; } }
   .jump input { all: unset; flex: 1; min-width: 0; color: var(--bar-ink); font-size: 12.5px; }
   .jump input::placeholder { color: var(--bar-ink-2); }
   .jlist { position: absolute; z-index: 40; top: 38px; left: 0; right: 0; margin: 0; padding: 4px; list-style: none;

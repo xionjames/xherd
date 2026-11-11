@@ -6,6 +6,8 @@
   import { get, post, put, del } from '../lib/api';
   import { agoText } from '../lib/format';
   import { showError } from '../lib/errors.svelte';
+  import PageHead from '../components/PageHead.svelte';
+  import Panel from '../components/Panel.svelte';
 
   type LastCheck = { at: number; outcome: 'met' | 'not-met' | 'unclear' | 'failed'; summary?: string };
   type Todo = { id: string; title: string; note?: string; due: number; repeatMinutes?: number; condition?: string; model?: string; status: 'open' | 'checking' | 'due' | 'done' | 'error'; createdAt: number; completedAt?: number; lastCheck?: LastCheck };
@@ -64,67 +66,63 @@
   const done = $derived((todos ?? []).filter((t) => t.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)).slice(0, 20));
 </script>
 
-<div class="stack">
-  <div class="phead notabs"><div class="row"><h1>TODOs</h1></div></div>
-  <p class="muted">Reminders for you, not for agents. When one comes due it needs you and you get a notification. A reminder with a condition only comes due when the condition is met.</p>
+<PageHead title="TODOs" sub="Reminders for you, not for agents. When one comes due it needs you and you get a notification. A reminder with a condition only comes due when the condition is met." />
 
-  <form class="card f" style="padding:12px 16px" onsubmit={(e) => { e.preventDefault(); save(); }}>
-    <h2>{editing ? 'Edit the TODO' : 'New TODO'}</h2>
-    <label class="f">Title <input bind:value={form.title} maxlength="200" required placeholder="Renew the TLS certificate" /></label>
-    <label class="f">Condition (optional) <textarea bind:value={form.condition} maxlength="1000" rows="2" placeholder="The pull request for PROJ-123 is merged"></textarea>
-      <span class="hint">Leave empty for a plain reminder. With a condition, at each time a short read-only run of Claude Code looks into it (it can read files and use <span class="mono">gh</span> and <span class="mono">git</span> to read, nothing that changes anything). You are notified only when it is met; otherwise it is checked again at the next interval.</span></label>
-    {#if hasCond}
-      <label class="f">Model <input class="mono" bind:value={form.model} maxlength="100" placeholder="the runtime's default" /></label>
-    {/if}
-    <label class="f">Note <textarea bind:value={form.note} maxlength="2000" rows="2"></textarea></label>
-    <div class="row" style="gap:12px;flex-wrap:wrap">
-      <label class="f">Due <input type="datetime-local" bind:value={form.due} required /></label>
-      <label class="f">{hasCond ? 'Check again' : 'Repeat'} <select bind:value={form.repeat}>{#each hasCond ? CHECKS : REPEATS as [v, l] (v)}<option value={v}>{l}</option>{/each}</select></label>
-    </div>
-    <div class="row" style="gap:8px">
-      <button class="btn gate" type="submit" disabled={busy || !form.title.trim()}>{editing ? 'Save' : 'Add'}</button>
-      {#if editing}<button class="btn ghost" type="button" onclick={() => { editing = null; form = blank(); }}>Cancel</button>{/if}
-    </div>
+<div class="stack mid">
+  <form onsubmit={(e) => { e.preventDefault(); save(); }}>
+    <Panel title={editing ? 'Edit the TODO' : 'New TODO'}>
+      <label class="f">Title <input bind:value={form.title} maxlength="200" required placeholder="Renew the TLS certificate" /></label>
+      <label class="f">Condition (optional) <textarea bind:value={form.condition} maxlength="1000" rows="2" placeholder="The pull request for PROJ-123 is merged"></textarea>
+        <span class="hint">Leave empty for a plain reminder. With a condition, at each time a short read-only run of Claude Code looks into it (it can read files and use <span class="mono">gh</span> and <span class="mono">git</span> to read, nothing that changes anything). You are notified only when it is met; otherwise it is checked again at the next interval.</span></label>
+      {#if hasCond}
+        <label class="f">Model <input class="mono" bind:value={form.model} maxlength="100" placeholder="the runtime's default" /></label>
+      {/if}
+      <label class="f">Note <textarea bind:value={form.note} maxlength="2000" rows="2"></textarea></label>
+      <div class="g2">
+        <label class="f">Due <input type="datetime-local" bind:value={form.due} required /></label>
+        <label class="f">{hasCond ? 'Check again' : 'Repeat'} <select bind:value={form.repeat}>{#each hasCond ? CHECKS : REPEATS as [v, l] (v)}<option value={v}>{l}</option>{/each}</select></label>
+      </div>
+      {#snippet foot()}
+        {#if editing}<button class="btn ghost" type="button" onclick={() => { editing = null; form = blank(); }}>Cancel</button>{/if}
+        <button class="btn primary" type="submit" disabled={busy || !form.title.trim()}>{editing ? 'Save TODO' : 'Add TODO'}</button>
+      {/snippet}
+    </Panel>
   </form>
 
   {#if todos === null}
-    <p class="muted">Loading…</p>
+    <p class="empty">Loading…</p>
   {:else}
     {#snippet item(t: Todo)}
-      <li class="it">
-        <div class="row" style="gap:10px;flex-wrap:wrap">
-          <b>{t.title}</b>
+      <li>
+        <div class="row">
+          <b class="wrap-any">{t.title}</b>
           <span class="hint">{t.status === 'done' ? `done ${agoText(t.completedAt ?? t.due)}` : t.status === 'checking' ? 'checking now…' : `${t.status === 'due' || t.status === 'error' ? 'was due' : t.condition ? 'next check' : 'due'} ${when(t.due)}`}{t.repeatMinutes ? ` · ${repeatLabel(t.repeatMinutes)}` : ''}</span>
-          <span class="grow"></span>
+        </div>
+        {#if t.condition}<div class="hint">Condition: {t.condition}{t.model ? ` · model ${t.model}` : ''}</div>{/if}
+        {#if t.lastCheck}<div class="hint">Last check {agoText(t.lastCheck.at)}: {OUTCOME[t.lastCheck.outcome]}{t.lastCheck.summary ? ` — ${t.lastCheck.summary}` : ''}</div>{/if}
+        {#if t.note}<div class="hint pre">{t.note}</div>{/if}
+        <div class="row">
           {#if t.status !== 'done'}
-            {#if t.condition}<button class="btn sm" disabled={busy || t.status === 'checking'} onclick={() => run(() => post(`/todos/${t.id}/check`), 'Could not start the check')}>Check now</button>{/if}
             <button class="btn sm" class:gate={t.status === 'due' || t.status === 'error'} disabled={busy} onclick={() => run(() => post(`/todos/${t.id}/complete`), 'Could not complete')}>Complete</button>
+            {#if t.condition}<button class="btn sm" disabled={busy || t.status === 'checking'} onclick={() => run(() => post(`/todos/${t.id}/check`), 'Could not start the check')}>Check now</button>{/if}
             <button class="btn sm" disabled={busy} onclick={() => snooze(t, 3600000)}>Snooze 1 h</button>
             <button class="btn sm" disabled={busy} onclick={() => snooze(t, 86400000)}>Tomorrow</button>
             <button class="btn ghost sm" onclick={() => edit(t)}>Edit</button>
           {/if}
-          <button class="btn ghost sm" disabled={busy} onclick={() => run(() => del(`/todos/${t.id}`), 'Could not delete')}>Delete</button>
+          <button class="btn ghost danger sm" disabled={busy} onclick={() => run(() => del(`/todos/${t.id}`), 'Could not delete')}>Delete</button>
         </div>
-        {#if t.condition}<div class="hint">Condition: {t.condition}{t.model ? ` · model ${t.model}` : ''}</div>{/if}
-        {#if t.lastCheck}<div class="hint">Last check {agoText(t.lastCheck.at)}: {OUTCOME[t.lastCheck.outcome]}{t.lastCheck.summary ? ` — ${t.lastCheck.summary}` : ''}</div>{/if}
-        {#if t.note}<div class="hint" style="white-space:pre-wrap">{t.note}</div>{/if}
       </li>
     {/snippet}
-    <section class="stack">
-      <h2>Needs you <span class="hint num">{due.length}</span></h2>
-      {#if !due.length}<p class="muted">Nothing is due.</p>{:else}<ul class="card list">{#each due as t (t.id)}{@render item(t)}{/each}</ul>{/if}
-    </section>
-    <section class="stack">
-      <h2>Upcoming <span class="hint num">{open.length}</span></h2>
-      {#if !open.length}<p class="muted">No upcoming TODOs.</p>{:else}<ul class="card list">{#each open as t (t.id)}{@render item(t)}{/each}</ul>{/if}
-    </section>
+    <Panel title="Needs you" tone={due.length ? 'need' : undefined} flush>
+      {#snippet head()}<span class="pill" class:gate={due.length > 0}>{due.length}</span>{/snippet}
+      {#if !due.length}<div class="cb"><p class="empty">Nothing is due.</p></div>{:else}<ul class="list">{#each due as t (t.id)}{@render item(t)}{/each}</ul>{/if}
+    </Panel>
+    <Panel title="Upcoming" flush>
+      {#snippet head()}<span class="pill">{open.length}</span>{/snippet}
+      {#if !open.length}<div class="cb"><p class="empty">No upcoming TODOs.</p></div>{:else}<ul class="list">{#each open as t (t.id)}{@render item(t)}{/each}</ul>{/if}
+    </Panel>
     {#if done.length}
-      <section class="stack"><h2>Done</h2><ul class="card list">{#each done as t (t.id)}{@render item(t)}{/each}</ul></section>
+      <Panel title="Done" flush><ul class="list">{#each done as t (t.id)}{@render item(t)}{/each}</ul></Panel>
     {/if}
   {/if}
 </div>
-
-<style>
-  .list { list-style: none; margin: 0; padding: 0; }
-  .it { padding: 10px 16px; border-bottom: 1px solid var(--fence-soft); }
-</style>

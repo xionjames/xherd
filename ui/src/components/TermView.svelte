@@ -28,8 +28,11 @@
     void attempt;
     const url = path;
     if (!host) return;
+    // The terminal's colours are the --term tokens of app.css.
+    const css = getComputedStyle(host);
+    const tok = (n: string) => css.getPropertyValue(n).trim();
     const term = new Terminal({
-      fontFamily: "'JetBrains Mono', ui-monospace, Menlo, monospace",
+      fontFamily: tok('--mono'),
       fontSize: 12.5,
       cursorBlink: true,
       scrollback: 5000,
@@ -37,7 +40,7 @@
       macOptionClickForcesSelection: true, // Option+drag selects even when the app grabs the mouse
       rightClickSelectsWord: true,
       linkHandler: { activate: open },
-      theme: { background: '#0c0a1f', foreground: '#d6d2f2', cursor: '#d6d2f2', selectionBackground: '#3a3370' },
+      theme: { background: tok('--term'), foreground: tok('--term-ink'), cursor: tok('--term-ink'), selectionBackground: tok('--term-sel') },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
