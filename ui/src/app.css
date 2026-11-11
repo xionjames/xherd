@@ -138,6 +138,7 @@ label.f,div.f{display:flex;flex-direction:column;gap:5px;font-size:12px;font-wei
 .bar{display:flex;align-items:center;gap:4px;min-height:52px;padding:0 20px;background:var(--bar);color:var(--bar-ink);flex-wrap:wrap}
 .x a.logo{display:flex;align-items:center;gap:9px;margin-right:14px;color:var(--bar-ink)}
 .logo b{font-size:14px;font-weight:700;letter-spacing:.16em}
+.logo .ver{font-size:11px;color:var(--bar-ink-2);margin-left:2px}
 .gnav{display:flex;align-items:center;flex-wrap:wrap}
 .x a.gt{position:relative;display:inline-flex;align-items:center;gap:7px;height:52px;padding:0 12px;color:var(--bar-ink-2);font-weight:500}
 .x a.gt:hover,.x a.gt.on{color:var(--bar-ink)}

@@ -141,6 +141,8 @@ export interface AgentEvent { id: number; kind: string; payload: unknown; at: nu
 
 export interface AppState {
   version: string;
+  /** Release tag, or `<tag>+<commits>.<hash>` in development. */
+  buildVersion: string;
   platform: string;
   config: Record<string, unknown>;
   agents: Agent[];

@@ -87,7 +87,7 @@
       <h1>Where xherd runs</h1>
       <section class="sec"><div class="bd">
         <dl class="kv">
-          <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.version}</dd>
+          <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.buildVersion}</dd>
           <dt>Workspace</dt><dd class="mono">{workspace}</dd>
           <dt>Worktrees</dt><dd class="muted">One folder per repo, one worktree per agent, under the workspace.</dd>
         </dl>

@@ -12,7 +12,7 @@
   import Toolchains from '../components/Toolchains.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const TABS = ['general', 'gates', 'notifications', 'git', 'profiles', 'backups', 'plugins'];
+  const TABS = ['general', 'gates', 'notifications', 'git', 'profiles', 'backups', 'plugins', 'about'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
   const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
@@ -91,6 +91,7 @@
     <a class="tb" class:on={tab === 'backups'} aria-current={tab === 'backups' ? 'page' : undefined} href={href('/settings', { tab: 'backups' })}>Backups</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
+    <a class="tb" class:on={tab === 'about'} aria-current={tab === 'about' ? 'page' : undefined} href={href('/settings', { tab: 'about' })}>About</a>
   </nav>
 </div>
 
@@ -106,6 +107,15 @@
     <Profiles />
   {:else if tab === 'backups'}
     <Backups />
+  {:else if tab === 'about'}
+    <section class="sec"><div class="sh"><h2>About xherd</h2></div><div class="bd">
+      <dl class="kv">
+        <dt>Version</dt><dd class="mono">{app.state?.buildVersion}</dd>
+        <dt>Runs</dt><dd>{#if app.state?.sandbox}In the Docker container{:else}Natively on {app.state?.platform}{/if}</dd>
+        <dt>License</dt><dd>MIT</dd>
+      </dl>
+      <p class="hint">A release shows its tag (<span class="mono">0.2.0</span>); a development build shows the last tag, the commits since it and the commit hash (<span class="mono">0.2.0+3.abc1234</span>), with <span class="mono">dirty</span> for uncommitted changes.</p>
+    </div></section>
   {:else if !setup.config || !ready}
     <p class="muted">Loading…</p>
   {:else if tab === 'general'}
@@ -264,7 +274,7 @@
     {/if}
     {/if}
   {/if}
-  {#if setup.config && ready && tab !== 'git' && tab !== 'backups' && tab !== 'profiles'}
+  {#if setup.config && ready && tab !== 'git' && tab !== 'backups' && tab !== 'profiles' && tab !== 'about'}
     <div class="savebar">
       <span class="muted">{dirty ? `${dirty} unsaved change${dirty > 1 ? 's' : ''}` : 'No unsaved changes'}</span>
       <span class="grow"></span>
