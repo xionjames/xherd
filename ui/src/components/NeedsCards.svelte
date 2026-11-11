@@ -1,6 +1,8 @@
 <script lang="ts">
   // Agents waiting for you, oldest first: what waits and the button that opens
   // the agent tab holding the decision. Used by the Herd and Needs attention.
+  // Every card has the same height: the text is cut at three lines and the
+  // details at one (the full text is in the tooltip and on the agent page).
   import AgentDot from './AgentDot.svelte';
   import { href, go } from '../lib/router.svelte';
   import { ago, repoName, waitText } from '../lib/format';
@@ -44,8 +46,8 @@
         <AgentDot agent={a} /><a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a>
         <span class="grow"></span><span class="muted num">{ago(a.statusSince)}</span>
       </div>
-      <p class="wrap-any" class:mono={a.gate?.kind === 'commit'}>{waitText(a)}</p>
-      <p class="hint">{meta(a)}</p>
+      <p class="wrap-any nytext" class:mono={a.gate?.kind === 'commit'} title={waitText(a)}>{waitText(a)}</p>
+      <p class="hint nymeta" title={meta(a)}>{meta(a)}</p>
       <div class="row end">
         <button class="btn gate" onclick={() => go(`/agent/${a.name}`, { s: decisionTab(a) })}>{actionLabel(a)}</button>
       </div>
@@ -56,4 +58,7 @@
 <style>
   .nygrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; }
   .nyname { font-weight: 600; color: var(--ink); }
+  .nytext, .nymeta { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; }
+  .nytext { -webkit-line-clamp: 3; line-clamp: 3; height: 3lh; }
+  .nymeta { -webkit-line-clamp: 1; line-clamp: 1; height: 1lh; }
 </style>
