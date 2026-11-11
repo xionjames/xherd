@@ -1,6 +1,5 @@
 <script lang="ts">
   import GlobalBar from './components/GlobalBar.svelte';
-  import HerdStrip from './components/HerdStrip.svelte';
   import ErrorDialog from './components/ErrorDialog.svelte';
   import Herd from './pages/Herd.svelte';
   import Agent from './pages/Agent.svelte';
@@ -8,7 +7,7 @@
   import Setup from './pages/Setup.svelte';
   import Welcome from './pages/Welcome.svelte';
   import NewAgent from './pages/NewAgent.svelte';
-  import Review from './pages/Review.svelte';
+  import Attention from './pages/Attention.svelte';
   import Board from './pages/Board.svelte';
   import Time from './pages/Time.svelte';
   import Todos from './pages/Todos.svelte';
@@ -38,7 +37,6 @@
 {:else}
   <div class="x">
     <GlobalBar {blocked} />
-    {#if !blocked}<HerdStrip current={agent?.id} />{/if}
     {#if !app.state}
       <div class="stack"><p class="empty">{app.error ? `Cannot reach the daemon: ${app.error}` : 'Loading…'}</p></div>
     {:else if route.path === '/setup'}
@@ -51,8 +49,8 @@
       <Time />
     {:else if route.path === '/board'}
       <Board />
-    {:else if route.path === '/review'}
-      <Review />
+    {:else if route.path === '/attention' || route.path === '/review'}
+      <Attention />
     {:else if route.path === '/new'}
       <NewAgent />
     {:else if route.path === '/'}

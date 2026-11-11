@@ -232,6 +232,8 @@ label.f.chk.top { align-items: flex-start; }
 .x a.gt:hover, .x a.gt.on { color: var(--bar-ink); }
 .x a.gt.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--bar-accent); }
 .x a.gt[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+.gt .short { display: none; }
+@media (max-width: 760px) { .gt .long { display: none; } .gt .short { display: inline; } }
 .gcount { font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 9px; background: var(--bar-2); color: var(--bar-ink); }
 .gcount.g { background: var(--bar-gate); color: #1f0b02; }
 .jump { display: flex; align-items: center; gap: 8px; height: 34px; width: 280px; max-width: 100%; padding: 0 10px; border-radius: 8px; background: var(--bar-2); color: var(--bar-ink-2); font-size: 12.5px; border: 1px solid rgba(255,255,255,.08); }
@@ -244,22 +246,15 @@ label.f.chk.top { align-items: flex-start; }
   /* Phone: logo and tools on the first line, the sections scroll on the second. */
   .bar { flex-wrap: wrap; padding-top: 6px; }
   .gnav { order: 10; flex: 1 1 100%; margin: 0 calc(-1 * var(--gut)); padding: 0 calc(var(--gut) - 12px); }
-  .x a.gt { height: 44px; }
+  .x a.gt { height: 44px; padding: 0 9px; }
+  /* Herd, then what needs you, so the ✋ count is never scrolled away. */
+  .x a.gt.home { order: -2; }
+  .x a.gt.attn { order: -1; }
+  .x a.gt.on::after { left: 9px; right: 9px; }
   .logo .ver { display: none; }
   .x a.btn.newb { width: 36px; padding: 0; }
   .newb .nl { display: none; }
 }
-
-/* ---- herd strip ---- */
-.herd { display: flex; align-items: center; gap: 8px; padding: 10px var(--gut); background: var(--pen); border-bottom: 1px solid var(--fence); overflow-x: auto; scrollbar-width: thin; }
-.x a.hc { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--fence); background: var(--pen); color: var(--ink); font: 500 12px var(--mono); white-space: nowrap; flex: none; text-decoration: none; }
-.x a.hc:hover { border-color: var(--fence-strong); }
-.x a.hc.need { border-color: var(--gate-line); background: var(--gate-wash); }
-.x a.hc.on { background: var(--ink); border-color: var(--ink); color: var(--pen); }
-.hc .s { font: 500 11px var(--sans); color: var(--ink-3); }
-.hc.need .s { color: var(--gate); font-weight: 600; }
-.hc.on .s { color: var(--pen); opacity: .75; }
-.hsep { width: 1px; height: 22px; background: var(--fence); flex: none; margin: 0 4px; }
 
 /* ---- "your call" band: the loudest thing on screen, full width, top ---- */
 .gband { display: flex; flex-direction: column; gap: 10px; padding: 12px var(--gut); background: var(--gate-wash); border-top: 1px solid var(--gate-line); border-bottom: 1px solid var(--gate-line); box-shadow: inset 5px 0 0 var(--gate); }
@@ -377,6 +372,12 @@ label.f.chk.top { align-items: flex-start; }
 .md { max-width: 72ch; display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .md h1 { font-size: 24px; }
 .md h2 { font-size: 15px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--fence-soft); }
+/* Mermaid diagrams in agent documents (lib/mermaid.ts). */
+.mdb { display: contents; }
+.md pre.mmd { margin: 0; padding: 14px; background: var(--well); border: 1px solid var(--fence-soft); border-radius: var(--r-ctl); overflow-x: auto; text-align: center; white-space: normal; font-family: var(--sans); }
+.md pre.mmd svg { max-width: 100%; height: auto; }
+.md pre.mmd.failed { white-space: pre-wrap; text-align: left; font-family: var(--mono); }
+.md pre.mmd.failed .hint { display: block; margin-top: 8px; font-family: var(--sans); }
 .outline a { display: block; padding: 4px 0 4px 12px; border-left: 2px solid var(--fence); color: var(--ink-3); font-size: 12.5px; }
 .outline a.on { color: var(--ink); border-left-color: var(--accent); font-weight: 500; }
 .kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 14px; margin: 0; max-width: 86ch; }

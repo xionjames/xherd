@@ -15,8 +15,8 @@ I got overwhelmed running several coding tasks at once: terminals piled up and a
 
 ## What is xherd?
 
-![The xherd Herd view: two agents waiting for review, one watching a pull request, one paused, one done](doc/assets/herd.jpg)
-*The Herd view, with mocked data: what needs you is on top, everything else below.*
+![A tour of xherd: the Herd, an agent's terminal, a spec, a design with diagrams, reviewing a commit, inline comments, the Board, and Needs attention](doc/assets/tour.gif)
+*A short tour, with mocked data. Stills of each screen are [below](#screenshots).*
 
 You hand xherd your tickets. It gives each one to a coding agent in its own sandbox, and shows you all of them on one screen.
 
@@ -34,21 +34,42 @@ Working today:
 
 - Many agents in parallel, each isolated in its own git worktree and tmux session, with a concurrency cap.
 - A web UI: the herd at a glance, a "your call" band for whatever needs you, a live terminal per agent, diffs, and settings with setup checks.
-- Approval gates for spec, design, tasks and commits. Approvals are hashed, so you approve exactly what you read, and each step starts a fresh session that carries over a short `memory.md`.
+- Approval gates for spec, design, tasks and commits; documents render Markdown with Mermaid diagrams, and you can comment on any block or diff line. Approvals are hashed, so you approve exactly what you read, and each step starts a fresh session that carries over a short `memory.md`.
 - xherd runs the approved commit for you, and the agent opens a draft pull request when you approve the ship gate.
 - Pluggable spec-driven development: **xherd** built in, or your own through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
 - Docker-first: agents, toolchains (Java, Node, Go, Rust, Python) and Claude Code live in one container and only your workspace is shared. "Open in" your IDE through same-path mounts.
 - Agents survive restarts: they are parked at their gate or resumed, not lost.
 - Git access from the UI (HTTPS tokens, SSH keys, per-owner commit identity) and repositories cloned by URL.
 - Plugins in any language (the CLI is the plugin API). Single Rust binary, web UI embedded.
+- A Board with every stage and task of every agent (pending, in progress, done), a Needs attention page, time tracking and TODOs.
+- Adjustable autonomy: xherd can approve routine steps itself, held back by tripwires (secrets, sensitive paths, large diffs, failing lint or tests). Guardrails: a pre-push guard, token budgets, a session time limit and a "Pause all" kill switch.
+- Pull request follow-up: CI and merge conflicts are polled, review comments become fix tasks, and replies are posted only after you approve them.
+- Repo profiles: per-repository base branch, autonomy, tripwires, test and lint commands, and instructions.
+- Notifications in the browser and on the desktop, and on your phone through ntfy.
+- Backups of agents and their work (`xherd backup create|verify|restore`).
 
 Planned:
 
-- Adjustable autonomy, tripwires and guardrails (for example, blocking pushes).
-- Following the pull request after it opens: CI, review comments, replies.
 - Other runtimes beyond Claude Code (Codex, opencode…), and a runtime, model and effort per step.
-- Board, review and time views, notifications, and access from your phone.
-- Declarative views and backups.
+- Secure access from your phone or another device (pairing), beyond notifications.
+- Declarative views: Board cards and views declared by flow packs and profiles.
+
+## Screenshots
+
+All with mocked data.
+
+| | |
+|---|---|
+| ![The Herd: two agents waiting for you on top, every agent below with its status, progress and tasks](doc/assets/herd.jpg) | ![An agent's live terminal: it starts task T02, writes files, runs the tests and reports to xherd](doc/assets/terminal.jpg) |
+| **Herd.** What needs you on top, every agent below. | **Terminal.** Each agent's live session, in the browser. |
+| ![The spec of a ticket: problem, numbered requirements and how each is checked](doc/assets/spec.jpg) | ![An agent waiting at the design gate: the design document, with Approve and Request changes on top](doc/assets/review-design.jpg) |
+| **Spec.** Problem, requirements and acceptance, written by the agent. | **Review a document.** Approve it, or ask for changes. |
+| ![A design document with a flowchart of the coupon check](doc/assets/design.jpg) | ![A design document with a data table and a sequence diagram of the payment transaction](doc/assets/design-diagram.jpg) |
+| **Design.** Diagrams in the documents are drawn ([Mermaid](https://mermaid.js.org)). | **Design.** Data, interfaces and the tricky parts, as diagrams. |
+| ![A commit waiting for approval: its diff, the commit message and the files it contains](doc/assets/review-commit.jpg) | ![A review comment on a line of the diff, and a Send 2 comments button to send them to the agent](doc/assets/review-comments.jpg) |
+| **Review a commit.** xherd commits it when you approve. | **Comment on lines.** Comments go back to the agent as one change request. |
+| ![The Board: stages and tasks of every agent in Pending, In progress and Done, with TODOs](doc/assets/board.jpg) | ![Needs attention: agents waiting for you, a due TODO, and an approval made by xherd](doc/assets/attention.jpg) |
+| **Board.** Every stage and task of every agent, and your TODOs. | **Needs attention.** Everything waiting on you in one place. |
 
 ## Documentation
 

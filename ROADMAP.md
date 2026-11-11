@@ -22,7 +22,7 @@ by theme; update it together with them.
 - [x] Open questions: a text box per question to answer them inline
 - [x] Board (tasks of all agents by status) and Review with "Mark seen"; the notification bell is in
 - [x] Time (work log: agent and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
-- [x] Board stage cards (by role), swimlanes (repository, agent) and TODO cards; TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
+- [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (agent, repository) and TODO cards; the Herd's By stage layout (agents in columns by role); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
 - [ ] Board cards declared by packs and profiles (R-1101), checks for runtimes other than Claude Code (they need a `check` command in their plugin)
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [ ] Plugin secrets and plugin install from the UI
@@ -98,7 +98,7 @@ by theme; update it together with them.
 
 - [ ] Codex and opencode runtimes
 - [x] To review and Work log views (per-ticket cycle time, review loops and rework)
-- [x] Kanban Board: stage cards, tasks, TODOs, swimlanes
+- [x] Kanban Board: stages and tasks as work units, TODOs, swimlanes; agents by stage on the Herd
 - [ ] Pack-declared Kanban cards (R-1101)
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
 - [x] TODO reminders

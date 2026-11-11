@@ -28,7 +28,7 @@ xherd runs coding agents that can read, write and execute. This page says what i
 - A document is approved if and only if its current content hash has an entry in `.xherd/ledger/approvals.jsonl`. An edit changes the hash and re-opens the gate.
 - The UI sends the hashes it displayed. If a file changed between display and click, the approval is refused (`changed_since_read`), so you approve exactly what you read.
 - A commit approval covers exactly the proposed files; xherd runs the commit itself, hooks included, never with `--no-verify`.
-- Automatic approvals are recorded with `auto` and listed under *To review*. A gate that xherd inferred (the agent stopped without declaring it) always waits for a human, and so do gates in `critical`/`human-only` classes, the ship stage of a hotfix, and the pull-request review stage.
+- Automatic approvals are recorded with `auto` and listed under *Needs attention*. A gate that xherd inferred (the agent stopped without declaring it) always waits for a human, and so do gates in `critical`/`human-only` classes, the ship stage of a hotfix, and the pull-request review stage.
 - Agents cannot approve. Their tokens carry only the `hooks`, `xap` and `credential` scopes.
 
 ## Network and access

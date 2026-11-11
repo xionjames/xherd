@@ -12,8 +12,12 @@ export function flowOf(a: Agent, flows: FlowInfo[]): FlowInfo | undefined {
   return flows.find((f) => f.flow === a.flow && (!a.pack || f.pack === a.pack));
 }
 
+/** "Spec", "Build"…; a stage whose id is not its role names itself by its
+ *  id, known words as their labels (`pr-review` → "PR Review"), so two stages
+ *  with one role (pr-review, pr) read differently. */
 export function stageLabel(s: StageInfo): string {
-  return STAGE_LABEL[s.role] ?? s.id;
+  if (s.id === s.role) return STAGE_LABEL[s.role] ?? s.id;
+  return s.id.split(/[-_]/).map((w) => STAGE_LABEL[w] ?? w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
 /** State of each stage: done (or skipped, when the agent never entered it)

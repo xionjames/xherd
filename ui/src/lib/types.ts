@@ -18,6 +18,8 @@ export interface Task {
   evidence?: string;
   verify?: string;
   blockedReason?: string;
+  /** Where the task came from; absent = the approved task list. */
+  source?: 'review' | 'pr';
 }
 
 /** A comment on the pull request (R-304); `body` is untrusted text. */
