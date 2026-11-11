@@ -427,10 +427,12 @@ label.f.chk.top { align-items: flex-start; }
   .ln b { padding-right: 6px; }
   .lnote { margin-left: 0; }
 }
-.blk { position: relative; }
+.blk, .ln { position: relative; }
 .blk .bc { position: absolute; top: 0; right: -4px; opacity: 0; }
-.blk:hover .bc, .blk .bc:focus-visible { opacity: 1; }
-@media (hover: none) { .blk .bc { opacity: .6; } }
+.ln .bc { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); opacity: 0; }
+.x .ln .bc { height: 20px; padding: 0 6px; }
+.blk:hover .bc, .blk .bc:focus-visible, .ln:hover .bc { opacity: 1; }
+@media (hover: none) { .blk .bc { opacity: .6; } .ln .bc { display: none; } }
 
 /* ---- terminal (always dark) ---- */
 .term { display: flex; flex-direction: column; border-radius: var(--r-card); overflow: hidden; background: var(--term); border: 1px solid var(--term-line); }
