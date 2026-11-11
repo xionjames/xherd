@@ -66,6 +66,7 @@ pub fn router(d: Daemon) -> Router {
             axum::routing::put(todo_update).delete(todo_delete),
         )
         .route("/api/v1/todos/{id}/complete", post(todo_complete))
+        .route("/api/v1/todos/{id}/check", post(todo_check))
         .route("/api/v1/todos/{id}/reschedule", post(todo_reschedule))
         .route("/api/v1/worklog", get(worklog))
         .route("/api/v1/agents/{id}/user-time", post(user_time))
@@ -482,6 +483,14 @@ async fn todo_complete(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(json!(d.complete_todo(&id).await?)))
+}
+
+async fn todo_check(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.check_todo(&id).await?)))
 }
 
 #[derive(Deserialize)]

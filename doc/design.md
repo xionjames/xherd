@@ -719,11 +719,11 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Repo profiles: move `sensitivePaths` and `maxDiffLines` (global since M4) into each profile, with the global values as defaults; add the profile's test command as a code tripwire (R-115)
   - [ ] Codex and opencode
   - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
-  - [ ] Kanban: the Board shows every agent's tasks by status (done); stage cards, TODOs and swimlanes are not
+  - [x] Kanban: the Board with stage cards by role, tasks, TODOs and swimlanes (cards declared by packs and profiles, R-1101, come with profiles)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [x] TODOs: reminders, once or repeating (`/todos`, 30 s tick, kind `todo`)
-  - [ ] TODO condition checks (a read-only runtime session, spec §16.2)
+  - [x] TODO condition checks (spec §16.2): a headless read-only run of the runtime (`data.terminal.check`) answering `XHERD_RESULT {met, summary}`; met or unclear needs you, not met is rescheduled, failure is an error
   - [ ] Budgets per profile and a cost estimate (token budgets are global since M4)
   - [ ] `never` autonomy
 - [ ] **Later**

@@ -47,6 +47,39 @@ pub struct Terminal {
     /// is found through `resume`, so it needs one.
     #[serde(default)]
     pub usage: Option<Usage>,
+    /// A one-shot, read-only run that answers a question (TODO condition
+    /// checks, spec §16.2); runtimes without it cannot check conditions.
+    #[serde(default)]
+    pub check: Option<Check>,
+}
+
+/// How to run the runtime once, headless, read-only (`data.terminal.check`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Check {
+    /// The command. `{prompt}` is the question and `{system}` the rules the
+    /// answer must follow; both appear once. List only tools that cannot
+    /// change anything: xherd relies on it.
+    pub argv: Vec<String>,
+    /// Appended when the TODO names a model; `{model}` is its name.
+    #[serde(default)]
+    pub model_args: Vec<String>,
+}
+
+impl Check {
+    /// The argv for one check; the model only when one was chosen.
+    pub fn command(&self, prompt: &str, system: &str, model: Option<&str>) -> Vec<String> {
+        let sub = |a: &String| {
+            a.replace("{prompt}", prompt)
+                .replace("{system}", system)
+                .replace("{model}", model.unwrap_or_default())
+        };
+        let mut out: Vec<String> = self.argv.iter().map(sub).collect();
+        if model.is_some() {
+            out.extend(self.model_args.iter().map(sub));
+        }
+        out
+    }
 }
 
 /// Token usage in a runtime's transcript: JSON lines, each possibly holding an
@@ -284,6 +317,15 @@ impl Terminal {
             if args.is_empty() {
                 return Err(format!(
                     "runtime {}: permission mode {mode} needs explicit flags (the runtime's default may change)",
+                    m.name
+                ));
+            }
+        }
+        if let Some(c) = &t.check {
+            let n = |p: &str| c.argv.iter().filter(|a| a.contains(p)).count();
+            if c.argv.is_empty() || n("{prompt}") != 1 || n("{system}") != 1 {
+                return Err(format!(
+                    "runtime {}: check needs a command with {{prompt}} and {{system}} once each",
                     m.name
                 ));
             }
@@ -598,5 +640,40 @@ not json
         assert!(e.contains("must start with /"), "{e}");
         let e = Terminal::of(&m(json!({"records": "/u", "fields": {}}), true)).unwrap_err();
         assert!(e.contains("names no counter"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+
+    fn check() -> Check {
+        Check {
+            argv: ["run", "-p", "{prompt}", "--sys", "{system}", "--ro"]
+                .map(String::from)
+                .to_vec(),
+            model_args: ["--model", "{model}"].map(String::from).to_vec(),
+        }
+    }
+
+    #[test]
+    fn the_model_is_added_only_when_chosen() {
+        let c = check();
+        assert_eq!(
+            c.command("is it?", "be careful", None),
+            ["run", "-p", "is it?", "--sys", "be careful", "--ro"]
+        );
+        assert_eq!(c.command("q", "s", Some("m1")).last().unwrap(), "m1");
+        assert_eq!(c.command("q", "s", Some("m1")).len(), 8);
+    }
+
+    #[test]
+    fn the_built_in_claude_code_check_is_valid() {
+        let reg = crate::builtins();
+        let p = reg.iter().find(|m| m.name == "claude-code").unwrap();
+        let t = Terminal::of(p).unwrap();
+        let argv = t.check.unwrap().command("PROMPT", "SYSTEM", None);
+        assert_eq!(argv[..3], ["claude", "-p", "PROMPT"]);
+        assert!(argv.contains(&"--disallowedTools".to_string()));
     }
 }
