@@ -519,8 +519,20 @@ impl Daemon {
         if protocols.iter().any(|p| p == "ssh") {
             self.doctor_ssh(host, &mut out).await;
         }
+        let ssh_len = out.len();
         if protocols.iter().any(|p| p == "https") {
             self.doctor_https(host, repo, &mut out).await;
+        }
+        // Both protocols are enabled by default: when HTTPS works, a failing
+        // SSH step is not a problem (issue #43), so it is reported as passing.
+        if ssh_len > 0 && out.len() > ssh_len && out[ssh_len..].iter().all(|f| f.ok) {
+            for f in &mut out[..ssh_len] {
+                if !f.ok {
+                    f.ok = true;
+                    f.detail = format!("not needed, HTTPS works ({})", f.detail);
+                    f.fix = None;
+                }
+            }
         }
         if let Some(url) = repo {
             let r = sh(Cmd::new(["git", "ls-remote", "--heads", url])
