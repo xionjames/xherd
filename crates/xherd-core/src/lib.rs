@@ -7,6 +7,7 @@ pub mod config;
 pub mod container;
 pub mod domain;
 pub mod exec;
+pub mod git_auth;
 pub mod guard;
 pub mod hash;
 pub mod new;

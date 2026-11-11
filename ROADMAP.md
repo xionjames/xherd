@@ -31,7 +31,7 @@ by theme; update it together with them.
 - [x] Git access setup and doctor
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
 - [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`
-- [ ] Block an agent on git auth failures (R-688)
+- [x] Block an agent on git auth failures (R-688): an auth error on the screen or from a host command blocks a live agent with reason `git access` (UI: "Fix git access"); the doctor result is not shown inline yet, the message names `xherd git doctor <host>`
 - [ ] Profile `toolchain:` / `setup:` (R-654, needs profiles) and the Welcome toolchain step (R-653; each toolchain plugin's page in Settings → Plugins has defaults, a version dropdown and installs)
 
 ## Agents that survive and recover

@@ -441,6 +441,33 @@ async fn screen_rules_block_and_unblock() {
 }
 
 #[tokio::test]
+async fn git_auth_failure_on_screen_blocks_with_reason() {
+    let t = daemon(4).await;
+    let a = t.d.create_agent(agent("GA-1", 1)).await.unwrap();
+    wait_status(&t.d, "GA-1", Status::Running).await;
+
+    *t.drv.screen.lock().unwrap() =
+        "$ git push\nfatal: Authentication failed for 'https://github.com/o/r.git/'".into();
+    t.d.sup.tick(TickKind::ScreenScan);
+    wait_status(&t.d, "GA-1", Status::Blocked).await;
+    let shown = t.d.action("GA-1", UserAction::Get).await.unwrap();
+    assert_eq!(shown.block_reason.as_deref(), Some("git access"));
+
+    // The screen shows the same failure: no flapping, and the block is not
+    // a screen-rule block, so a clean screen does not clear it by itself.
+    t.d.sup.tick(TickKind::ScreenScan);
+    *t.drv.screen.lock().unwrap() = "working…".into();
+    t.d.sup.tick(TickKind::ScreenScan);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_status(&t.d, "GA-1", Status::Blocked).await;
+
+    // The agent carrying on clears it.
+    let r = rep(&a, "w1", ReportEvent::Working, 1, Value::Null);
+    assert_eq!(t.d.report(r).await, Some(ReportResult::Applied));
+    wait_status(&t.d, "GA-1", Status::Running).await;
+}
+
+#[tokio::test]
 async fn queued_reports_are_replayed_on_start() {
     let t = daemon(4).await;
     let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();

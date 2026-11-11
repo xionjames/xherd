@@ -61,7 +61,7 @@ export function waitLabel(a: Agent): string {
 /** One-line description of what waits on the human. */
 export function waitText(a: Agent): string {
   const g = a.gate;
-  if (!g) return a.status === 'blocked' ? 'The agent is blocked.' : 'The agent is waiting for your answer.';
+  if (!g) return a.status === 'blocked' ? (a.blockReason ? `Blocked: ${a.blockReason}.` : 'The agent is blocked.') : 'The agent is waiting for your answer.';
   switch (g.kind) {
     case 'docs': return `${g.files.map((f) => f.path).join(', ') || g.stage} ready for review`;
     case 'commit': return `${g.id} ${g.subject}`;

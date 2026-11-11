@@ -55,7 +55,7 @@
   );
 
   const title = $derived.by(() => {
-    if (!g) return agent.status === 'blocked' ? 'the agent is blocked' : 'the agent asks you';
+    if (!g) return agent.status === 'blocked' ? (agent.blockReason ? `the agent is blocked: ${agent.blockReason}` : 'the agent is blocked') : 'the agent asks you';
     switch (g.kind) {
       case 'docs': return `${g.files.map((f) => f.path).join(', ') || g.stage} ${g.files.length > 1 ? 'are' : 'is'} ready for review`;
       case 'commit': return `commit ${g.id} is ready`;
@@ -122,6 +122,9 @@
     </div>
     <div class="gact">
       {#if agent.status === 'blocked'}
+        {#if agent.blockReason === 'git access'}
+          <a class="btn gate lg" href={href('/settings', { tab: 'git' })}>Fix git access</a>
+        {/if}
         <a class="btn gate lg" href={href(`/agent/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
       {/if}
       {#if approvable && !reviewing}

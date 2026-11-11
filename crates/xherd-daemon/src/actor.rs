@@ -245,6 +245,7 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         env,
         tx: tx.clone(),
         delivery: None,
+        auth_screen_line: None,
         next_delivery: 0,
         first_unacked: false,
         resume_session: None,
@@ -262,6 +263,9 @@ struct Actor {
     tx: AgentTx,
     /// Delivery waiting for acknowledgement: (id, retried).
     delivery: Option<(u64, bool)>,
+    /// The auth-failure line last seen on the screen (R-688), so a failure
+    /// that stays visible blocks once.
+    auth_screen_line: Option<String>,
     next_delivery: u64,
     /// The first command was typed but no prompt was accepted yet. Claude Code
     /// can start a second session right after the first `session-start` and
@@ -357,6 +361,50 @@ impl Actor {
         };
         if let Err(err) = self.env.store.insert_event(e).await {
             tracing::error!(agent = %self.agent.name, %err, "event not stored");
+        }
+    }
+
+    /// R-688: an authentication failure (a host command's error or the
+    /// terminal screen) blocks a live agent with the reason `git access`;
+    /// others are only notified. Returns whether `text` was one.
+    async fn git_access_failed(&mut self, source: &str, text: &str) -> bool {
+        let Some(line) = xherd_core::git_auth::failing_line(text) else {
+            return false;
+        };
+        let host = self
+            .agent
+            .pr_url
+            .as_deref()
+            .and_then(|u| u.split("//").nth(1))
+            .and_then(|r| r.split('/').next())
+            .unwrap_or("<host>")
+            .to_string();
+        self.log(
+            None,
+            "git-access-failed",
+            Some(json!({"source": source, "line": line})),
+        )
+        .await;
+        let msg = format!(
+            "{}: git access failed ({line}). Run `xherd git doctor {host}` or open Settings → Git access",
+            self.agent.name
+        );
+        let before = self.agent.status;
+        if self.agent.fire(Trigger::Blocked, self.now()).is_some() {
+            self.agent.screen_blocked = false;
+            self.agent.block_reason = Some("git access".into());
+            self.commit(before).await;
+        }
+        self.notify("blocked", msg);
+        true
+    }
+
+    /// Clears a git-access block once a host command works again.
+    async fn git_access_ok(&mut self) {
+        if self.agent.block_reason.as_deref() == Some("git access") {
+            let before = self.agent.status;
+            self.agent.fire(Trigger::Working, self.now());
+            self.commit(before).await;
         }
     }
 
@@ -2399,14 +2447,7 @@ impl Actor {
                 {
                     self.finish_pause(true).await;
                 }
-                if self.agent.status.is_live()
-                    && self
-                        .env
-                        .settings
-                        .screen_rules
-                        .as_ref()
-                        .is_some_and(|r| !r.is_empty())
-                {
+                if self.agent.status.is_live() {
                     let (driver, ctx, tx, generation) = (
                         self.env.driver.clone(),
                         self.ctx(),
@@ -2418,7 +2459,7 @@ impl Actor {
                         .settings
                         .screen_rules
                         .as_ref()
-                        .map_or(40, |r| r.last_lines as u32 * 4);
+                        .map_or(40, |r| (r.last_lines as u32 * 4).max(40));
                     tokio::spawn(async move {
                         if let Ok(screen) = driver.capture(&ctx, lines).await {
                             let _ = tx.send(Msg::WorkDone {
@@ -2437,6 +2478,16 @@ impl Actor {
     async fn on_work(&mut self, w: WorkResult) {
         match w {
             WorkResult::Screen(screen) => {
+                match xherd_core::git_auth::failing_line(&screen) {
+                    None => self.auth_screen_line = None,
+                    Some(l) if self.auth_screen_line.as_deref() != Some(&l) => {
+                        self.auth_screen_line = Some(l);
+                        if self.git_access_failed("screen", &screen).await {
+                            return;
+                        }
+                    }
+                    Some(_) => {}
+                }
                 let Some(rules) = self.env.settings.screen_rules.as_ref() else {
                     return;
                 };
@@ -2482,10 +2533,12 @@ impl Actor {
                 tracing::warn!(agent = %self.agent.name, error = %e, "PR poll failed");
                 self.log(None, "pr-poll-failed", Some(json!({"error": e})))
                     .await;
+                self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
-            WorkResult::PrLookup(Ok(None)) => {}
+            WorkResult::PrLookup(Ok(None)) => self.git_access_ok().await,
             WorkResult::PrLookup(Ok(Some(url))) => {
+                self.git_access_ok().await;
                 let before = self.agent.status;
                 self.agent.pr_url = Some(url.clone());
                 self.log(None, "pr-found", Some(json!({"url": url}))).await;
@@ -2496,6 +2549,7 @@ impl Actor {
                 tracing::warn!(agent = %self.agent.name, error = %e, "PR lookup failed");
                 self.log(None, "pr-lookup-failed", Some(json!({"error": e})))
                     .await;
+                self.git_access_failed("pr-lookup", &e).await;
             }
             WorkResult::DeliveryTimeout { delivery } => match self.delivery {
                 Some((d, false))
