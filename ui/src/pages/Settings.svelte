@@ -223,8 +223,7 @@
         {#key open.name}<Toolchains plugin={open.name} />{/key}
       {/if}
     {:else}
-    <div class="cards">
-      {#each app.state?.plugins ?? [] as p (p.name)}
+    {#snippet pcard(p: PluginInfo)}
         <a class="pcard" href={href('/settings', { tab: 'plugins', plugin: p.name })} style="color:inherit;text-decoration:none">
           <div class="h">
             <span class="mi" style="background:{HUE[p.kind] ?? '#5b4b80'}" aria-hidden="true">{initials(p)}</span>
@@ -237,9 +236,23 @@
             {#if p.description}<p class="muted">{p.description}</p>{/if}
             <span class="hint">{p.settings.length ? `${p.settings.length} setting${p.settings.length > 1 ? 's' : ''}` : 'No settings'}{p.kind === 'toolchain' ? ' · tools and versions' : ''}</span>
           </div>
-          <div class="ft"><span class="pill live">● on</span></div>
+          <div class="ft">{#if p.enabled}<span class="pill live">● on</span>{:else}<span class="pill">○ off</span>{/if}</div>
         </a>
-      {/each}
+    {/snippet}
+    {@const plugs = app.state?.plugins ?? []}
+    <h2 class="hint" style="margin:0 0 8px">Enabled</h2>
+    <div class="cards">
+      {#each plugs.filter((p) => p.enabled) as p (p.name)}{@render pcard(p)}{/each}
+    </div>
+    {#if plugs.some((p) => !p.enabled)}
+      <h2 class="hint" style="margin:16px 0 8px">Available</h2>
+      <p class="hint" style="margin:0 0 8px">Installed but switched off. They can be switched on in the Welcome page tools step.</p>
+      <div class="cards">
+        {#each plugs.filter((p) => !p.enabled) as p (p.name)}{@render pcard(p)}{/each}
+      </div>
+    {/if}
+    {#if broken.length}
+    <div class="cards">
       {#each broken as b (b.dir)}
         <article class="pcard err">
           <div class="h"><span class="mi" style="background:var(--halt)">!</span>
@@ -248,6 +261,7 @@
         </article>
       {/each}
     </div>
+    {/if}
     {/if}
   {/if}
   {#if setup.config && ready && tab !== 'git' && tab !== 'backups' && tab !== 'profiles'}
