@@ -8,7 +8,7 @@ A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in 
 
 | Built-in | Kind | Does |
 |---|---|---|
-| `claude-code` | runtime | Launch argv, permission modes, hook file and event map, trust file, transcript lookup, token usage |
+| `claude-code` | runtime | Launch argv, permission modes, hook file and event map, trust file, transcript lookup, token usage, read-only check command |
 | `github` | host | Pull request lookup, status, checks, comments, replies and templates through the `gh` CLI |
 | `sdkman`, `nvm`, `uv`, `go`, `rustup` | toolchain | Which version files they read and how to find or install a tool |
 
@@ -75,6 +75,7 @@ A runtime plugin's `data.terminal` says how to run an agent CLI in tmux:
 - `hooks`: the file the runtime reads hooks from and a map from its events to xherd's (`session-start`, `user-prompt-submit`, `post-tool-use`, `notification`, `stop`).
 - `trust`: where the runtime remembers trusted folders, so xherd can trust each new worktree.
 - `resume` and `usage`: where transcripts live, and how to count tokens in them, for resuming a conversation and for budgets.
+- `check`: how to run the runtime once, headless and read-only, to answer a question (TODO conditions). `argv` holds `{prompt}` and `{system}` once each; `modelArgs` (with `{model}`) are added when a model is chosen. List only tools that cannot change anything: xherd relies on it. The run must end with a line `XHERD_RESULT {"met": true, "summary": "…"}`. A runtime without `check` cannot check conditions.
 
 Only Claude Code is built in. Another runtime needs these pieces; there is no runtime other than Claude Code yet.
 

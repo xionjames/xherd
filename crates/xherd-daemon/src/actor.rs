@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
+use xherd_core::config::Config;
 use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
@@ -147,6 +148,23 @@ pub enum SupEvent {
     StatusChanged { id: String, to: Status },
 }
 
+/// The settings actors read, replaced as a whole when the config is saved
+/// (`Daemon::save_config`), so most settings apply without a restart.
+#[derive(Clone)]
+pub struct SettingsHandle(Arc<std::sync::RwLock<Arc<ActorSettings>>>);
+
+impl SettingsHandle {
+    pub fn new(s: ActorSettings) -> SettingsHandle {
+        SettingsHandle(Arc::new(std::sync::RwLock::new(Arc::new(s))))
+    }
+    pub fn get(&self) -> Arc<ActorSettings> {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    pub fn set(&self, s: ActorSettings) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(s);
+    }
+}
+
 /// Settings an actor reads (snapshot of config).
 #[derive(Debug, Clone)]
 pub struct ActorSettings {
@@ -177,6 +195,41 @@ pub struct ActorSettings {
     pub daily_token_budget: u64,
     pub max_diff_lines: usize,
     pub sensitive_paths: Vec<String>,
+    /// Plugins switched off (`disabledPlugins`): the host, the trust writer
+    /// and the toolchain plugins skip them while running.
+    pub disabled_plugins: Vec<String>,
+    /// Notification kinds that are not published (`mutedNotifications`).
+    pub muted_notifications: Vec<String>,
+}
+
+impl ActorSettings {
+    /// The config-derived fields over `base` (the parts that do not come
+    /// from the config: binary, URL, runtime options). Called at start and
+    /// whenever the config is saved, so these settings are live.
+    pub fn from_config(
+        c: &Config,
+        base: ActorSettings,
+        pr_poll_override: Option<Duration>,
+    ) -> ActorSettings {
+        ActorSettings {
+            idle_alert_minutes: c.idle_alert_minutes,
+            gate_park_minutes: c.gate_park_minutes,
+            fresh_sessions: c.fresh_sessions,
+            pause_timeout: Duration::from_secs(c.pause_timeout_sec),
+            toolchain_defaults: c.toolchain_defaults.clone(),
+            pr_poll: pr_poll_override.unwrap_or(Duration::from_secs(c.pr_poll_minutes * 60)),
+            max_session_minutes: c.max_session_minutes,
+            max_review_loops: c.max_review_loops,
+            max_auto_approvals_in_row: c.max_auto_approvals_in_row,
+            agent_token_budget: c.agent_token_budget,
+            daily_token_budget: c.daily_token_budget,
+            max_diff_lines: c.max_diff_lines,
+            sensitive_paths: c.sensitive_paths.clone(),
+            disabled_plugins: c.disabled_plugins.clone(),
+            muted_notifications: c.muted_notifications.clone(),
+            ..base
+        }
+    }
 }
 
 impl Default for ActorSettings {
@@ -201,6 +254,8 @@ impl Default for ActorSettings {
             daily_token_budget: 0,
             max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
             sensitive_paths: Vec::new(),
+            disabled_plugins: Vec::new(),
+            muted_notifications: Vec::new(),
         }
     }
 }
@@ -211,7 +266,7 @@ pub struct Env {
     pub driver: Arc<dyn Driver>,
     pub hub: Hub,
     pub clock: Arc<dyn Clock>,
-    pub settings: Arc<ActorSettings>,
+    pub settings: SettingsHandle,
     pub sup: mpsc::UnboundedSender<SupEvent>,
     /// Flow packs by name.
     pub packs: Arc<BTreeMap<String, Pack>>,
@@ -245,6 +300,7 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         env,
         tx: tx.clone(),
         delivery: None,
+        auth_screen_line: None,
         next_delivery: 0,
         first_unacked: false,
         resume_session: None,
@@ -262,6 +318,9 @@ struct Actor {
     tx: AgentTx,
     /// Delivery waiting for acknowledgement: (id, retried).
     delivery: Option<(u64, bool)>,
+    /// The auth-failure line last seen on the screen (R-688), so a failure
+    /// that stays visible blocks once.
+    auth_screen_line: Option<String>,
     next_delivery: u64,
     /// The first command was typed but no prompt was accepted yet. Claude Code
     /// can start a second session right after the first `session-start` and
@@ -360,7 +419,70 @@ impl Actor {
         }
     }
 
+    /// R-688: an authentication failure (a host command's error or the
+    /// terminal screen) blocks a live agent with the reason `git access`;
+    /// others are only notified. Returns whether `text` was one.
+    async fn git_access_failed(&mut self, source: &str, text: &str) -> bool {
+        let Some(line) = xherd_core::git_auth::failing_line(text) else {
+            return false;
+        };
+        let host = self
+            .agent
+            .pr_url
+            .as_deref()
+            .and_then(|u| u.split("//").nth(1))
+            .and_then(|r| r.split('/').next())
+            .unwrap_or("<host>")
+            .to_string();
+        self.log(
+            None,
+            "git-access-failed",
+            Some(json!({"source": source, "line": line})),
+        )
+        .await;
+        let msg = format!(
+            "{}: git access failed ({line}). Run `xherd git doctor {host}` or open Settings → Git access",
+            self.agent.name
+        );
+        let before = self.agent.status;
+        if self.agent.fire(Trigger::Blocked, self.now()).is_some() {
+            self.agent.screen_blocked = false;
+            self.agent.block_reason = Some("git access".into());
+            self.commit(before).await;
+        }
+        self.notify("blocked", msg);
+        true
+    }
+
+    /// Clears a git-access block once a host command works again.
+    async fn git_access_ok(&mut self) {
+        if self.agent.block_reason.as_deref() == Some("git access") {
+            let before = self.agent.status;
+            self.agent.fire(Trigger::Working, self.now());
+            self.commit(before).await;
+        }
+    }
+
+    /// The host plugin, unless it is switched off.
+    fn host(&self) -> Option<Arc<xherd_plugin::host::Host>> {
+        let off = self.env.settings.get().disabled_plugins.clone();
+        self.env
+            .host
+            .clone()
+            .filter(|h| !off.iter().any(|n| n == h.plugin.name()))
+    }
+
     fn notify(&self, kind: &str, text: String) {
+        if self
+            .env
+            .settings
+            .get()
+            .muted_notifications
+            .iter()
+            .any(|k| k == kind)
+        {
+            return;
+        }
         let _ = self.env.hub.send(Change::Notify {
             agent_id: self.agent.id.clone(),
             kind: kind.into(),
@@ -526,14 +648,14 @@ impl Actor {
     /// `prPollMinutes` have passed (R-303; slow: spawned, back as `WorkDone`).
     /// Comments come with the rest of PR follow-up.
     fn poll_pr(&mut self) {
-        let every = self.env.settings.pr_poll;
+        let every = self.env.settings.get().pr_poll;
         let now = self.now();
         let due = self
             .agent
             .pr_polled_at
             .is_none_or(|t| now - t >= every.as_millis() as i64);
         let (Some(host), Ok(wd), Some(url), true) = (
-            self.env.host.clone(),
+            self.host(),
             self.workdir(),
             self.agent.pr_url.clone(),
             self.agent.status == Status::Watching && !every.is_zero() && due,
@@ -675,7 +797,7 @@ impl Actor {
             tracing::warn!(agent = %self.agent.name, %e, "usage not stored");
         }
         let daily = self.env.store.usage("all", &today).await.unwrap_or(0);
-        let s = &self.env.settings;
+        let s = self.env.settings.get();
         let checks = [
             ("agent", self.agent.tokens_total(), s.agent_token_budget),
             ("daily", daily, s.daily_token_budget),
@@ -759,7 +881,7 @@ impl Actor {
                 }),
             _ => false,
         };
-        let (Some(host), Ok(wd), true) = (self.env.host.clone(), self.workdir(), ship) else {
+        let (Some(host), Ok(wd), true) = (self.host(), self.workdir(), ship) else {
             return;
         };
         let (tx, generation, branch) = (
@@ -897,7 +1019,7 @@ impl Actor {
             if state.posted.contains(&v.id) {
                 continue;
             }
-            let (Some(host), Some(url)) = (self.env.host.clone(), self.agent.pr_url.clone()) else {
+            let (Some(host), Some(url)) = (self.host(), self.agent.pr_url.clone()) else {
                 return Err(refuse(
                     "no_host",
                     "no host plugin or pull request to reply on",
@@ -952,7 +1074,7 @@ impl Actor {
     /// The repository's pull-request templates through the host plugin
     /// (R-153; spawned, back as `WorkDone`), for the `ship` prompt.
     fn fetch_templates(&self) {
-        let (Some(host), Ok(wd)) = (self.env.host.clone(), self.workdir()) else {
+        let (Some(host), Ok(wd)) = (self.host(), self.workdir()) else {
             return;
         };
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
@@ -1011,7 +1133,7 @@ impl Actor {
             .filter(|t| t.source == TaskSource::Review && t.status != TaskStatus::Done)
             .map(|t| t.id.as_str())
             .collect();
-        let max = self.env.settings.max_review_loops;
+        let max = self.env.settings.get().max_review_loops;
         if let Some(why) = xherd_core::tripwire::review_summary(
             &open_findings,
             &open,
@@ -1037,7 +1159,7 @@ impl Actor {
         };
         use xherd_core::tripwire as tw;
         let mut hits = Vec::new();
-        let st = &self.env.settings;
+        let st = self.env.settings.get();
         hits.extend(tw::sensitive_summary(files, &st.sensitive_paths));
         if let Ok(wd) = self.workdir() {
             match self.env.git.diff_proposed(&wd, files).await {
@@ -1243,7 +1365,7 @@ impl Actor {
         let out = xherd_core::exec::run(
             xherd_core::exec::Cmd::new(["sh", "-c", command.as_str()])
                 .cwd(wd)
-                .timeout(self.env.settings.verify_timeout)
+                .timeout(self.env.settings.get().verify_timeout)
                 // As the user the agent is (R-1203): it can run the same.
                 .as_agent(),
         )
@@ -1489,7 +1611,7 @@ impl Actor {
         )
         .await
         .map_err(|e| refuse("store", e.to_string()))?;
-        let s = &self.env.settings;
+        let s = self.env.settings.get();
         let mut ctx = self.ctx();
         ctx.env = vec![
             ("XHERD_ENV".into(), "1".into()),
@@ -1528,16 +1650,26 @@ impl Actor {
         let Some(wd) = self.agent.workdir.as_deref().map(Path::new) else {
             return launch;
         };
+        let settings = self.env.settings.get();
+        let off = |n: &str| settings.disabled_plugins.iter().any(|d| d == n);
         if let Some(t) = &self.env.trust
+            && !off(xherd_flow::approve::DEFAULT_RUNTIME)
             && let Err(e) = t.ensure(wd).await
         {
             tracing::warn!(agent = %self.agent.name, error = %e, "runtime trust not written");
         }
+        let on: Vec<_> = self
+            .env
+            .toolchains
+            .iter()
+            .filter(|(n, _)| !off(n))
+            .cloned()
+            .collect();
         let p = plan(
             wd,
-            &self.env.toolchains,
-            self.env.settings.toolchain_install,
-            &self.env.settings.toolchain_defaults,
+            &on,
+            settings.toolchain_install,
+            &settings.toolchain_defaults,
         );
         let file = wd.join(PLAN_FILE);
         if p.steps.is_empty() {
@@ -1550,7 +1682,7 @@ impl Actor {
             return launch;
         }
         let mut argv = vec![
-            self.env.settings.xherd_bin.clone(),
+            self.env.settings.get().xherd_bin.clone(),
             "toolchain".into(),
             "exec".into(),
             "--".into(),
@@ -1586,7 +1718,7 @@ impl Actor {
     fn watch_delivery(&self, delivery: u64) {
         let (tx, wait, generation) = (
             self.tx.clone(),
-            self.env.settings.delivery_ack,
+            self.env.settings.get().delivery_ack,
             self.agent.generation,
         );
         tokio::spawn(async move {
@@ -1696,7 +1828,7 @@ impl Actor {
         }
         if let Some(why) = run_limit(
             self.agent.auto_in_row,
-            self.env.settings.max_auto_approvals_in_row,
+            self.env.settings.get().max_auto_approvals_in_row,
         ) {
             // Make the reason visible on the gate, and say so once.
             match &mut self.agent.gate {
@@ -2012,7 +2144,7 @@ impl Actor {
     /// on and the agent follows a flow (R-024; flow `none` has no gates).
     /// Background tasks (also R-024) are not tracked yet.
     fn fresh_sessions_on(&self) -> bool {
-        self.env.settings.fresh_sessions && self.agent.pack.is_some()
+        self.env.settings.get().fresh_sessions && self.agent.pack.is_some()
     }
 
     /// Replace the runtime process in the agent window by a new session
@@ -2097,7 +2229,7 @@ impl Actor {
         )
         .await;
         if timed_out {
-            let s = self.env.settings.pause_timeout.as_secs();
+            let s = self.env.settings.get().pause_timeout.as_secs();
             self.notify(
                 "limit",
                 format!(
@@ -2114,7 +2246,8 @@ impl Actor {
             self.agent.next_prompt = self.resume_command();
         }
         // After a handoff the next session starts fresh from the note (R-027).
-        let handed_off = self.agent.handoff_at.take().is_some() && self.env.settings.fresh_sessions;
+        let handed_off =
+            self.agent.handoff_at.take().is_some() && self.env.settings.get().fresh_sessions;
         self.resume_session = match (&self.env.resume, &self.agent.session) {
             (Some(r), Some(id))
                 if !handed_off
@@ -2185,6 +2318,14 @@ impl Actor {
         }
         let text = xherd_flow::approve::changes_message(&gate, comment);
         self.send(&text, 1).await?;
+        // For the work log's rework count (spec §16.4): which gate it was.
+        let label = match &gate {
+            Gate::Docs { stage, .. } => stage.clone(),
+            Gate::Commit(c) => format!("commit {}", c.id),
+            _ => String::new(),
+        };
+        self.log(None, "change-request", Some(json!({"gate": label})))
+            .await;
         self.agent.fire(Trigger::UserInput, self.now());
         Ok(())
     }
@@ -2337,7 +2478,7 @@ impl Actor {
                 }
             }
             TickKind::IdleCheck => {
-                let m = self.env.settings.idle_alert_minutes;
+                let m = self.env.settings.get().idle_alert_minutes;
                 if self.agent.status == Status::Idle
                     && m > 0
                     && !self.agent.idle_alerted
@@ -2353,7 +2494,7 @@ impl Actor {
                 }
             }
             TickKind::SessionLimit => {
-                let m = self.env.settings.max_session_minutes;
+                let m = self.env.settings.get().max_session_minutes;
                 if m > 0
                     && self.agent.status.is_live()
                     && self.agent.pause_requested_at.is_none()
@@ -2381,7 +2522,7 @@ impl Actor {
                 }
             }
             TickKind::ParkCheck => {
-                let m = self.env.settings.gate_park_minutes;
+                let m = self.env.settings.get().gate_park_minutes;
                 if self.agent.status == Status::WaitingInput
                     && m > 0
                     && now - self.agent.status_since >= minutes(m)
@@ -2395,18 +2536,11 @@ impl Actor {
             TickKind::ScreenScan => {
                 if let Some(asked) = self.agent.pause_requested_at
                     && self.agent.status.is_live()
-                    && now - asked >= self.env.settings.pause_timeout.as_millis() as i64
+                    && now - asked >= self.env.settings.get().pause_timeout.as_millis() as i64
                 {
                     self.finish_pause(true).await;
                 }
-                if self.agent.status.is_live()
-                    && self
-                        .env
-                        .settings
-                        .screen_rules
-                        .as_ref()
-                        .is_some_and(|r| !r.is_empty())
-                {
+                if self.agent.status.is_live() {
                     let (driver, ctx, tx, generation) = (
                         self.env.driver.clone(),
                         self.ctx(),
@@ -2416,9 +2550,10 @@ impl Actor {
                     let lines = self
                         .env
                         .settings
+                        .get()
                         .screen_rules
                         .as_ref()
-                        .map_or(40, |r| r.last_lines as u32 * 4);
+                        .map_or(40, |r| (r.last_lines as u32 * 4).max(40));
                     tokio::spawn(async move {
                         if let Ok(screen) = driver.capture(&ctx, lines).await {
                             let _ = tx.send(Msg::WorkDone {
@@ -2437,7 +2572,18 @@ impl Actor {
     async fn on_work(&mut self, w: WorkResult) {
         match w {
             WorkResult::Screen(screen) => {
-                let Some(rules) = self.env.settings.screen_rules.as_ref() else {
+                match xherd_core::git_auth::failing_line(&screen) {
+                    None => self.auth_screen_line = None,
+                    Some(l) if self.auth_screen_line.as_deref() != Some(&l) => {
+                        self.auth_screen_line = Some(l);
+                        if self.git_access_failed("screen", &screen).await {
+                            return;
+                        }
+                    }
+                    Some(_) => {}
+                }
+                let settings = self.env.settings.get();
+                let Some(rules) = settings.screen_rules.as_ref() else {
                     return;
                 };
                 let shown = rules.matching(&screen).is_some();
@@ -2482,10 +2628,12 @@ impl Actor {
                 tracing::warn!(agent = %self.agent.name, error = %e, "PR poll failed");
                 self.log(None, "pr-poll-failed", Some(json!({"error": e})))
                     .await;
+                self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
-            WorkResult::PrLookup(Ok(None)) => {}
+            WorkResult::PrLookup(Ok(None)) => self.git_access_ok().await,
             WorkResult::PrLookup(Ok(Some(url))) => {
+                self.git_access_ok().await;
                 let before = self.agent.status;
                 self.agent.pr_url = Some(url.clone());
                 self.log(None, "pr-found", Some(json!({"url": url}))).await;
@@ -2496,6 +2644,7 @@ impl Actor {
                 tracing::warn!(agent = %self.agent.name, error = %e, "PR lookup failed");
                 self.log(None, "pr-lookup-failed", Some(json!({"error": e})))
                     .await;
+                self.git_access_failed("pr-lookup", &e).await;
             }
             WorkResult::DeliveryTimeout { delivery } => match self.delivery {
                 Some((d, false))

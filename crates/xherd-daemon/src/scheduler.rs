@@ -41,6 +41,7 @@ pub fn spawn(d: Daemon, iv: Intervals) -> tokio::task::JoinHandle<()> {
                 _ = screen.tick() => d.sup.tick(TickKind::ScreenScan),
                 _ = poll.tick() => {
                     d.sup.tick(TickKind::TodoTick);
+                    d.todo_tick().await;
                     d.sup.tick(TickKind::PrPoll);
                 }
                 _ = minute.tick() => {
@@ -52,7 +53,7 @@ pub fn spawn(d: Daemon, iv: Intervals) -> tokio::task::JoinHandle<()> {
                     if let Err(e) = d.replay_queue().await {
                         tracing::warn!(error = %e, "hook queue replay failed");
                     }
-                    // Work-log flush: v1.x.
+                    d.flush_worklog().await;
                 }
                 _ = daily.tick() => {
                     d.prune_events().await;

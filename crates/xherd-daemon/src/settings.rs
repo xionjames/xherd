@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use xherd_core::config::{Config, GitIdentity};
 
+use crate::actor::ActorSettings;
 use crate::{ActionError, Daemon};
 
 /// Fields the UI may change; anything else is refused.
@@ -34,6 +35,8 @@ pub struct ConfigPatch {
     /// Empty string = off.
     pub ntfy_server: Option<String>,
     pub ntfy_topic: Option<String>,
+    pub muted_notifications: Option<Vec<String>>,
+    pub desktop_notifications: Option<bool>,
     pub max_session_minutes: Option<u64>,
     pub pr_poll_minutes: Option<u64>,
     pub max_review_loops: Option<u32>,
@@ -188,6 +191,21 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
         }
         c.ntfy_server = (!v.is_empty()).then(|| v.to_string());
     }
+    if let Some(list) = p.muted_notifications {
+        if let Some(k) = list
+            .iter()
+            .find(|k| !xherd_core::config::NOTIFY_KINDS.contains(&k.as_str()))
+        {
+            return Err(bad(format!("{k:?} is not a notification kind")));
+        }
+        let mut list = list;
+        list.sort();
+        list.dedup();
+        c.muted_notifications = list;
+    }
+    if let Some(b) = p.desktop_notifications {
+        c.desktop_notifications = b;
+    }
     if let Some(v) = p.ntfy_topic {
         let v = v.trim();
         if !v.is_empty() && !crate::notifier::valid_topic(v) {
@@ -272,19 +290,14 @@ impl Daemon {
     /// whether they differ in anything but `welcomed`.
     pub fn config_view(&self) -> Result<Value, ActionError> {
         let saved = self.saved_config()?;
-        let mut a = saved.clone();
-        a.welcomed = self.config.welcomed;
-        a.disabled_plugins = self.config.disabled_plugins.clone();
-        a.git_user_name = self.config.git_user_name.clone();
-        a.git_user_email = self.config.git_user_email.clone();
-        a.git_identities = self.config.git_identities.clone();
-        a.ntfy_server = self.config.ntfy_server.clone();
-        a.ntfy_topic = self.config.ntfy_topic.clone();
-        a.user_token = self.config.user_token.clone();
+        // Everything but these applies live (`save_config`); `running` is what
+        // the daemon uses now, so it takes the saved value of each live field.
+        let mut running = (*self.config).clone();
+        running.apply_live_from(&saved);
         Ok(json!({
             "config": shown(&saved),
-            "running": shown(&self.config),
-            "restartNeeded": a != *self.config,
+            "running": shown(&running),
+            "restartNeeded": saved != running,
         }))
     }
 
@@ -322,6 +335,12 @@ impl Daemon {
             code: "io",
             message: e.to_string(),
         })?;
+        // Settings the actors read apply at once (the rest needs a restart).
+        self.settings.set(ActorSettings::from_config(
+            &c,
+            (*self.settings.get()).clone(),
+            self.pr_poll_override,
+        ));
         // The commit identity goes into the managed git config at once.
         if let Err(e) = self.write_gitconfig() {
             tracing::warn!(error = %e.message, "managed git config not written");
@@ -362,6 +381,21 @@ mod tests {
         }
         assert!(serde_json::from_value::<ConfigPatch>(json!({"port": 1})).is_err());
         assert!(serde_json::from_value::<ConfigPatch>(json!({"userToken": "x"})).is_err());
+    }
+
+    #[test]
+    fn muted_notification_kinds_are_checked_and_sorted() {
+        let mut c = Config::default();
+        let p: ConfigPatch = serde_json::from_value(
+            json!({"mutedNotifications": ["idle", "gate", "idle"], "desktopNotifications": true}),
+        )
+        .unwrap();
+        apply(&mut c, p).unwrap();
+        assert_eq!(c.muted_notifications, ["gate", "idle"]);
+        assert!(c.desktop_notifications);
+        let p: ConfigPatch =
+            serde_json::from_value(json!({"mutedNotifications": ["nope"]})).unwrap();
+        assert_eq!(apply(&mut c, p).unwrap_err().code, "bad_config");
     }
 
     #[test]

@@ -33,6 +33,7 @@ export function addNotice(agentId: string, kind: string, text: string) {
 
 export function open(n: Notice) {
   n.read = true;
+  if (n.agentId.startsWith('todo:')) return go('/todos');
   const a = agentByName(n.agentId);
   if (a) go(`/agent/${a.name}`);
 }

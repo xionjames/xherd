@@ -689,7 +689,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Open-in (URL schemes, Dev Containers, companion)
   - [x] Git access setup and doctor
 - [ ] **M4 → v1.0**
-  - [ ] Guardrails
+  - [x] Guardrails
     - [x] "Viewed" marks per file in the Changes panel (`diff_viewed`, `/agents/:id/viewed`) and a Setup check `runner` that pings the runner
     - [x] Secret tripwire on commit proposals (R-117)
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
@@ -710,16 +710,20 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Decisions and replies (R-306): `xherd_flow::pr_review` parses `pr-review.md`; the user decides fix / reply / skip with a note per comment in the Pull request panel (`PUT /agents/:id/pr-decisions`); approving the `pr-review` gate posts the `reply` answers through the host (`pr-reply`, marker appended, never twice) and writes `pr-decisions.json` for `pr-apply`. Separate `pr-triage` / `pr-replies` gates were not needed: one gate covers both
     - [x] `pr-template` (R-153): `Host::pr_template` (built-in `github` reads the worktree's template files and folders, GitLab's too; no organisation defaults), looked up when the agent enters the ship stage, written to `pr-templates.json` for the `ship` prompt
     - `pr.merged` hooks (R-307) belong to the stage-hook engine (R-401…R-404), listed under v1.x: nothing declares hooks until profiles or pack `stageHooks` exist
-  - [x] Notifications: kinds on hub `Notify`, bell + browser notifications, ntfy (`ntfyServer`/`ntfyTopic`, live); desktop OS notifications and notifier plugins later
+  - [x] Notifications: kinds on hub `Notify`, bell + browser notifications, ntfy (`ntfyServer`/`ntfyTopic`, live), per-kind filter (`mutedNotifications`), daemon-side desktop notifications (`desktopNotifications`); notifier plugins later
+  - [x] Live config: saving settings applies them at once (`SettingsHandle`) except port, bind, concurrency, workspace, tmux socket and plugin settings; plugins switched off apply live
+  - [x] Git access block (R-688): an auth failure blocks a live agent with reason `git access` and the band shows the doctor's first failure and fix
   - [ ] Phones
 - [ ] **v1.x**
   - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
   - [ ] Repo profiles: move `sensitivePaths` and `maxDiffLines` (global since M4) into each profile, with the global values as defaults; add the profile's test command as a code tripwire (R-115)
   - [ ] Codex and opencode
-  - [ ] Kanban / To review / Work log (per-ticket delivery metrics: cycle time, review–fix rounds, rework; spec §16.4)
+  - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
+  - [x] Kanban: the Board with stage cards by role, tasks, TODOs and swimlanes (cards declared by packs and profiles, R-1101, come with profiles)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
-  - [ ] TODOs
+  - [x] TODOs: reminders, once or repeating (`/todos`, 30 s tick, kind `todo`)
+  - [x] TODO condition checks (spec §16.2): a headless read-only run of the runtime (`data.terminal.check`) answering `XHERD_RESULT {met, summary}`; met or unclear needs you, not met is rescheduled, failure is an error
   - [ ] Budgets per profile and a cost estimate (token budgets are global since M4)
   - [ ] `never` autonomy
 - [ ] **Later**

@@ -50,6 +50,37 @@
         "transcripts": "${CLAUDE_CONFIG_DIR:-~/.claude}/projects",
         "file": "{session}.jsonl"
       },
+      "check": {
+        "argv": [
+          "claude",
+          "-p",
+          "{prompt}",
+          "--append-system-prompt",
+          "{system}",
+          "--no-session-persistence",
+          "--allowedTools",
+          "Read",
+          "Grep",
+          "Glob",
+          "WebFetch",
+          "Bash(gh pr view:*)",
+          "Bash(gh pr checks:*)",
+          "Bash(gh pr list:*)",
+          "Bash(gh issue view:*)",
+          "Bash(git log:*)",
+          "Bash(git status:*)",
+          "Bash(git diff:*)",
+          "Bash(git show:*)",
+          "--disallowedTools",
+          "Edit",
+          "Write",
+          "NotebookEdit"
+        ],
+        "modelArgs": [
+          "--model",
+          "{model}"
+        ]
+      },
       "usage": {
         "records": "/message/usage",
         "id": "/message/id",

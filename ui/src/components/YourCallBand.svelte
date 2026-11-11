@@ -2,8 +2,8 @@
   // The full-width band shown when the agent waits on the human: what to
   // decide, why it is held, and the decision controls.
   import Icon from './Icon.svelte';
-  import type { Agent, FlowInfo } from '../lib/types';
-  import { post } from '../lib/api';
+  import type { Agent, FlowInfo, GitFinding } from '../lib/types';
+  import { get, post } from '../lib/api';
   import { app, upsertAgent } from '../lib/store.svelte';
   import { reads } from '../lib/reads.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -23,6 +23,20 @@
     run('request-changes', { comment: `Answers to your open questions:\n\n${lines.join('\n\n')}` }, 'Could not send the answers')
       .then((ok) => { if (ok) answers = []; });
   }
+  // R-688: what the git doctor says about the host a git-access block is about.
+  const gitBlocked = $derived(agent.status === 'blocked' && agent.blockReason === 'git access');
+  const agentId = $derived(agent.id);
+  let doctor = $state<{ host: string; first?: GitFinding; checking: boolean; error?: string } | null>(null);
+  async function checkGit() {
+    doctor = { host: '', checking: true };
+    try {
+      const r = await get<{ host: string; findings: GitFinding[] }>(`/agents/${agentId}/git-access`);
+      doctor = { host: r.host, first: r.findings.find((f) => !f.ok), checking: false };
+    } catch (e) {
+      doctor = { host: '', checking: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  $effect(() => { if (gitBlocked && agentId) checkGit(); else doctor = null; });
   // The band stays one line high; long text opens on demand.
   let open = $state(false);
 
@@ -55,7 +69,7 @@
   );
 
   const title = $derived.by(() => {
-    if (!g) return agent.status === 'blocked' ? 'the agent is blocked' : 'the agent asks you';
+    if (!g) return agent.status === 'blocked' ? (agent.blockReason ? `the agent is blocked: ${agent.blockReason}` : 'the agent is blocked') : 'the agent asks you';
     switch (g.kind) {
       case 'docs': return `${g.files.map((f) => f.path).join(', ') || g.stage} ${g.files.length > 1 ? 'are' : 'is'} ready for review`;
       case 'commit': return `commit ${g.id} is ready`;
@@ -117,11 +131,23 @@
       <h2>Your call — {title}</h2>
       <p class="muted">{line}</p>
       {#if held}<p class="gwhy">Held: {held}</p>{/if}
+      {#if gitBlocked && doctor}
+        <p class="gwhy">
+          {#if doctor.checking}Checking git access…
+          {:else if doctor.error}Could not run the git doctor: {doctor.error}
+          {:else if doctor.first}{doctor.host}: {doctor.first.label} — {doctor.first.detail}{#if doctor.first.fix?.kind === 'command'} <span class="mono">{doctor.first.fix.text}</span>{:else if doctor.first.fix} ({doctor.first.fix.label}, in Settings){/if}
+          {:else}The doctor finds nothing wrong with {doctor.host} now; message the agent to carry on.{/if}
+          {#if !doctor.checking}<button class="btn ghost sm" onclick={checkGit}>Check again</button>{/if}
+        </p>
+      {/if}
       {#if answering && question}<p class="gwhy">“{question}”</p>{/if}
       <button class="gtoggle" aria-expanded={open} onclick={() => (open = !open)}>{open ? 'Show less' : 'Show more'}</button>
     </div>
     <div class="gact">
       {#if agent.status === 'blocked'}
+        {#if agent.blockReason === 'git access'}
+          <a class="btn gate lg" href={href('/settings', { tab: 'git' })}>Fix git access</a>
+        {/if}
         <a class="btn gate lg" href={href(`/agent/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
       {/if}
       {#if approvable && !reviewing}

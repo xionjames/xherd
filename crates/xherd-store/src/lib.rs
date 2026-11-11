@@ -402,6 +402,104 @@ impl Store {
         .await
     }
 
+    // ---- todos ---------------------------------------------------------------
+
+    pub async fn put_todo(&self, t: &xherd_core::todo::Todo) -> Result<()> {
+        let data = serde_json::to_string(t)?;
+        let (id, created) = (t.id.clone(), t.created_at);
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO todos (id, created_at, data) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+                params![id, created, data],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Oldest first; rows that no longer parse are skipped.
+    pub async fn list_todos(&self) -> Result<Vec<xherd_core::todo::Todo>> {
+        self.read(|c| {
+            let mut st = c.prepare("SELECT data FROM todos ORDER BY created_at, id")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                if let Ok(t) = serde_json::from_str(&row?) {
+                    out.push(t);
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Whether a row was removed.
+    pub async fn delete_todo(&self, id: &str) -> Result<bool> {
+        let id = id.to_string();
+        self.write(move |c| Ok(c.execute("DELETE FROM todos WHERE id = ?1", [id])? == 1))
+            .await
+    }
+
+    // ---- work log ------------------------------------------------------------
+
+    /// Add `ms` to the work log of `ticket` on `day` (`YYYY-MM-DD`, UTC);
+    /// `kind` is `agent` (time in `running`) or `user` (time on the agent page).
+    pub async fn add_worklog(&self, day: &str, ticket: &str, kind: &str, ms: u64) -> Result<()> {
+        let (d, t, k, ms) = (
+            day.to_string(),
+            ticket.to_string(),
+            kind.to_string(),
+            ms as i64,
+        );
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO worklog (day, ticket_key, kind, ms) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(day, ticket_key, kind) DO UPDATE SET ms = ms + excluded.ms",
+                params![d, t, k, ms],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// `(day, ticket, kind, ms)` from `since_day` on, newest day first.
+    pub async fn worklog(&self, since_day: &str) -> Result<Vec<(String, String, String, u64)>> {
+        let since = since_day.to_string();
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT day, ticket_key, kind, ms FROM worklog WHERE day >= ?1
+                 ORDER BY day DESC, ticket_key, kind",
+            )?;
+            let rows = st.query_map([since], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? as u64))
+            })?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
+    /// Every event of `kind`, oldest first (delivery metrics).
+    pub async fn events_of_kind(&self, kind: &str) -> Result<Vec<Event>> {
+        let k = kind.to_string();
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT id, agent_id, kind, payload, at FROM events WHERE kind = ?1 ORDER BY at, id",
+            )?;
+            let rows = st.query_map([k], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, Option<String>>(3)?, r.get(4)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, agent_id, kind, payload, at) = row?;
+                let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
+                out.push(Event { id, agent_id, kind, payload, at });
+            }
+            Ok(out)
+        })
+        .await
+    }
+
     // ---- usage ---------------------------------------------------------------
 
     /// Add tokens to `scope`'s total for `day` (`YYYY-MM-DD`, UTC).
@@ -500,6 +598,17 @@ impl Store {
                     .optional()?
                     .is_some(),
             )
+        })
+        .await
+    }
+
+    /// `agent_id|at|gate` of every auto-approval marked seen (events of kind
+    /// `review-seen`, pruned with the approvals themselves).
+    pub async fn reviews_seen(&self) -> Result<std::collections::HashSet<String>> {
+        self.read(|c| {
+            let mut st = c.prepare("SELECT id FROM events WHERE kind = 'review-seen'")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
         })
         .await
     }

@@ -104,6 +104,8 @@ export interface Agent {
   prConflict?: boolean;
   prPolledAt?: number;
   lastMessage?: string;
+  /** Why the daemon blocked the agent (`git access`). */
+  blockReason?: string;
   nextPrompt?: string;
   /** What xherd may approve by itself (R-109). */
   autonomy?: 'ask' | 'important' | 'never';

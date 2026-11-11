@@ -95,6 +95,10 @@ pub struct Agent {
     /// The current `blocked` status came from a screen rule, not a real report.
     #[serde(default)]
     pub screen_blocked: bool,
+    /// Why the agent is blocked when the daemon, not the agent, decided so
+    /// (R-688: `git access`). Cleared when the agent leaves `blocked`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_reason: Option<String>,
     #[serde(default)]
     pub idle_alerted: bool,
     /// When the current runtime session started (R-1206).
@@ -171,6 +175,7 @@ impl Agent {
             pause_requested_at: None,
             last_message: None,
             screen_blocked: false,
+            block_reason: None,
             idle_alerted: false,
             session_since: None,
             tokens_base: 0,
@@ -214,6 +219,7 @@ impl Agent {
             self.generation += 1;
             if to != Status::Blocked {
                 self.screen_blocked = false;
+                self.block_reason = None;
             }
         }
         Some(from)

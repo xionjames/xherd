@@ -441,6 +441,214 @@ async fn screen_rules_block_and_unblock() {
 }
 
 #[tokio::test]
+async fn git_auth_failure_on_screen_blocks_with_reason() {
+    let t = daemon(4).await;
+    let a = t.d.create_agent(agent("GA-1", 1)).await.unwrap();
+    wait_status(&t.d, "GA-1", Status::Running).await;
+
+    *t.drv.screen.lock().unwrap() =
+        "$ git push\nfatal: Authentication failed for 'https://github.com/o/r.git/'".into();
+    t.d.sup.tick(TickKind::ScreenScan);
+    wait_status(&t.d, "GA-1", Status::Blocked).await;
+    let shown = t.d.action("GA-1", UserAction::Get).await.unwrap();
+    assert_eq!(shown.block_reason.as_deref(), Some("git access"));
+
+    // The screen shows the same failure: no flapping, and the block is not
+    // a screen-rule block, so a clean screen does not clear it by itself.
+    t.d.sup.tick(TickKind::ScreenScan);
+    *t.drv.screen.lock().unwrap() = "working…".into();
+    t.d.sup.tick(TickKind::ScreenScan);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_status(&t.d, "GA-1", Status::Blocked).await;
+
+    // The agent carrying on clears it.
+    let r = rep(&a, "w1", ReportEvent::Working, 1, Value::Null);
+    assert_eq!(t.d.report(r).await, Some(ReportResult::Applied));
+    wait_status(&t.d, "GA-1", Status::Running).await;
+}
+
+#[tokio::test]
+async fn worklog_books_running_time_and_user_time() {
+    let t = daemon(4).await;
+    t.d.create_agent(agent("WL-1", 1)).await.unwrap();
+    wait_status(&t.d, "WL-1", Status::Running).await;
+
+    // The first flush only starts the clock; the next books the span.
+    t.d.flush_worklog().await;
+    t.d.worklog_flushed.store(
+        t.d.clock.now() - 60_000,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    t.d.flush_worklog().await;
+    t.d.add_user_time("WL-1", 30_000).await.unwrap();
+    t.d.add_user_time("WL-1", 10_000_000).await.unwrap(); // clamped
+
+    let v = t.d.worklog(1).await.unwrap();
+    let row = &v["days"][0]["tickets"][0];
+    assert!(row["agentMs"].as_u64().unwrap() >= 60_000);
+    assert_eq!(row["userMs"], 30_000 + 120_000);
+    assert_eq!(v["tickets"][0]["agent"], "WL-1");
+    assert_eq!(v["tickets"][0]["cycleMs"], Value::Null);
+}
+
+#[tokio::test]
+async fn todos_come_due_notify_once_and_repeat() {
+    use xherd_core::todo::TodoStatus;
+    use xherd_daemon::todos::TodoInput;
+    let t = daemon(4).await;
+    let mut rx = t.d.hub.subscribe();
+    let now = t.d.clock.now();
+    let input = |title: &str, due, repeat| TodoInput {
+        title: title.into(),
+        note: None,
+        due,
+        repeat_minutes: repeat,
+        condition: None,
+        model: None,
+    };
+    let later =
+        t.d.create_todo(input("later", now + 3_600_000, None))
+            .await
+            .unwrap();
+    let once =
+        t.d.create_todo(input("renew cert", now - 1, None))
+            .await
+            .unwrap();
+    let again =
+        t.d.create_todo(input("water plants", now - 1, Some(60)))
+            .await
+            .unwrap();
+    assert!(t.d.create_todo(input(" ", now, None)).await.is_err());
+
+    t.d.todo_tick().await;
+    t.d.todo_tick().await; // a second tick must not notify again
+    let mut texts = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind, text, .. } = c {
+            assert_eq!(kind, "todo");
+            texts.push(text);
+        }
+    }
+    texts.sort();
+    assert_eq!(texts, ["TODO: renew cert", "TODO: water plants"]);
+
+    let status = |list: &[xherd_core::todo::Todo], id: &str| {
+        list.iter().find(|x| x.id == id).unwrap().status
+    };
+    let list = t.d.todos().await.unwrap();
+    assert_eq!(status(&list, &later.id), TodoStatus::Open);
+    assert_eq!(status(&list, &once.id), TodoStatus::Due);
+
+    t.d.complete_todo(&once.id).await.unwrap();
+    t.d.complete_todo(&again.id).await.unwrap();
+    let list = t.d.todos().await.unwrap();
+    assert_eq!(status(&list, &once.id), TodoStatus::Done);
+    assert_eq!(status(&list, &again.id), TodoStatus::Open, "repeats");
+
+    t.d.reschedule_todo(&once.id, now + 1_000).await.unwrap();
+    assert_eq!(
+        status(&t.d.todos().await.unwrap(), &once.id),
+        TodoStatus::Open
+    );
+    t.d.delete_todo(&later.id).await.unwrap();
+    assert!(t.d.delete_todo(&later.id).await.is_err());
+}
+
+/// A fake runtime check: the condition text decides the answer.
+fn fake_check(o: &mut Options) {
+    let script = r#"case "$1" in
+  *MET*) echo 'thinking'; echo 'XHERD_RESULT {"met": true, "summary": "it is"}';;
+  *NOT*) echo 'XHERD_RESULT {"met": false, "summary": "not yet"}';;
+  *FAIL*) echo 'login needed' >&2; exit 3;;
+  *) echo 'no idea';;
+esac"#;
+    let rt = o
+        .builtin_plugins
+        .iter_mut()
+        .find(|m| m.name == "claude-code")
+        .unwrap();
+    rt.data["terminal"]["check"]["argv"] =
+        json!(["sh", "-c", script, "sh", "{prompt}", "{system}"]);
+}
+
+#[tokio::test]
+async fn todo_conditions_are_checked_and_decide_what_happens() {
+    use xherd_core::todo::{CheckOutcome, TodoStatus};
+    use xherd_daemon::todos::TodoInput;
+    let t = daemon_with(tempfile::tempdir().unwrap(), 4, fake_check).await;
+    let mut rx = t.d.hub.subscribe();
+    let now = t.d.clock.now();
+    let mk = |title: &str, cond: &str| TodoInput {
+        title: title.into(),
+        note: None,
+        due: now,
+        repeat_minutes: Some(10),
+        condition: Some(cond.into()),
+        model: Some("m1".into()),
+    };
+    let met = t.d.create_todo(mk("met", "MET please")).await.unwrap();
+    let not = t.d.create_todo(mk("not", "NOT yet")).await.unwrap();
+    let bad = t.d.create_todo(mk("bad", "FAIL it")).await.unwrap();
+    let odd = t.d.create_todo(mk("odd", "something")).await.unwrap();
+    // A condition without an interval is refused.
+    let mut no_interval = mk("x", "MET");
+    no_interval.repeat_minutes = None;
+    assert!(t.d.create_todo(no_interval).await.is_err());
+
+    t.d.todo_tick().await;
+    for _ in 0..200 {
+        let l = t.d.todos().await.unwrap();
+        if l.iter().all(|x| x.status != TodoStatus::Checking) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let list = t.d.todos().await.unwrap();
+    let get = |id: &str| list.iter().find(|x| x.id == id).unwrap().clone();
+    let (m, n, b, o) = (get(&met.id), get(&not.id), get(&bad.id), get(&odd.id));
+    assert_eq!(m.status, TodoStatus::Due);
+    assert_eq!(m.last_check.as_ref().unwrap().outcome, CheckOutcome::Met);
+    assert_eq!(m.last_check.unwrap().summary.as_deref(), Some("it is"));
+    assert_eq!(n.status, TodoStatus::Open, "not met: rescheduled");
+    assert_eq!(n.due, now + 10 * 60_000);
+    assert_eq!(b.status, TodoStatus::Error);
+    assert!(
+        b.last_check
+            .unwrap()
+            .summary
+            .unwrap()
+            .contains("login needed")
+    );
+    assert_eq!(o.status, TodoStatus::Due, "no answer line: you look");
+    assert_eq!(o.last_check.unwrap().outcome, CheckOutcome::Unclear);
+
+    // Notifications carry titles only, never what the check said.
+    let mut texts = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { text, .. } = c {
+            texts.push(text);
+        }
+    }
+    texts.sort();
+    assert_eq!(texts, ["TODO check failed: bad", "TODO: met", "TODO: odd"]);
+
+    // Check now: allowed from error, refused for a reminder.
+    assert!(t.d.check_todo(&bad.id).await.is_ok());
+    let plain =
+        t.d.create_todo(TodoInput {
+            condition: None,
+            model: None,
+            ..mk("p", "x")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        t.d.check_todo(&plain.id).await.unwrap_err().code,
+        "not_checkable"
+    );
+}
+
+#[tokio::test]
 async fn queued_reports_are_replayed_on_start() {
     let t = daemon(4).await;
     let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();

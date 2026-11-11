@@ -205,7 +205,48 @@ fn cmd_fix(text: impl Into<String>) -> Option<Fix> {
     Some(Fix::Command { text: text.into() })
 }
 
+/// The host of a remote URL (`https://h/..`, `ssh://git@h:22/..`,
+/// `git@h:o/r`); lower-case, no user or port.
+pub fn remote_host(url: &str) -> Option<String> {
+    let rest = url.trim().split_once("://").map_or(url.trim(), |(_, r)| r);
+    let authority = rest.split('/').next()?;
+    let authority = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = authority.split(':').next()?.to_ascii_lowercase();
+    (!host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+    .then_some(host)
+}
+
 impl Daemon {
+    /// R-688: the doctor's answer for the host an agent works against (its
+    /// PR's, else its worktree's `origin`), for the blocked band.
+    pub async fn agent_git_access(&self, who: &str) -> Result<Value, ActionError> {
+        let a = self.action(who, crate::actor::UserAction::Get).await?;
+        let origin = match a.workdir.as_deref() {
+            Some(wd) => {
+                let r = sh(
+                    Cmd::new(["git", "-C", wd, "config", "--get", "remote.origin.url"]).as_agent(),
+                )
+                .await;
+                (r.code == Some(0)).then(|| r.out.trim().to_string())
+            }
+            None => None,
+        };
+        let host = a
+            .pr_url
+            .as_deref()
+            .and_then(remote_host)
+            .or_else(|| origin.as_deref().and_then(remote_host))
+            .ok_or_else(|| ActionError {
+                code: "no_host",
+                message: "this agent has no remote to check".into(),
+            })?;
+        let findings = self.git_doctor(&host, origin.as_deref()).await;
+        Ok(serde_json::json!({"host": host, "findings": findings}))
+    }
+
     pub(crate) fn live_config(&self) -> Config {
         Config::load(&self.paths.config())
             .map(|(c, _)| c)
@@ -839,6 +880,28 @@ impl Daemon {
             detail,
             fix,
         });
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::remote_host;
+
+    #[test]
+    fn hosts_of_the_usual_remote_forms() {
+        for (u, h) in [
+            ("https://github.com/o/r.git", "github.com"),
+            (
+                "https://user:tok@GitLab.example.com:8443/o/r",
+                "gitlab.example.com",
+            ),
+            ("git@github.com:o/r.git", "github.com"),
+            ("ssh://git@git.example.com:22/o/r", "git.example.com"),
+        ] {
+            assert_eq!(remote_host(u).as_deref(), Some(h), "{u}");
+        }
+        assert_eq!(remote_host(""), None);
+        assert_eq!(remote_host("/local/path/repo"), None);
     }
 }
 

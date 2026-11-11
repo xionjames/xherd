@@ -60,10 +60,22 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/security", get(security))
+        .route("/api/v1/todos", get(todos_list).post(todo_create))
+        .route(
+            "/api/v1/todos/{id}",
+            axum::routing::put(todo_update).delete(todo_delete),
+        )
+        .route("/api/v1/todos/{id}/complete", post(todo_complete))
+        .route("/api/v1/todos/{id}/check", post(todo_check))
+        .route("/api/v1/todos/{id}/reschedule", post(todo_reschedule))
+        .route("/api/v1/worklog", get(worklog))
+        .route("/api/v1/agents/{id}/user-time", post(user_time))
         .route("/api/v1/reviews", get(reviews))
+        .route("/api/v1/reviews/seen", post(reviews_seen))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
+        .route("/api/v1/agents/{id}/git-access", get(agent_git_access))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
@@ -435,20 +447,162 @@ async fn put_config(
     Ok(Json(d.save_config(patch)?))
 }
 
+async fn todos_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"todos": d.todos().await?})))
+}
+
+async fn todo_create(
+    _: User,
+    State(d): State<Daemon>,
+    Json(i): Json<xherd_daemon::todos::TodoInput>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.create_todo(i).await?)))
+}
+
+async fn todo_update(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(i): Json<xherd_daemon::todos::TodoInput>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.update_todo(&id, i).await?)))
+}
+
+async fn todo_delete(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    d.delete_todo(&id).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn todo_complete(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.complete_todo(&id).await?)))
+}
+
+async fn todo_check(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.check_todo(&id).await?)))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RescheduleBody {
+    due: i64,
+}
+
+async fn todo_reschedule(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<RescheduleBody>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.reschedule_todo(&id, b.due).await?)))
+}
+
+#[derive(Deserialize)]
+struct WorklogQuery {
+    days: Option<u32>,
+}
+
+/// `GET /api/v1/worklog?days=N` (spec §16.4): time per day and ticket, and
+/// the delivery metrics per ticket.
+async fn worklog(
+    _: User,
+    State(d): State<Daemon>,
+    axum::extract::Query(q): axum::extract::Query<WorklogQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.worklog(q.days.unwrap_or(14)).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UserTimeBody {
+    ms: u64,
+}
+
+/// `POST /agents/:id/user-time`: the agent page was open for `ms` (heartbeat).
+async fn user_time(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<UserTimeBody>,
+) -> ApiResult<Json<Value>> {
+    d.add_user_time(&id, b.ms).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
 /// `GET /api/v1/reviews` (R-111): what xherd approved by itself, newest first.
 async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
     let events =
         d.store.auto_approvals(100).await.map_err(|e| {
             ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
         })?;
+    let seen =
+        d.store.reviews_seen().await.map_err(|e| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
+        })?;
     let items: Vec<Value> = events
         .into_iter()
         .map(|e| {
             let p = e.payload.unwrap_or_default();
-            json!({"agentId": e.agent_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"]})
+            let seen = seen.contains(&seen_id(&e.agent_id, e.at, p["gate"].as_str().unwrap_or("")));
+            json!({"agentId": e.agent_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"], "seen": seen})
         })
         .collect();
     Ok(Json(json!({"reviews": items})))
+}
+
+/// The event id that records an auto-approval as seen (one per item).
+fn seen_id(agent_id: &str, at: i64, gate: &str) -> String {
+    format!("seen:{agent_id}:{at}:{gate}")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SeenItem {
+    agent_id: String,
+    at: i64,
+    gate: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeenBody {
+    items: Vec<SeenItem>,
+}
+
+/// `POST /api/v1/reviews/seen` (R-111, "Mark seen"): the listed
+/// auto-approvals are marked as looked at.
+async fn reviews_seen(
+    _: User,
+    State(d): State<Daemon>,
+    Json(b): Json<SeenBody>,
+) -> ApiResult<Json<Value>> {
+    let now = d.clock.now();
+    for i in b.items.iter().take(500) {
+        d.store
+            .insert_event(xherd_store::Event {
+                id: seen_id(&i.agent_id, i.at, &i.gate),
+                agent_id: i.agent_id.clone(),
+                kind: "review-seen".into(),
+                payload: None,
+                at: now,
+            })
+            .await
+            .map_err(|e| {
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
+            })?;
+    }
+    Ok(Json(json!({"ok": true})))
 }
 
 /// `GET /api/v1/backups` (R-1402): the archives in the backup folder, newest first.
@@ -587,6 +741,15 @@ struct DoctorReq {
     host: String,
     #[serde(default)]
     repo: Option<String>,
+}
+
+/// `GET /agents/:id/git-access` (R-688): the doctor for the agent's host.
+async fn agent_git_access(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.agent_git_access(&id).await?))
 }
 
 async fn git_doctor(
