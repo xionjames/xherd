@@ -93,6 +93,9 @@ by theme; update it together with them.
 - [x] Notifications: typed (one per agent and kind), the bell and browser notifications in the UI, ntfy from Settings → Notifications
 - [x] Per-kind notification filter (`mutedNotifications`) and daemon-side desktop notifications (`desktopNotifications`: `osascript` / `notify-send`, native installs)
 - [ ] Notifier plugins, replacing an earlier ntfy message, Windows desktop notifications
+- [x] GitHub Actions (#41): CI on main and PRs; a `v*` tag on main releases Linux binaries (static musl, `.tar.gz`/`.deb`/`.rpm`) and the multi-arch image `ghcr.io/xionjames/xherd`
+- [ ] macOS binaries (x86_64 + arm64, `macos-14` runners) and a Homebrew tap (`xionjames/homebrew-tap`, formula updated by the release with a `HOMEBREW_TAP_TOKEN` secret, depends on git and tmux); a signed, notarized `.pkg` only with an Apple Developer account
+- [ ] Rest of R-1313: signatures (cosign), SBOMs, install script, Homebrew tap; Docker smoke and migration tests in CI
 
 ## v1.x
 

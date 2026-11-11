@@ -1,0 +1,209 @@
+# Release (issue #41): a tag `vX.Y.Z` on a commit of main publishes
+# - binaries: static Linux (musl), x86_64 and arm64, on a GitHub release, as
+#   .tar.gz, .deb and .rpm (deploy/nfpm/nfpm.yaml); macOS is on the roadmap;
+# - the image ghcr.io/<owner>/<repo> for amd64 + arm64, tagged X.Y.Z, X.Y, X and latest
+#   (no X for 0.x: those are development versions).
+# A tag with a suffix (`v0.2.0-rc.1`) is a prerelease: no X.Y, X or latest.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  on-main:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: on-main
+    uses: ./.github/workflows/ci.yml
+
+  ui:
+    needs: on-main
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.4.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile && pnpm build
+        working-directory: ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+
+  binaries:
+    needs: [on-main, ci, ui]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, arch: amd64 }
+          - { target: aarch64-unknown-linux-musl, arch: arm64 }
+    runs-on: ubuntu-24.04
+    env:
+      # Shown by `xherd --version` and in the UI (crates/xherd-core/build.rs).
+      XHERD_VERSION: ${{ needs.on-main.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: ui/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build (cargo-zigbuild, static)
+        run: |
+          # A venv: the runner's Python refuses global installs. cargo-zigbuild
+          # finds zig through `python3 -m ziglang`, so the venv goes first on PATH.
+          python3 -m venv "$RUNNER_TEMP/zig"
+          export PATH="$RUNNER_TEMP/zig/bin:$PATH"
+          pip install cargo-zigbuild
+          cargo zigbuild --release --locked -p xherd-cli --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          name="xherd-${XHERD_VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/xherd" LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+      - name: .deb and .rpm (deploy/nfpm/nfpm.yaml)
+        env:
+          VERSION: ${{ needs.on-main.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.0
+          mkdir -p dist/pkg
+          cp "target/${{ matrix.target }}/release/xherd" dist/pkg/xherd
+          for p in deb rpm; do
+            "$(go env GOPATH)/bin/nfpm" package -f deploy/nfpm/nfpm.yaml -p "$p" -t dist/
+          done
+          (cd dist && for f in *.deb *.rpm; do shasum -a 256 "$f" > "$f.sha256"; done)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz*
+            dist/*.deb*
+            dist/*.rpm*
+
+  image:
+    needs: [on-main, ci]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux/amd64, os: ubuntu-24.04 }
+          - { platform: linux/arm64, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: XHERD_VERSION=${{ needs.on-main.outputs.version }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - name: Keep the digest
+        run: |
+          mkdir -p digests
+          d="${{ steps.build.outputs.digest }}"
+          touch "digests/${d#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: digests/*
+
+  manifest:
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref_name, 'v0.') }}
+      - name: Multi-arch manifest
+        working-directory: digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+          docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}"
+
+  release:
+    needs: [binaries, manifest]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          path: dist
+          merge-multiple: true
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pre=""
+          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $pre

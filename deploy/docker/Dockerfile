@@ -2,7 +2,7 @@
 # openssh, the agent CLIs and the version managers. Languages are not in the
 # image: they are installed into the xherd-home volume on first use.
 #
-#   docker build -f deploy/docker/Dockerfile -t ghcr.io/xherd/xherd:dev .
+#   docker build -f deploy/docker/Dockerfile -t ghcr.io/xionjames/xherd:dev .
 # (plain `docker build` works; releases use `docker buildx` for amd64 + arm64)
 
 ARG RUST_VERSION=1.99
