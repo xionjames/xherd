@@ -3,14 +3,15 @@
   // Done, plus your TODOs. A unit is a flow stage (spec, design, tasks,
   // review, ship…), or, once an agent has a task list, each of its tasks in
   // place of the implement stage. Fix tasks from a review or the PR carry a
-  // tag. Where an agent waits for you the card is outlined. Read-only. Filter
-  // and swimlanes live in the URL: `?agent=NAME&lanes=agent|repo|none`.
+  // tag; a pending task names the tasks it waits on. Where an agent waits for
+  // you the card is outlined. Read-only. Filters and swimlanes live in the URL:
+  // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=agent|repo|none`.
   import PageHead from '../components/PageHead.svelte';
   import { app } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { get } from '../lib/api';
   import { flowOf, steps, STAGE_LABEL } from '../lib/flow';
-  import { needsYou, repoName } from '../lib/format';
+  import { agentHue, needsYou, repoName } from '../lib/format';
   import type { Agent, StageInfo, Task } from '../lib/types';
 
   type Todo = { id: string; title: string; due: number; status: 'open' | 'checking' | 'due' | 'done' | 'error'; condition?: string };
@@ -22,8 +23,16 @@
 
   const lanes = $derived((['repo', 'none'] as const).find((l) => l === route.query.get('lanes')) ?? 'agent');
   const only = $derived(route.query.get('agent') ?? '');
+  const repo = $derived(route.query.get('repo') ?? '');
+  const needsOnly = $derived(route.query.get('needs') === '1');
+  const finished = $derived(route.query.get('finished') === '1');
+  // Stages not reached yet repeat in every agent's lane: shown by default only
+  // with lanes by agent, where they read as that agent's plan.
+  const upcoming = $derived(route.query.has('upcoming') ? route.query.get('upcoming') === '1' : lanes === 'agent');
+  const KEYS = ['agent', 'repo', 'needs', 'finished', 'upcoming', 'lanes'];
   const go = (q: Record<string, string | undefined>) => {
-    location.hash = href('/board', { agent: route.query.get('agent') ?? undefined, lanes: route.query.get('lanes') ?? undefined, ...q });
+    const keep = Object.fromEntries(KEYS.map((k) => [k, route.query.get(k) ?? undefined]));
+    location.hash = href('/board', { ...keep, ...q });
   };
 
   let todos = $state<Todo[]>([]);
@@ -39,8 +48,11 @@
   const SOURCE_TAG: Record<string, string> = { review: 'review fix', pr: 'PR fix' };
 
   // Cancelled agents are left out: their work is neither pending nor done.
+  // Finished ones (done, watching their PR) only on request.
+  const isFinished = (a: Agent) => a.status === 'done' || a.status === 'watching';
   const everyone = $derived((app.state?.agents ?? []).filter((a) => a.status !== 'cancelled'));
-  const shown = $derived(everyone.filter((a) => !only || a.name === only));
+  const repos = $derived([...new Set(everyone.map(repoName))].sort());
+  const shown = $derived(everyone.filter((a) => (!only || a.name === only) && (!repo || repoName(a) === repo) && (finished || only || !isFinished(a))));
   const laneOf = (a: Agent) => (lanes === 'repo' ? repoName(a) : lanes === 'agent' ? a.name : '');
 
   /** "Spec", "PR"…; a stage whose id is not its role names itself by its id,
@@ -68,6 +80,7 @@
     const tasks = a.tasks ?? [];
     const gateTasks = a.gate?.kind === 'commit' ? a.gate.tasks : [];
     const out: Card[] = [];
+    let nextShown = false;
     for (const { stage, state } of steps(a, flow)) {
       const current = stage.id === a.stage;
       if (stage.role === 'implement' && tasks.length) {
@@ -80,6 +93,10 @@
         continue;
       }
       const col: Col = state === 'ok' || state === 'skip' ? 'done' : state === 'todo' ? 'pending' : 'doing';
+      // Without upcoming stages, the next one still shows (a queued agent
+      // would otherwise vanish).
+      if (col === 'pending' && !upcoming && (nextShown || out.some((c) => c.col === 'doing'))) continue;
+      if (col === 'pending') nextShown = true;
       // A later stage already visited: the agent was sent back (review → fix).
       const again = state === 'todo' && (a.visitedStages ?? []).includes(stage.id);
       const hint = state === 'skip' ? 'skipped' : again ? 'again after the fixes' : current && a.gate ? 'waiting for you' : '';
@@ -93,11 +110,17 @@
   }
 
   const cards = $derived.by((): Card[] => {
-    const out = shown.flatMap(agentCards);
-    if (!only) for (const t of todos) out.push({ kind: 'todo', key: `todo:${t.id}`, lane: lanes === 'none' ? '' : 'TODOs', col: 'todos', todo: t });
+    const out = shown.flatMap(agentCards).filter((c) => !needsOnly || (c.kind !== 'todo' && c.needs));
+    if (!only && !repo) for (const t of todos.filter((t) => !needsOnly || t.status === 'due' || t.status === 'error')) out.push({ kind: 'todo', key: `todo:${t.id}`, lane: lanes === 'none' ? '' : 'TODOs', col: 'todos', todo: t });
     return out;
   });
   const columns = $derived<[string, string][]>(cards.some((c) => c.kind === 'todo') ? [...COLS, ['todos', 'TODOs']] : COLS);
+  /** The unfinished tasks a pending task waits on. */
+  function waitsOn(a: Agent, t: Task): string[] {
+    if (t.status !== 'todo') return [];
+    return t.depends.filter((d) => a.tasks?.find((x) => x.id === d)?.status !== 'done');
+  }
+  const filtered = $derived(!!(only || repo || needsOnly));
   const laneNames = $derived([...new Set(cards.map((c) => c.lane))].sort((a, b) => (a === 'TODOs' ? 1 : b === 'TODOs' ? -1 : a.localeCompare(b))));
 </script>
 
@@ -108,18 +131,35 @@
     </select>
     <select aria-label="Agent" value={only} onchange={(e) => go({ agent: e.currentTarget.value || undefined })}>
       <option value="">All agents</option>
-      {#each everyone as a (a.id)}<option value={a.name}>{a.name}</option>{/each}
+      {#each everyone.filter((a) => finished || !isFinished(a) || a.name === only) as a (a.id)}<option value={a.name}>{a.name}</option>{/each}
     </select>
+    {#if repos.length > 1}
+      <select aria-label="Repository" value={repo} onchange={(e) => go({ repo: e.currentTarget.value || undefined })}>
+        <option value="">All repositories</option>
+        {#each repos as r (r)}<option value={r}>{r}</option>{/each}
+      </select>
+    {/if}
+  {/snippet}
+  {#snippet sub()}
+    <span class="filters">
+      <label class="f chk"><input type="checkbox" checked={needsOnly} onchange={(e) => go({ needs: e.currentTarget.checked ? '1' : undefined })} /> ✋ Needs you only</label>
+      <label class="f chk"><input type="checkbox" checked={upcoming} onchange={(e) => go({ upcoming: e.currentTarget.checked === (lanes === 'agent') ? undefined : e.currentTarget.checked ? '1' : '0' })} /> Upcoming stages</label>
+      <label class="f chk"><input type="checkbox" checked={finished} onchange={(e) => go({ finished: e.currentTarget.checked ? '1' : undefined })} /> Finished agents</label>
+    </span>
   {/snippet}
 </PageHead>
 
 <div class="stack">
   {#if !cards.length}
-    <p class="empty">No agents yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.</p>
+    {#if filtered || everyone.length}
+      <p class="empty">Nothing matches these filters.</p>
+    {:else}
+      <p class="empty">No agents yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.</p>
+    {/if}
   {:else}
     {#each laneNames as lane (lane)}
       <section class="lane" aria-label={lane || 'Board'}>
-        {#if lane}<h2 class="lh">{lane}</h2>{/if}
+        {#if lane}<h2 class="lh">{#if lanes === 'agent' && lane !== 'TODOs'}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
         <div class="cols">
           {#each columns as [col, name] (col)}
             {@const list = cards.filter((c) => c.lane === lane && c.col === col)}
@@ -127,15 +167,17 @@
               <h3>{name} <span class="hint num">{list.length}</span></h3>
               {#each list as c (c.key)}
                 {#if c.kind === 'stage'}
-                  <a class="card tk" class:needs={c.needs} href={href(`/agent/${c.agent.name}`, { s: c.tab })}>
-                    {#if lanes !== 'agent'}<span class="hint mono">{c.agent.name}</span>{/if}
+                  <a class="card tk" class:needs={c.needs} style:--hue={agentHue(c.agent.name)} href={href(`/agent/${c.agent.name}`, { s: c.tab })}>
+                    {#if lanes !== 'agent'}<span class="hint mono who">{c.agent.name}</span>{/if}
                     <span><b>{c.label}</b></span>
                     {#if c.needs}<span class="hint">✋ {c.hint || 'needs you'}</span>{:else if c.hint}<span class="hint">{c.hint}</span>{/if}
                   </a>
                 {:else if c.kind === 'task'}
-                  <a class="card tk" class:needs={c.needs} href={href(`/agent/${c.agent.name}`, { s: 'tasks' })}>
-                    <span class="top"><span class="hint mono">{lanes === 'agent' ? '' : `${c.agent.name} · `}{c.task.id}</span>{#if c.task.source && SOURCE_TAG[c.task.source]}<span class="pill">{SOURCE_TAG[c.task.source]}</span>{/if}</span>
+                  {@const after = waitsOn(c.agent, c.task)}
+                  <a class="card tk" class:needs={c.needs} style:--hue={agentHue(c.agent.name)} href={href(`/agent/${c.agent.name}`, { s: 'tasks' })}>
+                    <span class="top"><span class="hint mono" class:who={lanes !== 'agent'}>{lanes === 'agent' ? '' : `${c.agent.name} · `}{c.task.id}</span>{#if c.task.source && SOURCE_TAG[c.task.source]}<span class="pill">{SOURCE_TAG[c.task.source]}</span>{/if}</span>
                     <span>{c.task.title}</span>
+                    {#if after.length}<span class="hint">after {after.join(', ')}</span>{/if}
                     {#if c.task.status === 'blocked'}<span class="hint">⛔ Blocked{c.task.blockedReason ? `: ${c.task.blockedReason}` : ''}</span>{/if}
                     {#if c.needs}<span class="hint">✋ needs you</span>{/if}
                   </a>
@@ -168,6 +210,10 @@
   .col h3 { font-size: 13px; margin: 0; padding: 2px 4px; }
   a.tk { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; color: inherit; text-decoration: none; font-size: 13px; }
   .tk:hover { border-color: var(--accent); }
+  .filters { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .hue { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
+  /* Without lanes by agent, the agent's colour marks whose card it is. */
+  .who::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--hue); margin-right: 6px; }
   .top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
   .tk.needs { border-color: var(--gate); box-shadow: inset 3px 0 0 var(--gate); }
 </style>
