@@ -7,8 +7,12 @@
   import { route, href } from '../lib/router.svelte';
   import { failingRequired } from '../lib/setup.svelte';
   import { app } from '../lib/store.svelte';
+  import { watchAttention, attentionCount } from '../lib/attention.svelte';
   let { blocked = false }: { blocked?: boolean } = $props();
   const failing = $derived(failingRequired().length);
+  const attn = $derived(attentionCount());
+  $effect(() => { if (!blocked) watchAttention(); });
+  const onAttention = $derived(route.path === '/attention' || route.path === '/review');
 </script>
 
 <header class="bar">
@@ -23,8 +27,8 @@
        href={href('/time')}>Time</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/todos'} aria-current={route.path === '/todos' ? 'page' : undefined}
        href={href('/todos')}>TODOs</a>{/if}
-    {#if !blocked}<a class="gt" class:on={route.path === '/review'} aria-current={route.path === '/review' ? 'page' : undefined}
-       href={href('/review')}>To review</a>{/if}
+    {#if !blocked}<a class="gt" class:on={onAttention} aria-current={onAttention ? 'page' : undefined}
+       href={href('/attention')} title={attn ? `${attn} need your attention` : 'Nothing needs you'}>{#if attn}<span aria-hidden="true">✋</span> {/if}Needs attention{#if attn}<span class="gcount g">{attn}</span>{/if}</a>{/if}
     {#if failing || route.path === '/setup'}<a class="gt" class:on={route.path === '/setup'} aria-current={route.path === '/setup' ? 'page' : undefined}
        href={href('/setup')}>Setup checks{#if failing}<span class="gcount g">{failing}</span>{/if}</a>{/if}
   </nav>

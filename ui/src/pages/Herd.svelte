@@ -2,6 +2,7 @@
   // Overview: "Needs you" (oldest first) then every agent (spec §17.2), as a
   // list or in columns by stage (R-210, `?layout=stages`).
   import AgentDot from '../components/AgentDot.svelte';
+  import NeedsCards from '../components/NeedsCards.svelte';
   import Mini from '../components/Mini.svelte';
   import TaskBar from '../components/TaskBar.svelte';
   import StatusPill from '../components/StatusPill.svelte';
@@ -12,7 +13,7 @@
   import StageColumns from '../components/StageColumns.svelte';
   import { app } from '../lib/store.svelte';
   import { href, route, go } from '../lib/router.svelte';
-  import { ago, needsYou, waitText, repoName, shortBase } from '../lib/format';
+  import { ago, needsYou, repoName, shortBase } from '../lib/format';
   import { post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import type { Agent } from '../lib/types';
@@ -40,33 +41,6 @@
       .filter(FILTERS.find((f) => f[0] === filter)?.[2] ?? (() => true))
       .sort((a, b) => b.lastActivity - a.lastActivity),
   );
-
-  /** The tab that holds the decision for a waiting agent. */
-  function decisionTab(a: Agent): string {
-    const g = a.gate;
-    if (!g) return 'terminal';
-    if (g.kind === 'commit') return 'changes';
-    if (g.kind === 'question') return 'terminal';
-    if (g.kind === 'docs' && g.role === 'ship') return 'changes';
-    if (g.kind === 'docs') return 'spec';
-    return 'pr';
-  }
-  function actionLabel(a: Agent): string {
-    const g = a.gate;
-    if (!g || g.kind === 'question') return 'Answer';
-    if (g.kind === 'commit') return 'Review changes';
-    if (g.kind === 'docs') return 'Review';
-    return 'Decide';
-  }
-  function meta(a: Agent): string {
-    const g = a.gate;
-    const parts = [repoName(a)];
-    if (g?.kind === 'commit') parts.push(`${g.files.length} files`);
-    if (g?.kind === 'docs' && g.questions?.length) parts.push(`${g.questions.length} open questions`);
-    if (g && 'needsHuman' in g && g.needsHuman) parts.push(`held: ${g.needsHuman}`);
-    if (!g) parts.push('asked in the terminal');
-    return parts.join(' · ');
-  }
 
   // The kill switch (R-032): no handoff notes, nothing new starts.
   const pausable = $derived((app.state?.agents ?? []).filter((a) => ['queued', 'running', 'idle', 'blocked', 'waiting-input'].includes(a.status)).length);
@@ -98,21 +72,7 @@
 <div class="stack">
   {#if waiting.length}
     <div class="sect"><h2>Needs you</h2><span class="hint">oldest first</span></div>
-    <div class="nygrid">
-      {#each waiting as a (a.id)}
-        <article class="card need cb tight">
-          <div class="row">
-            <AgentDot agent={a} /><a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a>
-            <span class="grow"></span><span class="muted num">{ago(a.statusSince)}</span>
-          </div>
-          <p class="wrap-any" class:mono={a.gate?.kind === 'commit'}>{waitText(a)}</p>
-          <p class="hint">{meta(a)}</p>
-          <div class="row end">
-            <button class="btn gate" onclick={() => go(`/agent/${a.name}`, { s: decisionTab(a) })}>{actionLabel(a)}</button>
-          </div>
-        </article>
-      {/each}
-    </div>
+    <NeedsCards agents={waiting} />
   {/if}
 
   <Panel title="All agents" flush>
@@ -169,6 +129,5 @@
 {/if}
 
 <style>
-  .nygrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; }
   .nyname { font-weight: 600; color: var(--ink); }
 </style>

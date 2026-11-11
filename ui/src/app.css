@@ -250,17 +250,6 @@ label.f.chk.top { align-items: flex-start; }
   .newb .nl { display: none; }
 }
 
-/* ---- herd strip ---- */
-.herd { display: flex; align-items: center; gap: 8px; padding: 10px var(--gut); background: var(--pen); border-bottom: 1px solid var(--fence); overflow-x: auto; scrollbar-width: thin; }
-.x a.hc { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--fence); background: var(--pen); color: var(--ink); font: 500 12px var(--mono); white-space: nowrap; flex: none; text-decoration: none; }
-.x a.hc:hover { border-color: var(--fence-strong); }
-.x a.hc.need { border-color: var(--gate-line); background: var(--gate-wash); }
-.x a.hc.on { background: var(--ink); border-color: var(--ink); color: var(--pen); }
-.hc .s { font: 500 11px var(--sans); color: var(--ink-3); }
-.hc.need .s { color: var(--gate); font-weight: 600; }
-.hc.on .s { color: var(--pen); opacity: .75; }
-.hsep { width: 1px; height: 22px; background: var(--fence); flex: none; margin: 0 4px; }
-
 /* ---- "your call" band: the loudest thing on screen, full width, top ---- */
 .gband { display: flex; flex-direction: column; gap: 10px; padding: 12px var(--gut); background: var(--gate-wash); border-top: 1px solid var(--gate-line); border-bottom: 1px solid var(--gate-line); box-shadow: inset 5px 0 0 var(--gate); }
 .gband.halt { background: var(--halt-wash); border-color: var(--halt); box-shadow: inset 5px 0 0 var(--halt); }
