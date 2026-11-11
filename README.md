@@ -42,14 +42,17 @@ Working today:
 - Git access from the UI (HTTPS tokens, SSH keys, per-owner commit identity) and repositories cloned by URL.
 - Plugins in any language (the CLI is the plugin API). Single Rust binary, web UI embedded.
 - A Board with every stage and task of every agent (pending, in progress, done), a Needs attention page, time tracking and TODOs.
+- Adjustable autonomy: xherd can approve routine steps itself, held back by tripwires (secrets, sensitive paths, large diffs, failing lint or tests). Guardrails: a pre-push guard, token budgets, a session time limit and a "Pause all" kill switch.
+- Pull request follow-up: CI and merge conflicts are polled, review comments become fix tasks, and replies are posted only after you approve them.
+- Repo profiles: per-repository base branch, autonomy, tripwires, test and lint commands, and instructions.
+- Notifications in the browser and on the desktop, and on your phone through ntfy.
+- Backups of agents and their work (`xherd backup create|verify|restore`).
 
 Planned:
 
-- Adjustable autonomy, tripwires and guardrails (for example, blocking pushes).
-- Following the pull request after it opens: CI, review comments, replies.
 - Other runtimes beyond Claude Code (Codex, opencode…), and a runtime, model and effort per step.
-- Notifications and access from your phone.
-- Declarative views and backups.
+- Secure access from your phone or another device (pairing), beyond notifications.
+- Declarative views: Board cards and views declared by flow packs and profiles.
 
 ## Screenshots
 
