@@ -11,15 +11,15 @@
   import { route, href } from '../lib/router.svelte';
   import { get } from '../lib/api';
   import { flowOf, steps, STAGE_LABEL } from '../lib/flow';
-  import { agentHue, needsYou, repoName } from '../lib/format';
+  import { agentHue, agoText, needsYou, repoName } from '../lib/format';
   import type { Agent, StageInfo, Task } from '../lib/types';
 
-  type Todo = { id: string; title: string; due: number; status: 'open' | 'checking' | 'due' | 'done' | 'error'; condition?: string };
+  type Todo = { id: string; title: string; due: number; status: 'open' | 'checking' | 'due' | 'done' | 'error'; condition?: string; completedAt?: number };
   type Col = 'pending' | 'doing' | 'done';
   type Card =
     | { kind: 'stage'; key: string; lane: string; col: Col; agent: Agent; label: string; tab: string; hint: string; needs: boolean }
     | { kind: 'task'; key: string; lane: string; col: Col; agent: Agent; task: Task; needs: boolean }
-    | { kind: 'todo'; key: string; lane: string; col: 'todos'; todo: Todo };
+    | { kind: 'todo'; key: string; lane: string; col: Col; todo: Todo; needs: boolean };
 
   const lanes = $derived((['repo', 'none'] as const).find((l) => l === route.query.get('lanes')) ?? 'agent');
   const only = $derived(route.query.get('agent') ?? '');
@@ -37,7 +37,7 @@
 
   let todos = $state<Todo[]>([]);
   $effect(() => {
-    const load = () => get<{ todos: Todo[] }>('/todos').then((r) => (todos = r.todos.filter((t) => t.status !== 'done'))).catch(() => {});
+    const load = () => get<{ todos: Todo[] }>('/todos').then((r) => (todos = r.todos)).catch(() => {});
     load();
     const t = setInterval(load, 30000);
     return () => clearInterval(t);
@@ -45,6 +45,10 @@
 
   const COLS: [Col, string][] = [['pending', 'Pending'], ['doing', 'In progress'], ['done', 'Done']];
   const TASK_COL: Record<Task['status'], Col> = { todo: 'pending', doing: 'doing', blocked: 'doing', done: 'done' };
+  // TODOs: scheduled = Pending, due (or its check failed) = In progress and
+  // needs you, completed = Done. A check running is in progress too.
+  const TODO_COL: Record<Todo['status'], Col> = { open: 'pending', checking: 'doing', due: 'doing', error: 'doing', done: 'done' };
+  const DAY = 86_400_000;
   const SOURCE_TAG: Record<string, string> = { review: 'review fix', pr: 'PR fix' };
 
   // Cancelled agents are left out: their work is neither pending nor done.
@@ -110,13 +114,20 @@
   }
 
   const cards = $derived.by((): Card[] => {
-    const out = shown.flatMap(agentCards).filter((c) => !needsOnly || (c.kind !== 'todo' && c.needs));
-    if (!only && !repo) for (const t of todos.filter((t) => !needsOnly || t.status === 'due' || t.status === 'error')) out.push({ kind: 'todo', key: `todo:${t.id}`, lane: lanes === 'none' ? '' : 'TODOs', col: 'todos', todo: t });
-    return out;
+    const out = shown.flatMap(agentCards);
+    // TODOs belong to no agent or repository. Completed ones: the last day's,
+    // or all with "Finished".
+    if (!only && !repo) {
+      const now = Date.now();
+      for (const t of todos) {
+        if (t.status === 'done' && !finished && now - (t.completedAt ?? 0) > DAY) continue;
+        const needs = t.status === 'due' || t.status === 'error';
+        out.push({ kind: 'todo', key: `todo:${t.id}`, lane: lanes === 'none' ? '' : 'TODOs', col: TODO_COL[t.status], todo: t, needs });
+      }
+    }
+    return out.filter((c) => !needsOnly || c.needs);
   });
-  // With swimlanes the TODOs have a lane of their own and only that column.
-  const columnsOf = (lane: string): [string, string][] =>
-    lane === 'TODOs' ? [['todos', 'TODOs']] : !lane && cards.some((c) => c.kind === 'todo') ? [...COLS, ['todos', 'TODOs']] : COLS;
+  const when = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
   /** The unfinished tasks a pending task waits on. */
   function waitsOn(a: Agent, t: Task): string[] {
     if (t.status !== 'todo') return [];
@@ -128,6 +139,11 @@
 
 <PageHead title="Board">
   {#snippet actions()}
+    <span class="filters">
+      <label class="f chk"><input type="checkbox" checked={needsOnly} onchange={(e) => go({ needs: e.currentTarget.checked ? '1' : undefined })} /> ✋ Needs you only</label>
+      <label class="f chk"><input type="checkbox" checked={upcoming} onchange={(e) => go({ upcoming: e.currentTarget.checked === (lanes === 'agent') ? undefined : e.currentTarget.checked ? '1' : '0' })} /> Upcoming stages</label>
+      <label class="f chk"><input type="checkbox" checked={finished} onchange={(e) => go({ finished: e.currentTarget.checked ? '1' : undefined })} /> Finished</label>
+    </span>
     <select aria-label="Swimlanes" value={lanes} onchange={(e) => go({ lanes: e.currentTarget.value === 'agent' ? undefined : e.currentTarget.value })}>
       <option value="agent">Lanes by agent</option><option value="repo">Lanes by repository</option><option value="none">No swimlanes</option>
     </select>
@@ -142,13 +158,6 @@
       </select>
     {/if}
   {/snippet}
-  {#snippet sub()}
-    <span class="filters">
-      <label class="f chk"><input type="checkbox" checked={needsOnly} onchange={(e) => go({ needs: e.currentTarget.checked ? '1' : undefined })} /> ✋ Needs you only</label>
-      <label class="f chk"><input type="checkbox" checked={upcoming} onchange={(e) => go({ upcoming: e.currentTarget.checked === (lanes === 'agent') ? undefined : e.currentTarget.checked ? '1' : '0' })} /> Upcoming stages</label>
-      <label class="f chk"><input type="checkbox" checked={finished} onchange={(e) => go({ finished: e.currentTarget.checked ? '1' : undefined })} /> Finished agents</label>
-    </span>
-  {/snippet}
 </PageHead>
 
 <div class="stack">
@@ -162,8 +171,8 @@
     {#each laneNames as lane (lane)}
       <section class="lane" aria-label={lane || 'Board'}>
         {#if lane}<h2 class="lh">{#if lanes === 'agent' && lane !== 'TODOs'}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
-        <div class="cols" class:one={lane === 'TODOs'}>
-          {#each columnsOf(lane) as [col, name] (col)}
+        <div class="cols">
+          {#each COLS as [col, name] (col)}
             {@const list = cards.filter((c) => c.lane === lane && c.col === col)}
             <section class="col" aria-label={name}>
               <h3>{name} <span class="hint num">{list.length}</span></h3>
@@ -184,9 +193,11 @@
                     {#if c.needs}<span class="hint">✋ needs you</span>{/if}
                   </a>
                 {:else}
-                  <a class="card tk" class:needs={c.todo.status === 'due' || c.todo.status === 'error'} href={href('/todos')}>
-                    <span>{c.todo.title}</span>
-                    <span class="hint">{c.todo.status === 'due' ? 'due' : c.todo.status === 'error' ? 'check failed' : c.todo.status === 'checking' ? 'checking…' : c.todo.condition ? 'next check' : 'due'} {new Date(c.todo.due).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                  {@const t = c.todo}
+                  <a class="card tk" class:needs={c.needs} href={href('/todos')}>
+                    {#if !lane}<span class="hint">TODO</span>{/if}
+                    <span>{t.title}</span>
+                    <span class="hint">{c.needs ? '✋ ' : ''}{t.status === 'done' ? `completed ${agoText(t.completedAt ?? t.due)}` : t.status === 'error' ? 'check failed' : t.status === 'checking' ? 'checking now…' : `${t.status === 'due' ? 'due' : t.condition ? 'next check' : 'scheduled'} ${when(t.due)}`}</span>
                   </a>
                 {/if}
               {/each}
@@ -204,7 +215,6 @@
   /* Columns side by side; they scroll sideways when they do not fit (on a
      phone, one column and a bit of the next). */
   .cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 6px; }
-  .cols.one { grid-auto-columns: minmax(180px, 360px); }
   @media (max-width: 760px) {
     .cols { grid-auto-columns: minmax(230px, 72vw); scroll-snap-type: x mandatory; }
     .col { scroll-snap-align: start; }
@@ -213,7 +223,7 @@
   .col h3 { font-size: 13px; margin: 0; padding: 2px 4px; }
   a.tk { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; color: inherit; text-decoration: none; font-size: 13px; }
   .tk:hover { border-color: var(--accent); }
-  .filters { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-right: 8px; }
   .hue { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
   /* Without lanes by agent, the agent's colour marks whose card it is. */
   .who::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--hue); margin-right: 6px; }
