@@ -27,6 +27,13 @@ pub struct ToolInfo {
     pub can_install: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionInfo {
+    pub version: String,
+    pub installed: bool,
+}
+
 fn fail(code: &'static str, message: impl Into<String>) -> ActionError {
     ActionError {
         code,
@@ -114,5 +121,71 @@ impl Daemon {
         tmux.new_session(INSTALL_SESSION, &home, &env, &argv)
             .await
             .map_err(|e| fail("driver", e.to_string()))
+    }
+
+    /// The versions the tool's plugin offers (`list` command, best first),
+    /// each marked installed when `resolve` finds it. Container only: the
+    /// list needs the network and the agents' toolchain homes.
+    pub async fn toolchain_versions(&self, tool: &str) -> Result<Vec<VersionInfo>, ActionError> {
+        if !self.sandbox {
+            return Err(fail(
+                "not_in_container",
+                "xherd lists installable versions only in its container",
+            ));
+        }
+        let (tc, t) = self
+            .plugins
+            .of_kind(xherd_plugin::Kind::Toolchain)
+            .filter(|p| self.plugin_enabled(&p.manifest.name))
+            .filter_map(|p| Toolchain::of(&p.manifest).ok())
+            .find_map(|tc| {
+                let t = tc.tools.iter().find(|t| t.name == tool).cloned()?;
+                Some((tc, t))
+            })
+            .ok_or_else(|| fail("no_tool", format!("no toolchain provides {tool}")))?;
+        let list = t
+            .list
+            .ok_or_else(|| fail("no_list", format!("{tool} has no version list")))?;
+        let env: Vec<(String, String)> = tc
+            .pass_env
+            .iter()
+            .filter_map(|k| xherd_core::runner::agent_env(k).map(|v| (k.clone(), v)))
+            .collect();
+        let run = |argv: Vec<String>, secs| {
+            let mut cmd = xherd_core::exec::Cmd::new(argv)
+                .as_agent()
+                .timeout(std::time::Duration::from_secs(secs));
+            for (k, v) in &env {
+                cmd = cmd.env(k, v);
+            }
+            xherd_core::exec::run(cmd)
+        };
+        let out = run(list, 60)
+            .await
+            .map_err(|e| fail("list_failed", e.to_string()))?;
+        if !out.success() {
+            return Err(fail(
+                "list_failed",
+                format!("the version list failed: {}", out.stderr.trim()),
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let versions: Vec<String> = out
+            .stdout_str()
+            .lines()
+            .map(str::trim)
+            .filter(|v| valid_version(v) && seen.insert(v.to_string()))
+            .take(200)
+            .map(str::to_string)
+            .collect();
+        let mut result = Vec::with_capacity(versions.len());
+        for version in versions {
+            let installed = match &t.resolve {
+                Some(r) => run(subst(r, &version), 10).await.is_ok_and(|o| o.success()),
+                None => false,
+            };
+            result.push(VersionInfo { version, installed });
+        }
+        Ok(result)
     }
 }

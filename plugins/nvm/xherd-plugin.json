@@ -35,6 +35,11 @@
             ". \"${NVM_DIR:-$HOME/.nvm}/nvm.sh\" --no-use && nvm install \"$1\" </dev/null && PATH=\"$(dirname \"$(nvm which \"$1\")\"):$PATH\" corepack enable 2>/dev/null; true",
             "_",
             "{v}"
+          ],
+          "list": [
+            "bash",
+            "-c",
+            ". \"${NVM_DIR:-$HOME/.nvm}/nvm.sh\" --no-use && nvm ls-remote --no-colors </dev/null | grep -oE '^[ >-]*v[0-9]+\\.[0-9]+\\.[0-9]+' | tr -d ' >-' | sort -ruV | head -80"
           ]
         }
       ]

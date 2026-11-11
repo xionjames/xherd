@@ -32,7 +32,7 @@ by theme; update it together with them.
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
 - [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`
 - [ ] Block an agent on git auth failures (R-688)
-- [ ] Profile `toolchain:` / `setup:` (R-654, needs profiles) and the Welcome toolchain step (R-653; Settings → Toolchains has defaults and installs)
+- [ ] Profile `toolchain:` / `setup:` (R-654, needs profiles) and the Welcome toolchain step (R-653; each toolchain plugin's page in Settings → Plugins has defaults, a version dropdown and installs)
 
 ## Agents that survive and recover
 

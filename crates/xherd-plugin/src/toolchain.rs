@@ -38,6 +38,11 @@ pub struct Tool {
     pub resolve: Option<Vec<String>>,
     #[serde(default)]
     pub install: Option<Vec<String>>,
+    /// argv; one installable version per line on stdout, best first (the
+    /// Settings dropdown). No `{v}`; needs network, so it runs in the
+    /// container only.
+    #[serde(default)]
+    pub list: Option<Vec<String>>,
     /// Session variables; values may use `{v}`, `{bin}` (the resolved
     /// directory) and `{home}` (its parent).
     #[serde(default)]
@@ -246,6 +251,16 @@ pub fn resolved_dir(stdout: &str) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_installable_tools_list_versions() {
+        for m in crate::builtins() {
+            let Ok(tc) = Toolchain::of(&m) else { continue };
+            for t in tc.tools.iter().filter(|t| t.install.is_some()) {
+                assert!(t.list.is_some(), "{} has no list", t.name);
+            }
+        }
+    }
 
     #[test]
     fn version_files() {

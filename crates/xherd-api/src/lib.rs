@@ -69,6 +69,10 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
         .route("/api/v1/toolchains", get(toolchains))
         .route("/api/v1/toolchains/install", post(toolchain_install))
+        .route(
+            "/api/v1/toolchains/{tool}/versions",
+            get(toolchain_versions),
+        )
         .route("/api/v1/git/credential", post(git_credential))
         .route("/api/v1/hooks", post(hooks))
         .route("/api/v1/xap", post(xap))
@@ -642,6 +646,17 @@ async fn plugin_login(
 /// Settings → Toolchains: the tools and their default versions.
 async fn toolchains(_: User, State(d): State<Daemon>) -> Json<Value> {
     Json(json!({"tools": d.toolchain_tools(), "sandbox": d.sandbox}))
+}
+
+/// The versions a tool can install, each marked installed or not.
+async fn toolchain_versions(
+    _: User,
+    State(d): State<Daemon>,
+    Path(tool): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        json!({"versions": d.toolchain_versions(&tool).await?}),
+    ))
 }
 
 #[derive(Deserialize)]

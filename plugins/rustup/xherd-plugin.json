@@ -36,6 +36,11 @@
             "install",
             "{v}"
           ],
+          "list": [
+            "sh",
+            "-c",
+            "echo stable; echo beta; echo nightly; rustup toolchain list </dev/null | awk '{print $1}' | grep -vE '^(stable|beta|nightly)' "
+          ],
           "env": {
             "RUSTUP_TOOLCHAIN": "{v}"
           }
