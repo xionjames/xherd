@@ -6,6 +6,9 @@
 
 <p align="center"><b>Run a herd of coding agents in parallel. Stay in control.</b></p>
 
+> [!WARNING]
+> **Development version.** xherd is under active development and has no releases yet. Expect breaking changes, missing features and rough edges, and back up anything you care about before trying it.
+
 ## Why
 
 I got overwhelmed running several coding tasks at once: terminals piled up and an agent could wait an hour for an answer I never saw. The tools I tried each solved part of it, so I built the one I wanted, with the same kind of agents it now manages. It is opinionated and built around my workflow; I hope it fits yours.
