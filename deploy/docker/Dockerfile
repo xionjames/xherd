@@ -23,6 +23,10 @@ FROM rust:${RUST_VERSION}-trixie AS build
 WORKDIR /src
 COPY . .
 COPY --from=ui /src/ui/dist ui/dist
+# .git is not in the build context: pass the version shown in the UI
+# (`git describe`-style, see crates/xherd-core/build.rs).
+ARG XHERD_VERSION=""
+ENV XHERD_VERSION=${XHERD_VERSION}
 RUN cargo build --release --locked -p xherd-cli \
     && cp target/release/xherd /usr/local/bin/xherd
 

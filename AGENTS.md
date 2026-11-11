@@ -131,6 +131,11 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 
 ## Gotchas
 
+- `target/` size: `[profile.dev] debug = "line-tables-only"` in `Cargo.toml` and `incremental = false` in `.cargo/config.toml` keep it small (about 30 test binaries each link the whole tree). Remove the second if rebuild speed matters more than disk; `cargo clean` is always safe.
+
+- Version (issue #53): `xherd_core::VERSION` is the Cargo version (compatibility checks, store, backups compare it; do not display-format it). `xherd_core::BUILD_VERSION` (`crates/xherd-core/build.rs`) is what people see (`xherd --version`, `/state` `buildVersion`, the bar next to the logo, Settings → About): the git tag of a release (`0.2.0`), `<tag>+<commits>.<hash>` after it, `<cargo version>+<hash>` before the first tag, `.dirty` for uncommitted changes. `XHERD_VERSION` in the environment overrides it; the Docker image has no `.git`, so pass `--build-arg XHERD_VERSION=$(git describe --tags --always)` (compose does not yet).
+- Toolchain installs (issue #48): the install command is wrapped in `sh -c` that waits for Enter when it fails, so the terminal stays and shows the error; the version list is sorted newest first by `natural_cmp`.
+
 - `xherd hook` is handled in `main` **before** clap, inside `catch_unwind` with a silent panic hook, so bad arguments or panics still exit 0 with no output. Keep it that way.
 - Sequence numbers from the CLI are `max(last + 1, now in µs)` (`.xherd/seq`), so counter-based and time-based reports from the same agent stay ordered.
 - Hooks without a token, or with the daemon unreachable / 5xx, are appended to `hook-queue.jsonl`; 4xx answers are not queued (a retry would not help). The daemon replays the queue at start and every minute.

@@ -121,6 +121,7 @@ html, body { margin: 0; background: var(--pasture); }
 .x input[type=checkbox],.x input[type=radio]{width:15px;height:15px;padding:0;accent-color:var(--accent);flex:none}
 .x input:focus,.x select:focus,.x textarea:focus{outline:none;border-color:var(--link);box-shadow:0 0 0 3px var(--focus)}
 label.f,div.f{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:500;color:var(--ink-2)}
+label.f.chk{flex-direction:row;align-items:center;gap:8px}
 .seg{display:inline-flex;padding:2px;gap:2px;background:var(--pen-2);border-radius:7px}
 .seg button{height:26px;padding:0 11px;border:0;border-radius:5px;background:transparent;font:500 12px Inter,system-ui,sans-serif;color:var(--ink-2);cursor:pointer}
 .seg button.on{background:var(--pen);color:var(--ink);box-shadow:0 0 0 1px var(--fence-strong)}
@@ -138,6 +139,7 @@ label.f,div.f{display:flex;flex-direction:column;gap:5px;font-size:12px;font-wei
 .bar{display:flex;align-items:center;gap:4px;min-height:52px;padding:0 20px;background:var(--bar);color:var(--bar-ink);flex-wrap:wrap}
 .x a.logo{display:flex;align-items:center;gap:9px;margin-right:14px;color:var(--bar-ink)}
 .logo b{font-size:14px;font-weight:700;letter-spacing:.16em}
+.logo .ver{font-size:11px;color:var(--bar-ink-2);margin-left:2px}
 .gnav{display:flex;align-items:center;flex-wrap:wrap}
 .x a.gt{position:relative;display:inline-flex;align-items:center;gap:7px;height:52px;padding:0 12px;color:var(--bar-ink-2);font-weight:500}
 .x a.gt:hover,.x a.gt.on{color:var(--bar-ink)}

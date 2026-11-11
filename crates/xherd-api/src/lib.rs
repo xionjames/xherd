@@ -325,7 +325,9 @@ impl FromRequestParts<Daemon> for AgentAuth {
 // ---- handlers ------------------------------------------------------------------
 
 async fn healthz() -> Json<Value> {
-    Json(json!({"ok": true, "version": xherd_core::VERSION}))
+    Json(
+        json!({"ok": true, "version": xherd_core::VERSION, "buildVersion": xherd_core::BUILD_VERSION}),
+    )
 }
 
 async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
@@ -355,6 +357,7 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         .collect();
     Ok(Json(json!({
         "version": xherd_core::VERSION,
+        "buildVersion": xherd_core::BUILD_VERSION,
         "platform": std::env::consts::OS,
         "config": config,
         "agents": agents,

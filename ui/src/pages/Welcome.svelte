@@ -9,6 +9,7 @@
   import { showError } from '../lib/errors.svelte';
   import GitAccess from '../components/GitAccess.svelte';
   import TermView from '../components/TermView.svelte';
+  import Toolchains from '../components/Toolchains.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
   const STEPS = ['Welcome', 'Where it runs', 'Your tools', 'Git access', 'Connect & check', 'Ready'];
@@ -29,6 +30,8 @@
   // An enabled plugin that needs a login and is not logged in holds the step.
   const toolsBlocked = $derived(plugins.some((p) => p.enabled && p.login && loginCheck(p) && !loginCheck(p)!.ok));
   let loggingIn = $state<string | null>(null);
+  // Toolchain plugin whose versions are open (they are listed only when opened).
+  let versionsOpen = $state<string | null>(null);
 
   async function toggle(p: PluginInfo) {
     const off = plugins.filter((q) => (q.name === p.name ? q.enabled : !q.enabled)).map((q) => q.name);
@@ -84,7 +87,7 @@
       <h1>Where xherd runs</h1>
       <section class="sec"><div class="bd">
         <dl class="kv">
-          <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.version}</dd>
+          <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.buildVersion}</dd>
           <dt>Workspace</dt><dd class="mono">{workspace}</dd>
           <dt>Worktrees</dt><dd class="muted">One folder per repo, one worktree per agent, under the workspace.</dd>
         </dl>
@@ -120,6 +123,19 @@
           {/each}
         </div>
       {/each}
+      {#if app.state?.sandbox}
+        {@const langs = plugins.filter((p) => p.kind === 'toolchain' && p.enabled)}
+        {#if langs.length}
+          <span class="lbl">Language versions</span>
+          <p class="hint">Optional: install a version now, or set the default for repositories that do not pin one. Otherwise versions install on first use. You can change all of this later in Settings → Plugins.</p>
+          {#each langs as p (p.name)}
+            <details ontoggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) versionsOpen = p.name; else if (versionsOpen === p.name) versionsOpen = null; }}>
+              <summary>{p.label || p.name}</summary>
+              {#if versionsOpen === p.name}{#key p.name}<Toolchains plugin={p.name} />{/key}{/if}
+            </details>
+          {/each}
+        {/if}
+      {/if}
       {#if loggingIn}
         <TermView path="/ws/setup/plugin-login" title={`Log in to ${plugins.find((p) => p.name === loggingIn)?.label ?? loggingIn}`}
           height="360px" onclose={loginEnded} hint="Follow the steps; the check runs again when it ends." />

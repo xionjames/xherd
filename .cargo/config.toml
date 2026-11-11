@@ -1,0 +1,4 @@
+# The incremental cache grows without bound and the ~30 test binaries share
+# little of it. Remove this line if rebuild speed matters more than disk.
+[build]
+incremental = false

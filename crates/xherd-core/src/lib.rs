@@ -27,4 +27,8 @@ pub mod xap;
 pub use agent::{Agent, Millis, new_id, now_ms};
 pub use status::{Status, Trigger};
 
+/// The Cargo version: what compatibility checks and the store compare.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version shown to people (see `build.rs`): the git tag of a release,
+/// `<tag>+<commits>.<hash>` in development.
+pub const BUILD_VERSION: &str = env!("XHERD_BUILD_VERSION");

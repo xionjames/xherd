@@ -12,7 +12,7 @@
   import Toolchains from '../components/Toolchains.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const TABS = ['general', 'gates', 'notifications', 'git', 'profiles', 'backups', 'plugins'];
+  const TABS = ['general', 'gates', 'notifications', 'git', 'profiles', 'backups', 'plugins', 'about'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
   const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
@@ -91,6 +91,7 @@
     <a class="tb" class:on={tab === 'backups'} aria-current={tab === 'backups' ? 'page' : undefined} href={href('/settings', { tab: 'backups' })}>Backups</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
+    <a class="tb" class:on={tab === 'about'} aria-current={tab === 'about' ? 'page' : undefined} href={href('/settings', { tab: 'about' })}>About</a>
   </nav>
 </div>
 
@@ -106,6 +107,15 @@
     <Profiles />
   {:else if tab === 'backups'}
     <Backups />
+  {:else if tab === 'about'}
+    <section class="sec"><div class="sh"><h2>About xherd</h2></div><div class="bd">
+      <dl class="kv">
+        <dt>Version</dt><dd class="mono">{app.state?.buildVersion}</dd>
+        <dt>Runs</dt><dd>{#if app.state?.sandbox}In the Docker container{:else}Natively on {app.state?.platform}{/if}</dd>
+        <dt>License</dt><dd>MIT</dd>
+      </dl>
+      <p class="hint">A release shows its tag (<span class="mono">0.2.0</span>); a development build shows the last tag, the commits since it and the commit hash (<span class="mono">0.2.0+3.abc1234</span>), with <span class="mono">dirty</span> for uncommitted changes.</p>
+    </div></section>
   {:else if !setup.config || !ready}
     <p class="muted">Loading…</p>
   {:else if tab === 'general'}
@@ -223,8 +233,7 @@
         {#key open.name}<Toolchains plugin={open.name} />{/key}
       {/if}
     {:else}
-    <div class="cards">
-      {#each app.state?.plugins ?? [] as p (p.name)}
+    {#snippet pcard(p: PluginInfo)}
         <a class="pcard" href={href('/settings', { tab: 'plugins', plugin: p.name })} style="color:inherit;text-decoration:none">
           <div class="h">
             <span class="mi" style="background:{HUE[p.kind] ?? '#5b4b80'}" aria-hidden="true">{initials(p)}</span>
@@ -237,9 +246,23 @@
             {#if p.description}<p class="muted">{p.description}</p>{/if}
             <span class="hint">{p.settings.length ? `${p.settings.length} setting${p.settings.length > 1 ? 's' : ''}` : 'No settings'}{p.kind === 'toolchain' ? ' · tools and versions' : ''}</span>
           </div>
-          <div class="ft"><span class="pill live">● on</span></div>
+          <div class="ft">{#if p.enabled}<span class="pill live">● on</span>{:else}<span class="pill">○ off</span>{/if}</div>
         </a>
-      {/each}
+    {/snippet}
+    {@const plugs = app.state?.plugins ?? []}
+    <h2 class="hint" style="margin:0 0 8px">Enabled</h2>
+    <div class="cards">
+      {#each plugs.filter((p) => p.enabled) as p (p.name)}{@render pcard(p)}{/each}
+    </div>
+    {#if plugs.some((p) => !p.enabled)}
+      <h2 class="hint" style="margin:16px 0 8px">Available</h2>
+      <p class="hint" style="margin:0 0 8px">Installed but switched off. They can be switched on in the Welcome page tools step.</p>
+      <div class="cards">
+        {#each plugs.filter((p) => !p.enabled) as p (p.name)}{@render pcard(p)}{/each}
+      </div>
+    {/if}
+    {#if broken.length}
+    <div class="cards">
       {#each broken as b (b.dir)}
         <article class="pcard err">
           <div class="h"><span class="mi" style="background:var(--halt)">!</span>
@@ -249,8 +272,9 @@
       {/each}
     </div>
     {/if}
+    {/if}
   {/if}
-  {#if setup.config && ready && tab !== 'git' && tab !== 'backups' && tab !== 'profiles'}
+  {#if setup.config && ready && tab !== 'git' && tab !== 'backups' && tab !== 'profiles' && tab !== 'about'}
     <div class="savebar">
       <span class="muted">{dirty ? `${dirty} unsaved change${dirty > 1 ? 's' : ''}` : 'No unsaved changes'}</span>
       <span class="grow"></span>

@@ -112,6 +112,17 @@ impl Daemon {
             .iter()
             .filter_map(|k| xherd_core::runner::agent_env(k).map(|v| (k.clone(), v)))
             .collect();
+        // On failure keep the terminal open so the error can be read (issue #48).
+        let mut wrapped: Vec<String> = [
+            "sh",
+            "-c",
+            r#""$@"; s=$?; if [ "$s" -ne 0 ]; then printf '\n\nInstall failed (exit %s). Press Enter to close.' "$s"; read -r _; fi; exit "$s""#,
+            "xherd-install",
+        ]
+        .map(String::from)
+        .into();
+        wrapped.extend(argv);
+        let argv = wrapped;
         let tmux = xherd_term::Tmux::new(self.config.tmux_server());
         if tmux.has_session(INSTALL_SESSION).await {
             let _ = tmux.kill_session(INSTALL_SESSION).await;
@@ -170,7 +181,7 @@ impl Daemon {
             ));
         }
         let mut seen = std::collections::HashSet::new();
-        let versions: Vec<String> = out
+        let mut versions: Vec<String> = out
             .stdout_str()
             .lines()
             .map(str::trim)
@@ -178,6 +189,7 @@ impl Daemon {
             .take(200)
             .map(str::to_string)
             .collect();
+        versions.sort_by(|a, b| natural_cmp(b, a));
         let mut result = Vec::with_capacity(versions.len());
         for version in versions {
             let installed = match &t.resolve {
@@ -187,5 +199,53 @@ impl Daemon {
             result.push(VersionInfo { version, installed });
         }
         Ok(result)
+    }
+}
+
+/// Version-aware order: runs of digits compare as numbers, the rest as text
+/// (`21.0.10` after `21.0.2`).
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    fn chunks(s: &str) -> Vec<(bool, &str)> {
+        let mut out = Vec::new();
+        let mut start = 0;
+        let mut digit = None;
+        for (i, c) in s.char_indices() {
+            let d = c.is_ascii_digit();
+            if let Some(prev) = digit.filter(|x| *x != d) {
+                out.push((prev, &s[start..i]));
+                start = i;
+            }
+            digit = Some(d);
+        }
+        if let Some(d) = digit {
+            out.push((d, &s[start..]));
+        }
+        out
+    }
+    let (ca, cb) = (chunks(a), chunks(b));
+    for (x, y) in ca.iter().zip(&cb) {
+        let o = match (x.0, y.0) {
+            (true, true) => {
+                let (nx, ny) = (x.1.trim_start_matches('0'), y.1.trim_start_matches('0'));
+                nx.len().cmp(&ny.len()).then_with(|| nx.cmp(ny))
+            }
+            _ => x.1.cmp(y.1),
+        };
+        if o.is_ne() {
+            return o;
+        }
+    }
+    ca.len().cmp(&cb.len()).then_with(|| a.cmp(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::natural_cmp;
+
+    #[test]
+    fn versions_sort_numerically() {
+        let mut v = vec!["21.0.2-tem", "21.0.10-tem", "17.0.9-tem", "8.0.1"];
+        v.sort_by(|a, b| natural_cmp(b, a));
+        assert_eq!(v, ["21.0.10-tem", "21.0.2-tem", "17.0.9-tem", "8.0.1"]);
     }
 }

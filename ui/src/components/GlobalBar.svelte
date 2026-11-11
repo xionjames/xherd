@@ -6,12 +6,13 @@
   import Bell from './Bell.svelte';
   import { route, href } from '../lib/router.svelte';
   import { failingRequired } from '../lib/setup.svelte';
+  import { app } from '../lib/store.svelte';
   let { blocked = false }: { blocked?: boolean } = $props();
   const failing = $derived(failingRequired().length);
 </script>
 
 <header class="bar">
-  <a class="logo" href={href('/')} aria-label="xherd home"><Logo /><b>XHERD</b></a>
+  <a class="logo" href={href('/')} aria-label="xherd home"><Logo /><b>XHERD</b>{#if app.state?.buildVersion}<span class="ver mono" title="xherd version">{app.state.buildVersion}</span>{/if}</a>
   <nav class="gnav" aria-label="Main">
     <a class="gt" class:on={route.path === '/' || route.path.startsWith('/agent')}
        aria-current={route.path === '/' ? 'page' : undefined}

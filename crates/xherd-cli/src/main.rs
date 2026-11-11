@@ -22,7 +22,7 @@ mod xap;
 #[derive(Parser)]
 #[command(
     name = "xherd",
-    version,
+    version = xherd_core::BUILD_VERSION,
     about = "Run, watch and steer a herd of coding agents"
 )]
 struct Cli {
@@ -514,7 +514,7 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
         .filter_map(|s| s.trim().parse().ok())
         .collect();
     let d = xherd_daemon::Daemon::start(paths.clone(), opts).await?;
-    tracing::info!(url = %format!("http://{addr}"), data = %paths.root.display(), version = xherd_core::VERSION, "xherd daemon listening");
+    tracing::info!(url = %format!("http://{addr}"), data = %paths.root.display(), version = xherd_core::BUILD_VERSION, "xherd daemon listening");
     xherd_api::serve(d, listener, shutdown_signal()).await?;
     tracing::info!("xherd daemon stopped; agent sessions keep running");
     Ok(())
