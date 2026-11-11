@@ -114,7 +114,9 @@
     if (!only && !repo) for (const t of todos.filter((t) => !needsOnly || t.status === 'due' || t.status === 'error')) out.push({ kind: 'todo', key: `todo:${t.id}`, lane: lanes === 'none' ? '' : 'TODOs', col: 'todos', todo: t });
     return out;
   });
-  const columns = $derived<[string, string][]>(cards.some((c) => c.kind === 'todo') ? [...COLS, ['todos', 'TODOs']] : COLS);
+  // With swimlanes the TODOs have a lane of their own and only that column.
+  const columnsOf = (lane: string): [string, string][] =>
+    lane === 'TODOs' ? [['todos', 'TODOs']] : !lane && cards.some((c) => c.kind === 'todo') ? [...COLS, ['todos', 'TODOs']] : COLS;
   /** The unfinished tasks a pending task waits on. */
   function waitsOn(a: Agent, t: Task): string[] {
     if (t.status !== 'todo') return [];
@@ -160,8 +162,8 @@
     {#each laneNames as lane (lane)}
       <section class="lane" aria-label={lane || 'Board'}>
         {#if lane}<h2 class="lh">{#if lanes === 'agent' && lane !== 'TODOs'}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
-        <div class="cols">
-          {#each columns as [col, name] (col)}
+        <div class="cols" class:one={lane === 'TODOs'}>
+          {#each columnsOf(lane) as [col, name] (col)}
             {@const list = cards.filter((c) => c.lane === lane && c.col === col)}
             <section class="col" aria-label={name}>
               <h3>{name} <span class="hint num">{list.length}</span></h3>
@@ -202,6 +204,7 @@
   /* Columns side by side; they scroll sideways when they do not fit (on a
      phone, one column and a bit of the next). */
   .cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 6px; }
+  .cols.one { grid-auto-columns: minmax(180px, 360px); }
   @media (max-width: 760px) {
     .cols { grid-auto-columns: minmax(230px, 72vw); scroll-snap-type: x mandatory; }
     .col { scroll-snap-align: start; }
