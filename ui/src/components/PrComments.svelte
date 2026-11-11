@@ -4,6 +4,7 @@
   // the pr-review gate. Comment text is untrusted: it is shown as plain text.
   import type { Agent, Decision, PrComment, Verdict } from '../lib/types';
   import { get, put } from '../lib/api';
+  import Seg from './Seg.svelte';
 
   let { agent }: { agent: Agent } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -60,7 +61,7 @@
 </script>
 
 {#if error}
-  <div class="card cb" style="color:var(--halt)">{error}</div>
+  <div class="card cb"><p class="err">{error}</p></div>
 {/if}
 {#if round && open}
   <section class="card" aria-label="Pull request comments">
@@ -68,32 +69,30 @@
       <h2>Comments to decide</h2>
       <span class="muted">{open} in this round: choose what to do, then approve the plan</span>
     </div>
-    {#if round.error}<div class="cb" style="color:var(--halt)">pr-review.md: {round.error}</div>{/if}
+    {#if round.error}<div class="cb"><p class="err">pr-review.md: {round.error}</p></div>{/if}
     <ul class="list">
       {#each round.comments as c (c.id)}
         {@const v = effective(c)}
-        <li class="item">
+        <li>
           <div class="row">
             <b>{c.author}</b>
-            <span class="mono muted">{location(c)}</span>
+            <span class="mono muted wrap-any">{location(c)}</span>
             {#if safe(c.url)}<a href={safe(c.url)} target="_blank" rel="noopener noreferrer">open</a>{/if}
             <span class="grow"></span>
             {#if posted(c)}<span class="pill live">✓ reply posted</span>{/if}
           </div>
-          <p class="body">{c.body}</p>
-          <div class="row" role="group" aria-label="Decision for this comment">
-            {#each DECISIONS as d (d)}
-              <button class="chip" class:on={v?.decision === d} aria-pressed={v?.decision === d}
-                onclick={() => edit(c, { decision: d })}>{GLYPH[d]} {d}</button>
-            {/each}
+          <p class="pre wrap-any">{c.body}</p>
+          <div class="row">
+            <Seg label="Decision for this comment" value={v?.decision ?? ('' as Decision)} onchange={(d) => edit(c, { decision: d })}
+              options={DECISIONS.map((d) => ({ value: d, label: `${GLYPH[d]} ${d}` }))} />
             {#if v && !overrides[c.id]}<span class="muted">proposed by the agent</span>{/if}
             {#if !v}<span class="pill gate">no decision yet</span>{/if}
           </div>
           {#if v}
-            <input class="note" placeholder="Note (why)" value={v.note ?? ''}
+            <input placeholder="Note (why)" value={v.note ?? ''}
               onchange={(e) => edit(c, { note: e.currentTarget.value })} />
             {#if v.decision !== 'skip'}
-              <textarea class="reply" rows="2"
+              <textarea rows="2"
                 placeholder={v.decision === 'reply' ? 'Reply to post (required)' : 'Reply draft (not posted)'}
                 value={v.reply ?? ''} onchange={(e) => edit(c, { reply: e.currentTarget.value })}></textarea>
             {/if}
@@ -105,9 +104,3 @@
   </section>
 {/if}
 
-<style>
-  .list { list-style: none; margin: 0; padding: 0; }
-  .item { padding: 10px 14px; border-top: 1px solid var(--fence-soft); display: flex; flex-direction: column; gap: 6px; }
-  .body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .note, .reply { width: 100%; font: 13px var(--sans); color: var(--ink); background: var(--well); border: 1px solid var(--fence); border-radius: var(--r-ctl); padding: 6px 10px; }
-</style>

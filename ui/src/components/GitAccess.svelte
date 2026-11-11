@@ -5,6 +5,9 @@
   import { get, put, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import TermView from './TermView.svelte';
+  import Panel from './Panel.svelte';
+  import SaveBar from './SaveBar.svelte';
+  import Callout from './Callout.svelte';
   import type { GitHost, GitHostsView, GitFinding, ConfigView } from '../lib/types';
 
   type Row = GitHost & { token: string };
@@ -140,6 +143,16 @@
   async function startLogin(host: string) {
     try { await post('/git/login', { host }); login = host; } catch (e) { showError(`Could not log in to ${host}`, e); }
   }
+  // One save bar for the page: identity and hosts are saved together.
+  const anyDirty = $derived(dirty || idDirty);
+  async function saveAll() {
+    if (idDirty) await saveIdentity();
+    if (dirty) await save();
+  }
+  function discardAll() {
+    if (view) fill(view);
+    loadIdentity();
+  }
   function loginEnded() {
     const h = login;
     login = null;
@@ -148,120 +161,119 @@
 </script>
 
 {#if !view}
-  <p class="muted">Loading…</p>
+  <p class="empty">Loading…</p>
 {:else}
   {#if !view.sandbox && view.gitconfig}
-    <p class="hint">xherd runs natively: these settings go to <span class="mono">{view.gitconfig}</span>. Add
-      <span class="mono" style="user-select:all">[include] path = {view.gitconfig}</span> to <span class="mono">~/.gitconfig</span> to use them.</p>
+    <Callout tone="info">xherd runs natively: these settings go to <span class="mono">{view.gitconfig}</span>. Add
+      <span class="mono" style="user-select:all">[include] path = {view.gitconfig}</span> to <span class="mono">~/.gitconfig</span> to use them.</Callout>
   {/if}
 
-  <div class="gdiv"><h2>1 · Commit identity</h2></div>
-  <div class="gstat" class:ok={!idDirty && idName && idEmail} class:bad={!idName || !idEmail} role="status">
-    {#if !idName || !idEmail}<span class="ckst bad" aria-hidden="true">✕</span><span>Not set: git refuses to commit without a name and email.</span>
-    {:else if idDirty}<span class="ckst opt" aria-hidden="true">•</span><span>Unsaved changes to the identity.</span>
-    {:else}<span class="ckst ok" aria-hidden="true">✓</span><span>Agents commit as <b>{idName}</b> &lt;{idEmail}&gt;</span>{/if}
-  </div>
-  <section class="sec"><div class="bd stack">
-    <h3>Name and email</h3>
-    <p class="hint">Agents commit as this name and email. Without it git refuses to commit ("unable to auto-detect email address").</p>
-    <div class="g3">
+  <div class="sect"><h2>1 · Commit identity</h2></div>
+  {#if !idName || !idEmail}
+    <Callout tone="bad">Not set: git refuses to commit without a name and email.</Callout>
+  {:else if idDirty}
+    <Callout>Unsaved changes to the identity.</Callout>
+  {:else}
+    <Callout tone="ok">Agents commit as <b>{idName}</b> &lt;{idEmail}&gt;</Callout>
+  {/if}
+  <Panel title="Name and email" hint="Agents commit as this name and email. Without it git refuses to commit (“unable to auto-detect email address”).">
+    <div class="g2">
       <label class="f">Name <input bind:value={idName} placeholder="Your Name" autocomplete="off" /></label>
       <label class="f">Email <input type="email" bind:value={idEmail} placeholder="you@example.com" autocomplete="off" /></label>
     </div>
-    <span class="lbl">Other identities, by repository owner</span>
-    <p class="hint">For repositories under an owner or a host, use a different identity (for example work on the same github.com). Matched on the remote URL, HTTPS or SSH.</p>
-    {#each idRules as r, i (i)}
-      <div class="g3">
-        <label class="f">Owner <input class="mono" bind:value={r.scope} placeholder="github.com/my-company" autocomplete="off" /></label>
-        <label class="f">Name <input bind:value={r.name} autocomplete="off" /></label>
-        <label class="f">Email <input type="email" bind:value={r.email} autocomplete="off" /></label>
-        <div><button class="btn ghost sm" onclick={() => idRules.splice(i, 1)}>Remove</button></div>
-      </div>
-    {/each}
-    <div><button class="btn" onclick={() => idRules.push({ scope: '', name: '', email: '' })}>+ Add an identity</button></div>
-    <div><button class="btn" disabled={idBusy || !idDirty} onclick={saveIdentity}>{idBusy ? 'Saving…' : 'Save identity'}</button>
-      {#if !idDirty && idName && idEmail}<span class="hint">Saved; applies to new commits at once.</span>{/if}</div>
-  </div></section>
+    <div class="grp">
+      <header><h3>Other identities, by repository owner</h3>
+        <span class="hint">For repositories under an owner or a host, use a different identity (for example work on the same github.com). Matched on the remote URL, HTTPS or SSH.</span></header>
+      {#each idRules as r, i (i)}
+        <div class="idrule">
+          <label class="f">Owner <input class="mono" bind:value={r.scope} placeholder="github.com/my-company" autocomplete="off" /></label>
+          <label class="f">Name <input bind:value={r.name} autocomplete="off" /></label>
+          <label class="f">Email <input type="email" bind:value={r.email} autocomplete="off" /></label>
+          <button class="btn ghost danger sm" onclick={() => idRules.splice(i, 1)}>Remove</button>
+        </div>
+      {/each}
+      <div><button class="btn" onclick={() => idRules.push({ scope: '', name: '', email: '' })}>+ Add an identity</button></div>
+    </div>
+  </Panel>
 
-  <div class="gdiv"><h2>2 · Git hosts</h2></div>
-  <p class="hint">How agents reach each host to fetch and push. This is separate from the identity above: it only decides access.</p>
+  <div class="sect"><h2>2 · Git hosts</h2><span class="hint">How agents reach each host to fetch and push; separate from the identity above.</span></div>
   {#if rows.length}
     {@const bad = rows.filter((r) => status(doctor[r.host]) === 'bad')}
     {@const pending = rows.filter((r) => ['checking', 'unknown'].includes(status(doctor[r.host])))}
-    <div class="gstat" class:ok={!bad.length && !pending.length} class:bad={bad.length > 0} role="status">
-      {#if bad.length}<span class="ckst bad" aria-hidden="true">✕</span><span>Access fails for {bad.map((r) => r.host).join(', ')}.</span>
-      {:else if pending.length}<span class="ckst opt" aria-hidden="true">…</span><span>Checking access…</span>
-      {:else}<span class="ckst ok" aria-hidden="true">✓</span><span>Access works for {rows.map((r) => r.host).join(', ')}.</span>{/if}
-    </div>
+    {#if bad.length}<Callout tone="bad">Access fails for {bad.map((r) => r.host).join(', ')}.</Callout>
+    {:else if pending.length}<Callout glyph="…">Checking access…</Callout>
+    {:else}<Callout tone="ok">Access works for {rows.map((r) => r.host).join(', ')}.</Callout>{/if}
   {:else}
-    <div class="gstat bad" role="status"><span class="ckst bad" aria-hidden="true">✕</span><span>No host yet: add the hosts your repositories live on.</span></div>
+    <Callout tone="bad">No host yet: add the hosts your repositories live on.</Callout>
   {/if}
 
   {#each rows as r (r.host)}
     {@const d = doctor[r.host]}
-    <section class="sec">
-      <div class="sh" style="flex-direction:row;align-items:center;gap:10px;flex-wrap:wrap"><h2 class="mono">{r.host}</h2>
-        <span class="hint">{r.protocols.length ? r.protocols.join(' + ').toUpperCase() : 'no protocol'}</span>
-        {#if status(d) === 'checking'}<span class="hint">Checking…</span>
-        {:else if status(d) === 'ok'}<span class="ckst ok" aria-label="access works">✓</span><span class="hint">Access works</span>
-        {:else if status(d) === 'bad'}<span class="ckst bad" aria-label="access fails">✕</span><span class="hint">{d?.findings?.find((f) => !f.ok)?.label}</span>{/if}
+    <Panel label={r.host}>
+      {#snippet head()}
+        <h2 class="mono">{r.host}</h2>
+        <span class="pill">{r.protocols.length ? r.protocols.join(' + ').toUpperCase() : 'no protocol'}</span>
+        {#if status(d) === 'checking'}<span class="pill">Checking…</span>
+        {:else if status(d) === 'ok'}<span class="pill live">✓ Access works</span>
+        {:else if status(d) === 'bad'}<span class="pill halt">✕ {d?.findings?.find((f) => !f.ok)?.label}</span>{/if}
         <span class="grow"></span>
-        <button class="btn ghost sm" onclick={() => (rows = rows.filter((x) => x !== r))}>Remove</button></div>
-      <div class="bd">
-        <div class="row" style="gap:18px">
-          {#each ['https', 'ssh'] as const as p (p)}
-            <label class="row" style="gap:6px;width:auto"><input type="checkbox" style="width:auto;height:auto"
-              checked={r.protocols.includes(p)} onchange={() => toggle(r, p)} />{p.toUpperCase()}</label>
-          {/each}
-        </div>
-        {#if r.protocols.includes('https')}
-          <div class="g3">
-            <label class="f">HTTPS token from
-              <select bind:value={r.credential}>
-                {#each CRED as [v, label] (v)}<option value={v}>{label}</option>{/each}
-              </select></label>
-            {#if r.credential === 'xherd'}
-              <label class="f">Token
-                <input type="password" autocomplete="off" bind:value={r.token}
-                  placeholder={r.hasToken ? 'stored · type to replace' : 'paste a token'} />
-                {#if r.hasToken}<button class="btn ghost sm" style="width:fit-content" onclick={() => forget(r)}>Forget the stored token</button>{/if}</label>
-            {/if}
-            <label class="f">Username <input bind:value={r.username} placeholder="automatic" /></label>
-          </div>
-          <label class="f">CA bundle (optional)
-            <input class="mono" bind:value={r.caFile} placeholder="/path/to/ca.pem, for a host with its own certificate authority" /></label>
-          {#if r.credential === 'gh' || r.credential === 'glab'}
-            <div><button class="btn" onclick={() => startLogin(r.host)}>Log in to {r.host} in the browser</button>
-              <span class="hint">Shows a one-time code to enter on {r.host}.</span></div>
+        <button class="btn ghost danger sm" onclick={() => (rows = rows.filter((x) => x !== r))}>Remove</button>
+      {/snippet}
+      <div class="row" style="gap:18px">
+        {#each ['https', 'ssh'] as const as p (p)}
+          <label class="f chk"><input type="checkbox" checked={r.protocols.includes(p)} onchange={() => toggle(r, p)} />{p.toUpperCase()}</label>
+        {/each}
+      </div>
+      {#if r.protocols.includes('https')}
+        <div class="g3">
+          <label class="f">HTTPS token from
+            <select bind:value={r.credential}>
+              {#each CRED as [v, label] (v)}<option value={v}>{label}</option>{/each}
+            </select></label>
+          {#if r.credential === 'xherd'}
+            <label class="f">Token
+              <input type="password" autocomplete="off" bind:value={r.token}
+                placeholder={r.hasToken ? 'stored · type to replace' : 'paste a token'} />
+              {#if r.hasToken}<button class="btn ghost danger sm" style="align-self:flex-start" onclick={() => forget(r)}>Forget the stored token</button>{/if}</label>
           {/if}
+          <label class="f">Username <input bind:value={r.username} placeholder="automatic" /></label>
+        </div>
+        <label class="f">CA bundle (optional)
+          <input class="mono" bind:value={r.caFile} placeholder="/path/to/ca.pem, for a host with its own certificate authority" /></label>
+        {#if r.credential === 'gh' || r.credential === 'glab'}
+          <div class="row"><button class="btn" onclick={() => startLogin(r.host)}>Log in to {r.host} in the browser</button>
+            <span class="hint">Shows a one-time code to enter on {r.host}.</span></div>
         {/if}
-        <label class="f">Rewrite remotes of this host
-          <select value={r.preferHttps ? 'https' : r.preferSsh ? 'ssh' : ''} onchange={(e) => rewrite(r, e.currentTarget.value)}>
-            <option value="">No: use remote URLs as they are</option>
-            <option value="https">SSH remotes over HTTPS</option>
-            <option value="ssh">HTTPS remotes over SSH</option>
-          </select></label>
+      {/if}
+      <label class="f">Rewrite remotes of this host
+        <select value={r.preferHttps ? 'https' : r.preferSsh ? 'ssh' : ''} onchange={(e) => rewrite(r, e.currentTarget.value)}>
+          <option value="">No: use remote URLs as they are</option>
+          <option value="https">SSH remotes over HTTPS</option>
+          <option value="ssh">HTTPS remotes over SSH</option>
+        </select></label>
 
-        {#if login === r.host}
-          <TermView path="/ws/setup/git-login" title={`Log in to ${r.host}`} height="360px" onclose={loginEnded}
-            hint="Follow the steps; the check runs again when it ends." />
-        {/if}
+      {#if login === r.host}
+        <TermView path="/ws/setup/git-login" title={`Log in to ${r.host}`} height="360px" onclose={loginEnded}
+          hint="Follow the steps; the check runs again when it ends." />
+      {/if}
 
-        <div class="row" style="gap:8px;border-top:1px solid var(--fence-soft);padding-top:12px">
-          <input class="mono" style="max-width:420px" placeholder="repository URL to test (optional)"
+      <div class="grp">
+        <header><h3>Check access</h3></header>
+        <div class="row" style="flex-wrap:nowrap">
+          <input class="mono" placeholder="repository URL to test (optional)"
             value={d?.repo ?? ''} oninput={(e) => { doctor[r.host] ??= { repo: '', findings: null, running: false }; doctor[r.host].repo = e.currentTarget.value; }} />
-          <button class="btn" disabled={d?.running || dirty} title={dirty ? 'Save first' : ''} onclick={() => runDoctor(r.host)}>
+          <button class="btn" disabled={d?.running || anyDirty} title={anyDirty ? 'Save first' : ''} onclick={() => runDoctor(r.host)}>
             {d?.running ? 'Checking…' : 'Check access'}</button>
         </div>
         {#if d?.findings}
           <div class="card">
             {#each d.findings as f, i (f.id + i)}
-              <div class="ck" class:first={i === 0} style={f.ok ? '' : 'background:var(--halt-wash)'}>
+              <div class="ck" class:first={i === 0} class:fail={!f.ok}>
                 <span class="ckst {f.ok ? 'ok' : 'bad'}" aria-label={f.ok ? 'passes' : 'fails'}>{f.ok ? '✓' : '✕'}</span>
-                <div style="min-width:0">
+                <div class="wrap-any">
                   <b style="font-weight:500">{f.label}</b>
-                  <p class={f.ok ? 'mono muted' : ''} style={f.ok ? '' : 'color:var(--halt);word-break:break-word'}>{f.detail}</p>
-                  {#if !f.ok && f.fix?.kind === 'command'}<div class="fix"><span style="user-select:all">{f.fix.text}</span></div>{/if}
+                  <p class="wrap-any" class:mono={f.ok} class:muted={f.ok}>{f.detail}</p>
+                  {#if !f.ok && f.fix?.kind === 'command'}<div class="fix"><span>{f.fix.text}</span></div>{/if}
                 </div>
                 {#if !f.ok && f.fix?.kind === 'action'}
                   <button class="btn primary sm" onclick={() => fix(r.host, f)}>{f.fix.label}</button>
@@ -271,22 +283,30 @@
           </div>
         {/if}
       </div>
-    </section>
+    </Panel>
   {/each}
 
-  <div class="row" style="gap:8px">
-    {#each PRESETS.filter((p) => !rows.some((r) => r.host === p)) as p (p)}
-      <button class="btn" onclick={() => add(p)}>+ {p}</button>
-    {/each}
-    <input class="mono" style="max-width:240px" placeholder="git.example.com" bind:value={newHost}
-      onkeydown={(e) => e.key === 'Enter' && add(newHost)} />
-    <button class="btn" disabled={!newHost.trim()} onclick={() => add(newHost)}>+ Add host</button>
-  </div>
+  <Panel title="Add a host">
+    <div class="row">
+      {#each PRESETS.filter((p) => !rows.some((r) => r.host === p)) as p (p)}
+        <button class="btn" onclick={() => add(p)}>+ {p}</button>
+      {/each}
+    </div>
+    <div class="row" style="flex-wrap:nowrap">
+      <input class="mono" placeholder="git.example.com" bind:value={newHost}
+        onkeydown={(e) => e.key === 'Enter' && add(newHost)} />
+      <button class="btn" disabled={!newHost.trim()} onclick={() => add(newHost)}>+ Add host</button>
+    </div>
+  </Panel>
 
-  <div class="savebar">
-    <span class="muted">{dirty ? 'Unsaved changes' : 'Saved; applies right away'}</span>
-    <span class="grow"></span>
-    <button class="btn ghost" disabled={!dirty || busy} onclick={() => view && fill(view)}>Discard</button>
-    <button class="btn primary" disabled={!dirty || busy} onclick={save}>Save git access</button>
-  </div>
+  <SaveBar dirty={anyDirty} busy={busy || idBusy} onsave={saveAll} ondiscard={discardAll}
+    saveLabel="Save git access" saved="Saved; applies right away" />
 {/if}
+
+<style>
+  .idrule { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+  @media (max-width: 760px) {
+    .idrule { grid-template-columns: minmax(0, 1fr); padding-bottom: 12px; border-bottom: 1px solid var(--fence-soft); }
+    .idrule .btn { justify-self: start; }
+  }
+</style>

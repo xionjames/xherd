@@ -6,6 +6,9 @@
   import { go, href } from '../lib/router.svelte';
   import { showError } from '../lib/errors.svelte';
   import type { Agent } from '../lib/types';
+  import PageHead from '../components/PageHead.svelte';
+  import Panel from '../components/Panel.svelte';
+  import Seg from '../components/Seg.svelte';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
   let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask' });
@@ -79,16 +82,16 @@
   }
 </script>
 
-<div class="phead notabs"><h1>New agent</h1><p class="muted">One ticket, one worktree, one agent.</p></div>
-<form class="stack" onsubmit={create}>
-  <section class="sec"><div class="bd">
+<PageHead title="New agent" sub="One ticket, one worktree, one agent." />
+<form class="stack narrow" onsubmit={create}>
+  <Panel>
     <div class="g2">
       <label class="f">Ticket key
         <input class="mono" bind:value={f.ticketKey} placeholder="PAY-412" required oninput={() => (f.ticketKey = f.ticketKey.toUpperCase())} />
-        {#if f.ticketKey && !keyOk}<span class="hint" style="color:var(--halt)">Capital letters, digits, - and _.</span>{/if}</label>
+        {#if f.ticketKey && !keyOk}<span class="hint err">Capital letters, digits, - and _.</span>{/if}</label>
       <label class="f">Short name (optional)
         <input class="mono" bind:value={f.slug} placeholder="refund-retry" />
-        {#if !slugOk}<span class="hint" style="color:var(--halt)">Lowercase letters, digits and -, up to 41.</span>
+        {#if !slugOk}<span class="hint err">Lowercase letters, digits and -, up to 41.</span>
         {:else if f.ticketKey}<span class="hint">Agent, branch and session: <span class="mono">{name}</span></span>{/if}</label>
     </div>
     <label class="f">Repository: URL or local path
@@ -98,14 +101,14 @@
       {#if repo.busy && repo.input === input}
         <span class="hint">{isUrl(input) ? `Cloning or fetching ${input}…` : 'Checking…'}</span>
       {:else if repoBad}
-        <span class="hint" style="color:var(--halt);word-break:break-word">✕ {repo.error}</span>
+        <span class="hint err">✕ {repo.error}</span>
       {:else if repo.data && repo.input === input}
-        <span class="hint">✓ <span class="mono">{repo.data.path}</span>{repo.data.cloned ? ' (cloned now)' : ''}</span>
-        {#if repo.data.warning}<span class="hint" style="word-break:break-word">⚠ {repo.data.warning}</span>{/if}
+        <span class="hint wrap-any">✓ <span class="mono">{repo.data.path}</span>{repo.data.cloned ? ' (cloned now)' : ''}</span>
+        {#if repo.data.warning}<span class="hint wrap-any">⚠ {repo.data.warning}</span>{/if}
       {:else}
         <span class="hint">A URL is cloned into the workspace once and fetched before each new agent.</span>
       {/if}</label>
-    <label class="f" style="max-width:420px">Base branch (optional)
+    <label class="f">Base branch (optional)
       <input class="mono" bind:value={f.base} list="repo-branches"
         placeholder={repo.data?.base ?? "origin's default branch"} />
       {#if repo.data?.profile}<span class="hint">Profile <b>{repo.data.profile.name}</b> applies.</span>
@@ -113,24 +116,19 @@
         <a href={href('/settings', { tab: 'profiles', new: repo.data.suggestedMatch })}>Create one</a> for a base branch, test command or sensitive paths.</span>{/if}
       <datalist id="repo-branches">{#each repo.data?.branches ?? [] as b (b)}<option value={b}></option>{/each}</datalist></label>
     <div class="f">Workflow
-      <div class="seg" role="group" aria-label="Workflow" style="align-self:flex-start">
-        {#each [...flows, 'none'] as fl (fl)}
-          <button type="button" class:on={f.flow === fl} aria-pressed={f.flow === fl} onclick={() => (f.flow = fl)}>{fl === 'none' ? 'No workflow' : fl}</button>
-        {/each}
-      </div></div>
+      <Seg label="Workflow" value={f.flow} onchange={(v) => (f.flow = v)}
+        options={[...flows, 'none'].map((fl) => ({ value: fl, label: fl === 'none' ? 'No workflow' : fl }))} /></div>
     <div class="f">Autonomy
-      <div class="seg" role="group" aria-label="Autonomy" style="align-self:flex-start">
-        {#each ['ask', 'important'] as lv (lv)}
-          <button type="button" class:on={f.autonomy === lv} aria-pressed={f.autonomy === lv} onclick={() => { autonomyTouched = true; f.autonomy = lv; }}>{lv}</button>
-        {/each}
-      </div>
+      <Seg label="Autonomy" value={f.autonomy} onchange={(v) => { autonomyTouched = true; f.autonomy = v; }}
+        options={[{ value: 'ask', label: 'ask' }, { value: 'important', label: 'important' }]} />
       <span class="hint">{f.autonomy === 'ask'
         ? 'Every gate waits for you.'
         : 'Design, tasks, review and commit gates are approved by xherd when nothing needs you; spec and ship always wait.'}</span></div>
     <label class="f">{f.flow === 'none' ? 'Prompt' : 'What to do (optional)'}
       <textarea rows="4" bind:value={f.prompt} placeholder={f.flow === 'none' ? 'Typed into the agent as its first message' : 'Context for the spec step'}></textarea></label>
-  </div></section>
-  <div class="row"><span class="grow"></span>
-    <button type="button" class="btn ghost" onclick={() => history.back()}>Cancel</button>
-    <button class="btn primary lg" disabled={!ready || busy}>{busy && repo.busy ? 'Getting the repository…' : 'Create agent'}</button></div>
+    {#snippet foot()}
+      <button type="button" class="btn ghost" onclick={() => history.back()}>Cancel</button>
+      <button class="btn primary" disabled={!ready || busy}>{busy && repo.busy ? 'Getting the repository…' : 'Create agent'}</button>
+    {/snippet}
+  </Panel>
 </form>

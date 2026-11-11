@@ -6,6 +6,8 @@
   import { href } from '../lib/router.svelte';
   import { agoText } from '../lib/format';
   import { showError } from '../lib/errors.svelte';
+  import PageHead from '../components/PageHead.svelte';
+  import Panel from '../components/Panel.svelte';
 
   type Item = { agentId: string; at: number; gate: string; files: string[]; reason?: string; seen: boolean };
   let items = $state<Item[] | null>(null);
@@ -23,31 +25,36 @@
   const name = (id: string) => app.state?.agents.find((a) => a.id === id)?.name;
 </script>
 
-<div class="stack">
-  <div class="phead notabs"><div class="row"><h1>To review</h1>
-    <span class="grow"></span>
-    <label class="hint"><input type="checkbox" bind:checked={showSeen} /> Show seen</label>
-    <button class="btn sm" disabled={!unseen.length} onclick={() => markSeen(unseen)}>Mark all seen</button></div></div>
-  <p class="muted">Gates xherd approved by itself under autonomy <span class="mono">important</span>. Anything a tripwire held is not here: it waited for you.</p>
+<PageHead title="To review">
+  {#snippet sub()}Gates xherd approved by itself under autonomy <span class="mono">important</span>. Anything a tripwire held is not here: it waited for you.{/snippet}
+  {#snippet actions()}
+    <label class="f chk"><input type="checkbox" bind:checked={showSeen} /> Show seen</label>
+    <button class="btn" disabled={!unseen.length} onclick={() => markSeen(unseen)}>Mark all seen</button>
+  {/snippet}
+</PageHead>
+
+<div class="stack mid">
   {#if items === null}
-    <p class="muted">Loading…</p>
+    <p class="empty">Loading…</p>
   {:else if shown.length === 0}
-    <p class="muted">{items.length ? 'Everything is seen.' : 'Nothing yet.'}</p>
+    <p class="empty">{items.length ? 'Everything is seen.' : 'Nothing yet.'}</p>
   {:else}
-    <ul class="card" style="list-style:none;margin:0;padding:0">
-      {#each shown as it (`${it.agentId}${it.at}${it.gate}`)}
-        <li style="padding:12px 16px;border-bottom:1px solid var(--fence)">
-          <div class="row" style="gap:10px">
-            {#if name(it.agentId)}<a href={href(`/agent/${name(it.agentId)}`)}><b>{name(it.agentId)}</b></a>{:else}<span class="muted">removed agent</span>{/if}
-            <span class="pill mono" style="text-transform:none">{it.gate}</span>
-            <span class="hint">{agoText(it.at)}</span>
-            <span class="grow"></span>
-            {#if it.seen}<span class="hint">seen</span>{:else}<button class="btn ghost sm" onclick={() => markSeen([it])}>Mark seen</button>{/if}
-          </div>
-          {#if it.reason}<div class="hint">{it.reason}</div>{/if}
-          {#if it.files?.length}<div class="mono hint">{it.files.join(', ')}</div>{/if}
-        </li>
-      {/each}
-    </ul>
+    <Panel label="Approved by xherd" flush>
+      <ul class="list">
+        {#each shown as it (`${it.agentId}${it.at}${it.gate}`)}
+          <li>
+            <div class="row">
+              {#if name(it.agentId)}<a href={href(`/agent/${name(it.agentId)}`)}><b>{name(it.agentId)}</b></a>{:else}<span class="muted">removed agent</span>{/if}
+              <span class="pill mono">{it.gate}</span>
+              <span class="hint">{agoText(it.at)}</span>
+              <span class="grow"></span>
+              {#if it.seen}<span class="hint">seen</span>{:else}<button class="btn ghost sm" onclick={() => markSeen([it])}>Mark seen</button>{/if}
+            </div>
+            {#if it.reason}<div class="hint">{it.reason}</div>{/if}
+            {#if it.files?.length}<div class="mono hint wrap-any">{it.files.join(', ')}</div>{/if}
+          </li>
+        {/each}
+      </ul>
+    </Panel>
   {/if}
 </div>

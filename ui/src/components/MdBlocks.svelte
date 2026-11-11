@@ -23,16 +23,16 @@
     {#if onnote}<button class="btn ghost sm bc" aria-label="Comment on this block" onclick={() => start(k)}>💬</button>{/if}
   </div>
   {#if editing === k}
-    <div class="lnote" style="margin-left:0">
+    <div class="lnote flush">
       <textarea bind:value={draft} aria-label="Your comment" placeholder="Comment for the agent…"></textarea>
-      <div class="row" style="gap:8px">
+      <div class="row">
         <button class="btn sm" onclick={() => save(b.raw)}>{draft.trim() ? 'Save' : 'Remove'}</button>
         <button class="btn ghost sm" onclick={() => (editing = null)}>Cancel</button>
       </div>
     </div>
   {:else if notes?.[k]}
-    <div class="lnote saved" style="margin-left:0">
-      <span style="white-space:pre-wrap">{notes[k].text}</span>
+    <div class="lnote saved flush">
+      <span class="pre">{notes[k].text}</span>
       <button class="btn ghost sm" onclick={() => start(k)}>Edit</button>
     </div>
   {/if}

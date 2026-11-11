@@ -38,14 +38,14 @@
       {#if editing === k}
         <div class="lnote">
           <textarea bind:value={draft} aria-label="Your comment" placeholder="Comment for the agent…"></textarea>
-          <div class="row" style="gap:8px">
+          <div class="row">
             <button class="btn sm" onclick={save}>{draft.trim() ? 'Save' : 'Remove'}</button>
             <button class="btn ghost sm" onclick={() => (editing = null)}>Cancel</button>
           </div>
         </div>
       {:else if notes?.[k]}
         <div class="lnote saved">
-          <span style="white-space:pre-wrap">{notes[k]}</span>
+          <span class="pre">{notes[k]}</span>
           <button class="btn ghost sm" onclick={() => start(l)}>Edit</button>
         </div>
       {/if}

@@ -89,17 +89,17 @@
 
 <header class="hero">
   <div class="htop">
-    <div style="display:flex;flex-direction:column;gap:6px;min-width:0;flex:1">
-      <div class="row lbl" style="gap:10px">
-        <span>{repoName(agent)} · {agent.flow ?? 'no workflow'}</span>
-        <span class="pill acc mono" style="text-transform:none;letter-spacing:0">{agent.ticketKey}</span>
+    <div class="hid">
+      <div class="row">
+        <span class="lbl">{repoName(agent)} · {agent.flow ?? 'no workflow'}</span>
+        <span class="pill acc mono">{agent.ticketKey}</span>
       </div>
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
         {#if agent.base}<span class="mono">{agent.name} ← {shortBase(agent)}</span>{/if}
         <span>{agent.runtime ?? 'claude-code'}</span>
         {#if agent.flow && agent.flow !== 'none'}
-          <label class="row" style="gap:6px">autonomy
+          <label class="row" style="gap:6px;flex-wrap:nowrap">autonomy
             <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
               <option value="ask">ask</option><option value="important">important</option>
             </select></label>
@@ -118,11 +118,11 @@
         <button class="btn" onclick={() => act('pause', 'Could not pause')}><Icon name="pause" />Pause</button>
       {/if}
       {#if agent.workdir}
-        <div style="position:relative">
+        <div class="anchor">
           <button class="btn" aria-haspopup="menu" aria-expanded={openMenu} onclick={toggleOpen}>Open in…</button>
           {#if openMenu}
-            <div class="menu card" role="menu">
-              {#if !targets}<span class="muted" style="padding:6px 10px">Loading…</span>{/if}
+            <div class="pop" role="menu">
+              {#if !targets}<span class="muted mpad">Loading…</span>{/if}
               {#each targets ?? [] as t (t.id)}
                 {#if t.kind === 'url'}
                   <a role="menuitem" class="btn ghost" href={t.url} onclick={() => (openMenu = false)}>{t.label}</a>
@@ -131,16 +131,16 @@
                 {/if}
               {/each}
               {#if targets && !targets.some((t) => t.kind === 'companion')}
-                <span class="hint" style="padding:6px 10px">Run <span class="mono">xherd companion</span> on this computer to offer its apps here.</span>
+                <span class="hint mpad">Run <span class="mono">xherd companion</span> on this computer to offer its apps here.</span>
               {/if}
             </div>
           {/if}
         </div>
       {/if}
-      <div style="position:relative">
+      <div class="anchor">
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>
         {#if menu}
-          <div class="menu card" role="menu">
+          <div class="pop" role="menu">
             <button role="menuitem" class="btn ghost danger" disabled={agent.status === 'cancelled' || agent.status === 'done'}
               onclick={() => { menu = false; confirmCancel = true; }}>Cancel agent…</button>
           </div>
@@ -172,13 +172,13 @@
   <Dialog title="Cancel {agent.name}?" onclose={() => (confirmCancel = false)}>
     <p>The agent's session ends and it will not run again. Its worktree and branch stay.</p>
     {#snippet actions()}
-      <button class="btn" onclick={() => (confirmCancel = false)}>Keep it</button>
-      <button class="btn dfill" onclick={() => { confirmCancel = false; act('cancel', 'Could not cancel'); }}>Cancel agent</button>
+      <button class="btn ghost" onclick={() => (confirmCancel = false)}>Keep it</button>
+      <button class="btn danger" onclick={() => { confirmCancel = false; act('cancel', 'Could not cancel'); }}>Cancel agent</button>
     {/snippet}
   </Dialog>
 {/if}
 
 <style>
-  .menu { position: absolute; right: 0; top: 34px; z-index: 30; padding: 4px; min-width: 180px; display: flex; flex-direction: column; }
-  .menu .btn { justify-content: flex-start; }
+  .anchor { position: relative; }
+  .mpad { padding: 6px 10px; }
 </style>

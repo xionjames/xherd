@@ -4,6 +4,8 @@
   // Read-only. View, filter and swimlanes live in the URL:
   // `?view=stages|tasks&agent=NAME&lanes=none|repo|agent`.
   import StatusPill from '../components/StatusPill.svelte';
+  import PageHead from '../components/PageHead.svelte';
+  import Seg from '../components/Seg.svelte';
   import { app } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { get } from '../lib/api';
@@ -81,23 +83,23 @@
   const empty = $derived(!cards.length);
 </script>
 
-<div class="stack">
-  <div class="phead notabs"><div class="row" style="gap:10px;flex-wrap:wrap"><h1>Board</h1>
-    <span class="grow"></span>
-    <div class="seg" role="group" aria-label="View">
-      <button class="btn sm" aria-pressed={view === 'stages'} onclick={() => go({ view: undefined })}>Stages</button>
-      <button class="btn sm" aria-pressed={view === 'tasks'} onclick={() => go({ view: 'tasks' })}>Tasks</button>
-    </div>
+<PageHead title="Board">
+  {#snippet actions()}
+    <Seg label="View" value={view} onchange={(v) => go({ view: v === 'tasks' ? 'tasks' : undefined })}
+      options={[{ value: 'stages', label: 'Stages' }, { value: 'tasks', label: 'Tasks' }]} />
     <select aria-label="Swimlanes" value={lanes} onchange={(e) => go({ lanes: e.currentTarget.value === 'none' ? undefined : e.currentTarget.value })}>
       <option value="none">No swimlanes</option><option value="repo">Lanes by repository</option><option value="agent">Lanes by agent</option>
     </select>
     <select aria-label="Agent" value={only} onchange={(e) => go({ agent: e.currentTarget.value || undefined })}>
       <option value="">All agents</option>
       {#each agentLinks as a (a.id)}<option value={a.name}>{a.name}</option>{/each}
-    </select></div></div>
+    </select>
+  {/snippet}
+</PageHead>
 
+<div class="stack">
   {#if empty}
-    <p class="muted">{view === 'tasks' ? "No agent has a task list yet. Tasks appear here once an agent's tasks are approved." : 'No agents yet.'}</p>
+    <p class="empty">{view === 'tasks' ? "No agent has a task list yet. Tasks appear here once an agent's tasks are approved." : 'No agents yet.'}</p>
   {:else}
     {#each laneNames as lane (lane)}
       <section class="lane" aria-label={lane || 'Board'}>
@@ -138,13 +140,17 @@
 <style>
   .lane { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
   .lh { font-size: 14px; margin: 0; padding-bottom: 4px; border-bottom: 1px solid var(--fence-soft); }
-  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; align-items: start; }
-  .col { display: flex; flex-direction: column; gap: 8px; min-height: 40px; }
-  .col h3 { font-size: 13px; margin: 0; }
-  .tk { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; color: inherit; text-decoration: none; font-size: 13px; }
-  .tk:hover { background: var(--accent-wash); }
-  .tk.needs { border-color: var(--gate); }
-  .seg { display: inline-flex; gap: 4px; }
-  .phead select { width: auto; min-width: 0; }
-  .seg .btn[aria-pressed='true'] { background: var(--accent-wash); border-color: var(--accent, currentColor); }
+  /* One row in flow order; it scrolls sideways when the columns do not fit
+     (on a phone, one column and a bit of the next). */
+  .cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 6px; }
+  @media (max-width: 760px) {
+    .cols { grid-auto-columns: minmax(230px, 72vw); scroll-snap-type: x mandatory; }
+    .col { scroll-snap-align: start; }
+  }
+  .col { display: flex; flex-direction: column; gap: 8px; min-height: 40px; background: var(--pen-2); border-radius: var(--r-card); padding: 8px; }
+  .col h3 { font-size: 13px; margin: 0; padding: 2px 4px; }
+  a.tk { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; color: inherit; text-decoration: none; font-size: 13px; }
+  .tk:hover { border-color: var(--accent); }
+  .tk :global(.pill) { align-self: flex-start; }
+  .tk.needs { border-color: var(--gate); box-shadow: inset 3px 0 0 var(--gate); }
 </style>

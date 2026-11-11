@@ -39,7 +39,7 @@
 </script>
 
 {#if error}
-  <div class="card cb" style="color:var(--sev-blocker)">review.md: {error}</div>
+  <div class="card cb"><p class="err">review.md: {error}</p></div>
 {:else if findings.length}
   <section class="card" aria-label="Review findings">
     <div class="ch">
@@ -66,7 +66,6 @@
 {/if}
 
 <style>
-  .list { list-style: none; margin: 0; padding: 0; }
   .item { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-top: 1px solid var(--fence-soft); box-shadow: inset 3px 0 0 var(--sev-minor); flex-wrap: wrap; }
   .item.sev-blocker { box-shadow: inset 3px 0 0 var(--sev-blocker); }
   .item.sev-major { box-shadow: inset 3px 0 0 var(--sev-major); }

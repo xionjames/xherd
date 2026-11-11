@@ -128,7 +128,7 @@
   <div class="gtop">
     <div class="ghand" aria-hidden="true"><Icon name="hand" size={20} /></div>
     <div class="gtitle" class:open class:more={true}>
-      <h2>Your call — {title}</h2>
+      <h2>Your call: {title}</h2>
       <p class="muted">{line}</p>
       {#if held}<p class="gwhy">Held: {held}</p>{/if}
       {#if gitBlocked && doctor}
@@ -170,8 +170,7 @@
     <div class="gmore">
       <label class="gbox" style="flex:1 1 100%">
         <span class="lbl">Commit message · xherd commits {g.files.length} {g.files.length === 1 ? 'file' : 'files'} with it when you approve</span>
-        <textarea class="mono" rows="4" bind:value={msg} aria-label="Commit message"
-          style="font-size:13px;line-height:1.45;resize:vertical;background:var(--pen)"></textarea>
+        <textarea class="mono" rows="4" bind:value={msg} aria-label="Commit message"></textarea>
         {#if msg.trim() !== proposed.trim()}<span class="hint">Edited: your text replaces the agent's.</span>{/if}
       </label>
     </div>
@@ -184,11 +183,10 @@
           {#each g.questions as q, i (i)}
             <label class="gbox" style="flex:none">
               <span>{q}</span>
-              <textarea rows="2" bind:value={answers[i]} aria-label={`Answer: ${q}`} placeholder="Your answer"
-                style="background:var(--pen);resize:vertical"></textarea>
+              <textarea rows="2" bind:value={answers[i]} aria-label={`Answer: ${q}`} placeholder="Your answer"></textarea>
             </label>
           {/each}
-          <div>
+          <div class="row">
             <button class="btn" disabled={busy || !answered} onclick={sendAnswers}>Send answers</button>
             <span class="hint">The agent revises the document with them; unanswered questions stay open.</span>
           </div>

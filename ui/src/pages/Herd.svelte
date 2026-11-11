@@ -4,6 +4,10 @@
   import Mini from '../components/Mini.svelte';
   import TaskBar from '../components/TaskBar.svelte';
   import StatusPill from '../components/StatusPill.svelte';
+  import PageHead from '../components/PageHead.svelte';
+  import Panel from '../components/Panel.svelte';
+  import Seg from '../components/Seg.svelte';
+  import Dialog from '../components/Dialog.svelte';
   import { app } from '../lib/store.svelte';
   import { href, route, go } from '../lib/router.svelte';
   import { ago, needsYou, waitText, repoName, shortBase } from '../lib/format';
@@ -61,8 +65,9 @@
 
   // The kill switch (R-032): no handoff notes, nothing new starts.
   const pausable = $derived((app.state?.agents ?? []).filter((a) => ['queued', 'running', 'idle', 'blocked', 'waiting-input'].includes(a.status)).length);
+  let confirmPause = $state(false);
   async function pauseAll() {
-    if (!confirm(`Pause all ${pausable} agents now? Their sessions end without a handoff note.`)) return;
+    confirmPause = false;
     try {
       await post('/agents/pause-all');
     } catch (e) {
@@ -71,35 +76,33 @@
   }
 </script>
 
-<div class="phead notabs">
-  <div class="row" style="gap:14px">
-    <h1>Herd</h1>
-    {#if waiting.length}<span class="pill gate">{waiting.length} need you</span>{/if}
+<PageHead title="Herd">
+  {#snippet meta()}
+    {#if waiting.length}<span class="pill gate">✋ {waiting.length} need you</span>{/if}
     {#if count((a) => a.status === 'running')}<span class="pill live">● {count((a) => a.status === 'running')} running</span>{/if}
     {#if count((a) => a.status === 'queued')}<span class="pill">{count((a) => a.status === 'queued')} queued</span>{/if}
     {#if count((a) => a.status === 'watching')}<span class="pill done">{count((a) => a.status === 'watching')} watching PR</span>{/if}
     {#if count((a) => a.status === 'done')}<span class="pill">{count((a) => a.status === 'done')} done</span>{/if}
-    <span class="grow"></span>
+  {/snippet}
+  {#snippet actions()}
     {#if slots}<span class="muted num">{busy} of {slots} slots busy</span>{/if}
-    {#if pausable}<button class="btn ghost" onclick={pauseAll} title="Kill switch: pause every running and queued agent now">Pause all</button>{/if}
-  </div>
-</div>
+    {#if pausable}<button class="btn" onclick={() => (confirmPause = true)} title="Kill switch: pause every running and queued agent now">Pause all</button>{/if}
+  {/snippet}
+</PageHead>
 
 <div class="stack">
   {#if waiting.length}
-    <section class="row" style="gap:8px" aria-labelledby="ny-h">
-      <h2 id="ny-h" style="color:var(--gate)">Needs you</h2><span class="hint">oldest first</span>
-    </section>
+    <div class="sect"><h2>Needs you</h2><span class="hint">oldest first</span></div>
     <div class="nygrid">
       {#each waiting as a (a.id)}
-        <article class="ny">
+        <article class="card need cb tight">
           <div class="row">
-            <AgentDot agent={a} /><a class="mono" style="font-weight:600;color:var(--ink)" href={href(`/agent/${a.name}`)}>{a.name}</a>
+            <AgentDot agent={a} /><a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a>
             <span class="grow"></span><span class="muted num">{ago(a.statusSince)}</span>
           </div>
-          <p class:qtext={a.gate?.kind === 'question'} class:mono={a.gate?.kind === 'commit'}>{waitText(a)}</p>
-          <p class="muted" style="font-size:12px">{meta(a)}</p>
-          <div class="row" style="justify-content:flex-end">
+          <p class="wrap-any" class:mono={a.gate?.kind === 'commit'}>{waitText(a)}</p>
+          <p class="hint">{meta(a)}</p>
+          <div class="row end">
             <button class="btn gate" onclick={() => go(`/agent/${a.name}`, { s: decisionTab(a) })}>{actionLabel(a)}</button>
           </div>
         </article>
@@ -107,49 +110,56 @@
     </div>
   {/if}
 
-  <section class="card">
-    <div class="ch">
-      <h2>All agents</h2>
-      <div class="seg" role="group" aria-label="Filter">
-        {#each FILTERS as [id, label, f] (id)}
-          <button class:on={filter === id} aria-pressed={filter === id}
-            onclick={() => go('/', { f: id === 'all' ? undefined : id })}>{label} {count(f)}</button>
-        {/each}
-      </div>
-    </div>
+  <Panel title="All agents" flush>
+    {#snippet head()}
+      <Seg label="Filter" value={filter} onchange={(id) => go('/', { f: id === 'all' ? undefined : id })}
+        options={FILTERS.map(([id, label, f]) => ({ value: id, label: `${label} ${count(f)}` }))} />
+    {/snippet}
     {#if shown.length}
-      <table class="tbl">
-        <thead><tr><th>Agent</th><th>Status</th><th>Progress</th><th>Tasks</th><th>Branch</th><th style="text-align:right">Active</th></tr></thead>
-        <tbody>
-          {#each shown as a (a.id)}
-            <tr class="hov" onclick={() => go(`/agent/${a.name}`)} style="cursor:pointer">
-              <td>
-                <div class="row" style="gap:8px;flex-wrap:nowrap">
-                  <AgentDot agent={a} />
-                  <div>
-                    <a class="mono" style="color:var(--ink)" href={href(`/agent/${a.name}`)}>{a.name}</a>
-                    <div class="muted" style="font-size:12px">{repoName(a)} · {a.flow ?? 'no workflow'}</div>
+      <div class="tscroll">
+        <table class="tbl">
+          <thead><tr><th>Agent</th><th>Status</th><th class="hide-sm">Progress</th><th class="hide-sm">Tasks</th><th class="hide-sm">Branch</th><th class="r">Active</th></tr></thead>
+          <tbody>
+            {#each shown as a (a.id)}
+              <tr class="hov" onclick={() => go(`/agent/${a.name}`)}>
+                <td>
+                  <div class="row" style="flex-wrap:nowrap">
+                    <AgentDot agent={a} />
+                    <div class="wrap-any">
+                      <a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a>
+                      <div class="hint">{repoName(a)} · {a.flow ?? 'no workflow'}</div>
+                    </div>
                   </div>
-                </div>
-              </td>
-              <td><StatusPill agent={a} /></td>
-              <td><Mini agent={a} /></td>
-              <td><TaskBar agent={a} /></td>
-              <td class="mono muted">{a.workdir ? `← ${shortBase(a)}` : 'not created'}</td>
-              <td class="num muted" style="text-align:right">{ago(a.lastActivity)}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+                </td>
+                <td><StatusPill agent={a} /></td>
+                <td class="hide-sm"><Mini agent={a} /></td>
+                <td class="hide-sm"><TaskBar agent={a} /></td>
+                <td class="hide-sm mono muted">{a.workdir ? `← ${shortBase(a)}` : 'not created'}</td>
+                <td class="num muted r">{ago(a.lastActivity)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     {:else}
-      <div class="cb muted">
-        {#if agents.length}No agents match this filter.{:else}No agents yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.{/if}
+      <div class="cb">
+        <p class="empty">{#if agents.length}No agents match this filter.{:else}No agents yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.{/if}</p>
       </div>
     {/if}
-  </section>
+  </Panel>
 </div>
 
+{#if confirmPause}
+  <Dialog title="Pause all {pausable} agents?" onclose={() => (confirmPause = false)}>
+    <p>Their sessions end now, without a handoff note, and nothing queued starts. Resume each one when you want it back.</p>
+    {#snippet actions()}
+      <button class="btn ghost" onclick={() => (confirmPause = false)}>Keep them running</button>
+      <button class="btn danger" onclick={pauseAll}>Pause all</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
 <style>
-  .nygrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
-  .qtext { color: var(--gate); }
+  .nygrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; }
+  .nyname { font-weight: 600; color: var(--ink); }
 </style>

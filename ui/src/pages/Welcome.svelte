@@ -10,6 +10,7 @@
   import GitAccess from '../components/GitAccess.svelte';
   import TermView from '../components/TermView.svelte';
   import Toolchains from '../components/Toolchains.svelte';
+  import Panel from '../components/Panel.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
   const STEPS = ['Welcome', 'Where it runs', 'Your tools', 'Git access', 'Connect & check', 'Ready'];
@@ -62,30 +63,30 @@
 </script>
 
 <div class="x">
-  <header class="bar" style="flex-direction:column;align-items:stretch;padding:16px 28px 22px;gap:22px">
-    <div class="row"><span class="logo row" style="gap:9px"><Logo /><b>XHERD</b></span><span class="grow"></span>
+  <header class="bar whead">
+    <div class="row"><span class="logo row"><Logo /><b>XHERD</b></span><span class="grow"></span>
       {#if setup.checks && !blocked}
-        <button class="btn ghost sm" style="color:var(--bar-ink-2)" onclick={() => finish('/')}>Skip setup</button>
+        <button class="bb skip" onclick={() => finish('/')}>Skip setup</button>
       {/if}</div>
-    <ol class="row" style="list-style:none;margin:0;padding:0;gap:10px;flex-wrap:nowrap;overflow-x:auto">
+    <ol class="wsteps">
       {#each STEPS as s, i (s)}
         {#if i > 0}<li class="wsep" aria-hidden="true"></li>{/if}
-        <li class="wstep" class:done={i + 1 < step} class:on={i + 1 === step} style="color:{i + 1 === step ? 'var(--bar-ink)' : 'var(--bar-ink-2)'}"
+        <li class="wstep" class:done={i + 1 < step} class:on={i + 1 === step}
           aria-current={i + 1 === step ? 'step' : undefined}>
-          <i>{i + 1 < step ? '✓' : i + 1}</i>{s}
+          <i>{i + 1 < step ? '✓' : i + 1}</i><span class="wl">{s}</span>
         </li>
       {/each}
     </ol>
   </header>
 
-  <main class="stack" style="width:100%;padding-top:40px">
+  <main class="stack narrow wmain">
     {#if step === 1}
-      <h1 style="font-size:28px">Run many coding agents, decide only what matters</h1>
-      <p class="muted" style="max-width:72ch;font-size:14px">xherd starts each agent in its own git worktree and terminal session, follows it through spec, design, tasks, build, review and ship, and stops it at the gates where your call is needed. Everything else runs on its own.</p>
-      <p class="muted" style="max-width:72ch">A few steps set it up: where it runs, which tools it uses, and a check that everything works.</p>
+      <h1 class="big">Run many coding agents, decide only what matters</h1>
+      <p class="muted lead">xherd starts each agent in its own git worktree and terminal session, follows it through spec, design, tasks, build, review and ship, and stops it at the gates where your call is needed. Everything else runs on its own.</p>
+      <p class="muted">A few steps set it up: where it runs, which tools it uses, and a check that everything works.</p>
     {:else if step === 2}
       <h1>Where xherd runs</h1>
-      <section class="sec"><div class="bd">
+      <Panel>
         <dl class="kv">
           <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.buildVersion}</dd>
           <dt>Workspace</dt><dd class="mono">{workspace}</dd>
@@ -96,7 +97,7 @@
         {:else}
           <p class="hint">To run xherd in Docker instead, run <span class="mono">xherd docker init</span> on this computer. Change the workspace in Settings.</p>
         {/if}
-      </div></section>
+      </Panel>
     {:else if step === 3}
       <h1>Your tools</h1>
       <p class="muted">Switch on what you use; at least one of each kind stays on. A plugin that needs a login is set up here.</p>
@@ -148,18 +149,17 @@
     {:else if step === 5}
       <h1>Connect &amp; check</h1>
       <p class="muted">Required checks must pass before agents can start.</p>
-      <section class="card">
-        {#if !setup.checks}<div class="cb muted">Running checks…</div>{/if}
+      <Panel label="Checks" flush>
+        {#if !setup.checks}<div class="cb"><p class="empty">Running checks…</p></div>{/if}
         {#each setup.checks ?? [] as c, i (c.id)}<CheckRow check={c} first={i === 0} />{/each}
-      </section>
+      </Panel>
       <div><button class="btn" disabled={setup.running} onclick={() => loadChecks()}>Re-run</button></div>
     {:else}
       <h1>{blocked ? 'Almost ready' : 'Ready'}</h1>
       <p class="muted">{blocked ? 'Some required checks still fail; Setup checks lists them.' : 'Start your first agent on a ticket, or open the herd.'}</p>
     {/if}
 
-    <div class="row" style="border-top:1px solid var(--fence);padding-top:18px;margin-top:8px">
-      <span class="grow"></span>
+    <div class="row end wnav">
       {#if step > 1}<button class="btn ghost lg" onclick={() => to(step - 1)}>Back</button>{/if}
       {#if step < STEPS.length}
         <button class="btn primary lg" disabled={step === 3 && toolsBlocked} onclick={() => to(step + 1)}>Next: {STEPS[step].toLowerCase()}</button>
@@ -172,3 +172,15 @@
     </div>
   </main>
 </div>
+
+<style>
+  .whead { flex-direction: column; align-items: stretch; padding: 16px var(--gut) 20px; gap: 20px; }
+  .whead .logo { gap: 9px; }
+  .skip { width: auto; padding: 0 12px; font: 500 12.5px var(--sans); }
+  .wsteps { display: flex; align-items: center; list-style: none; margin: 0; padding: 0; gap: 10px; overflow-x: auto; scrollbar-width: none; }
+  .wmain { width: 100%; padding-top: 36px; }
+  .big { font-size: 28px; }
+  .lead { font-size: 14px; }
+  .wnav { border-top: 1px solid var(--fence); padding-top: 18px; margin-top: 8px; }
+  @media (max-width: 560px) { .big { font-size: 22px; } .wnav .btn { flex: 1 1 auto; } }
+</style>

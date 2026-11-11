@@ -9,6 +9,7 @@
   import { parseUnified } from '../lib/diff';
   import DiffLines, { lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
+  import Seg from '../components/Seg.svelte';
 
   let { agent }: { agent: Agent } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -119,24 +120,25 @@
 
 <div class="body">
   <div class="colmain">
-    <div class="row" role="tablist" aria-label="What to show" style="gap:8px">
-      <button class="btn sm" class:primary={view === 'uncommitted'} role="tab" aria-selected={view === 'uncommitted'}
-        onclick={() => pick('uncommitted')}>Uncommitted</button>
-      <button class="btn sm" class:primary={view === 'branch'} role="tab" aria-selected={view === 'branch'}
-        onclick={() => pick('branch')} disabled={!agent.base} title={agent.base ? '' : 'No base branch'}>All changes</button>
-      {#if agent.commits?.length}
-        <select aria-label="A commit" class:primary={view === 'commit'} value={view === 'commit' ? commitId : ''}
-          onchange={(e) => e.currentTarget.value && pick('commit', e.currentTarget.value)} style="width:auto">
-          <option value="" disabled>A commit…</option>
+    <div class="row">
+      <Seg label="What to show" value={view} onchange={(v) => (v === 'commit' ? pick('commit', commitId) : pick(v))}
+        options={[
+          { value: 'uncommitted', label: 'Uncommitted' },
+          { value: 'branch', label: 'All changes', disabled: !agent.base, title: agent.base ? '' : 'No base branch' },
+          ...(agent.commits?.length ? [{ value: 'commit' as const, label: 'One commit' }] : []),
+        ]} />
+      {#if agent.commits?.length && view === 'commit'}
+        <select aria-label="Commit" class="csel" value={commitId}
+          onchange={(e) => e.currentTarget.value && pick('commit', e.currentTarget.value)}>
           {#each agent.commits as c (c.id)}<option value={c.id}>{c.id} · {c.subject} ({c.status})</option>{/each}
         </select>
       {/if}
     </div>
     {#if error}
-      <div class="card cb muted">{error}</div>
+      <div class="card cb"><p class="err">{error}</p></div>
     {:else if d}
       <div class="row">
-        <h2>{what}</h2>
+        <h2 class="wrap-any">{what}</h2>
         <span class="grow"></span>
         <span class="mono muted">HEAD {d.head.slice(0, 8)}</span>
         {#if count}
@@ -145,14 +147,14 @@
         {/if}
         <button class="btn sm" onclick={load} disabled={loading}>Refresh</button>
       </div>
-      {#if !files.length}<div class="card cb muted">No changes.</div>{/if}
+      {#if !files.length}<div class="card cb"><p class="empty">No changes.</p></div>{/if}
       {#each files as f (f.path)}
         <section class="card">
           <div class="ch">
-            <button class="btn ghost sm" aria-expanded={!collapsed[f.path]} onclick={() => (collapsed[f.path] = !collapsed[f.path])}>
+            <button class="btn ghost sm icon" aria-label={collapsed[f.path] ? 'Expand' : 'Collapse'} aria-expanded={!collapsed[f.path]} onclick={() => (collapsed[f.path] = !collapsed[f.path])}>
               {collapsed[f.path] ? '▸' : '▾'}
             </button>
-            <span class="mono">{f.path}</span>
+            <span class="mono fpath">{f.path}</span>
             {#if f.status !== 'modified'}<span class="pill">{f.status}</span>{/if}
             <span class="grow"></span>
             {#if canPreview && previewKind(f.path) && f.status !== 'deleted'}
@@ -160,10 +162,8 @@
                 {previewing[f.path] ? 'Diff' : 'Preview'}
               </button>
             {/if}
-            <label class="row" style="gap:4px;font-size:12.5px">
-              <input type="checkbox" checked={isViewed(f)} onchange={() => toggleViewed(f)} /> Viewed
-            </label>
-            <span class="num" style="color:var(--live)">+{f.adds}</span><span class="num" style="color:var(--halt)">−{f.dels}</span>
+            <label class="f chk"><input type="checkbox" checked={isViewed(f)} onchange={() => toggleViewed(f)} /> Viewed</label>
+            <span class="num adds">+{f.adds}</span><span class="num dels">−{f.dels}</span>
           </div>
           {#if !collapsed[f.path]}
             {@const k = previewKind(f.path)}
@@ -172,7 +172,7 @@
         </section>
       {/each}
     {:else}
-      <div class="card cb muted">Loading…</div>
+      <div class="card cb"><p class="empty">Loading…</p></div>
     {/if}
   </div>
   {#if d && (d.files.length || d.others.length || d.commit)}
@@ -180,21 +180,29 @@
       {#if d.commit}
         <section class="card cb">
           <span class="lbl">Commit message</span>
-          <pre class="mono" style="white-space:pre-wrap;margin:6px 0 0;font-size:12.5px;line-height:1.45">{d.commit.message ?? d.commit.subject}</pre>
+          <pre class="mono pre msg">{d.commit.message ?? d.commit.subject}</pre>
         </section>
       {/if}
       {#if d.files.length}
         <section class="card cb">
           <span class="lbl">{d.commit ? 'In this commit' : 'Files'} · {d.files.length}</span>
-          <ul class="mono" style="font-size:12px">{#each d.files as f (f)}<li>{f}</li>{/each}</ul>
+          <ul class="mono">{#each d.files as f (f)}<li class="wrap-any">{f}</li>{/each}</ul>
         </section>
       {/if}
       {#if d.others.length && (d.commit || d.branch)}
         <section class="card cb">
           <span class="lbl">{d.branch ? 'Uncommitted, not pushed' : 'Left out of this commit'} · {d.others.length}</span>
-          <ul class="mono muted" style="font-size:12px">{#each d.others as f (f)}<li>{f}</li>{/each}</ul>
+          <ul class="mono muted">{#each d.others as f (f)}<li class="wrap-any">{f}</li>{/each}</ul>
         </section>
       {/if}
     </aside>
   {/if}
 </div>
+
+<style>
+  .csel { width: auto; max-width: 100%; }
+  .fpath { overflow-wrap: anywhere; min-width: 0; flex: 1 1 200px; }
+  .adds { color: var(--live); font-weight: 600; }
+  .dels { color: var(--halt); font-weight: 600; }
+  .msg { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; }
+</style>

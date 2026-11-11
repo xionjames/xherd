@@ -18,7 +18,7 @@
   </button>
   {#if shown}
     <div class="pop" role="region" aria-label="Notifications">
-      {#if !notices.list.length}<p class="muted" style="padding:12px">Nothing yet. New ones appear here while xherd is open.</p>{/if}
+      {#if !notices.list.length}<p class="empty" style="padding:12px">Nothing yet. New ones appear here while xherd is open.</p>{/if}
       <ul>
         {#each notices.list as n (n.key)}
           <li class:unread={!n.read}>
@@ -46,9 +46,9 @@
 
 <style>
   .bell { position: relative; }
-  .pop { position: absolute; right: 0; top: 40px; width: min(380px, 92vw); max-height: 70vh; overflow: auto; z-index: 20;
-    background: var(--pen); color: var(--ink); border: 1px solid var(--fence-strong); border-radius: var(--r-card);
-    box-shadow: 0 8px 28px rgba(0, 0, 0, .25); }
+  /* Placement comes from the global .pop (a sheet at the bottom on a phone). */
+  .pop { width: min(380px, 92vw); max-height: 70vh; overflow: auto; padding: 0; }
+  @media (max-width: 560px) { .pop { width: auto; } }
   ul { list-style: none; margin: 0; padding: 4px; }
   .item { display: flex; justify-content: space-between; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; border: 0;
     border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }

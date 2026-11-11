@@ -12,6 +12,7 @@
   import Board from './pages/Board.svelte';
   import Time from './pages/Time.svelte';
   import Todos from './pages/Todos.svelte';
+  import Callout from './components/Callout.svelte';
   import { app, start } from './lib/store.svelte';
   import { route, go } from './lib/router.svelte';
   import { setup, loadChecks, loadConfig, failingRequired } from './lib/setup.svelte';
@@ -39,7 +40,7 @@
     <GlobalBar {blocked} />
     {#if !blocked}<HerdStrip current={agent?.id} />{/if}
     {#if !app.state}
-      <div class="stack"><p class="muted">{app.error ? `Cannot reach the daemon: ${app.error}` : 'Loading…'}</p></div>
+      <div class="stack"><p class="empty">{app.error ? `Cannot reach the daemon: ${app.error}` : 'Loading…'}</p></div>
     {:else if route.path === '/setup'}
       <Setup />
     {:else if route.path === '/settings'}
@@ -59,18 +60,13 @@
     {:else if agentId && agent}
       <Agent {agent} />
     {:else if agentId}
-      <div class="stack"><p class="muted">No agent {agentId}. <a href="#/">Back to the herd</a>.</p></div>
+      <div class="stack"><p class="empty">No agent {agentId}. <a href="#/">Back to the herd</a>.</p></div>
     {:else}
-      <div class="stack"><p class="muted">Nothing here. <a href="#/">Back to the herd</a>.</p></div>
+      <div class="stack"><p class="empty">Nothing here. <a href="#/">Back to the herd</a>.</p></div>
     {/if}
     {#if app.state && !app.connected}
-      <div class="offline" role="status">Reconnecting to the daemon…</div>
+      <Callout tone="bad" class="toast">Reconnecting to the daemon…</Callout>
     {/if}
   </div>
 {/if}
 <ErrorDialog />
-
-<style>
-  .offline { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px;
-    background: var(--halt-wash); color: var(--halt); border: 1px solid var(--halt); font-weight: 500; }
-</style>
