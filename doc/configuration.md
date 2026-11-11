@@ -53,7 +53,8 @@ Settings → Repo profiles (stored in the database, not `config.json`; `GET/POST
 | `autonomy` | Default autonomy of new agents (the New agent form shows it once the repository is known) |
 | `sensitivePaths`, `maxDiffLines` | Replace the global values; an empty list switches the sensitive-path hold off |
 | `agentTokenBudget` | Replaces the global per-agent budget (0 = off); the daily budget stays global |
-| `testCommand` | One shell command run in the worktree at each commit proposal; if it fails or times out, the commit is held for a human (only the exit status is shown) |
+| `testCommand` | One shell command (one line) run in the worktree at each commit proposal; if it fails or times out, the commit is held for a human (only the exit status is shown) |
+| `lintCommand` | Like `testCommand`, run before it (a linter or formatter check); leave both empty to run nothing |
 | `instructions` | Added to the agent's `instructions.md` |
 | `stagingBranch`, `hotfixBase` | Stored; no flow uses them yet |
 

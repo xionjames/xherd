@@ -1758,6 +1758,25 @@ async fn the_profiles_test_command_holds_a_failing_commit() {
     assert_eq!(c.needs_human, None);
 }
 
+#[tokio::test]
+async fn the_profiles_lint_command_holds_a_failing_commit_and_runs_before_the_test() {
+    let t = setup_profile(
+        json!({"freshSessions": true}),
+        test_profile(|p| {
+            p.lint_command = Some("test -f lint-ok".into());
+            p.test_command = Some("true".into());
+        }),
+    )
+    .await;
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    let why = propose_reason(&t, "pl1", &["a.txt"]).await;
+    assert!(
+        why.contains("lint command `test -f lint-ok` failed (exit 1)"),
+        "{why}"
+    );
+    assert!(!why.contains("test command"), "{why}");
+}
+
 async fn propose_reason(t: &T, id: &str, files: &[&str]) -> String {
     xap(
         t,
