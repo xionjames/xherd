@@ -1,26 +1,27 @@
-# xherd
+<p align="center">
+  <img src="doc/assets/logo.svg" alt="xherd logo: four agents converging on one watching eye" width="96" height="96">
+</p>
 
-Run, watch and steer a herd of coding agents working on your tickets in parallel.
+<h1 align="center">xherd</h1>
 
-## Why xherd exists
+<p align="center"><b>Run a herd of coding agents in parallel. Stay in control.</b></p>
 
-I got overwhelmed running several coding tasks in parallel. Terminal windows piled up, virtual desktops multiplied, and I kept losing track of which agent was doing what. Worse, an agent would sit for an hour waiting for an answer I never saw.
+## Why
 
-I tried a number of good existing tools. Each one gave me one or two things I liked for my daily work, but none gave me everything I needed. So I decided to build the one I wanted, and to vibe code it with the same kind of agents it now manages.
+I got overwhelmed running several coding tasks at once: terminals piled up and an agent could wait an hour for an answer I never saw. The tools I tried each solved part of it, so I built the one I wanted, with the same kind of agents it now manages. It is opinionated and built around my workflow; I hope it fits yours.
 
-xherd is that tool. It is opinionated and built around my own workflow, and I hope it is useful to yours too.
+## What is xherd?
 
-## What xherd is
+![The xherd Herd view: two agents waiting for review, one watching a pull request, one paused, one done](doc/assets/herd.jpg)
+*The Herd view, with mocked data: what needs you is on top, everything else below.*
 
-xherd is a small daemon with a web UI. It manages a herd of coding agents so you don't have to juggle them by hand.
+You hand xherd your tickets. It gives each one to a coding agent in its own sandbox, and shows you all of them on one screen.
 
-- **One ticket, one sandbox.** Every task gets its own git worktree and its own tmux session, so agents never step on each other or on your checkout.
-- **One screen for all of them.** The browser shows every agent, what it is doing, and which ones are waiting for you. Nothing sits unanswered in a forgotten terminal.
-- **You stay in control.** Agents follow a spec-driven flow (spec, design, tasks, commits, pull request) and stop at approval gates. You read what they propose, then approve or ask for changes.
-- **Bring your own agent.** Claude Code today. The runtime, the flow and the integrations are plugins, and your own spec-driven process can plug in too.
-- **Run it in Docker or natively.** The Docker setup keeps agents and toolchains in a container and shares only your workspace, and you can still open the code in your IDE.
-
-In short: you describe the work, agents do it in parallel, and xherd makes sure you always know where each one stands and what needs your decision.
+- **One ticket, one sandbox.** Each task gets its own git worktree and tmux session, so agents never step on each other or on your checkout.
+- **One screen for the herd.** The browser shows what every agent is doing and which ones are waiting for you.
+- **You approve the important steps.** Agents follow a spec-driven flow (spec, design, tasks, commits, pull request) and stop at gates. You read what they propose, then approve or ask for changes.
+- **Bring your own agent and process.** Claude Code today; the runtime, the flow and the integrations are plugins.
+- **Docker or native.** Docker keeps agents and toolchains in a container and shares only your workspace; you can still open the code in your IDE.
 
 > **Status: early, but it runs.** One agent works end to end (worktree, Claude Code in tmux, approval gates, commits, draft PR), with a web UI and a Docker setup. It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
 

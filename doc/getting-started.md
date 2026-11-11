@@ -12,6 +12,17 @@ How to install and run xherd, and what a first agent looks like. We recommend **
 
 xherd is a single-user tool: one person, one daemon, one workspace folder.
 
+### Why Docker first?
+
+Coding agents run commands on your machine, install toolchains and write files. In a container that has limits:
+
+- **Containment.** Agents see only the workspace folder you share, not your home directory, keys or other projects. A confused or misled agent has a small blast radius.
+- **Nothing to install.** `git`, `tmux`, `gh`, `glab`, Claude Code and the Java/Node/Go/Rust/Python toolchain managers come in the image, at tested versions. Setup is the same on every machine.
+- **Safe to throw away.** Updating is `xherd docker update`; a broken toolchain is a rebuilt container, not a repaired laptop.
+- **Your IDE still works.** The workspace is mounted at the same path inside and outside, so worktrees open directly in your editor.
+
+Native works too (no isolation, you manage the tools yourself), and is what you want when developing xherd. See [Docker](docker.md) for the two-user layout and security details.
+
 ## Run with Docker
 
 From a clone of this repository:
