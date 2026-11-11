@@ -1,12 +1,22 @@
 <script lang="ts">
   // Rendered Markdown, one block at a time, each with a comment box (#25).
   // Notes are keyed `b<index>`; `onnote` also gets the block's source as a quote.
+  // Mermaid blocks are drawn as diagrams once the blocks are on the page.
+  import { tick } from 'svelte';
+  import { drawDiagrams } from '../lib/mermaid';
+  import { isDark } from '../lib/theme.svelte';
   let { blocks, notes, onnote }: {
     blocks: { html: string; raw: string }[];
     notes?: Record<string, { text: string; quote: string }>;
     onnote?: (key: string, text: string | null, quote: string) => void;
   } = $props();
   let editing = $state<string | null>(null);
+  let root = $state<HTMLElement>();
+  $effect(() => {
+    void blocks; void isDark();
+    const el = root;
+    if (el) tick().then(() => drawDiagrams(el));
+  });
   let draft = $state('');
   const quoteOf = (raw: string) => { const l = raw.split('\n').find((x) => x.trim()) ?? ''; return l.length > 100 ? l.slice(0, 100) + '…' : l; };
   function start(k: string) { editing = k; draft = notes?.[k]?.text ?? ''; }
@@ -16,6 +26,7 @@
   }
 </script>
 
+<div bind:this={root} class="mdb">
 {#each blocks as b, i (i)}
   {@const k = `b${i}`}
   <div class="blk">
@@ -37,3 +48,4 @@
     </div>
   {/if}
 {/each}
+</div>

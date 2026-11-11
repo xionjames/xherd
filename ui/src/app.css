@@ -372,6 +372,12 @@ label.f.chk.top { align-items: flex-start; }
 .md { max-width: 72ch; display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .md h1 { font-size: 24px; }
 .md h2 { font-size: 15px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--fence-soft); }
+/* Mermaid diagrams in agent documents (lib/mermaid.ts). */
+.mdb { display: contents; }
+.md pre.mmd { margin: 0; padding: 14px; background: var(--well); border: 1px solid var(--fence-soft); border-radius: var(--r-ctl); overflow-x: auto; text-align: center; white-space: normal; font-family: var(--sans); }
+.md pre.mmd svg { max-width: 100%; height: auto; }
+.md pre.mmd.failed { white-space: pre-wrap; text-align: left; font-family: var(--mono); }
+.md pre.mmd.failed .hint { display: block; margin-top: 8px; font-family: var(--sans); }
 .outline a { display: block; padding: 4px 0 4px 12px; border-left: 2px solid var(--fence); color: var(--ink-3); font-size: 12.5px; }
 .outline a.on { color: var(--ink); border-left-color: var(--accent); font-weight: 500; }
 .kv { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 14px; margin: 0; max-width: 86ch; }
