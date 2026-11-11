@@ -11,9 +11,10 @@
   import Toolchains from '../components/Toolchains.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const TABS = ['general', 'gates', 'notifications', 'git', 'toolchains', 'backups', 'plugins'];
+  const TABS = ['general', 'gates', 'notifications', 'git', 'backups', 'plugins'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
+  const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
 
   type Form = Record<string, string | boolean>;
   const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic'];
@@ -78,7 +79,6 @@
     <a class="tb" class:on={tab === 'gates'} aria-current={tab === 'gates' ? 'page' : undefined} href={href('/settings', { tab: 'gates' })}>Gates &amp; autonomy</a>
     <a class="tb" class:on={tab === 'notifications'} aria-current={tab === 'notifications' ? 'page' : undefined} href={href('/settings', { tab: 'notifications' })}>Notifications</a>
     <a class="tb" class:on={tab === 'git'} aria-current={tab === 'git' ? 'page' : undefined} href={href('/settings', { tab: 'git' })}>Git access</a>
-    <a class="tb" class:on={tab === 'toolchains'} aria-current={tab === 'toolchains' ? 'page' : undefined} href={href('/settings', { tab: 'toolchains' })}>Toolchains</a>
     <a class="tb" class:on={tab === 'backups'} aria-current={tab === 'backups' ? 'page' : undefined} href={href('/settings', { tab: 'backups' })}>Backups</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
@@ -93,8 +93,6 @@
   {/if}
   {#if tab === 'git'}
     <GitAccess />
-  {:else if tab === 'toolchains'}
-    <Toolchains />
   {:else if tab === 'backups'}
     <Backups />
   {:else if !setup.config || !ready}
@@ -176,9 +174,32 @@
       </section>
     </div>
   {:else}
+    {#if tab === 'plugins' && open}
+      <a class="hint" href={href('/settings', { tab: 'plugins' })}>← All plugins</a>
+      <section class="sec">
+        <div class="sh"><h2>{open.label || open.name}</h2></div>
+        <div class="bd">
+          <div class="hint">{open.kind} · {open.version}{open.builtin ? ' · built in' : ''} · {open.enabled ? 'on' : 'off'}</div>
+          {#if open.description}<p class="muted">{open.description}</p>{/if}
+          {#each open.settings as s (s.key)}
+            {#if s.secret}
+              <div class="f">{s.label || s.key}<span class="hint">Secret: kept in secrets.json, not editable here yet.</span></div>
+            {:else if plugins[open.name]}
+              <label class="f">{s.label || s.key}{#if s.required} *{/if}
+                <input bind:value={plugins[open.name][s.key]} placeholder={s.default != null ? String(s.default) : ''} /></label>
+            {/if}
+          {:else}
+            <p class="hint">This plugin has no settings.</p>
+          {/each}
+        </div>
+      </section>
+      {#if open.kind === 'toolchain'}
+        {#key open.name}<Toolchains plugin={open.name} />{/key}
+      {/if}
+    {:else}
     <div class="cards">
       {#each app.state?.plugins ?? [] as p (p.name)}
-        <article class="pcard">
+        <a class="pcard" href={href('/settings', { tab: 'plugins', plugin: p.name })} style="color:inherit;text-decoration:none">
           <div class="h">
             <span class="mi" style="background:{HUE[p.kind] ?? '#5b4b80'}" aria-hidden="true">{initials(p)}</span>
             <div style="min-width:0">
@@ -188,17 +209,10 @@
           </div>
           <div class="b">
             {#if p.description}<p class="muted">{p.description}</p>{/if}
-            {#each p.settings as s (s.key)}
-              {#if s.secret}
-                <div class="f">{s.label || s.key}<span class="hint">Secret: kept in secrets.json, not editable here yet.</span></div>
-              {:else if plugins[p.name]}
-                <label class="f">{s.label || s.key}{#if s.required} *{/if}
-                  <input bind:value={plugins[p.name][s.key]} placeholder={s.default != null ? String(s.default) : ''} /></label>
-              {/if}
-            {/each}
+            <span class="hint">{p.settings.length ? `${p.settings.length} setting${p.settings.length > 1 ? 's' : ''}` : 'No settings'}{p.kind === 'toolchain' ? ' · tools and versions' : ''}</span>
           </div>
           <div class="ft"><span class="pill live">● on</span></div>
-        </article>
+        </a>
       {/each}
       {#each broken as b (b.dir)}
         <article class="pcard err">
@@ -208,6 +222,7 @@
         </article>
       {/each}
     </div>
+    {/if}
   {/if}
   {#if setup.config && ready && tab !== 'git' && tab !== 'backups'}
     <div class="savebar">
