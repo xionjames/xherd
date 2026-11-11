@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { steps } from './flow';
+import { stageLabel, steps } from './flow';
 import type { Agent, FlowInfo } from './types';
 
 describe('steps', () => {
@@ -14,5 +14,17 @@ describe('steps', () => {
   });
   it('without a record, everything before is done', () => {
     expect(steps(a({ stage: 'tasks', status: 'running' }), f).map((x) => x.state)).toEqual(['ok', 'ok', 'cur', 'todo']);
+  });
+});
+
+describe('stageLabel', () => {
+  const st = (id: string, role: string) => ({ id, role: role as never, class: 'routine', gate: true });
+  it('names a stage by its role when the id is the role', () => {
+    expect(stageLabel(st('implement', 'implement'))).toBe('Build');
+    expect(stageLabel(st('pr', 'pr'))).toBe('PR');
+  });
+  it('names a stage by its id otherwise, so two stages of one role differ', () => {
+    expect(stageLabel(st('pr-review', 'pr'))).toBe('PR Review');
+    expect(stageLabel(st('security_scan', 'review'))).toBe('Security Scan');
   });
 });

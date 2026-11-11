@@ -11,7 +11,7 @@
   import { app } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { get } from '../lib/api';
-  import { flowOf, steps, STAGE_LABEL } from '../lib/flow';
+  import { flowOf, steps, stageLabel } from '../lib/flow';
   import { agentHue, agoText, needsYou, repoName } from '../lib/format';
   import type { Agent, StageInfo, Task } from '../lib/types';
 
@@ -64,12 +64,6 @@
   const shown = $derived(everyone.filter((a) => (!only || a.name === only) && (!repo || repoName(a) === repo) && (finished || only || !isFinished(a))));
   const laneOf = (a: Agent) => (lanes === 'repo' ? repoName(a) : lanes === 'agent' ? a.name : '');
 
-  /** "Spec", "PR"…; a stage whose id is not its role names itself by its id,
-   *  known words as their labels (`pr-review` → "PR Review"). */
-  function label(s: StageInfo): string {
-    if (s.id === s.role) return STAGE_LABEL[s.role] ?? s.role;
-    return s.id.split(/[-_]/).map((w) => STAGE_LABEL[w] ?? w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-  }
   /** The agent tab that shows a stage's work. */
   function stageTab(s: StageInfo): string {
     if (s.role === 'implement') return 'tasks';
@@ -109,7 +103,7 @@
       // A later stage already visited: the agent was sent back (review → fix).
       const again = state === 'todo' && (a.visitedStages ?? []).includes(stage.id);
       const hint = state === 'skip' ? 'skipped' : again ? 'again after the fixes' : current && a.gate ? 'waiting for you' : '';
-      out.push({ kind: 'stage', key: `${a.id}:${stage.id}`, lane, col, agent: a, label: label(stage), tab: stageTab(stage), hint, needs: current && waits });
+      out.push({ kind: 'stage', key: `${a.id}:${stage.id}`, lane, col, agent: a, label: stageLabel(stage), tab: stageTab(stage), hint, needs: current && waits });
     }
     // Fix tasks of a later stage (review, PR) when the implement stage had none.
     if (!flow.stages.some((s) => s.role === 'implement')) {
