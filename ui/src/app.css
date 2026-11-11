@@ -232,6 +232,8 @@ label.f.chk.top { align-items: flex-start; }
 .x a.gt:hover, .x a.gt.on { color: var(--bar-ink); }
 .x a.gt.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--bar-accent); }
 .x a.gt[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+.gt .short { display: none; }
+@media (max-width: 760px) { .gt .long { display: none; } .gt .short { display: inline; } }
 .gcount { font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 9px; background: var(--bar-2); color: var(--bar-ink); }
 .gcount.g { background: var(--bar-gate); color: #1f0b02; }
 .jump { display: flex; align-items: center; gap: 8px; height: 34px; width: 280px; max-width: 100%; padding: 0 10px; border-radius: 8px; background: var(--bar-2); color: var(--bar-ink-2); font-size: 12.5px; border: 1px solid rgba(255,255,255,.08); }
@@ -244,7 +246,11 @@ label.f.chk.top { align-items: flex-start; }
   /* Phone: logo and tools on the first line, the sections scroll on the second. */
   .bar { flex-wrap: wrap; padding-top: 6px; }
   .gnav { order: 10; flex: 1 1 100%; margin: 0 calc(-1 * var(--gut)); padding: 0 calc(var(--gut) - 12px); }
-  .x a.gt { height: 44px; }
+  .x a.gt { height: 44px; padding: 0 9px; }
+  /* Herd, then what needs you, so the ✋ count is never scrolled away. */
+  .x a.gt.home { order: -2; }
+  .x a.gt.attn { order: -1; }
+  .x a.gt.on::after { left: 9px; right: 9px; }
   .logo .ver { display: none; }
   .x a.btn.newb { width: 36px; padding: 0; }
   .newb .nl { display: none; }
