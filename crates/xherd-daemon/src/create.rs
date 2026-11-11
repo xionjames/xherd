@@ -37,7 +37,7 @@ impl Daemon {
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
     pub async fn new_agent(&self, req: NewAgent) -> Result<Agent, ActionError> {
         let c = new::check(&req)?;
-        let autonomy = req.autonomy.unwrap_or(self.config.autonomy);
+        let autonomy = req.autonomy.unwrap_or(self.live_config().autonomy);
         if !autonomy.selectable() {
             return Err(refuse(
                 "autonomy_unavailable",

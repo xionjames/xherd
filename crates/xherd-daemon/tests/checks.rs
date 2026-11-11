@@ -75,6 +75,14 @@ async fn checks_report_and_fix_the_pack_install() {
         (Some(2), Some(true))
     );
     assert_eq!(v["running"]["maxConcurrentAgents"], 4);
+
+    // Most settings apply at once: the actors' snapshot changes, no restart.
+    let patch =
+        serde_json::from_value(json!({"maxReviewLoops": 7, "freshSessions": false})).unwrap();
+    let v = d.save_config(patch).unwrap();
+    assert_eq!(v["running"]["maxReviewLoops"], 7);
+    assert_eq!(d.settings.get().max_review_loops, 7);
+    assert!(!d.settings.get().fresh_sessions);
 }
 
 #[tokio::test]

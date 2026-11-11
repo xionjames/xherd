@@ -112,6 +112,13 @@ pub struct Config {
     pub ntfy_server: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ntfy_topic: Option<String>,
+    /// Notification kinds the user does not want at all (bell, browser, ntfy
+    /// and desktop); see `NOTIFY_KINDS`. Live.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub muted_notifications: Vec<String>,
+    /// Also show notifications as operating system notifications from the
+    /// daemon (`osascript` / `notify-send`); native installs only. Live.
+    pub desktop_notifications: bool,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -145,6 +152,8 @@ impl Default for Config {
             git_hosts: Vec::new(),
             ntfy_server: None,
             ntfy_topic: None,
+            muted_notifications: Vec::new(),
+            desktop_notifications: false,
             max_session_minutes: 0,
             pr_poll_minutes: 5,
             max_review_loops: 3,
@@ -218,7 +227,55 @@ fn both_protocols() -> Vec<String> {
 type Migration = fn(&mut Map<String, Value>);
 const MIGRATIONS: &[Migration] = &[|_v0| {}];
 
+/// The kinds of notification (spec §16.3), what `mutedNotifications` may name.
+pub const NOTIFY_KINDS: &[&str] = &[
+    "gate",
+    "blocked",
+    "idle",
+    "delivery",
+    "error",
+    "recovery",
+    "budget",
+    "limit",
+    "auto-approved",
+    "pr",
+    "pr-comments",
+];
+
 impl Config {
+    /// Copies the settings the daemon applies while running (everything but
+    /// the port, bind address, concurrency, workspace, tmux socket and plugin
+    /// settings) from `saved`, so the rest can be compared for a restart.
+    pub fn apply_live_from(&mut self, saved: &Config) {
+        let s = saved.clone();
+        self.gate_park_minutes = s.gate_park_minutes;
+        self.idle_alert_minutes = s.idle_alert_minutes;
+        self.pause_timeout_sec = s.pause_timeout_sec;
+        self.fresh_sessions = s.fresh_sessions;
+        self.event_retention_days = s.event_retention_days;
+        self.welcomed = s.welcomed;
+        self.disabled_plugins = s.disabled_plugins;
+        self.git_user_name = s.git_user_name;
+        self.git_user_email = s.git_user_email;
+        self.git_identities = s.git_identities;
+        self.max_session_minutes = s.max_session_minutes;
+        self.pr_poll_minutes = s.pr_poll_minutes;
+        self.max_review_loops = s.max_review_loops;
+        self.autonomy = s.autonomy;
+        self.max_auto_approvals_in_row = s.max_auto_approvals_in_row;
+        self.agent_token_budget = s.agent_token_budget;
+        self.daily_token_budget = s.daily_token_budget;
+        self.max_diff_lines = s.max_diff_lines;
+        self.sensitive_paths = s.sensitive_paths;
+        self.toolchain_defaults = s.toolchain_defaults;
+        self.ntfy_server = s.ntfy_server;
+        self.ntfy_topic = s.ntfy_topic;
+        self.muted_notifications = s.muted_notifications;
+        self.desktop_notifications = s.desktop_notifications;
+        self.git_hosts = s.git_hosts;
+        self.user_token = s.user_token;
+    }
+
     /// Load, migrating older schema versions. A missing file yields defaults.
     pub fn load(path: &Path) -> Result<(Config, bool), ConfigError> {
         let p = path.display().to_string();

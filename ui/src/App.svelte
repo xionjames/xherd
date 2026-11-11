@@ -9,6 +9,7 @@
   import Welcome from './pages/Welcome.svelte';
   import NewAgent from './pages/NewAgent.svelte';
   import Review from './pages/Review.svelte';
+  import Board from './pages/Board.svelte';
   import { app, start } from './lib/store.svelte';
   import { route, go } from './lib/router.svelte';
   import { setup, loadChecks, loadConfig, failingRequired } from './lib/setup.svelte';
@@ -41,6 +42,8 @@
       <Setup />
     {:else if route.path === '/settings'}
       <Settings />
+    {:else if route.path === '/board'}
+      <Board />
     {:else if route.path === '/review'}
       <Review />
     {:else if route.path === '/new'}

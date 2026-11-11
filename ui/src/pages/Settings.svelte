@@ -1,6 +1,6 @@
 <script lang="ts">
   // Settings: General, Gates & autonomy, Git access and Plugins. Saved to
-  // config.json; the daemon applies them at its next start.
+  // config.json; most apply at once.
   import { app } from '../lib/store.svelte';
   import { put } from '../lib/api';
   import { route, href } from '../lib/router.svelte';
@@ -17,8 +17,15 @@
   const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic'];
+  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
   let form = $state<Form>({});
+  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['auto-approved', 'Something was approved for you'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments']];
+  const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
+  function toggleKind(k: string, on: boolean) {
+    const next = new Set(muted);
+    if (on) next.delete(k); else next.add(k);
+    form.mutedNotifications = [...next].sort().join(',');
+  }
   let plugins = $state<Record<string, Record<string, string>>>({});
   let saving = $state(false);
   let ready = $state(false);
@@ -50,7 +57,7 @@
   async function save() {
     saving = true;
     const body: Record<string, unknown> = {};
-    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'workspace' || k === 'autonomy' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : Number(form[k]);
+    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : Number(form[k]);
     if (changedPlugins.length) {
       body.pluginSettings = Object.fromEntries(
         changedPlugins.map((p) => [p, Object.fromEntries(Object.entries(plugins[p]).filter(([, v]) => v !== ''))]),
@@ -159,6 +166,21 @@
         <div class="sh"><h2>In this browser</h2><span class="hint">The bell in the top bar lists what happened while xherd was open.</span></div>
         <div class="bd">
           <p class="muted">Turn browser notifications on from the bell; the browser asks for permission then. Each agent has one per kind (gate, blocked, idle…); a new one replaces the previous.</p>
+        </div>
+      </section>
+      <section class="sec">
+        <div class="sh"><h2>Which ones</h2><span class="hint">Untick a kind to stop receiving it anywhere (bell, browser, ntfy, desktop). Applies at once.</span></div>
+        <div class="bd">
+          {#each KINDS as [k, label] (k)}
+            <label class="f chk"><input type="checkbox" checked={!muted.has(k)} onchange={(e) => toggleKind(k, e.currentTarget.checked)} /> {label}</label>
+          {/each}
+        </div>
+      </section>
+      <section class="sec">
+        <div class="sh"><h2>Desktop</h2><span class="hint">System notifications from the daemon itself, also when no browser tab is open.</span></div>
+        <div class="bd">
+          <label class="f chk"><input type="checkbox" checked={form.desktopNotifications === true} onchange={(e) => (form.desktopNotifications = e.currentTarget.checked)} /> Show system notifications</label>
+          <span class="hint">Uses <code>osascript</code> (macOS) or <code>notify-send</code> (Linux) on the machine running the daemon. Not available in the Docker image: there, use the browser or ntfy.</span>
         </div>
       </section>
       <section class="sec">

@@ -16,6 +16,8 @@
     <a class="gt" class:on={route.path === '/' || route.path.startsWith('/agent')}
        aria-current={route.path === '/' ? 'page' : undefined}
        aria-disabled={blocked} href={blocked ? undefined : href('/')} style={blocked ? 'opacity:.45' : ''}>Herd</a>
+    {#if !blocked}<a class="gt" class:on={route.path === '/board'} aria-current={route.path === '/board' ? 'page' : undefined}
+       href={href('/board')}>Board</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/review'} aria-current={route.path === '/review' ? 'page' : undefined}
        href={href('/review')}>To review</a>{/if}
     {#if failing || route.path === '/setup'}<a class="gt" class:on={route.path === '/setup'} aria-current={route.path === '/setup' ? 'page' : undefined}

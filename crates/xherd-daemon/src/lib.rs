@@ -150,6 +150,10 @@ pub struct Daemon {
     pub packs: Arc<BTreeMap<String, Pack>>,
     pub hub: Hub,
     pub sup: SupervisorHandle,
+    /// What the actors read; replaced by `save_config` (live settings).
+    pub settings: actor::SettingsHandle,
+    /// `Options::pr_poll`, which wins over the config (tests).
+    pub pr_poll_override: Option<std::time::Duration>,
     pub driver: Arc<dyn Driver>,
     pub clock: Arc<dyn Clock>,
     /// Absolute path of the `xherd` binary (hook commands, `XHERD_BIN`).
@@ -221,29 +225,20 @@ impl Daemon {
         )]));
         let host = host_plugin(&plugins, &paths, &config, &secrets, &opts.xherd_bin);
         let hub = support::hub();
-        let settings = ActorSettings {
-            idle_alert_minutes: config.idle_alert_minutes,
-            gate_park_minutes: config.gate_park_minutes,
-            fresh_sessions: config.fresh_sessions,
-            xherd_bin: opts.xherd_bin.clone(),
-            xherd_url: config.url(),
-            pause_timeout: std::time::Duration::from_secs(config.pause_timeout_sec),
-            delivery_ack: opts.delivery_ack,
-            screen_rules: opts.screen_rules,
-            toolchain_install: opts.sandbox,
-            toolchain_defaults: config.toolchain_defaults.clone(),
-            verify_timeout: opts.verify_timeout,
-            pr_poll: opts
-                .pr_poll
-                .unwrap_or(std::time::Duration::from_secs(config.pr_poll_minutes * 60)),
-            max_session_minutes: config.max_session_minutes,
-            max_review_loops: config.max_review_loops,
-            max_auto_approvals_in_row: config.max_auto_approvals_in_row,
-            agent_token_budget: config.agent_token_budget,
-            daily_token_budget: config.daily_token_budget,
-            max_diff_lines: config.max_diff_lines,
-            sensitive_paths: config.sensitive_paths.clone(),
-        };
+        let pr_poll_override = opts.pr_poll;
+        let settings = actor::SettingsHandle::new(ActorSettings::from_config(
+            &config,
+            ActorSettings {
+                xherd_bin: opts.xherd_bin.clone(),
+                xherd_url: config.url(),
+                delivery_ack: opts.delivery_ack,
+                screen_rules: opts.screen_rules,
+                toolchain_install: opts.sandbox,
+                verify_timeout: opts.verify_timeout,
+                ..ActorSettings::default()
+            },
+            pr_poll_override,
+        ));
         let trust = plugins
             .get(xherd_flow::approve::DEFAULT_RUNTIME)
             .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
@@ -277,7 +272,7 @@ impl Daemon {
             driver: opts.driver.clone(),
             hub: hub.clone(),
             clock: opts.clock.clone(),
-            settings: Arc::new(settings),
+            settings: settings.clone(),
             sup: tokio::sync::mpsc::unbounded_channel().0, // replaced by the supervisor
             packs: packs.clone(),
             git: xherd_git::Git::new("git"),
@@ -299,6 +294,8 @@ impl Daemon {
             packs,
             hub,
             sup,
+            settings,
+            pr_poll_override,
             driver: opts.driver,
             clock: opts.clock,
             xherd_bin: opts.xherd_bin,
@@ -746,7 +743,7 @@ impl Daemon {
     }
 
     pub async fn prune_events(&self) {
-        let days = self.config.event_retention_days as i64;
+        let days = self.live_config().event_retention_days as i64;
         let before = self.clock.now() - days * 24 * 3600 * 1000;
         match self.store.prune_events(before).await {
             Ok(n) if n > 0 => tracing::info!(pruned = n, "old events removed"),

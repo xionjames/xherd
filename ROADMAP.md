@@ -20,8 +20,9 @@ by theme; update it together with them.
 - [x] Agent page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked agents
 - [x] Gate documents: highlight what changed after a change request (spec, design, tasks…), without keeping version history
 - [x] Open questions: a text box per question to answer them inline
-- [ ] Screens still hidden: Board, Review, TODOs, Time, notification bell
-- [ ] Live reload of the daemon config (most settings apply at the next start)
+- [x] Board (tasks of all agents by status) and Review with "Mark seen"; the notification bell is in
+- [ ] Screens still hidden: Time (work log: needs agent/user time recorded per day and ticket), TODOs (reminders and condition checks, spec §16.2); Board stage cards and swimlanes
+- [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [ ] Plugin secrets and plugin install from the UI
 
 ## M3 Docker-first
@@ -41,7 +42,7 @@ by theme; update it together with them.
 - [x] Resume button (also from `error`): continues the last Claude conversation when its transcript exists, else a new session
 - [x] Auto-resume a vanished session, at most twice per hour
 - [x] Fewer permission prompts: pack commands readable, plain `xherd` calls with allow rules, `edits` as the default mode
-- [ ] Plugins switched off apply live to toolchains, the host plugin and the trust writer (today: at daemon start)
+- [x] Plugins switched off apply live to toolchains, the host plugin and the trust writer
 - [x] Pause with a handoff (R-026): the agent is asked for a note, the session ends after it or after `pauseTimeoutSec`; resume starts a fresh session from the note
 - [x] Kill switch (R-032): `xherd pause --all`, `POST /agents/pause-all`, "Pause all" in the Herd; immediate, no handoff (also for the budget pause, on purpose)
 - [ ] Background-task guard (R-024); runtime change between steps (R-025)
@@ -87,7 +88,8 @@ by theme; update it together with them.
 - [x] `pr-template` (R-153): templates looked up on entering the ship stage, `pr-templates.json` read by the `ship` prompt
 - [ ] Stage hooks (R-401…R-404), including `pr.merged` (R-307): v1.x, with profiles / pack `stageHooks`
 - [x] Notifications: typed (one per agent and kind), the bell and browser notifications in the UI, ntfy from Settings → Notifications
-- [ ] Desktop OS notifications, phones, per-kind filters, notifier plugins
+- [x] Per-kind notification filter (`mutedNotifications`) and daemon-side desktop notifications (`desktopNotifications`: `osascript` / `notify-send`, native installs)
+- [ ] Notifier plugins, replacing an earlier ntfy message, Windows desktop notifications
 
 ## v1.x
 

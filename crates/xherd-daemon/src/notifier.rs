@@ -53,6 +53,32 @@ fn post(url: &str, kind: &str, text: &str) -> Cmd {
     .timeout(Duration::from_secs(15))
 }
 
+/// An operating system notification through the platform's tool; the text
+/// is an argument, never part of a script. `None` where there is no tool.
+fn desktop(text: &str) -> Option<Cmd> {
+    let argv: Vec<String> = if cfg!(target_os = "macos") {
+        [
+            "osascript",
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 1 of argv) with title \"xherd\"",
+            "-e",
+            "end run",
+            text,
+        ]
+        .map(String::from)
+        .to_vec()
+    } else if cfg!(target_os = "linux") {
+        ["notify-send", "--app-name=xherd", "--", "xherd", text]
+            .map(String::from)
+            .to_vec()
+    } else {
+        return None;
+    };
+    Some(Cmd::new(argv).timeout(Duration::from_secs(10)))
+}
+
 pub fn spawn(d: Daemon) -> tokio::task::JoinHandle<()> {
     let mut rx = d.hub.subscribe();
     tokio::spawn(async move {
@@ -63,6 +89,13 @@ pub fn spawn(d: Daemon) -> tokio::task::JoinHandle<()> {
                 Err(RecvError::Closed) => return,
             };
             let c = d.live_config();
+            if c.desktop_notifications
+                && !d.sandbox
+                && let Some(cmd) = desktop(&text)
+                && let Err(e) = run(cmd).await
+            {
+                tracing::warn!(err = %e, "desktop notification failed");
+            }
             let Some(url) = endpoint(c.ntfy_server.as_deref(), c.ntfy_topic.as_deref()) else {
                 continue;
             };
@@ -92,6 +125,19 @@ mod tests {
         assert_eq!(e(Some("https://x y"), Some("t")), None);
         assert_eq!(e(Some("https://x"), Some("a/b")), None);
         assert_eq!(e(Some("https://x"), Some("")), None);
+    }
+
+    #[test]
+    fn desktop_text_is_an_argument() {
+        if let Some(c) = desktop("SC-1: a \"quoted\" reason") {
+            assert!(c.argv.last().unwrap().contains("quoted"));
+            assert!(
+                !c.argv
+                    .iter()
+                    .take(c.argv.len() - 1)
+                    .any(|a| a.contains("quoted"))
+            );
+        }
     }
 
     #[test]

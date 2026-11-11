@@ -61,6 +61,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/security", get(security))
         .route("/api/v1/reviews", get(reviews))
+        .route("/api/v1/reviews/seen", post(reviews_seen))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
@@ -441,14 +442,63 @@ async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         d.store.auto_approvals(100).await.map_err(|e| {
             ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
         })?;
+    let seen =
+        d.store.reviews_seen().await.map_err(|e| {
+            ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
+        })?;
     let items: Vec<Value> = events
         .into_iter()
         .map(|e| {
             let p = e.payload.unwrap_or_default();
-            json!({"agentId": e.agent_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"]})
+            let seen = seen.contains(&seen_id(&e.agent_id, e.at, p["gate"].as_str().unwrap_or("")));
+            json!({"agentId": e.agent_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"], "seen": seen})
         })
         .collect();
     Ok(Json(json!({"reviews": items})))
+}
+
+/// The event id that records an auto-approval as seen (one per item).
+fn seen_id(agent_id: &str, at: i64, gate: &str) -> String {
+    format!("seen:{agent_id}:{at}:{gate}")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SeenItem {
+    agent_id: String,
+    at: i64,
+    gate: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeenBody {
+    items: Vec<SeenItem>,
+}
+
+/// `POST /api/v1/reviews/seen` (R-111, "Mark seen"): the listed
+/// auto-approvals are marked as looked at.
+async fn reviews_seen(
+    _: User,
+    State(d): State<Daemon>,
+    Json(b): Json<SeenBody>,
+) -> ApiResult<Json<Value>> {
+    let now = d.clock.now();
+    for i in b.items.iter().take(500) {
+        d.store
+            .insert_event(xherd_store::Event {
+                id: seen_id(&i.agent_id, i.at, &i.gate),
+                agent_id: i.agent_id.clone(),
+                kind: "review-seen".into(),
+                payload: None,
+                at: now,
+            })
+            .await
+            .map_err(|e| {
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
+            })?;
+    }
+    Ok(Json(json!({"ok": true})))
 }
 
 /// `GET /api/v1/backups` (R-1402): the archives in the backup folder, newest first.

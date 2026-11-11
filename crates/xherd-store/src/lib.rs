@@ -504,6 +504,17 @@ impl Store {
         .await
     }
 
+    /// `agent_id|at|gate` of every auto-approval marked seen (events of kind
+    /// `review-seen`, pruned with the approvals themselves).
+    pub async fn reviews_seen(&self) -> Result<std::collections::HashSet<String>> {
+        self.read(|c| {
+            let mut st = c.prepare("SELECT id FROM events WHERE kind = 'review-seen'")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<rusqlite::Result<_>>()?)
+        })
+        .await
+    }
+
     /// Most recent first.
     pub async fn events(&self, agent_id: &str, limit: usize) -> Result<Vec<Event>> {
         let id = agent_id.to_string();
