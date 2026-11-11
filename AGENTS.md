@@ -131,6 +131,8 @@ Integration tests need `git` and `tmux` (≥ 3.3) on `PATH`; tmux tests use a pr
 
 ## Gotchas
 
+- `target/` size: `[profile.dev] debug = "line-tables-only"` in `Cargo.toml` and `incremental = false` in `.cargo/config.toml` keep it small (about 30 test binaries each link the whole tree). Remove the second if rebuild speed matters more than disk; `cargo clean` is always safe.
+
 - Version (issue #53): `xherd_core::VERSION` is the Cargo version (compatibility checks, store, backups compare it; do not display-format it). `xherd_core::BUILD_VERSION` (`crates/xherd-core/build.rs`) is what people see (`xherd --version`, `/state` `buildVersion`, the bar next to the logo, Settings → About): the git tag of a release (`0.2.0`), `<tag>+<commits>.<hash>` after it, `<cargo version>+<hash>` before the first tag, `.dirty` for uncommitted changes. `XHERD_VERSION` in the environment overrides it; the Docker image has no `.git`, so pass `--build-arg XHERD_VERSION=$(git describe --tags --always)` (compose does not yet).
 - Toolchain installs (issue #48): the install command is wrapped in `sh -c` that waits for Enter when it fails, so the terminal stays and shows the error; the version list is sorted newest first by `natural_cmp`.
 
