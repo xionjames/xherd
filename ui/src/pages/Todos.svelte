@@ -22,8 +22,14 @@
   const local = (ms: number) => { const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
   const inAnHour = () => local(Date.now() + 3600000);
   const CHECKS: [string, string][] = [['15', 'Every 15 minutes'], ['60', 'Every hour'], ['1440', 'Every day']];
-  const blank = () => ({ title: '', note: '', due: inAnHour(), repeat: '', kind: 'reminder', condition: '', model: '' });
+  const blank = () => ({ title: '', note: '', due: inAnHour(), repeat: '', condition: '', model: '' });
   let form = $state(blank());
+  // One form: the condition is optional. With one, the TODO is checked at each time and only needs you when it is met, so it needs a check interval.
+  const hasCond = $derived(form.condition.trim() !== '');
+  $effect(() => {
+    if (hasCond && !CHECKS.some(([v]) => v === form.repeat)) form.repeat = '60';
+    else if (!hasCond && form.repeat === '15') form.repeat = '';
+  });
   let editing = $state<string | null>(null);
   let busy = $state(false);
 
@@ -32,8 +38,8 @@
     note: form.note.trim() || undefined,
     due: new Date(form.due).getTime(),
     repeatMinutes: form.repeat ? Number(form.repeat) : undefined,
-    condition: form.kind === 'condition' ? form.condition.trim() : undefined,
-    model: form.kind === 'condition' && form.model.trim() ? form.model.trim() : undefined,
+    condition: hasCond ? form.condition.trim() : undefined,
+    model: hasCond && form.model.trim() ? form.model.trim() : undefined,
   });
   async function run(f: () => Promise<unknown>, what: string) {
     busy = true;
@@ -46,7 +52,7 @@
   }, 'Could not save the TODO');
   function edit(t: Todo) {
     editing = t.id;
-    form = { title: t.title, note: t.note ?? '', due: local(t.due), repeat: t.repeatMinutes ? String(t.repeatMinutes) : '', kind: t.condition ? 'condition' : 'reminder', condition: t.condition ?? '', model: t.model ?? '' };
+    form = { title: t.title, note: t.note ?? '', due: local(t.due), repeat: t.repeatMinutes ? String(t.repeatMinutes) : '', condition: t.condition ?? '', model: t.model ?? '' };
   }
   const snooze = (t: Todo, ms: number) => run(() => post(`/todos/${t.id}/reschedule`, { due: Date.now() + ms }), 'Could not reschedule');
   const when = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -60,27 +66,23 @@
 
 <div class="stack">
   <div class="phead notabs"><div class="row"><h1>TODOs</h1></div></div>
-  <p class="muted">Reminders for you, not for agents. When one comes due it needs you and you get a notification.</p>
+  <p class="muted">Reminders for you, not for agents. When one comes due it needs you and you get a notification. A reminder with a condition only comes due when the condition is met.</p>
 
   <form class="card f" style="padding:12px 16px" onsubmit={(e) => { e.preventDefault(); save(); }}>
     <h2>{editing ? 'Edit the TODO' : 'New TODO'}</h2>
-    <div class="row" style="gap:16px" role="radiogroup" aria-label="Kind">
-      <label><input type="radio" value="reminder" bind:group={form.kind} onchange={() => (form.repeat = '')} /> Reminder</label>
-      <label><input type="radio" value="condition" bind:group={form.kind} onchange={() => (form.repeat = '60')} /> Condition to check</label>
-    </div>
     <label class="f">Title <input bind:value={form.title} maxlength="200" required placeholder="Renew the TLS certificate" /></label>
-    {#if form.kind === 'condition'}
-      <label class="f">Condition <textarea bind:value={form.condition} maxlength="1000" rows="2" required placeholder="The pull request for PROJ-123 is merged"></textarea>
-        <span class="hint">At each time a short read-only run of Claude Code looks into it: it can read files and use <span class="mono">gh</span> and <span class="mono">git</span> to read, nothing that changes anything. Met needs you; not met is checked again later.</span></label>
+    <label class="f">Condition (optional) <textarea bind:value={form.condition} maxlength="1000" rows="2" placeholder="The pull request for PROJ-123 is merged"></textarea>
+      <span class="hint">Leave empty for a plain reminder. With a condition, at each time a short read-only run of Claude Code looks into it (it can read files and use <span class="mono">gh</span> and <span class="mono">git</span> to read, nothing that changes anything). You are notified only when it is met; otherwise it is checked again at the next interval.</span></label>
+    {#if hasCond}
       <label class="f">Model <input class="mono" bind:value={form.model} maxlength="100" placeholder="the runtime's default" /></label>
     {/if}
     <label class="f">Note <textarea bind:value={form.note} maxlength="2000" rows="2"></textarea></label>
     <div class="row" style="gap:12px;flex-wrap:wrap">
       <label class="f">Due <input type="datetime-local" bind:value={form.due} required /></label>
-      <label class="f">{form.kind === 'condition' ? 'Check' : 'Repeat'} <select bind:value={form.repeat}>{#each form.kind === 'condition' ? CHECKS : REPEATS as [v, l] (v)}<option value={v}>{l}</option>{/each}</select></label>
+      <label class="f">{hasCond ? 'Check again' : 'Repeat'} <select bind:value={form.repeat}>{#each hasCond ? CHECKS : REPEATS as [v, l] (v)}<option value={v}>{l}</option>{/each}</select></label>
     </div>
     <div class="row" style="gap:8px">
-      <button class="btn gate" type="submit" disabled={busy || !form.title.trim() || (form.kind === 'condition' && !form.condition.trim())}>{editing ? 'Save' : 'Add'}</button>
+      <button class="btn gate" type="submit" disabled={busy || !form.title.trim()}>{editing ? 'Save' : 'Add'}</button>
       {#if editing}<button class="btn ghost" type="button" onclick={() => { editing = null; form = blank(); }}>Cancel</button>{/if}
     </div>
   </form>
