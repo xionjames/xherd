@@ -145,5 +145,6 @@
   .tk:hover { background: var(--accent-wash); }
   .tk.needs { border-color: var(--gate); }
   .seg { display: inline-flex; gap: 4px; }
+  .phead select { width: auto; min-width: 0; }
   .seg .btn[aria-pressed='true'] { background: var(--accent-wash); border-color: var(--accent, currentColor); }
 </style>

@@ -96,7 +96,7 @@
           <span class="grow"></span>
           {#if t.status !== 'done'}
             {#if t.condition}<button class="btn sm" disabled={busy || t.status === 'checking'} onclick={() => run(() => post(`/todos/${t.id}/check`), 'Could not start the check')}>Check now</button>{/if}
-            <button class="btn gate sm" disabled={busy} onclick={() => run(() => post(`/todos/${t.id}/complete`), 'Could not complete')}>Complete</button>
+            <button class="btn sm" class:gate={t.status === 'due' || t.status === 'error'} disabled={busy} onclick={() => run(() => post(`/todos/${t.id}/complete`), 'Could not complete')}>Complete</button>
             <button class="btn sm" disabled={busy} onclick={() => snooze(t, 3600000)}>Snooze 1 h</button>
             <button class="btn sm" disabled={busy} onclick={() => snooze(t, 86400000)}>Tomorrow</button>
             <button class="btn ghost sm" onclick={() => edit(t)}>Edit</button>

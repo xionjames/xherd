@@ -69,6 +69,7 @@
 </div>
 
 <style>
+  .phead select { width: auto; min-width: 0; }
   .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .tbl th, .tbl td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--fence-soft); }
   .tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
