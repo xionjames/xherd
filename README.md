@@ -15,8 +15,8 @@ I got overwhelmed running several coding tasks at once: terminals piled up and a
 
 ## What is xherd?
 
-![The xherd Herd view: two agents waiting for review, one watching a pull request, one paused, one done](doc/assets/herd.jpg)
-*The Herd view, with mocked data: what needs you is on top, everything else below.*
+![A tour of xherd: the Herd, reviewing a design, reviewing a commit, inline comments, the Board, and Needs attention](doc/assets/tour.gif)
+*A short tour, with mocked data. Stills of each screen are [below](#screenshots).*
 
 You hand xherd your tickets. It gives each one to a coding agent in its own sandbox, and shows you all of them on one screen.
 
@@ -41,14 +41,28 @@ Working today:
 - Agents survive restarts: they are parked at their gate or resumed, not lost.
 - Git access from the UI (HTTPS tokens, SSH keys, per-owner commit identity) and repositories cloned by URL.
 - Plugins in any language (the CLI is the plugin API). Single Rust binary, web UI embedded.
+- A Board with every stage and task of every agent (pending, in progress, done), a Needs attention page, time tracking and TODOs.
 
 Planned:
 
 - Adjustable autonomy, tripwires and guardrails (for example, blocking pushes).
 - Following the pull request after it opens: CI, review comments, replies.
 - Other runtimes beyond Claude Code (Codex, opencode…), and a runtime, model and effort per step.
-- Board, review and time views, notifications, and access from your phone.
+- Notifications and access from your phone.
 - Declarative views and backups.
+
+## Screenshots
+
+All with mocked data.
+
+| | |
+|---|---|
+| ![The Herd: two agents waiting for you on top, every agent below with its status, progress and tasks](doc/assets/herd.jpg) | ![An agent waiting at the design gate: the design document, with Approve and Request changes on top](doc/assets/review-design.jpg) |
+| **Herd.** What needs you on top, every agent below. | **Review a document.** Approve the design, or ask for changes. |
+| ![A commit waiting for approval: its diff, the commit message and the files it contains](doc/assets/review-commit.jpg) | ![A review comment on a line of the diff, and a Send 2 comments button to send them to the agent](doc/assets/review-comments.jpg) |
+| **Review a commit.** xherd commits it when you approve. | **Comment on lines.** Comments go back to the agent as one change request. |
+| ![The Board: stages and tasks of every agent in Pending, In progress and Done, with TODOs](doc/assets/board.jpg) | ![Needs attention: agents waiting for you, a due TODO, and an approval made by xherd](doc/assets/attention.jpg) |
+| **Board.** Every stage and task of every agent, and your TODOs. | **Needs attention.** Everything waiting on you in one place. |
 
 ## Documentation
 
