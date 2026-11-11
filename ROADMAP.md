@@ -20,6 +20,7 @@ by theme; update it together with them.
 - [x] Agent page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked agents
 - [x] Gate documents: highlight what changed after a change request (spec, design, tasks…), without keeping version history
 - [x] Open questions: a text box per question to answer them inline
+- [x] Open questions read from the gate documents' `## Open questions` section and answered as inline comments on their list items, sent with the other comments (R-105a)
 - [x] Board (tasks of all agents by status) and Review with "Mark seen"; the notification bell is in
 - [x] Time (work log: agent and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
 - [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (agent, repository) and TODO cards; the Herd's By stage layout (agents in columns by role); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)

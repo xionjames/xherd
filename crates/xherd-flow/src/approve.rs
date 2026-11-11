@@ -139,6 +139,8 @@ pub struct DocSeen {
     pub approved: bool,
     /// Some content of this file was approved before.
     pub ever_approved: bool,
+    /// Its open questions ([`crate::questions::parse`], R-105a).
+    pub questions: Vec<String>,
 }
 
 /// The gate to open when the agent stopped without declaring one: the first
@@ -169,7 +171,8 @@ pub fn infer_gate(flow: &Flow, seen: &[DocSeen]) -> Option<(Gate, bool)> {
             files,
             next: None,
             needs_human: None,
-            questions: Vec::new(),
+            questions: pending.iter().flat_map(|d| d.questions.clone()).collect(),
+            asked: Vec::new(),
         };
         return Some((gate, reopened));
     }
@@ -215,6 +218,7 @@ mod tests {
             next: None,
             needs_human: None,
             questions: vec![],
+            asked: vec![],
         }
     }
 
@@ -301,6 +305,7 @@ mod tests {
             sha256: sha.map(str::to_string),
             approved,
             ever_approved: ever,
+            questions: vec![],
         }
     }
 

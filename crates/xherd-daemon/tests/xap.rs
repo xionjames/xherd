@@ -2365,6 +2365,36 @@ async fn a_human_hold_or_open_questions_stop_auto_approval() {
 }
 
 #[tokio::test]
+async fn open_questions_are_read_from_the_document_and_hold_the_gate() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    std::fs::write(
+        t.wt.path().join(".xherd/spec/design.md"),
+        "# d\n\n## Open questions\n- Which db?\n- Who owns it?\n\n## Assumptions\n- a\n",
+    )
+    .unwrap();
+    xap(
+        &t,
+        "c1",
+        "gate.open",
+        json!({"stage": "design", "questions": ["Which db?", "Deadline?"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    let Some(Gate::Docs {
+        questions, asked, ..
+    }) = &a.gate
+    else {
+        panic!("held by its open questions: {:?}", a.gate)
+    };
+    assert_eq!(questions, &["Which db?", "Who owns it?"]);
+    assert_eq!(asked, &["Deadline?"]);
+    assert_eq!(a.auto_in_row, 0);
+}
+
+#[tokio::test]
 async fn a_tripwire_on_a_commit_holds_it_even_with_important() {
     let t = setup_config(json!({"freshSessions": true, "sensitivePaths": ["infra/**"]})).await;
     act(&t, level("important")).await.unwrap();

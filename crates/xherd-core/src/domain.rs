@@ -188,8 +188,14 @@ pub enum Gate {
         /// Tripwire set by the agent (`--needs-human`, R-112).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         needs_human: Option<String>,
+        /// Open questions read from the documents' `## Open questions`
+        /// sections (R-105a), in document order.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         questions: Vec<String>,
+        /// Questions that are in no document: `--question` and `xherd ask`
+        /// while the gate is open.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        asked: Vec<String>,
     },
     Commit(Commit),
     PrTriage {

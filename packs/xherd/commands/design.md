@@ -10,7 +10,8 @@ Read the xherd rules in `{{dir}}/rules.md` first and follow them.
    files in the code map and those the spec names; look elsewhere only when
    they fall short, and add what you find to the code map.
 3. Write `.xherd/spec/design.md` in the design format. Name real files and
-   functions; verify each one exists before you cite it.
+   functions; verify each one exists before you cite it. Put every question
+   for the user in its open questions section, one list item each.
 4. Rewrite `.xherd/spec/memory.md`, with the code map for the tasks step.
 5. `xherd gate open design`
 6. Stop and wait for the user.

@@ -554,6 +554,12 @@ Actors, gates, autonomy and XAP use only these; git-specific code registers as c
 
 Svelte 5 + Vite + TypeScript, built to static files and embedded. xterm.js for terminals, marked + DOMPurify for Markdown, Mermaid loaded on demand, diff2html for diffs. Hash router with view state in the query string. One global store loaded from `/state`, kept live by `/ws`, fully reloaded on reconnect. Own design tokens (CSS variables) with light/dark themes; one reserved "needs you" colour. Playwright smoke tests against the built binary with a fake runtime.
 
+**Open questions (R-105a).** The document is the only source, so nothing has to be matched against a second copy:
+
+- Daemon: `xherd_flow::questions::parse(md)` returns the top-level list items under the `## Open questions` heading (raw text; a lone "None." in any case, with or without the period, or an empty section = none). The actor parses each gate document when it observes `gate open` and before `infer_gate`; `Gate::Docs.questions` holds the texts in document order (the UI finds the items in the rendered document itself, `questionBlocks` in `lib/notes.ts`, so it needs no location). `--question` texts and `xherd ask` during the docs gate go to `Gate::Docs.asked: Vec<String>`, except one equal to a parsed question after trimming and collapsing whitespace (dropped). R-113, the Needs-you count and notifications use both lists. An edited document re-opens the gate (R-107), which parses it again.
+- Pack: `FORMAT.md` gives `design.md` an `## Open questions` section too; the `feature` and `design` prompts stop passing `--question` and say to write every question there.
+- UI: in the Documents panel, the list items under `## Open questions` of a gate document (already one `MdBlocks` block each) get their comment boxes opened when the gate is open, with the placeholder "Your answer", and are marked as questions. `asked` questions get comment boxes above the documents, each quoting its question. All of them are sent with the other inline comments ("Send N comments", `lib/notes.ts`); empty boxes send nothing. The your-call band no longer holds answer boxes: it says "N open questions" and links to the Documents panel, scrolled to the first one. A `question` gate (`xherd ask` with no docs gate) keeps its answer box in the band.
+
 ### 13.2 Desktop app (post-v1): Electron
 
 Electron bundles one Chromium on every OS, so the UI behaves the same everywhere (system webviews differ, and Linux's WebKitGTK lags behind); its tray, notifications, deep links, auto-update and installers are mature. Cost: size and memory, acceptable for a tool that stays open all day.
@@ -683,6 +689,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Diffs
   - [x] Highlight what changed in gate documents (spec, design, tasks…) after a change request; no version history kept
   - [x] Open questions answered inline: one text box per question
+  - [x] Open questions read from the gate documents and answered as inline comments on their list items (R-105a)
 - [x] **M3 Docker-first**
   - [x] Image with version managers
   - [x] `xherd init` (users, SSH proxy, git config)

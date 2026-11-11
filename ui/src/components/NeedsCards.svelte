@@ -29,7 +29,8 @@
     const g = a.gate;
     const parts = [repoName(a)];
     if (g?.kind === 'commit') parts.push(`${g.files.length} files`);
-    if (g?.kind === 'docs' && g.questions?.length) parts.push(`${g.questions.length} open questions`);
+    const nq = g?.kind === 'docs' ? (g.questions?.length ?? 0) + (g.asked?.length ?? 0) : 0;
+    if (nq) parts.push(`${nq} open question${nq === 1 ? '' : 's'}`);
     if (g && 'needsHuman' in g && g.needsHuman) parts.push(`held: ${g.needsHuman}`);
     if (!g) parts.push('asked in the terminal');
     return parts.join(' · ');

@@ -1466,12 +1466,16 @@ impl Actor {
             (Ok(abs), Ok(_)) if abs.is_file() => match std::fs::read(&abs) {
                 Ok(bytes) => {
                     let sha256 = self.doc_sha256(wd, &path, &bytes);
-                    let frontmatter_error = path
-                        .ends_with(".md")
-                        .then(|| {
-                            xherd_flow::frontmatter::parse(&String::from_utf8_lossy(&bytes)).err()
-                        })
+                    let text = String::from_utf8_lossy(&bytes);
+                    let md = path.ends_with(".md");
+                    let frontmatter_error = md
+                        .then(|| xherd_flow::frontmatter::parse(&text).err())
                         .flatten();
+                    let questions = if md {
+                        xherd_flow::questions::parse(&text)
+                    } else {
+                        Vec::new()
+                    };
                     let approved = self
                         .env
                         .store
@@ -1482,6 +1486,7 @@ impl Actor {
                         sha256,
                         frontmatter_error,
                         approved,
+                        questions,
                     }
                 }
                 Err(_) => DocState::Missing,
@@ -1875,11 +1880,13 @@ impl Actor {
                 stage,
                 needs_human,
                 questions,
+                asked,
                 ..
             } => (
                 stage.clone(),
                 needs_human.clone().or_else(|| {
-                    (!questions.is_empty()).then(|| "the document has open questions".to_string())
+                    (!questions.is_empty() || !asked.is_empty())
+                        .then(|| "the document has open questions".to_string())
                 }),
             ),
             Gate::Commit(c) => (format!("commit {}", c.id), c.needs_human.clone()),
@@ -2422,9 +2429,16 @@ impl Actor {
                 let Ok(path) = xherd_flow::xap::doc_path(d, &wd) else {
                     continue;
                 };
-                let sha = inside(&wd, &path)
-                    .and_then(|p| std::fs::read(p).ok())
-                    .map(|b| xherd_flow::approve::doc_sha256(Some(flow), &wd, &path, &b));
+                let bytes = inside(&wd, &path).and_then(|p| std::fs::read(p).ok());
+                let sha = bytes
+                    .as_ref()
+                    .map(|b| xherd_flow::approve::doc_sha256(Some(flow), &wd, &path, b));
+                let questions = match &bytes {
+                    Some(b) if path.ends_with(".md") => {
+                        xherd_flow::questions::parse(&String::from_utf8_lossy(b))
+                    }
+                    _ => Vec::new(),
+                };
                 let approved = match &sha {
                     Some(h) => self
                         .env
@@ -2440,6 +2454,7 @@ impl Actor {
                     path,
                     sha256: sha,
                     approved,
+                    questions,
                 });
             }
         }

@@ -14,15 +14,8 @@
   let { agent, flow, tabId }: { agent: Agent; flow?: FlowInfo; tabId?: string } = $props();
   let text = $state('');
   let busy = $state(false);
-  // Open questions: one answer per question, sent as a change request.
-  let answers = $state<string[]>([]);
-  const questions = $derived(agent.gate?.kind === 'docs' ? (agent.gate.questions ?? []) : []);
-  const answered = $derived(answers.some((a, i) => a?.trim() && i < questions.length));
-  function sendAnswers() {
-    const lines = questions.flatMap((q, i) => (answers[i]?.trim() ? [`Q: ${q}\nA: ${answers[i].trim()}`] : []));
-    run('request-changes', { comment: `Answers to your open questions:\n\n${lines.join('\n\n')}` }, 'Could not send the answers')
-      .then((ok) => { if (ok) answers = []; });
-  }
+  // Open questions are answered in the Documents panel, on their items (R-105a).
+  const openQuestions = $derived(agent.gate?.kind === 'docs' ? (agent.gate.questions?.length ?? 0) + (agent.gate.asked?.length ?? 0) : 0);
   // R-688: what the git doctor says about the host a git-access block is about.
   const gitBlocked = $derived(agent.status === 'blocked' && agent.blockReason === 'git access');
   const agentId = $derived(agent.id);
@@ -141,6 +134,12 @@
         </p>
       {/if}
       {#if answering && question}<p class="gwhy">“{question}”</p>{/if}
+      {#if openQuestions}
+        <p class="gwhy">{openQuestions} open question{openQuestions === 1 ? '' : 's'}:
+          {#if tabId === 'spec'}answer them in the document, then send them with your comments.
+          {:else}<a href={href(`/agent/${agent.name}`, { s: 'spec', ...(g?.kind === 'docs' && g.files[0] ? { doc: g.files[0].path } : {}), q: '1' })}>answer them in the document</a>.{/if}
+        </p>
+      {/if}
       <button class="gtoggle" aria-expanded={open} onclick={() => (open = !open)}>{open ? 'Show less' : 'Show more'}</button>
     </div>
     <div class="gact">
@@ -173,28 +172,6 @@
         <textarea class="mono" rows="4" bind:value={msg} aria-label="Commit message"></textarea>
         {#if msg.trim() !== proposed.trim()}<span class="hint">Edited: your text replaces the agent's.</span>{/if}
       </label>
-    </div>
-  {/if}
-  {#if g?.kind === 'docs' && g.questions?.length}
-    <div class="gmore">
-      <div class="gbox" style="flex:1 1 100%">
-        <span class="lbl">Open questions · {g.questions.length}</span>
-        {#if reviewing}
-          {#each g.questions as q, i (i)}
-            <label class="gbox" style="flex:none">
-              <span>{q}</span>
-              <textarea rows="2" bind:value={answers[i]} aria-label={`Answer: ${q}`} placeholder="Your answer"></textarea>
-            </label>
-          {/each}
-          <div class="row">
-            <button class="btn" disabled={busy || !answered} onclick={sendAnswers}>Send answers</button>
-            <span class="hint">The agent revises the document with them; unanswered questions stay open.</span>
-          </div>
-        {:else}
-          <ul>{#each g.questions as q, i (i)}<li>{q}</li>{/each}</ul>
-          <span class="hint">Open the document to answer them.</span>
-        {/if}
-      </div>
     </div>
   {/if}
 </section>

@@ -9,6 +9,7 @@ pub mod manifest;
 pub mod memory;
 pub mod pr_review;
 pub mod progress;
+pub mod questions;
 pub mod review;
 pub mod tasks;
 pub mod template;

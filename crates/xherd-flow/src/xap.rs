@@ -73,6 +73,8 @@ pub enum DocState {
         frontmatter_error: Option<String>,
         /// The ledger already approves this exact content.
         approved: bool,
+        /// Its open questions ([`crate::questions::parse`], R-105a).
+        questions: Vec<String>,
     },
 }
 
@@ -203,6 +205,19 @@ fn wrong(what: &str) -> Refusal {
     )
 }
 
+/// The `--question`s that are not already in the documents, without repeats
+/// (R-105a).
+fn extra_questions(in_docs: &[String], given: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for q in given {
+        let known = in_docs.iter().chain(out.iter());
+        if !q.trim().is_empty() && !known.into_iter().any(|k| crate::questions::same(k, q)) {
+            out.push(q.clone());
+        }
+    }
+    out
+}
+
 /// Validate and apply one call. Returns whether the agent changed; `Ok(false)`
 /// means "already in that state" (still exit 0, xap.md §1.4).
 pub fn apply(
@@ -273,6 +288,7 @@ pub fn apply(
                 return Err(wrong("gate.open"));
             };
             let mut files = Vec::new();
+            let mut doc_questions: Vec<String> = Vec::new();
             let mut all_approved = true;
             for f in facts {
                 match f.state {
@@ -289,11 +305,13 @@ pub fn apply(
                         sha256,
                         frontmatter_error,
                         approved,
+                        questions,
                     } => {
                         if let Some(e) = frontmatter_error {
                             return Err(refuse("doc_schema", format!("{}: {e}", f.path)));
                         }
                         all_approved &= approved;
+                        doc_questions.extend(questions);
                         files.push(HashedFile {
                             path: f.path,
                             sha256,
@@ -313,7 +331,8 @@ pub fn apply(
                 files,
                 next: None,
                 needs_human: needs_human.clone(),
-                questions: questions.clone(),
+                asked: extra_questions(&doc_questions, questions),
+                questions: doc_questions,
             };
             let changed = set(&mut a.stage, Some(stage.clone())) | set(&mut a.gate, Some(gate));
             if changed {
@@ -330,11 +349,14 @@ pub fn apply(
                 ));
             }
             let changed = match &mut a.gate {
-                Some(Gate::Docs { questions, .. }) => {
-                    if questions.contains(text) {
+                Some(Gate::Docs {
+                    questions, asked, ..
+                }) => {
+                    let known = questions.iter().chain(asked.iter());
+                    if known.into_iter().any(|q| crate::questions::same(q, text)) {
                         false
                     } else {
-                        questions.push(text.clone());
+                        asked.push(text.clone());
                         true
                     }
                 }
@@ -736,6 +758,7 @@ mod tests {
                 sha256: sha.into(),
                 frontmatter_error: None,
                 approved,
+                questions: vec![],
             },
         }
     }
@@ -881,6 +904,7 @@ mod tests {
                         sha256: "h".into(),
                         frontmatter_error: Some("frontmatter: bad".into()),
                         approved: false,
+                        questions: vec![],
                     },
                 },
                 "doc_schema",
@@ -941,9 +965,40 @@ mod tests {
         .unwrap();
         apply(&mut a, Some(&p), &ask, Observed::Nothing, 0).unwrap();
         assert!(!apply(&mut a, Some(&p), &ask, Observed::Nothing, 0).unwrap());
-        assert!(
-            matches!(&a.gate, Some(Gate::Docs { questions, .. }) if questions == &["which db?"])
-        );
+        assert!(matches!(&a.gate, Some(Gate::Docs { questions, asked, .. })
+            if questions.is_empty() && asked == &["which db?"]));
+    }
+
+    #[test]
+    fn questions_come_from_the_documents() {
+        let p = pack();
+        let mut a = agent();
+        let mut fact = present("spec.md", "h", false);
+        if let DocState::Present { questions, .. } = &mut fact.state {
+            *questions = vec!["Which db?".into(), "Who owns it?".into()];
+        }
+        let mut c = gate_open("spec");
+        if let XapCmd::GateOpen { questions, .. } = &mut c {
+            // One repeats a document question, one is new, one twice.
+            *questions = vec![
+                "Which  db?".into(),
+                "Keep logs?".into(),
+                "Keep logs?".into(),
+            ];
+        }
+        apply(&mut a, Some(&p), &c, Observed::Docs(vec![fact]), 0).unwrap();
+        let ask = |text: &str| XapCmd::Ask { text: text.into() };
+        assert!(!apply(&mut a, Some(&p), &ask("Who owns it?"), Observed::Nothing, 0).unwrap());
+        assert!(!apply(&mut a, Some(&p), &ask("Keep logs?"), Observed::Nothing, 0).unwrap());
+        assert!(apply(&mut a, Some(&p), &ask("Deadline?"), Observed::Nothing, 0).unwrap());
+        let Some(Gate::Docs {
+            questions, asked, ..
+        }) = &a.gate
+        else {
+            panic!("{:?}", a.gate);
+        };
+        assert_eq!(questions, &["Which db?", "Who owns it?"]);
+        assert_eq!(asked, &["Keep logs?", "Deadline?"]);
     }
 
     #[test]

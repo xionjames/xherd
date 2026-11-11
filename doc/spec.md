@@ -227,6 +227,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-103 | Priority when several apply: commit > PR triage/replies > documents > question. |
 | R-104 | **Approve**: append an approval to the ledger (R-106), snapshot the reviewed text for "changed since you reviewed", log the event, and hand on the next command (§5.5). |
 | R-105 | **Request changes**: send the agent a message naming the gate, the files and the user's comment, asking it to revise and stop at the gate again. |
+| R-105a | **Open questions** of a documents gate come from the gate documents' `## Open questions` section (one list item per question; "None." or an empty section = none), not from a separate list the agent passes. The user answers each one with an inline comment on its list item: the comment boxes of those items open by themselves when the gate opens, and the answers are sent together with the other inline comments as one change request (R-105). A question asked outside the documents (`xherd ask` while the gate is open, or a `--question` that matches no list item) gets its own comment box above the documents. Unanswered questions stay open (R-113). |
 
 ### 6.2 Approval by content hash
 
@@ -304,7 +305,7 @@ Design may be skipped only when the change is small and local, has no data/API/c
 Documents live in the agent's spec folder (§7.5): `ticket.md`, `spec.md`, `design.md`, `tasks.md`, `commits.md`, `review.md`, `pr.md`, `memory.md` (short state for fresh sessions), `pr-review.md`, plus private `HANDOFF.md` and `pr-comments.json`.
 
 - Frontmatter carries `ticket`, `flow`, `stage`, optional `needs-human` + `reason`, `design: skip` (spec), `template` and `url` (pr). There is **no `approved` key**: approval lives in the ledger (§6.2).
-- Gate documents end with the agent's **assumptions**; the spec also lists **open questions** (none → "None.").
+- Gate documents end with the agent's **assumptions**; the spec and the design also list **open questions** (none → "None."), the only place the agent states them (R-105a).
 - Tasks have stable ids (`T01`…), state (todo, doing, blocked, done), refs to requirements, `files:` (binding, R-116), `depends:`, `evidence:`, optional `verify:` command, optional model **tier** hint, optional **codebase contract** (verified file:line references and things that do not exist), and `source:` (spec, review, pr).
 - Commits have ids (`C01`…), state (proposed, done, dropped), tasks, files, sha; one proposal at a time.
 

@@ -18,7 +18,7 @@ Read the xherd rules in `{{dir}}/rules.md` first and follow them.
    questions, assumptions. Set `design: skip` only when the rules for skipping
    design hold.
 5. Write `.xherd/spec/memory.md`, with the code map of what you explored.
-6. Declare the gate with one `--question` per open question (none: plain
-   `xherd gate open spec`). For example:
-   `xherd gate open spec --question "Should expired sessions be kept for audit?"`
+6. `xherd gate open spec`. Put every question for the user in the open
+   questions section, one list item each: that is where xherd reads them and
+   where the user answers them.
 7. Stop and wait for the user.

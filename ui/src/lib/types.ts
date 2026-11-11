@@ -71,7 +71,7 @@ export interface Commit {
 }
 
 export type Gate =
-  | { kind: 'docs'; stage: string; role: Role; files: HashedFile[]; next?: string; needsHuman?: string; questions?: string[] }
+  | { kind: 'docs'; stage: string; role: Role; files: HashedFile[]; next?: string; needsHuman?: string; questions?: string[]; asked?: string[] }
   | ({ kind: 'commit' } & Commit)
   | { kind: 'pr-triage'; count: number }
   | { kind: 'pr-replies'; count: number }
