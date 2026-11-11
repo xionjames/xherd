@@ -3,20 +3,21 @@
   import { onMount } from 'svelte';
   import { get, post } from '../lib/api';
   import { upsertAgent, app } from '../lib/store.svelte';
-  import { go } from '../lib/router.svelte';
+  import { go, href } from '../lib/router.svelte';
   import { showError } from '../lib/errors.svelte';
   import type { Agent } from '../lib/types';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
   let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask' });
   let busy = $state(false);
+  let autonomyTouched = false; // a profile's autonomy fills the selector until the user picks one
   const keyOk = $derived(/^[A-Z0-9][A-Z0-9_-]*$/.test(f.ticketKey));
   const slugOk = $derived(!f.slug || /^[a-z0-9][a-z0-9-]{0,40}$/.test(f.slug));
   const name = $derived(f.ticketKey + (f.slug ? `-${f.slug}` : ''));
 
   // Repository: a local path or a remote URL, which the daemon clones into
   // the workspace once and fetches later (POST /repos/resolve).
-  type Resolved = { path: string; cloned: boolean; warning: string | null; branches: string[]; base: string | null };
+  type Resolved = { path: string; cloned: boolean; warning: string | null; branches: string[]; base: string | null; profile: { id: string; name: string; autonomy?: string } | null; suggestedMatch: string };
   let known = $state<{ path: string }[]>([]);
   let repo = $state<{ input: string; busy: boolean; data: Resolved | null; error: string | null }>(
     { input: '', busy: false, data: null, error: null });
@@ -41,7 +42,10 @@
   async function fetchRepo(want: string): Promise<Resolved | null> {
     try {
       const d = await post<Resolved>('/repos/resolve', { repo: want });
-      if (repo.input === want) repo.data = d;
+      if (repo.input === want) {
+        repo.data = d;
+        if (d.profile?.autonomy && !autonomyTouched) f.autonomy = d.profile.autonomy;
+      }
       return d;
     } catch (e) {
       if (repo.input === want) repo.error = e instanceof Error ? e.message : String(e);
@@ -104,6 +108,9 @@
     <label class="f" style="max-width:420px">Base branch (optional)
       <input class="mono" bind:value={f.base} list="repo-branches"
         placeholder={repo.data?.base ?? "origin's default branch"} />
+      {#if repo.data?.profile}<span class="hint">Profile <b>{repo.data.profile.name}</b> applies.</span>
+      {:else if repo.data}<span class="hint">No profile for this repository, so the global settings apply.
+        <a href={href('/settings', { tab: 'profiles', new: repo.data.suggestedMatch })}>Create one</a> for a base branch, test command or sensitive paths.</span>{/if}
       <datalist id="repo-branches">{#each repo.data?.branches ?? [] as b (b)}<option value={b}></option>{/each}</datalist></label>
     <div class="f">Workflow
       <div class="seg" role="group" aria-label="Workflow" style="align-self:flex-start">
@@ -114,7 +121,7 @@
     <div class="f">Autonomy
       <div class="seg" role="group" aria-label="Autonomy" style="align-self:flex-start">
         {#each ['ask', 'important'] as lv (lv)}
-          <button type="button" class:on={f.autonomy === lv} aria-pressed={f.autonomy === lv} onclick={() => (f.autonomy = lv)}>{lv}</button>
+          <button type="button" class:on={f.autonomy === lv} aria-pressed={f.autonomy === lv} onclick={() => { autonomyTouched = true; f.autonomy = lv; }}>{lv}</button>
         {/each}
       </div>
       <span class="hint">{f.autonomy === 'ask'

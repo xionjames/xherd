@@ -8,10 +8,11 @@
   import { showError } from '../lib/errors.svelte';
   import GitAccess from '../components/GitAccess.svelte';
   import Backups from '../components/Backups.svelte';
+  import Profiles from '../components/Profiles.svelte';
   import Toolchains from '../components/Toolchains.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const TABS = ['general', 'gates', 'notifications', 'git', 'backups', 'plugins'];
+  const TABS = ['general', 'gates', 'notifications', 'git', 'profiles', 'backups', 'plugins'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
   const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
@@ -86,6 +87,7 @@
     <a class="tb" class:on={tab === 'gates'} aria-current={tab === 'gates' ? 'page' : undefined} href={href('/settings', { tab: 'gates' })}>Gates &amp; autonomy</a>
     <a class="tb" class:on={tab === 'notifications'} aria-current={tab === 'notifications' ? 'page' : undefined} href={href('/settings', { tab: 'notifications' })}>Notifications</a>
     <a class="tb" class:on={tab === 'git'} aria-current={tab === 'git' ? 'page' : undefined} href={href('/settings', { tab: 'git' })}>Git access</a>
+    <a class="tb" class:on={tab === 'profiles'} aria-current={tab === 'profiles' ? 'page' : undefined} href={href('/settings', { tab: 'profiles' })}>Repo profiles</a>
     <a class="tb" class:on={tab === 'backups'} aria-current={tab === 'backups' ? 'page' : undefined} href={href('/settings', { tab: 'backups' })}>Backups</a>
     <a class="tb" class:on={tab === 'plugins'} aria-current={tab === 'plugins' ? 'page' : undefined} href={href('/settings', { tab: 'plugins' })}>
       Plugins{#if broken.length}<span class="tc h">{broken.length} error{broken.length > 1 ? 's' : ''}</span>{/if}</a>
@@ -100,6 +102,8 @@
   {/if}
   {#if tab === 'git'}
     <GitAccess />
+  {:else if tab === 'profiles'}
+    <Profiles />
   {:else if tab === 'backups'}
     <Backups />
   {:else if !setup.config || !ready}
@@ -246,7 +250,7 @@
     </div>
     {/if}
   {/if}
-  {#if setup.config && ready && tab !== 'git' && tab !== 'backups'}
+  {#if setup.config && ready && tab !== 'git' && tab !== 'backups' && tab !== 'profiles'}
     <div class="savebar">
       <span class="muted">{dirty ? `${dirty} unsaved change${dirty > 1 ? 's' : ''}` : 'No unsaved changes'}</span>
       <span class="grow"></span>

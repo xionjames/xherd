@@ -41,7 +41,23 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `welcomed` | `false` | The first-run Welcome screen was completed or skipped |
 | `userToken` | generated | Token of the local user (the CLI and local browsers). Do not share it |
 
-The "held for a human" settings (`maxDiffLines`, `sensitivePaths`, the secret tripwire) set *needs human* on the gate: autonomy never approves it, and the UI shows why. They are global; per-repository profiles are not built yet.
+The "held for a human" settings (`maxDiffLines`, `sensitivePaths`, the secret tripwire) set *needs human* on the gate: autonomy never approves it, and the UI shows why. They are global defaults; a repo profile (below) replaces `maxDiffLines` and `sensitivePaths` for its repositories and adds a test command.
+
+## Repo profiles
+
+Settings → Repo profiles (stored in the database, not `config.json`; `GET/POST /api/v1/profiles`, `PUT/DELETE /api/v1/profiles/{id}`, `GET /api/v1/profiles/export`, `POST /api/v1/profiles/import`). A profile applies to a repository found by its `origin` URL first (`github.com/acme/*`, any scheme, the longest pattern wins), then by its folder (`/work/acme`, `~/acme`). Every field but the name and "applies to" is optional; empty means the global setting.
+
+| Field | Effect |
+|---|---|
+| `baseBranch` | Where new agents start when the request names no base |
+| `autonomy` | Default autonomy of new agents (the New agent form shows it once the repository is known) |
+| `sensitivePaths`, `maxDiffLines` | Replace the global values; an empty list switches the sensitive-path hold off |
+| `agentTokenBudget` | Replaces the global per-agent budget (0 = off); the daily budget stays global |
+| `testCommand` | One shell command run in the worktree at each commit proposal; if it fails or times out, the commit is held for a human (only the exit status is shown) |
+| `instructions` | Added to the agent's `instructions.md` |
+| `stagingBranch`, `hotfixBase` | Stored; no flow uses them yet |
+
+Changes apply to running agents at once, except `instructions`, which is written at an agent's creation and when its autonomy changes. Deleting a profile sends its agents back to the global settings.
 
 ## What the UI can change
 

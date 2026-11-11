@@ -798,8 +798,13 @@ impl Actor {
         }
         let daily = self.env.store.usage("all", &today).await.unwrap_or(0);
         let s = self.env.settings.get();
+        let agent_budget = self
+            .profile()
+            .await
+            .and_then(|p| p.agent_token_budget)
+            .unwrap_or(s.agent_token_budget);
         let checks = [
-            ("agent", self.agent.tokens_total(), s.agent_token_budget),
+            ("agent", self.agent.tokens_total(), agent_budget),
             ("daily", daily, s.daily_token_budget),
         ];
         let before = self.agent.status;
@@ -1160,16 +1165,29 @@ impl Actor {
         use xherd_core::tripwire as tw;
         let mut hits = Vec::new();
         let st = self.env.settings.get();
-        hits.extend(tw::sensitive_summary(files, &st.sensitive_paths));
+        // The profile's values replace the global ones (R-115).
+        let profile = self.profile().await;
+        let sensitive = profile
+            .as_ref()
+            .and_then(|p| p.sensitive_paths.as_ref())
+            .unwrap_or(&st.sensitive_paths);
+        let max_lines = profile
+            .as_ref()
+            .and_then(|p| p.max_diff_lines)
+            .unwrap_or(st.max_diff_lines);
+        hits.extend(tw::sensitive_summary(files, sensitive));
         if let Ok(wd) = self.workdir() {
             match self.env.git.diff_proposed(&wd, files).await {
                 Ok(diff) => {
                     hits.extend(tw::summary(&tw::scan_diff(&diff)));
-                    hits.extend(tw::size_summary(&diff, st.max_diff_lines));
+                    hits.extend(tw::size_summary(&diff, max_lines));
                 }
                 Err(e) => {
                     tracing::debug!(agent = %self.agent.name, %e, "commit tripwires: no diff");
                 }
+            }
+            if let Some(test) = profile.as_ref().and_then(|p| p.test_command.as_deref()) {
+                hits.extend(self.run_test_tripwire(&wd, test).await);
             }
         }
         if !hits.is_empty() {
@@ -1178,6 +1196,41 @@ impl Actor {
                 Some(own) => format!("{own}; {why}"),
                 None => why,
             });
+        }
+    }
+
+    /// The profile the agent was created on, read at each use so a change in
+    /// Settings applies at once; `None` when unset or deleted.
+    async fn profile(&self) -> Option<xherd_core::profile::Profile> {
+        let id = self.agent.profile.as_deref()?;
+        self.env
+            .store
+            .list_profiles()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|p| p.id == id)
+    }
+
+    /// The profile's test command (R-115), run in the worktree like a task's
+    /// `verify:` (inline, as the agents' user): a failure or timeout holds the
+    /// commit. Only the exit status is reported, never the output.
+    async fn run_test_tripwire(&self, wd: &Path, command: &str) -> Option<String> {
+        let out = xherd_core::exec::run(
+            xherd_core::exec::Cmd::new(["sh", "-c", command])
+                .cwd(wd)
+                .timeout(self.env.settings.get().verify_timeout)
+                .as_agent(),
+        )
+        .await;
+        match out {
+            Ok(o) if o.timed_out => Some(format!("test command `{command}` timed out")),
+            Ok(o) if o.code != Some(0) => Some(format!(
+                "test command `{command}` failed (exit {})",
+                o.code.map_or("?".into(), |c| c.to_string())
+            )),
+            Ok(_) => None,
+            Err(e) => Some(format!("test command `{command}` did not run: {e}")),
         }
     }
 
@@ -1908,9 +1961,10 @@ impl Actor {
         self.agent.generation += 1;
         if let Ok(wd) = self.workdir() {
             let file = wd.join(".xherd").join("instructions.md");
+            let extra = self.profile().await.and_then(|p| p.instructions);
             if let Err(e) = xherd_core::paths::write_atomic(
                 &file,
-                xherd_core::new::instructions_md(&self.agent).as_bytes(),
+                xherd_core::new::instructions_md(&self.agent, extra.as_deref()).as_bytes(),
                 None,
             ) {
                 tracing::warn!(agent = %self.agent.name, %e, "instructions.md not rewritten");

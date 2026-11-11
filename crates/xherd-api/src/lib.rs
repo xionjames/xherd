@@ -60,6 +60,13 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/security", get(security))
+        .route("/api/v1/profiles", get(profiles_list).post(profile_create))
+        .route("/api/v1/profiles/export", get(profiles_export))
+        .route("/api/v1/profiles/import", post(profiles_import))
+        .route(
+            "/api/v1/profiles/{id}",
+            axum::routing::put(profile_update).delete(profile_delete),
+        )
         .route("/api/v1/todos", get(todos_list).post(todo_create))
         .route(
             "/api/v1/todos/{id}",
@@ -445,6 +452,48 @@ async fn put_config(
     Json(patch): Json<xherd_daemon::settings::ConfigPatch>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.save_config(patch)?))
+}
+
+async fn profiles_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"profiles": d.profiles().await?})))
+}
+
+async fn profile_create(
+    _: User,
+    State(d): State<Daemon>,
+    Json(p): Json<xherd_core::profile::Profile>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.create_profile(p).await?)))
+}
+
+async fn profile_update(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(p): Json<xherd_core::profile::Profile>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.update_profile(&id, p).await?)))
+}
+
+async fn profile_delete(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    d.delete_profile(&id).await?;
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn profiles_export(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(d.export_profiles().await?))
+}
+
+async fn profiles_import(
+    _: User,
+    State(d): State<Daemon>,
+    Json(i): Json<xherd_daemon::profiles::Import>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.import_profiles(i).await?))
 }
 
 async fn todos_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {

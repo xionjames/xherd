@@ -716,7 +716,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Phones
 - [ ] **v1.x**
   - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
-  - [ ] Repo profiles: move `sensitivePaths` and `maxDiffLines` (global since M4) into each profile, with the global values as defaults; add the profile's test command as a code tripwire (R-115)
+  - [x] Repo profiles, first slice (branch `m5-profiles`): `profiles` table, CRUD/import/export API, Settings → Repo profiles; matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-agent token budget, test command tripwire (R-115) and repo instructions, each falling back to the global setting
+  - [ ] Profile fields still to build: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, stage hooks, spec folder mode, colour, default flow/pack, ticket prefix, tool permissions, per-profile daily budget and cost estimate
   - [ ] Codex and opencode
   - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
   - [x] Kanban: the Board with stage cards by role, tasks, TODOs and swimlanes (cards declared by packs and profiles, R-1101, come with profiles)

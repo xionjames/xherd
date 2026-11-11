@@ -24,6 +24,7 @@ pub mod install;
 pub mod notifier;
 pub mod open_in;
 pub mod pr_round;
+pub mod profiles;
 pub mod repos;
 pub mod scheduler;
 pub mod security;

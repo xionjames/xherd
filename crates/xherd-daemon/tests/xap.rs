@@ -55,6 +55,20 @@ async fn setup_config(config: Value) -> T {
 }
 
 async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
+    setup_inner(config, verify_timeout, None).await
+}
+
+/// The agent is created on this profile (the test never goes through a repo
+/// match: that is `tests/profiles.rs`).
+async fn setup_profile(config: Value, p: xherd_core::profile::Profile) -> T {
+    setup_inner(config, None, Some(p)).await
+}
+
+async fn setup_inner(
+    config: Value,
+    verify_timeout: Option<Duration>,
+    profile: Option<xherd_core::profile::Profile>,
+) -> T {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
     let wt = tempfile::tempdir().unwrap();
@@ -75,6 +89,9 @@ async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
     a.pack = Some("xherd".into());
     a.flow = Some("feature".into());
     a.base = Some("main".into());
+    if let Some(p) = profile {
+        a.profile = Some(d.create_profile(p).await.unwrap().id);
+    }
     let a = d.create_agent(a).await.unwrap();
     for _ in 0..200 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
@@ -1673,6 +1690,72 @@ async fn configured_limit_and_sensitive_paths_hold_a_commit() {
     let why = propose_reason(&t, "g1", &["infra/prod.tf", "ok.txt"]).await;
     assert!(why.contains("sensitive path: infra/prod.tf"), "{why}");
     assert!(why.contains("5 changed lines, limit 3"), "{why}");
+}
+
+fn test_profile(f: impl FnOnce(&mut xherd_core::profile::Profile)) -> xherd_core::profile::Profile {
+    let mut p = xherd_core::profile::Profile {
+        name: "P".into(),
+        matches: vec!["/x".into()],
+        ..Default::default()
+    };
+    f(&mut p);
+    p
+}
+
+#[tokio::test]
+async fn a_profile_replaces_the_global_tripwire_settings() {
+    // Global: tiny limit and a sensitive glob. Profile: a generous limit and
+    // another glob, so only the profile's own rules apply.
+    let t = setup_profile(
+        json!({"freshSessions": true, "maxDiffLines": 3, "sensitivePaths": ["infra/**"]}),
+        test_profile(|p| {
+            p.max_diff_lines = Some(100);
+            p.sensitive_paths = Some(vec!["*.pem".into()]);
+        }),
+    )
+    .await;
+    std::fs::create_dir_all(t.wt.path().join("infra")).unwrap();
+    std::fs::write(t.wt.path().join("infra/prod.tf"), "a\nb\nc\nd\n").unwrap();
+    std::fs::write(t.wt.path().join("k.pem"), "x\n").unwrap();
+    let why = propose_reason(&t, "pf1", &["infra/prod.tf", "k.pem"]).await;
+    assert!(why.contains("sensitive path: k.pem"), "{why}");
+    assert!(
+        !why.contains("infra/prod.tf") && !why.contains("limit"),
+        "{why}"
+    );
+}
+
+#[tokio::test]
+async fn the_profiles_test_command_holds_a_failing_commit() {
+    let t = setup_profile(
+        json!({"freshSessions": true}),
+        test_profile(|p| p.test_command = Some("test -f ready".into())),
+    )
+    .await;
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    let why = propose_reason(&t, "pt1", &["a.txt"]).await;
+    assert!(
+        why.contains("test command `test -f ready` failed (exit 1)"),
+        "{why}"
+    );
+
+    // passing: not held
+    std::fs::write(t.wt.path().join("ready"), "").unwrap();
+    xap(&t, "pt2", "commit.drop", json!({"id": "C01"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "pt3",
+        "commit.propose",
+        json!({"id": "C02", "subject": "y", "files": ["a.txt"]}),
+    )
+    .await
+    .unwrap();
+    let Some(Gate::Commit(c)) = get(&t).await.gate else {
+        panic!("no commit gate")
+    };
+    assert_eq!(c.needs_human, None);
 }
 
 async fn propose_reason(t: &T, id: &str, files: &[&str]) -> String {
