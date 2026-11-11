@@ -50,6 +50,9 @@ pub struct Profile {
     /// failure holds the commit for a human (R-115).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub test_command: Option<String>,
+    /// Same, run before the test command (a linter or formatter check).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lint_command: Option<String>,
     /// Added to the agent's `instructions.md` (spec §16.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
@@ -170,6 +173,22 @@ fn check_branch(label: &str, b: &Option<String>) -> Result<(), String> {
     }
 }
 
+/// Trim a command; empty means unset; one line, bounded.
+fn clean_command(field: &str, c: &mut Option<String>) -> Result<(), String> {
+    *c = c
+        .take()
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
+    if let Some(c) = c
+        && (c.len() > MAX_TEST_COMMAND || c.contains('\n') || c.contains('\0'))
+    {
+        return Err(format!(
+            "{field}: one line, up to {MAX_TEST_COMMAND} characters"
+        ));
+    }
+    Ok(())
+}
+
 /// Clean up and validate a profile the user sent (trims, drops empty and
 /// repeated entries). `others` are the names of the other profiles.
 pub fn check(p: &mut Profile, others: &[&str]) -> Result<(), String> {
@@ -228,18 +247,8 @@ pub fn check(p: &mut Profile, others: &[&str]) -> Result<(), String> {
     {
         return Err("maxDiffLines must be 1 to 1000000".into());
     }
-    p.test_command = p
-        .test_command
-        .take()
-        .map(|c| c.trim().to_string())
-        .filter(|c| !c.is_empty());
-    if let Some(c) = &p.test_command
-        && (c.len() > MAX_TEST_COMMAND || c.contains('\n') || c.contains('\0'))
-    {
-        return Err(format!(
-            "testCommand: one line, up to {MAX_TEST_COMMAND} characters"
-        ));
-    }
+    clean_command("testCommand", &mut p.test_command)?;
+    clean_command("lintCommand", &mut p.lint_command)?;
     p.instructions = p
         .instructions
         .take()
@@ -322,10 +331,12 @@ mod tests {
     fn check_cleans_and_refuses() {
         let mut p = prof("A", &[" github.com/acme/* ", "", "github.com/acme/*"]);
         p.test_command = Some("  cargo test ".into());
+        p.lint_command = Some("  ".into());
         p.sensitive_paths = Some(vec![" infra/** ".into()]);
         assert_eq!(check(&mut p, &[]), Ok(()));
         assert_eq!(p.matches, ["github.com/acme/*"]);
         assert_eq!(p.test_command.as_deref(), Some("cargo test"));
+        assert_eq!(p.lint_command, None);
         assert_eq!(p.sensitive_paths, Some(vec!["infra/**".to_string()]));
 
         let bad = |f: fn(&mut Profile)| {
@@ -343,6 +354,7 @@ mod tests {
         assert!(bad(|p| p.autonomy = Some(Autonomy::Never)));
         assert!(bad(|p| p.sensitive_paths = Some(vec!["/etc".into()])));
         assert!(bad(|p| p.test_command = Some("a\nb".into())));
+        assert!(bad(|p| p.lint_command = Some("a\nb".into())));
     }
 
     #[test]

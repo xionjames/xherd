@@ -1186,8 +1186,20 @@ impl Actor {
                     tracing::debug!(agent = %self.agent.name, %e, "commit tripwires: no diff");
                 }
             }
-            if let Some(test) = profile.as_ref().and_then(|p| p.test_command.as_deref()) {
-                hits.extend(self.run_test_tripwire(&wd, test).await);
+            // Lint first: it is the faster of the two.
+            for (label, cmd) in [
+                (
+                    "lint",
+                    profile.as_ref().and_then(|p| p.lint_command.as_deref()),
+                ),
+                (
+                    "test",
+                    profile.as_ref().and_then(|p| p.test_command.as_deref()),
+                ),
+            ] {
+                if let Some(cmd) = cmd {
+                    hits.extend(self.run_command_tripwire(&wd, label, cmd).await);
+                }
             }
         }
         if !hits.is_empty() {
@@ -1212,10 +1224,10 @@ impl Actor {
             .find(|p| p.id == id)
     }
 
-    /// The profile's test command (R-115), run in the worktree like a task's
+    /// The profile's test or lint command (R-115), run in the worktree like a task's
     /// `verify:` (inline, as the agents' user): a failure or timeout holds the
     /// commit. Only the exit status is reported, never the output.
-    async fn run_test_tripwire(&self, wd: &Path, command: &str) -> Option<String> {
+    async fn run_command_tripwire(&self, wd: &Path, label: &str, command: &str) -> Option<String> {
         let out = xherd_core::exec::run(
             xherd_core::exec::Cmd::new(["sh", "-c", command])
                 .cwd(wd)
@@ -1224,13 +1236,13 @@ impl Actor {
         )
         .await;
         match out {
-            Ok(o) if o.timed_out => Some(format!("test command `{command}` timed out")),
+            Ok(o) if o.timed_out => Some(format!("{label} command `{command}` timed out")),
             Ok(o) if o.code != Some(0) => Some(format!(
-                "test command `{command}` failed (exit {})",
+                "{label} command `{command}` failed (exit {})",
                 o.code.map_or("?".into(), |c| c.to_string())
             )),
             Ok(_) => None,
-            Err(e) => Some(format!("test command `{command}` did not run: {e}")),
+            Err(e) => Some(format!("{label} command `{command}` did not run: {e}")),
         }
     }
 
