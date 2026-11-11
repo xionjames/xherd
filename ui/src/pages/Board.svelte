@@ -7,6 +7,7 @@
   // you the card is outlined. Read-only. Filters and swimlanes live in the URL:
   // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=agent|repo|none`.
   import PageHead from '../components/PageHead.svelte';
+  import Seg from '../components/Seg.svelte';
   import { app } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { get } from '../lib/api';
@@ -36,6 +37,10 @@
   };
 
   let todos = $state<Todo[]>([]);
+  // On a phone: the filters fold behind a button and one column shows at a
+  // time (the In progress one first).
+  let filtersOpen = $state(false);
+  let phoneCol = $state<Col>('doing');
   $effect(() => {
     const load = () => get<{ todos: Todo[] }>('/todos').then((r) => (todos = r.todos)).catch(() => {});
     load();
@@ -134,11 +139,14 @@
     return t.depends.filter((d) => a.tasks?.find((x) => x.id === d)?.status !== 'done');
   }
   const filtered = $derived(!!(only || repo || needsOnly));
+  const active = $derived([needsOnly, finished, !!only, !!repo].filter(Boolean).length);
   const laneNames = $derived([...new Set(cards.map((c) => c.lane))].sort((a, b) => (a === 'TODOs' ? 1 : b === 'TODOs' ? -1 : a.localeCompare(b))));
 </script>
 
 <PageHead title="Board">
   {#snippet actions()}
+    <button class="btn sm fbtn" aria-expanded={filtersOpen} onclick={() => (filtersOpen = !filtersOpen)}>Filters{active ? ` (${active})` : ''}</button>
+    <span class="fctl" class:open={filtersOpen}>
     <span class="filters">
       <label class="f chk"><input type="checkbox" checked={needsOnly} onchange={(e) => go({ needs: e.currentTarget.checked ? '1' : undefined })} /> ✋ Needs you only</label>
       <label class="f chk"><input type="checkbox" checked={upcoming} onchange={(e) => go({ upcoming: e.currentTarget.checked === (lanes === 'agent') ? undefined : e.currentTarget.checked ? '1' : '0' })} /> Upcoming stages</label>
@@ -157,10 +165,17 @@
         {#each repos as r (r)}<option value={r}>{r}</option>{/each}
       </select>
     {/if}
+    </span>
   {/snippet}
 </PageHead>
 
 <div class="stack">
+  {#if cards.length}
+    <div class="phonecols">
+      <Seg label="Column" value={phoneCol} onchange={(v) => (phoneCol = v)}
+        options={COLS.map(([c, n]) => ({ value: c, label: `${n} ${cards.filter((x) => x.col === c).length}` }))} />
+    </div>
+  {/if}
   {#if !cards.length}
     {#if filtered || everyone.length}
       <p class="empty">Nothing matches these filters.</p>
@@ -171,10 +186,10 @@
     {#each laneNames as lane (lane)}
       <section class="lane" aria-label={lane || 'Board'}>
         {#if lane}<h2 class="lh">{#if lanes === 'agent' && lane !== 'TODOs'}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
-        <div class="cols">
+        <div class="cols" data-show={phoneCol}>
           {#each COLS as [col, name] (col)}
             {@const list = cards.filter((c) => c.lane === lane && c.col === col)}
-            <section class="col" aria-label={name}>
+            <section class="col" data-col={col} aria-label={name}>
               <h3>{name} <span class="hint num">{list.length}</span></h3>
               {#each list as c (c.key)}
                 {#if c.kind === 'stage'}
@@ -215,9 +230,21 @@
   /* Columns side by side; they scroll sideways when they do not fit (on a
      phone, one column and a bit of the next). */
   .cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 12px; align-items: start; overflow-x: auto; padding-bottom: 6px; }
+  .fctl { display: contents; }
+  .fbtn, .phonecols { display: none; }
+  /* A phone shows one column, chosen above the lanes, and folds the filters. */
   @media (max-width: 760px) {
-    .cols { grid-auto-columns: minmax(230px, 72vw); scroll-snap-type: x mandatory; }
-    .col { scroll-snap-align: start; }
+    .fbtn { display: inline-flex; }
+    .fctl { display: none; }
+    .fctl.open { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+    .fctl select { flex: 1 1 140px; }
+    .phonecols { display: block; }
+    .phonecols :global(.seg) { width: 100%; }
+    .phonecols :global(.seg button) { flex: 1; }
+    .cols { grid-auto-flow: row; grid-auto-columns: auto; overflow: visible; }
+    .cols[data-show="pending"] .col:not([data-col="pending"]),
+    .cols[data-show="doing"] .col:not([data-col="doing"]),
+    .cols[data-show="done"] .col:not([data-col="done"]) { display: none; }
   }
   .col { display: flex; flex-direction: column; gap: 8px; min-height: 40px; background: var(--pen-2); border-radius: var(--r-card); padding: 8px; }
   .col h3 { font-size: 13px; margin: 0; padding: 2px 4px; }
