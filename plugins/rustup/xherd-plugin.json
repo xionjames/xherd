@@ -39,7 +39,7 @@
           "list": [
             "sh",
             "-c",
-            "echo stable; echo beta; echo nightly; rustup toolchain list </dev/null | awk '{print $1}' | grep -vE '^(stable|beta|nightly)' "
+            "echo stable; echo beta; echo nightly; rustup toolchain list </dev/null 2>/dev/null | grep -v '^no installed' | awk '{print $1}' | grep -vE '^(stable|beta|nightly)'; true"
           ],
           "env": {
             "RUSTUP_TOOLCHAIN": "{v}"
@@ -47,7 +47,7 @@
           "installed": [
             "sh",
             "-c",
-            "rustup toolchain list </dev/null | awk '{print $1}' | sed -E 's/-(x86_64|aarch64|i686|arm)[A-Za-z0-9_-]*$//' | sort -u"
+            "rustup toolchain list </dev/null | grep -v '^no installed' | awk '{print $1}' | sed -E 's/-(x86_64|aarch64|i686|arm)[A-Za-z0-9_-]*$//' | sort -u"
           ]
         }
       ]
