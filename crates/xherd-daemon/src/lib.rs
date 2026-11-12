@@ -117,29 +117,35 @@ fn plugin_context(
     }
 }
 
-/// The host plugin for pull requests: `github`, built in or replaced by an
-/// external plugin of that name.
-fn host_plugin(
+/// The host plugins that handle pull requests: built-in `github` and
+/// `gitlab`, and external host plugins (D24). An external plugin of the same
+/// name replaces a built-in one. Which one serves an agent is decided by the
+/// host of its remote (`actor::pick_host`).
+fn host_plugins(
     plugins: &Registry,
     paths: &Paths,
     config: &Config,
     secrets: &Secrets,
     xherd_bin: &str,
-) -> Option<Arc<xherd_plugin::host::Host>> {
-    let p = plugins
-        .get(xherd_plugin::host::GITHUB)
-        .filter(|p| p.manifest.kind == xherd_plugin::Kind::Host)?;
-    let mut ctx = plugin_context(p, paths, config, secrets, xherd_bin);
-    // Host plugins reuse the token of Settings → Git access (R-685).
-    if !ctx.secrets.contains_key("token")
-        && let Some(t) = secrets.git_token("github.com")
-    {
-        ctx.secrets.insert("token".into(), t.into());
-    }
-    Some(Arc::new(xherd_plugin::host::Host {
-        plugin: p.clone(),
-        ctx,
-    }))
+) -> Vec<Arc<xherd_plugin::host::Host>> {
+    plugins
+        .of_kind(xherd_plugin::Kind::Host)
+        .filter(|p| !p.builtin() || matches!(p.name(), "github" | "gitlab"))
+        .map(|p| {
+            let mut ctx = plugin_context(p, paths, config, secrets, xherd_bin);
+            // The GitHub plugin reuses the token of Settings → Git access (R-685).
+            if p.name() == xherd_plugin::host::GITHUB
+                && !ctx.secrets.contains_key("token")
+                && let Some(t) = secrets.git_token("github.com")
+            {
+                ctx.secrets.insert("token".into(), t.into());
+            }
+            Arc::new(xherd_plugin::host::Host {
+                plugin: p.clone(),
+                ctx,
+            })
+        })
+        .collect()
 }
 
 /// Cheap to clone; every field is shared.
@@ -228,7 +234,7 @@ impl Daemon {
             xherd_flow::BUILTIN.to_string(),
             xherd_flow::builtin(),
         )]));
-        let host = host_plugin(&plugins, &paths, &config, &secrets, &opts.xherd_bin);
+        let hosts = host_plugins(&plugins, &paths, &config, &secrets, &opts.xherd_bin);
         let hub = support::hub();
         let pr_poll_override = opts.pr_poll;
         let settings = actor::SettingsHandle::new(ActorSettings::from_config(
@@ -267,7 +273,7 @@ impl Daemon {
             sup: tokio::sync::mpsc::unbounded_channel().0, // replaced by the supervisor
             packs: packs.clone(),
             git: xherd_git::Git::new("git"),
-            host,
+            hosts,
             toolchains: Arc::new(toolchains),
             runtimes,
         };

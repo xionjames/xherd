@@ -3,7 +3,11 @@
   "kind": "host",
   "version": "0.1.0",
   "label": "GitLab",
-  "description": "GitLab access through the glab CLI (git access only so far; merge requests come later).",
+  "description": "GitLab merge requests and git access through the glab CLI.",
+  "settings": [
+    { "key": "glab", "label": "glab binary", "default": "glab" },
+    { "key": "token", "label": "Token (GITLAB_TOKEN; empty = glab's own login)", "secret": true }
+  ],
   "timeoutSeconds": 30,
   "checks": [
     {

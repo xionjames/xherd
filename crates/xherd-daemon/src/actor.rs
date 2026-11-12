@@ -180,6 +180,8 @@ impl SettingsHandle {
 /// Settings an actor reads (snapshot of config).
 #[derive(Debug, Clone)]
 pub struct ActorSettings {
+    /// Git hosts with their providers (`gitHosts`): which host plugin serves a remote.
+    pub git_hosts: Vec<xherd_core::config::GitHost>,
     pub idle_alert_minutes: u64,
     pub gate_park_minutes: u64,
     pub fresh_sessions: bool,
@@ -238,15 +240,69 @@ impl ActorSettings {
             max_diff_lines: c.max_diff_lines,
             sensitive_paths: c.sensitive_paths.clone(),
             disabled_plugins: c.disabled_plugins.clone(),
+            git_hosts: c.git_hosts.clone(),
             muted_notifications: c.muted_notifications.clone(),
             ..base
         }
     }
 }
 
+/// The host name of the worktree's `origin` remote.
+async fn origin_host(wd: &std::path::Path) -> Option<String> {
+    let out = xherd_core::exec::run(
+        xherd_core::exec::Cmd::new([
+            "git",
+            "-C",
+            &wd.display().to_string(),
+            "config",
+            "--get",
+            "remote.origin.url",
+        ])
+        .as_agent(),
+    )
+    .await
+    .ok()?;
+    crate::git_access::remote_host(String::from_utf8_lossy(&out.stdout).trim())
+}
+
+/// Which host plugin serves a remote on `remote_host` (D24): the provider
+/// named on its row in Settings → Git access, else the plugin whose patterns
+/// claim the name, else `github` (what every remote used before providers).
+/// A switched-off plugin is never chosen.
+pub fn pick_host(
+    hosts: &[Arc<xherd_plugin::host::Host>],
+    git_hosts: &[xherd_core::config::GitHost],
+    disabled: &[String],
+    remote_host: Option<&str>,
+) -> Option<Arc<xherd_plugin::host::Host>> {
+    let on = |h: &&Arc<xherd_plugin::host::Host>| !disabled.iter().any(|n| n == h.plugin.name());
+    let named = |n: &str| hosts.iter().filter(on).find(|h| h.plugin.name() == n);
+    let by_row = remote_host.and_then(|r| {
+        git_hosts
+            .iter()
+            .find(|g| g.host == r)
+            .and_then(|g| g.provider.as_deref())
+    });
+    let claimed = || {
+        let r = remote_host?;
+        hosts.iter().filter(on).find(|h| {
+            xherd_plugin::git::Git::of(&h.plugin.manifest)
+                .ok()
+                .flatten()
+                .is_some_and(|g| g.claims(r))
+        })
+    };
+    by_row
+        .and_then(named)
+        .or_else(claimed)
+        .or_else(|| named(xherd_plugin::host::GITHUB))
+        .cloned()
+}
+
 impl Default for ActorSettings {
     fn default() -> ActorSettings {
         ActorSettings {
+            git_hosts: Vec::new(),
             idle_alert_minutes: 15,
             gate_park_minutes: 30,
             fresh_sessions: true,
@@ -283,8 +339,9 @@ pub struct Env {
     /// Flow packs by name.
     pub packs: Arc<BTreeMap<String, Pack>>,
     pub git: xherd_git::Git,
-    /// Host plugin for pull-request lookups (R-302); `None` when not installed.
-    pub host: Option<Arc<xherd_plugin::host::Host>>,
+    /// Host plugins for pull requests (R-302, D24); `pick_host` chooses one
+    /// by the host of the agent's remote.
+    pub hosts: Vec<Arc<xherd_plugin::host::Host>>,
     /// Toolchain plugins in registry order (R-652).
     pub toolchains: Arc<Vec<(String, xherd_plugin::toolchain::Toolchain)>>,
     /// Per runtime plugin: the trust writer (the worktree is marked trusted
@@ -477,13 +534,22 @@ impl Actor {
         }
     }
 
-    /// The host plugin, unless it is switched off.
+    /// The host plugin for a remote on `remote_host` (`None` = unknown),
+    /// unless it is switched off.
+    fn host_for(&self, remote_host: Option<&str>) -> Option<Arc<xherd_plugin::host::Host>> {
+        let settings = self.env.settings.get();
+        pick_host(
+            &self.env.hosts,
+            &settings.git_hosts,
+            &settings.disabled_plugins,
+            remote_host,
+        )
+    }
+
+    /// The host plugin for the agent's pull request.
     fn host(&self) -> Option<Arc<xherd_plugin::host::Host>> {
-        let off = self.env.settings.get().disabled_plugins.clone();
-        self.env
-            .host
-            .clone()
-            .filter(|h| !off.iter().any(|n| n == h.plugin.name()))
+        let url = self.agent.pr_url.as_deref();
+        self.host_for(url.and_then(crate::git_access::remote_host).as_deref())
     }
 
     fn notify(&self, kind: &str, text: String) {
@@ -933,7 +999,7 @@ impl Actor {
     /// as `WorkDone`). Only in the ship stage, where the agent opens it
     /// (`after_ship` checks).
     fn find_pr(&self) {
-        let (Some(host), Ok(wd)) = (self.host(), self.workdir()) else {
+        let Ok(wd) = self.workdir() else {
             return;
         };
         let (tx, generation, branch) = (
@@ -941,7 +1007,18 @@ impl Actor {
             self.agent.generation,
             self.agent.name.clone(),
         );
+        let settings = self.env.settings.get();
+        let hosts = self.env.hosts.clone();
         tokio::spawn(async move {
+            let remote = origin_host(&wd).await;
+            let Some(host) = pick_host(
+                &hosts,
+                &settings.git_hosts,
+                &settings.disabled_plugins,
+                remote.as_deref(),
+            ) else {
+                return;
+            };
             let result = host
                 .pr_for_branch(&wd, &branch)
                 .await
@@ -1122,11 +1199,22 @@ impl Actor {
     /// The repository's pull-request templates through the host plugin
     /// (R-153; spawned, back as `WorkDone`), for the `ship` prompt.
     fn fetch_templates(&self) {
-        let (Some(host), Ok(wd)) = (self.host(), self.workdir()) else {
+        let Ok(wd) = self.workdir() else {
             return;
         };
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        let settings = self.env.settings.get();
+        let hosts = self.env.hosts.clone();
         tokio::spawn(async move {
+            let remote = origin_host(&wd).await;
+            let Some(host) = pick_host(
+                &hosts,
+                &settings.git_hosts,
+                &settings.disabled_plugins,
+                remote.as_deref(),
+            ) else {
+                return;
+            };
             let result = host.pr_template(&wd).await.map_err(|e| e.to_string());
             let _ = tx.send(Msg::WorkDone {
                 generation,
@@ -3030,4 +3118,72 @@ fn append_ledger(wd: &Path, lines: &[Value]) -> std::io::Result<()> {
         .open(dir.join("approvals.jsonl"))?;
     f.write_all(&buf)?;
     f.sync_all()
+}
+
+#[cfg(test)]
+mod pick_host_tests {
+    use super::*;
+    use xherd_core::config::{Credential, GitHost};
+
+    fn hosts() -> Vec<Arc<xherd_plugin::host::Host>> {
+        let d = tempfile::tempdir().unwrap();
+        let reg = xherd_plugin::Registry::load(xherd_plugin::builtins(), d.path());
+        ["github", "gitlab"]
+            .iter()
+            .map(|n| {
+                Arc::new(xherd_plugin::host::Host {
+                    plugin: reg.get(n).unwrap().clone(),
+                    ctx: xherd_plugin::Context::default(),
+                })
+            })
+            .collect()
+    }
+
+    fn row(host: &str, provider: Option<&str>) -> GitHost {
+        GitHost {
+            host: host.into(),
+            protocols: vec!["https".into()],
+            credential: Credential::None,
+            provider: provider.map(str::to_string),
+            username: None,
+            ca_file: None,
+            prefer_https: false,
+            prefer_ssh: false,
+        }
+    }
+
+    #[test]
+    fn a_remote_goes_to_its_provider() {
+        let hs = hosts();
+        let pick = |rows: &[GitHost], off: &[String], r: Option<&str>| {
+            pick_host(&hs, rows, off, r).map(|h| h.plugin.name().to_string())
+        };
+        let none: &[String] = &[];
+        assert_eq!(
+            pick(&[], none, Some("gitlab.com")).as_deref(),
+            Some("gitlab")
+        );
+        assert_eq!(
+            pick(&[], none, Some("github.com")).as_deref(),
+            Some("github")
+        );
+        // Unknown names and no remote keep the old behaviour: GitHub.
+        assert_eq!(
+            pick(&[], none, Some("git.example.com")).as_deref(),
+            Some("github")
+        );
+        assert_eq!(pick(&[], none, None).as_deref(), Some("github"));
+        // The provider named on the host's row wins over its name.
+        let rows = [row("git.example.com", Some("gitlab"))];
+        assert_eq!(
+            pick(&rows, none, Some("git.example.com")).as_deref(),
+            Some("gitlab")
+        );
+        // A switched-off plugin is never used.
+        let off = ["gitlab".to_string()];
+        assert_eq!(
+            pick(&rows, &off, Some("gitlab.com")).as_deref(),
+            Some("github")
+        );
+    }
 }

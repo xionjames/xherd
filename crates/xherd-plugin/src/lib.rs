@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use xherd_core::exec::{Cmd, ExecError, run};
 
 pub mod git;
+pub mod gitlab;
 pub mod host;
 pub mod manifest;
 pub mod runtime;
