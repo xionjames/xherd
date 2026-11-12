@@ -116,6 +116,24 @@ impl Daemon {
         Ok(json!({"tracker": r.tracker, "issue": r.issue, "ticket": ticket}))
     }
 
+    /// `GET /agents/{id}/ticket-status`: which tracker reads the agent's
+    /// ticket and whether a summary was already posted (the event
+    /// `ticket-comment`). Cheap: no tracker CLI is run, so the agent page can
+    /// ask it every time it opens.
+    pub async fn ticket_status(&self, who: &str) -> Result<Value, ActionError> {
+        let (a, r) = self.resolve_ticket(who).await?;
+        let posted = self
+            .store
+            .events_of_kind("ticket-comment")
+            .await
+            .map(|es| es.iter().any(|e| e.agent_id == a.id))
+            .unwrap_or(false);
+        Ok(match r {
+            Some(r) => json!({"tracker": r.tracker, "issue": r.issue, "posted": posted}),
+            None => json!({"tracker": null, "posted": posted}),
+        })
+    }
+
     /// `GET /agents/{id}/ticket-summary`: the draft summary of what the agent
     /// has done, for the user to read and edit. Nothing is posted.
     pub async fn ticket_summary(&self, who: &str) -> Result<Value, ActionError> {

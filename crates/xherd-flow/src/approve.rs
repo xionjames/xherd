@@ -259,7 +259,7 @@ mod tests {
         );
         assert_eq!(
             n(&docs("ship"), &F(false), true),
-            Some(("/xherd:ship --no-ticket-update".into(), 1))
+            Some(("/xherd:ship".into(), 1))
         );
         assert_eq!(
             n(&Gate::Question { text: "?".into() }, &F(false), false),

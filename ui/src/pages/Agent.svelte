@@ -9,6 +9,7 @@
   import YourCallBand from '../components/YourCallBand.svelte';
   import Dialog from '../components/Dialog.svelte';
   import Callout from '../components/Callout.svelte';
+  import TicketPrompt from '../components/TicketPrompt.svelte';
   import type { Agent } from '../lib/types';
   import { app, upsertAgent } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
@@ -101,6 +102,7 @@
 </script>
 
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
+<TicketPrompt {agent} />
 
 <header class="hero">
   <div class="htop">

@@ -8,6 +8,7 @@
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { render } from '../lib/markdown';
+  import { route } from '../lib/router.svelte';
   import { agoText } from '../lib/format';
 
   let { agent }: { agent: Agent } = $props();
@@ -35,6 +36,11 @@
     }
   }
   $effect(() => { void id; load(); });
+  // Arriving from the "pull request is open" prompt: the draft is ready.
+  let autoDrafted = $state(false);
+  $effect(() => {
+    if (!autoDrafted && answer?.ticket && route.query.get('draft') === '1') { autoDrafted = true; makeDraft(); }
+  });
 
   const https = (u?: string) => (u && /^https:\/\//.test(u) ? u : undefined);
   const when = (iso?: string) => { const t = iso ? Date.parse(iso) : NaN; return Number.isNaN(t) ? '' : agoText(t); };

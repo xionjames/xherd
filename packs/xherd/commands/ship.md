@@ -1,6 +1,5 @@
 ---
 description: xherd — draft the pull request; once approved, push and open it as a draft
-argument-hint: "[--no-ticket-update]"
 ---
 # Ship
 
@@ -22,8 +21,9 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    templates, pick the fitting one and name its `path` in the frontmatter.
 4. Write `.xherd/spec/pr.md` in the pr format: the template's headings first,
    the essentials (summary, requirements covered, key decisions, testing,
-   assumptions) placed in them, a `## Ticket update` section if the ticket
-   should get a comment or transition.
+   assumptions) placed in them. It becomes the pull request's body, so it
+   holds only what belongs there; do not update the ticket yourself: xherd
+   offers the user a summary to post once the PR is open.
 5. `xherd gate open ship`, then stop and wait for the user.
 6. Approved: push the branch (`git push -u origin HEAD`) and open a **draft**
    pull request with the host's CLI, using the title and the body of
@@ -31,6 +31,4 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    `gh pr create --draft --title "<title>" --body-file <file>`).
 7. Report it: `xherd pr opened --url https://github.com/acme/app/pull/42`
    (with the real URL).
-8. Unless the arguments contain `--no-ticket-update`, apply the
-   `## Ticket update` section with your tracker tools, if there is one.
-9. Update `memory.md` and stop.
+8. Update `memory.md` and stop.
