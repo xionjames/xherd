@@ -23,6 +23,19 @@ export interface Task {
 }
 
 /** A comment on the pull request (R-304); `body` is untrusted text. */
+/** One check run of the pull request; `link` is host text (show only https). */
+export interface PrCheck {
+  name: string;
+  bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel' | string;
+  workflow?: string;
+  link?: string;
+}
+
+export interface PrReviewer {
+  name: string;
+  state: 'pending' | 'approved' | 'changes-requested' | 'commented' | 'dismissed';
+}
+
 export interface PrComment {
   id: string;
   kind: string;
@@ -107,6 +120,10 @@ export interface Agent {
   prCi?: 'pending' | 'failing' | 'passing';
   prConflict?: boolean;
   prPolledAt?: number;
+  prChecks?: PrCheck[];
+  prReviewers?: PrReviewer[];
+  /** Merges without conflicts (from the host, or worked out in the worktree when it does not say). */
+  prMergeable?: 'yes' | 'no' | 'unknown';
   lastMessage?: string;
   /** Why the daemon blocked the agent (`git access`). */
   blockReason?: string;

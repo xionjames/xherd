@@ -16,7 +16,9 @@ pub enum PrState {
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Whether the pull request merges into its base without conflicts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Mergeable {
     Yes,
     No,
@@ -33,11 +35,38 @@ pub enum Ci {
 }
 
 /// One check run. `bucket` is the host's roll-up of its result: `pass`,
-/// `fail`, `pending`, `skipping` or `cancel`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `fail`, `pending`, `skipping` or `cancel`. `workflow` groups checks of
+/// the same name; `link` is the page of the run (host text: the UI shows it
+/// only when it is an https URL).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CheckRun {
     pub name: String,
     pub bucket: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+/// Where a reviewer stands on the pull request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewState {
+    /// Asked to review, no review since.
+    Pending,
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+}
+
+/// A person or team asked to review, or who reviewed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Reviewer {
+    pub name: String,
+    pub state: ReviewState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +74,9 @@ pub struct Snapshot {
     pub state: PrState,
     pub mergeable: Mergeable,
     pub checks: Vec<CheckRun>,
+    pub reviewers: Vec<Reviewer>,
+    /// The branch the pull request merges into, when the host says.
+    pub base: Option<String>,
 }
 
 /// Hidden marker xherd puts in the comments it posts, so it never reads its
@@ -184,6 +216,9 @@ impl Agent {
     pub fn apply_pr(&mut self, s: &Snapshot) -> Vec<Event> {
         let mut out = Vec::new();
         self.pr_state = Some(s.state);
+        self.pr_checks = s.checks.clone();
+        self.pr_reviewers = s.reviewers.clone();
+        self.pr_mergeable = Some(s.mergeable);
         if s.state != PrState::Open {
             out.push(Event::Finished(s.state));
             return out;
@@ -232,9 +267,27 @@ mod tests {
                 .map(|(n, b)| CheckRun {
                     name: n.to_string(),
                     bucket: b.to_string(),
+                    workflow: None,
+                    link: None,
                 })
                 .collect(),
+            reviewers: Vec::new(),
+            base: None,
         }
+    }
+
+    #[test]
+    fn a_poll_keeps_checks_reviewers_and_merge_state() {
+        let mut a = Agent::new("A", "A", 1);
+        let mut s = snap(PrState::Open, Mergeable::Unknown, &[("t", "pass")]);
+        s.reviewers = vec![Reviewer {
+            name: "bob".into(),
+            state: ReviewState::Approved,
+        }];
+        a.apply_pr(&s);
+        assert_eq!(a.pr_checks, s.checks);
+        assert_eq!(a.pr_reviewers, s.reviewers);
+        assert_eq!(a.pr_mergeable, Some(Mergeable::Unknown));
     }
 
     #[test]
