@@ -247,6 +247,28 @@ pub fn adf_to_markdown(v: &Value) -> String {
     }
 }
 
+/// `acli ... --paginate --json` prints one JSON document per page, back to
+/// back (`{"comments": [...], "isLast": false, ...}{"comments": [], ...}`):
+/// the comments of all of them as one list. A bare list is read as a page.
+pub fn merge_comment_pages(bytes: &[u8]) -> Result<Value, String> {
+    let mut all = Vec::new();
+    for page in serde_json::Deserializer::from_slice(bytes).into_iter::<Value>() {
+        match page.map_err(|e| e.to_string())? {
+            Value::Array(a) => all.extend(a),
+            Value::Object(o) => {
+                for k in ["comments", "values"] {
+                    if let Some(Value::Array(a)) = o.get(k) {
+                        all.extend(a.iter().cloned());
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(Value::Array(all))
+}
+
 /// `acli jira workitem view KEY --json` and `comment list --json` as a view.
 /// The output is Jira's REST shape (`fields.summary`, `fields.status.name`,
 /// ADF for `description` and comment bodies, checked against real `acli`
@@ -461,7 +483,7 @@ impl Host {
                 jira_view(
                     issue,
                     &self.json("workitem view", &view)?,
-                    &self.json("comment list", &comments)?,
+                    &merge_comment_pages(&comments).map_err(|e| self.shape(name, &e))?,
                     base,
                 )
                 .map_err(|e| self.shape(name, &e))
@@ -806,5 +828,68 @@ esac"#,
         assert_eq!(t.url, "https://acme.atlassian.net/browse/SC-1");
         // Without a configured site there is no link rather than a wrong one.
         assert_eq!(jira_view("SC-1", &real, &json!([]), None).unwrap().url, "");
+    }
+
+    /// What `acli jira workitem comment list --json --paginate` really
+    /// prints (invented text, same structure): comment authors and bodies are
+    /// plain strings, there is no timestamp, and each page is its own JSON
+    /// document.
+    #[test]
+    fn the_real_acli_comment_pages() {
+        let out = br#"{
+  "comments": [
+    {"author": "Ann Example", "body": "Done in https://example.test/pull/1 (draft).\nSecond line.",
+     "id": "177175", "visibility": "public"},
+    {"author": "Bob Example", "body": "Thanks", "id": "177176", "visibility": "public"}
+  ],
+  "isLast": false, "maxResults": 50, "startAt": 0, "total": 2
+}
+{
+  "comments": [],
+  "isLast": true, "maxResults": 50, "startAt": 50, "total": 2
+}
+"#;
+        let merged = merge_comment_pages(out).unwrap();
+        assert_eq!(merged.as_array().unwrap().len(), 2);
+        let view = json!({"fields": {"summary": "S"}});
+        let t = jira_view("SC-1", &view, &merged, Some("https://acme.atlassian.net")).unwrap();
+        let ids: Vec<_> = t.comments.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["issue:177175", "issue:177176"],
+            "the CLI's order is kept"
+        );
+        assert_eq!(t.comments[0].author, "Ann Example");
+        assert!(
+            t.comments[0]
+                .body
+                .starts_with("Done in https://example.test/pull/1")
+        );
+        assert_eq!(t.comments[0].created_at, "");
+        // A single page, a bare list and nothing at all.
+        assert_eq!(
+            merge_comment_pages(br#"{"comments": [{"id": 1}]}"#)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            merge_comment_pages(b"[{\"id\": 1}, {\"id\": 2}]")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            merge_comment_pages(b"")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(merge_comment_pages(b"{not json").is_err());
     }
 }
