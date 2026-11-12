@@ -3,15 +3,67 @@
   "kind": "tracker",
   "version": "0.1.0",
   "label": "Jira",
-  "description": "Turns Jira ticket keys (PAY-412) in the UI into links to your Jira site.",
+  "description": "Turns Jira ticket keys (PAY-412) into links to your Jira site, and shows the ticket and its comments through Atlassian's CLI (acli).",
   "settings": [
-    { "key": "baseUrl", "label": "Jira site (https://yourcompany.atlassian.net)", "required": true }
+    {
+      "key": "baseUrl",
+      "label": "Jira site (https://yourcompany.atlassian.net)",
+      "required": true
+    },
+    {
+      "key": "acli",
+      "label": "acli binary",
+      "default": "acli"
+    }
   ],
   "data": {
     "tracker": {
       "links": [
-        { "pattern": "\\b[A-Z][A-Z0-9]{1,9}-\\d+\\b", "url": "{baseUrl}/browse/{0}" }
-      ]
+        {
+          "pattern": "\\b[A-Z][A-Z0-9]{1,9}-\\d+\\b",
+          "url": "{baseUrl}/browse/{0}"
+        }
+      ],
+      "key": "^([A-Z][A-Z0-9]{1,9}-\\d+)$"
     }
-  }
+  },
+  "requires": [
+    {
+      "name": "acli",
+      "check": [
+        "acli",
+        "--help"
+      ],
+      "optional": true,
+      "install": [
+        "sh",
+        "-c",
+        "mkdir -p \"$HOME/.local/bin\" && curl -fsSL -o \"$HOME/.local/bin/acli\" \"https://acli.atlassian.com/linux/latest/acli_linux_$(dpkg --print-architecture)/acli\" && chmod +x \"$HOME/.local/bin/acli\""
+      ],
+      "instructions": {
+        "macos": "brew tap atlassian/homebrew-acli && brew install acli",
+        "linux": "See https://developer.atlassian.com/cloud/acli/guides/install-linux/ (apt, yum or a direct download)",
+        "any": "See https://developer.atlassian.com/cloud/acli/guides/install-acli/"
+      }
+    }
+  ],
+  "login": [
+    "acli",
+    "jira",
+    "auth",
+    "login",
+    "--web"
+  ],
+  "checks": [
+    {
+      "name": "login",
+      "argv": [
+        "acli",
+        "jira",
+        "auth",
+        "status"
+      ],
+      "optional": true
+    }
+  ]
 }
