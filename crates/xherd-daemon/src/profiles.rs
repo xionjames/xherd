@@ -35,10 +35,22 @@ impl Daemon {
         self.store.list_profiles().await.map_err(store)
     }
 
+    /// A profile's runtime must be an installed runtime plugin (switched off
+    /// is allowed: creating an agent then says so).
+    fn check_profile_runtime(&self, p: &Profile) -> Result<(), ActionError> {
+        match &p.runtime {
+            Some(r) => self
+                .check_runtime(r, &[])
+                .map_err(|m| err("bad_profile", format!("{}: runtime: {m}", p.name))),
+            None => Ok(()),
+        }
+    }
+
     pub async fn create_profile(&self, mut p: Profile) -> Result<Profile, ActionError> {
         let all = self.profiles().await?;
         let names: Vec<&str> = all.iter().map(|x| x.name.as_str()).collect();
         profile::check(&mut p, &names).map_err(|m| err("bad_profile", m))?;
+        self.check_profile_runtime(&p)?;
         p.id = xherd_core::new_id();
         self.store.put_profile(&p).await.map_err(store)?;
         Ok(p)
@@ -55,6 +67,7 @@ impl Daemon {
             .map(|x| x.name.as_str())
             .collect();
         profile::check(&mut p, &names).map_err(|m| err("bad_profile", m))?;
+        self.check_profile_runtime(&p)?;
         p.id = id.to_string();
         self.store.put_profile(&p).await.map_err(store)?;
         Ok(p)
@@ -94,6 +107,7 @@ impl Daemon {
                 .collect();
             profile::check(&mut p, &names)
                 .map_err(|m| err("bad_profile", format!("{}: {m}", p.name)))?;
+            self.check_profile_runtime(&p)?;
             match at {
                 Some(n) => {
                     p.id = have[n].id.clone();

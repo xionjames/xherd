@@ -41,9 +41,9 @@ pub const HOOK_TAG: &str = "# xherd";
 #[serde(rename_all = "camelCase")]
 pub struct Terminal {
     pub launch: Vec<String>,
-    /// Mode name → extra launch arguments.
+    /// Mode name → extra launch arguments (and variables).
     #[serde(default)]
-    pub permission_modes: BTreeMap<String, Vec<String>>,
+    pub permission_modes: BTreeMap<String, ModeArgs>,
     #[serde(default)]
     pub hooks: Option<HookFile>,
     #[serde(default)]
@@ -59,6 +59,54 @@ pub struct Terminal {
     /// checks, spec §16.2); runtimes without it cannot check conditions.
     #[serde(default)]
     pub check: Option<Check>,
+    /// Launch arguments that give a new session its first prompt, `{prompt}`
+    /// once; the runtime submits it itself when ready. Without them xherd
+    /// types it at `session-start` (a runtime whose input is not ready then,
+    /// like opencode's, would lose the text).
+    #[serde(default)]
+    pub prompt_args: Vec<String>,
+}
+
+impl Terminal {
+    /// `prompt_args` with the prompt; `None` when the runtime has none.
+    pub fn prompt_argv(args: &[String], prompt: &str) -> Option<Vec<String>> {
+        (!args.is_empty()).then(|| args.iter().map(|a| a.replace("{prompt}", prompt)).collect())
+    }
+}
+
+/// What a permission mode adds to the launch: arguments, and variables for a
+/// runtime that takes its permissions from the environment (opencode's
+/// `OPENCODE_PERMISSION`). Written as a list (arguments only) or as
+/// `{"args": [...], "env": {...}}`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(from = "ModeSpec")]
+pub struct ModeArgs {
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ModeSpec {
+    Args(Vec<String>),
+    Full {
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+    },
+}
+
+impl From<ModeSpec> for ModeArgs {
+    fn from(s: ModeSpec) -> ModeArgs {
+        match s {
+            ModeSpec::Args(args) => ModeArgs {
+                args,
+                env: BTreeMap::new(),
+            },
+            ModeSpec::Full { args, env } => ModeArgs { args, env },
+        }
+    }
 }
 
 /// How to run the runtime once, headless, read-only (`data.terminal.check`).
@@ -165,20 +213,29 @@ impl Usage {
         Ok(())
     }
 
-    /// Totals of a whole transcript. Lines that are not JSON are skipped.
+    /// Totals of a whole transcript: JSON lines (lines that are not JSON are
+    /// skipped), or one JSON document (an export) read as a single line.
     pub fn totals(&self, transcript: &str) -> Totals {
+        // A counter name, or a JSON pointer inside the record (`/cache/write`).
         let get = |o: &Value, name: &Option<String>| {
             name.as_deref()
-                .and_then(|n| o.get(n))
+                .and_then(|n| match n.starts_with('/') {
+                    true => o.pointer(n),
+                    false => o.get(n),
+                })
                 .and_then(Value::as_u64)
                 .unwrap_or(0)
         };
         let mut by_id: BTreeMap<String, Totals> = BTreeMap::new();
         let mut sum = Totals::default();
-        for line in transcript.lines() {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
+        let docs: Vec<Value> = match serde_json::from_str::<Value>(transcript) {
+            Ok(v) => vec![v],
+            Err(_) => transcript
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect(),
+        };
+        for v in docs {
             let Some(o) = v.pointer(&self.records) else {
                 continue;
             };
@@ -208,15 +265,31 @@ impl Usage {
 }
 
 /// Continue a runtime conversation by its session id, when the runtime still
-/// has its transcript.
+/// has its transcript. The transcript is a file (`transcripts` + `file`), or
+/// what a command prints for runtimes that keep sessions in a database
+/// (`export`, opencode).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Resume {
     /// Extra launch arguments; `{session}` is the session id.
     pub args: Vec<String>,
     /// Folder holding one subfolder per project; may use `${VAR}` and `~/`.
-    pub transcripts: String,
+    #[serde(default)]
+    pub transcripts: Option<String>,
     /// Transcript file name inside a project folder; `{session}` as above.
-    pub file: String,
+    #[serde(default)]
+    pub file: Option<String>,
+    /// A command writing the session's transcript, `{session}` once; it
+    /// fails when the runtime no longer has the session. It prints it on
+    /// stdout, or writes it to `{file}` (a path xherd gives) when a pipe is
+    /// not reliable (opencode drops output past 64 KiB through a pipe).
+    #[serde(default)]
+    pub export: Vec<String>,
+    /// Variables that give a continued session its first prompt, with
+    /// `{prompt}` and `{session}`: for a runtime that ignores `promptArgs`
+    /// when continuing (opencode's plugin submits it from them).
+    #[serde(default)]
+    pub prompt_env: BTreeMap<String, String>,
 }
 
 /// Session ids come from the runtime's hook payload; only plain ids are used.
@@ -236,6 +309,54 @@ impl Resume {
                 .map(|a| a.replace("{session}", session))
                 .collect()
         })
+    }
+
+    /// The export command for `session`, writing to `file` when it takes
+    /// one; `None` without a command or for an odd id.
+    pub fn export_argv(&self, session: &str, file: &str) -> Option<Vec<String>> {
+        (plain_id(session) && !self.export.is_empty()).then(|| {
+            self.export
+                .iter()
+                .map(|a| a.replace("{session}", session).replace("{file}", file))
+                .collect()
+        })
+    }
+
+    /// `env K=V…` giving `session` its first `prompt`; `None` without
+    /// `promptEnv`.
+    pub fn prompt_env_argv(&self, session: &str, prompt: &str) -> Option<Vec<String>> {
+        (!self.prompt_env.is_empty()).then(|| {
+            std::iter::once("env".to_string())
+                .chain(self.prompt_env.iter().map(|(k, v)| {
+                    format!(
+                        "{k}={}",
+                        v.replace("{session}", session).replace("{prompt}", prompt)
+                    )
+                }))
+                .collect()
+        })
+    }
+
+    /// The export writes to `{file}` instead of stdout.
+    pub fn exports_to_file(&self) -> bool {
+        self.export.iter().any(|a| a.contains("{file}"))
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if !self.prompt_env.is_empty() && !self.prompt_env.values().any(|v| v.contains("{prompt}"))
+        {
+            return Err("resume.promptEnv needs {prompt}".into());
+        }
+        let n = |p: &str| self.export.iter().filter(|a| a.contains(p)).count();
+        let placed = n("{session}") == 1 && n("{file}") <= 1;
+        match (&self.transcripts, &self.file, self.export.is_empty()) {
+            (Some(_), Some(_), true) => Ok(()),
+            (None, None, false) if placed => Ok(()),
+            (None, None, false) => {
+                Err("resume.export needs {session} once, {file} at most once".into())
+            }
+            _ => Err("resume needs either transcripts and file, or export".into()),
+        }
     }
 }
 
@@ -292,13 +413,47 @@ impl Trust {
     }
 }
 
-/// A settings file in the worktree whose `hooks` map runs a command per event.
+/// The file in the worktree that makes the runtime call `xherd hook <event>`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct HookFile {
     /// Worktree-relative path (`.claude/settings.local.json`).
     pub file: String,
     /// Runtime event name → `xherd hook` event.
     pub events: BTreeMap<String, String>,
+    #[serde(default)]
+    pub format: HookFormat,
+}
+
+/// How the hook file is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HookFormat {
+    /// A JSON settings file whose `hooks` map runs a command per event; the
+    /// user's entries are kept (Claude Code).
+    #[default]
+    ClaudeSettings,
+    /// A JavaScript plugin file owned by xherd (opencode loads every file in
+    /// `.opencode/plugin/`); events are the triggers in `OPENCODE_TRIGGERS`.
+    OpencodePlugin,
+}
+
+/// What the opencode plugin can report: its own start, then opencode hooks
+/// and bus events.
+pub const OPENCODE_TRIGGERS: &[&str] = &[
+    "start",
+    "chat.message",
+    "tool.execute.after",
+    "permission.asked",
+    "question.asked",
+    "session.idle",
+];
+
+/// What xherd's commands need without asking: shell commands (patterns with
+/// a trailing `*`) and folders outside the worktree they read (R-005b).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Allow {
+    pub commands: Vec<String>,
+    pub read_dirs: Vec<String>,
 }
 
 impl Terminal {
@@ -314,7 +469,7 @@ impl Terminal {
         if t.launch.is_empty() {
             return Err(format!("runtime {}: empty launch argv", m.name));
         }
-        for (mode, args) in &t.permission_modes {
+        for (mode, a) in &t.permission_modes {
             if !PERMISSION_MODES.contains(&mode.as_str()) {
                 return Err(format!(
                     "runtime {}: unknown permission mode {mode:?} (modes: {})",
@@ -322,12 +477,51 @@ impl Terminal {
                     PERMISSION_MODES.join(", ")
                 ));
             }
-            if args.is_empty() {
+            if a.args.is_empty() && a.env.is_empty() {
                 return Err(format!(
                     "runtime {}: permission mode {mode} needs explicit flags (the runtime's default may change)",
                     m.name
                 ));
             }
+            let plain = |k: &String| {
+                !k.is_empty()
+                    && k.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            };
+            if let Some(k) = a.env.keys().find(|k| !plain(k)) {
+                return Err(format!(
+                    "runtime {}: permission mode {mode}: variable name {k:?} is not A-Z, 0-9, _",
+                    m.name
+                ));
+            }
+        }
+        if let Some(h) = &t.hooks
+            && h.format == HookFormat::OpencodePlugin
+            && let Some(e) = h
+                .events
+                .keys()
+                .find(|e| !OPENCODE_TRIGGERS.contains(&e.as_str()))
+        {
+            return Err(format!(
+                "runtime {}: the opencode plugin cannot report {e:?} (it reports: {})",
+                m.name,
+                OPENCODE_TRIGGERS.join(", ")
+            ));
+        }
+        if let Some(r) = &t.resume {
+            r.check().map_err(|e| format!("runtime {}: {e}", m.name))?;
+        }
+        if !t.prompt_args.is_empty()
+            && t.prompt_args
+                .iter()
+                .filter(|a| a.contains("{prompt}"))
+                .count()
+                != 1
+        {
+            return Err(format!(
+                "runtime {}: promptArgs needs {{prompt}} once",
+                m.name
+            ));
         }
         if let Some(c) = &t.check {
             let n = |p: &str| c.argv.iter().filter(|a| a.contains(p)).count();
@@ -358,18 +552,85 @@ impl Terminal {
         Ok(t)
     }
 
-    /// Launch argv with the arguments of a permission mode.
+    /// Launch argv with the arguments of a permission mode; its variables
+    /// come first through `env`, so the argv stays one command (resume
+    /// arguments are appended to it).
     pub fn argv(&self, mode: &str) -> Result<Vec<String>, String> {
-        let extra = self
+        let m = self
             .permission_modes
             .get(mode)
             .ok_or_else(|| format!("permission mode {mode:?} is not supported"))?;
-        Ok(self.launch.iter().chain(extra).cloned().collect())
+        let env: Vec<String> = match m.env.is_empty() {
+            true => Vec::new(),
+            false => std::iter::once("env".to_string())
+                .chain(m.env.iter().map(|(k, v)| format!("{k}={v}")))
+                .collect(),
+        };
+        Ok(env
+            .into_iter()
+            .chain(self.launch.iter().cloned())
+            .chain(m.args.iter().cloned())
+            .collect())
     }
+}
+
+/// The hook file's new content in its format (R-005b).
+pub fn hook_file_text(
+    existing: Option<&str>,
+    h: &HookFile,
+    xherd_bin: &str,
+    allow: &Allow,
+) -> Result<String, String> {
+    match h.format {
+        HookFormat::ClaudeSettings => merge_hooks(existing, h, xherd_bin, allow),
+        HookFormat::OpencodePlugin => opencode_plugin(existing, h, xherd_bin, allow),
+    }
+}
+
+const OPENCODE_PLUGIN: &str = include_str!("opencode-plugin.js");
+
+/// The opencode plugin file: xherd's own, so it is replaced whole. A file of
+/// that name that xherd did not write is refused, never overwritten.
+fn opencode_plugin(
+    existing: Option<&str>,
+    h: &HookFile,
+    xherd_bin: &str,
+    allow: &Allow,
+) -> Result<String, String> {
+    const MARK: &str = "// Written by xherd";
+    debug_assert!(OPENCODE_PLUGIN.starts_with(MARK));
+    if let Some(old) = existing.filter(|t| !t.trim().is_empty())
+        && !old.starts_with(MARK)
+    {
+        return Err(format!("{} exists and was not written by xherd", h.file));
+    }
+    // JSON is a JavaScript literal.
+    let js = |v: Value| v.to_string();
+    let dirs: Vec<&str> = allow
+        .read_dirs
+        .iter()
+        .map(|d| d.trim_end_matches('/'))
+        .collect();
+    Ok(OPENCODE_PLUGIN
+        .replace("__XHERD__", &js(json!(xherd_bin)))
+        .replace("__EVENTS__", &js(json!(h.events)))
+        .replace("__COMMANDS__", &js(json!(allow.commands)))
+        .replace("__READ_DIRS__", &js(json!(dirs))))
 }
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// Claude Code's form of `allow`: `Read(//dir/**)` (`//` marks an absolute
+/// path; one `/` is relative to the project root), then `Bash(command)`.
+pub fn claude_rules(allow: &Allow) -> Vec<String> {
+    allow
+        .read_dirs
+        .iter()
+        .map(|d| format!("Read(//{}/**)", d.trim_matches('/')))
+        .chain(allow.commands.iter().map(|c| format!("Bash({c})")))
+        .collect()
 }
 
 /// The hook file's new content: `existing` with xherd's tagged entries
@@ -381,8 +642,9 @@ pub fn merge_hooks(
     existing: Option<&str>,
     h: &HookFile,
     xherd_bin: &str,
-    allow_rules: &[String],
+    allow: &Allow,
 ) -> Result<String, String> {
+    let allow_rules = claude_rules(allow);
     let mut root: Map<String, Value> = match existing.map(str::trim) {
         None | Some("") => Map::new(),
         Some(text) => match serde_json::from_str(text) {
@@ -437,7 +699,7 @@ pub fn merge_hooks(
             .as_array_mut()
             .ok_or_else(|| format!("{}: permissions.allow is not a list", h.file))?;
         for rule in allow_rules {
-            let rule = Value::String(rule.clone());
+            let rule = Value::String(rule);
             if !allow.contains(&rule) {
                 allow.push(rule);
             }
@@ -543,8 +805,8 @@ mod tests {
         let h = claude().hooks.unwrap();
         let user = r#"{"permissions": {"allow": ["Bash(ls)"]},
             "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}}"#;
-        let once = merge_hooks(Some(user), &h, "/opt/x herd/xherd", &[]).unwrap();
-        let twice = merge_hooks(Some(&once), &h, "/usr/bin/xherd", &[]).unwrap();
+        let once = merge_hooks(Some(user), &h, "/opt/x herd/xherd", &Allow::default()).unwrap();
+        let twice = merge_hooks(Some(&once), &h, "/usr/bin/xherd", &Allow::default()).unwrap();
         let v: Value = serde_json::from_str(&twice).unwrap();
         assert_eq!(v["permissions"]["allow"][0], "Bash(ls)");
         let stop = v["hooks"]["Stop"].as_array().unwrap();
@@ -561,11 +823,11 @@ mod tests {
     #[test]
     fn hooks_merge_refuses_bad_json() {
         let h = claude().hooks.unwrap();
-        assert!(merge_hooks(Some("{oops"), &h, "xherd", &[]).is_err());
-        assert!(merge_hooks(Some("[]"), &h, "xherd", &[]).is_err());
-        assert!(merge_hooks(Some(r#"{"hooks": 1}"#), &h, "xherd", &[]).is_err());
+        assert!(merge_hooks(Some("{oops"), &h, "xherd", &Allow::default()).is_err());
+        assert!(merge_hooks(Some("[]"), &h, "xherd", &Allow::default()).is_err());
+        assert!(merge_hooks(Some(r#"{"hooks": 1}"#), &h, "xherd", &Allow::default()).is_err());
         assert!(
-            merge_hooks(None, &h, "xherd", &[])
+            merge_hooks(None, &h, "xherd", &Allow::default())
                 .unwrap()
                 .contains("Notification")
         );
@@ -575,15 +837,22 @@ mod tests {
     fn read_dirs_are_allowed_once() {
         let h = claude().hooks.unwrap();
         let user = r#"{"permissions": {"allow": ["Bash(ls)"]}}"#;
-        let rules = ["Read(//home/x/.claude/commands/xherd/**)".to_string()];
+        let rules = Allow {
+            commands: vec!["xherd task *".into()],
+            read_dirs: vec!["/home/x/.claude/commands/xherd".into()],
+        };
         let once = merge_hooks(Some(user), &h, "xherd", &rules).unwrap();
         let twice = merge_hooks(Some(&once), &h, "xherd", &rules).unwrap();
         let v: Value = serde_json::from_str(&twice).unwrap();
         assert_eq!(
             v["permissions"]["allow"],
-            json!(["Bash(ls)", "Read(//home/x/.claude/commands/xherd/**)"])
+            json!([
+                "Bash(ls)",
+                "Read(//home/x/.claude/commands/xherd/**)",
+                "Bash(xherd task *)"
+            ])
         );
-        let none = merge_hooks(None, &h, "xherd", &[]).unwrap();
+        let none = merge_hooks(None, &h, "xherd", &Allow::default()).unwrap();
         assert!(!none.contains("permissions"));
     }
 
@@ -648,6 +917,160 @@ not json
         assert!(e.contains("must start with /"), "{e}");
         let e = Terminal::of(&m(json!({"records": "/u", "fields": {}}), true)).unwrap_err();
         assert!(e.contains("names no counter"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod opencode_tests {
+    use super::*;
+
+    fn opencode() -> Terminal {
+        let m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "opencode")
+            .unwrap();
+        Terminal::of(&m).unwrap()
+    }
+
+    fn permission(argv: &[String]) -> Value {
+        assert_eq!(argv[0], "env");
+        let v = argv[1].strip_prefix("OPENCODE_PERMISSION=").unwrap();
+        serde_json::from_str(v).unwrap()
+    }
+
+    #[test]
+    fn modes_go_through_the_environment() {
+        let t = opencode();
+        let mut keys: Vec<&str> = t.permission_modes.keys().map(String::as_str).collect();
+        keys.sort();
+        let mut all = PERMISSION_MODES.to_vec();
+        all.sort();
+        assert_eq!(keys, all);
+        let ask = t.argv("ask").unwrap();
+        assert_eq!(ask[2..], ["opencode"]);
+        let p = permission(&ask);
+        assert_eq!(
+            (p["edit"].as_str(), p["bash"].as_str()),
+            (Some("ask"), Some("ask"))
+        );
+        assert_eq!(p["read"], "allow");
+        assert_eq!(permission(&t.argv("edits").unwrap())["edit"], "allow");
+        assert_eq!(permission(&t.argv("edits").unwrap())["bash"], "ask");
+        let auto = permission(&t.argv("auto").unwrap());
+        assert_eq!(
+            (auto["bash"].as_str(), auto["external_directory"].as_str()),
+            (Some("allow"), Some("ask"))
+        );
+        let all = t.argv("all").unwrap();
+        assert_eq!(all[2..], ["opencode", "--auto"]);
+        assert_eq!(permission(&all)["external_directory"], "allow");
+    }
+
+    #[test]
+    fn the_plugin_file_is_ours_and_filled_in() {
+        let h = opencode().hooks.unwrap();
+        assert_eq!(h.format, HookFormat::OpencodePlugin);
+        let allow = Allow {
+            commands: vec!["xherd task *".into()],
+            read_dirs: vec!["/home/u/.config/opencode/command/xherd/".into()],
+        };
+        let js = hook_file_text(None, &h, "/opt/x \"herd\"/xherd", &allow).unwrap();
+        assert!(
+            js.contains(r#"const XHERD = "/opt/x \"herd\"/xherd";"#),
+            "{js}"
+        );
+        assert!(js.contains(r#""session.idle":"stop""#));
+        assert!(js.contains(r#"const COMMANDS = ["xherd task *"];"#));
+        assert!(js.contains(r#"const READ_DIRS = ["/home/u/.config/opencode/command/xherd"];"#));
+        assert!(!js.contains("__"), "every placeholder filled");
+        // Ours is replaced; someone else's is refused.
+        assert_eq!(
+            hook_file_text(Some(&js), &h, "/opt/x \"herd\"/xherd", &allow).unwrap(),
+            js
+        );
+        let e = hook_file_text(Some("export const Mine = 1"), &h, "xherd", &allow).unwrap_err();
+        assert!(e.contains("not written by xherd"), "{e}");
+    }
+
+    #[test]
+    fn plugin_events_are_checked() {
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "opencode")
+            .unwrap();
+        m.data.get_mut("terminal").unwrap()["hooks"]["events"]["Stop"] = json!("stop");
+        assert!(
+            Terminal::of(&m)
+                .unwrap_err()
+                .contains("cannot report \"Stop\"")
+        );
+    }
+
+    #[test]
+    fn resume_and_usage_go_through_the_export() {
+        let t = opencode();
+        let r = t.resume.unwrap();
+        assert_eq!(r.argv("ses_1").unwrap(), ["--session", "ses_1"]);
+        assert!(r.exports_to_file());
+        let argv = r.export_argv("ses_1", "/w/.xherd/x.json").unwrap();
+        assert_eq!(argv[argv.len() - 2..], ["ses_1", "/w/.xherd/x.json"]);
+        assert_eq!(r.export_argv("../x", "/f"), None);
+        assert_eq!(
+            r.prompt_env_argv("ses_1", "/xherd/resume").unwrap(),
+            [
+                "env",
+                "XHERD_PROMPT=/xherd/resume",
+                "XHERD_PROMPT_SESSION=ses_1"
+            ]
+        );
+        // `opencode export` prints one pretty JSON document.
+        let export = r#"{
+  "info": {"id": "ses_1", "tokens": {"input": 100, "output": 20, "reasoning": 5,
+           "cache": {"read": 9000, "write": 7}}},
+  "messages": []
+}"#;
+        let totals = t.usage.unwrap().totals(export);
+        assert_eq!(
+            totals,
+            Totals {
+                input: 100,
+                output: 20,
+                cache_write: 7,
+                cache_read: 9000
+            }
+        );
+    }
+
+    #[test]
+    fn resume_needs_a_file_or_an_export() {
+        let r = |v: Value| serde_json::from_value::<Resume>(v).unwrap().check();
+        assert!(r(json!({"args": ["-s", "{session}"], "export": ["x", "{session}"]})).is_ok());
+        assert!(r(json!({"args": [], "transcripts": "/t", "file": "f"})).is_ok());
+        assert!(
+            r(json!({"args": [], "export": ["x"]}))
+                .unwrap_err()
+                .contains("{session} once")
+        );
+        assert!(r(json!({"args": [], "transcripts": "/t"})).is_err());
+        let e = r(json!({"args": [], "export": ["{session}"], "promptEnv": {"X": "{session}"}}));
+        assert!(e.unwrap_err().contains("{prompt}"));
+        assert!(
+            r(json!({"args": [], "transcripts": "/t", "file": "f", "export": ["{session}"]}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_check_is_read_only() {
+        let c = opencode().check.unwrap();
+        let argv = c.command("PROMPT", "SYSTEM", Some("opencode/m"));
+        assert_eq!(argv[2..5], ["opencode", "run", "SYSTEM\n\nPROMPT"]);
+        assert_eq!(argv[5..], ["--model", "opencode/m"]);
+        let p = permission(&argv);
+        assert_eq!(p["*"], "deny");
+        assert_eq!(p["edit"], "deny");
+        assert_eq!(p["bash"]["*"], "deny");
+        assert_eq!(p["bash"]["git log *"], "allow");
     }
 }
 

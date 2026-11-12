@@ -42,6 +42,7 @@ pub struct ConfigPatch {
     pub max_review_loops: Option<u32>,
     pub autonomy: Option<xherd_core::autonomy::Autonomy>,
     pub permission_mode: Option<xherd_core::permission::PermissionMode>,
+    pub default_runtime: Option<String>,
     pub open_in: Option<xherd_core::config::OpenIn>,
     pub max_auto_approvals_in_row: Option<u32>,
     pub agent_token_budget: Option<u64>,
@@ -176,6 +177,9 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
     }
     if let Some(m) = p.permission_mode {
         c.permission_mode = m;
+    }
+    if let Some(r) = p.default_runtime {
+        c.default_runtime = r.trim().to_string();
     }
     if let Some(o) = p.open_in {
         c.open_in = check_open_in(o)?;
@@ -374,10 +378,24 @@ impl Daemon {
         Ok(())
     }
 
+    /// `name` is a runtime plugin that is installed and not in `off`.
+    pub(crate) fn check_runtime(&self, name: &str, off: &[String]) -> Result<(), String> {
+        match self.plugins.get(name) {
+            Some(p) if p.manifest.kind != xherd_plugin::Kind::Runtime => {
+                Err(format!("{name} is not a runtime plugin"))
+            }
+            Some(_) if off.iter().any(|n| n == name) => Err(format!("{name} is switched off")),
+            Some(_) => Ok(()),
+            None => Err(format!("no runtime plugin named {name}")),
+        }
+    }
+
     pub fn save_config(&self, patch: ConfigPatch) -> Result<Value, ActionError> {
         let mut c = self.saved_config()?;
         apply(&mut c, patch)?;
         self.check_disabled(&c.disabled_plugins)?;
+        self.check_runtime(&c.default_runtime, &c.disabled_plugins)
+            .map_err(|e| bad(format!("defaultRuntime: {e}")))?;
         c.save(&self.paths.config()).map_err(|e| ActionError {
             code: "io",
             message: e.to_string(),

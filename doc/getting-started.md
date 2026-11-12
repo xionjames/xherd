@@ -8,7 +8,7 @@ To build xherd yourself (an unreleased branch, or to change it), see [Running fr
 
 | | Docker (recommended) | Native (Linux) |
 |---|---|---|
-| What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code and `gh` / `glab` |
+| What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code (or opencode) and `gh` / `glab` |
 | Agent CLI and tools | In the image (Claude Code, `git`, `gh`, `glab`, toolchain managers) | Yours, on `PATH` |
 | Isolation | Agents see only the workspace folder | None: agents run as you |
 | Platforms | macOS and Linux (amd64, arm64) | Linux (x86_64, arm64) |

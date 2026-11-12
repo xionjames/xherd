@@ -22,6 +22,7 @@ pub use manifest::{Check, Kind, MANIFEST_FILE, Manifest, Setting};
 pub fn builtins() -> Vec<Manifest> {
     [
         include_str!("../../../plugins/claude-code/xherd-plugin.json"),
+        include_str!("../../../plugins/opencode/xherd-plugin.json"),
         include_str!("../../../plugins/github/xherd-plugin.json"),
         include_str!("../../../plugins/sdkman/xherd-plugin.json"),
         include_str!("../../../plugins/nvm/xherd-plugin.json"),

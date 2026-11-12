@@ -79,11 +79,14 @@ enum Cmd {
         /// Tool permissions: ask, edits, auto or all (container only); default: the profile's, else Settings.
         #[arg(long)]
         mode: Option<xherd_core::permission::PermissionMode>,
+        /// Runtime plugin (claude-code, opencode); default: the profile's, else Settings.
+        #[arg(long)]
+        runtime: Option<String>,
         prompt: Option<String>,
     },
     /// List agents.
     Ls,
-    /// Install a pack's commands for agent runtimes (default: xherd, every runtime).
+    /// Install a pack's commands for agent runtimes (default: xherd, every runtime switched on).
     Install {
         #[arg(long)]
         runtime: Option<String>,
@@ -348,6 +351,7 @@ fn main() -> ExitCode {
             base,
             autonomy,
             mode,
+            runtime,
             prompt,
         } => new_agent(
             repo,
@@ -360,6 +364,7 @@ fn main() -> ExitCode {
                 prompt,
                 autonomy,
                 permission_mode: mode,
+                runtime,
             },
         ),
         Cmd::Mode { agent, mode } => {

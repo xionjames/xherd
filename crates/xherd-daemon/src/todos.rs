@@ -203,7 +203,8 @@ impl Daemon {
     /// a run that could not happen is `Failed`.
     async fn run_check(&self, t: &Todo) -> (CheckOutcome, Option<String>) {
         let fail = |m: String| (CheckOutcome::Failed, Some(m));
-        let runtime = xherd_flow::approve::DEFAULT_RUNTIME;
+        let runtime = self.live_config().default_runtime;
+        let runtime = runtime.as_str();
         if !self.plugin_enabled(runtime) {
             return fail(format!("the {runtime} plugin is switched off"));
         }

@@ -101,7 +101,8 @@ by theme; update it together with them.
 
 ## v1.x
 
-- [ ] Codex and opencode runtimes
+- [x] opencode runtime (branch `runtime-opencode`): choice per agent, profile and setting
+- [ ] Codex runtime
 - [x] To review and Work log views (per-ticket cycle time, review loops and rework)
 - [x] Kanban Board: stages and tasks as work units, TODOs, swimlanes; agents by stage on the Herd
 - [ ] Pack-declared Kanban cards (R-1101)

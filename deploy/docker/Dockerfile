@@ -39,6 +39,7 @@ ARG GO_VERSION=1.27.3
 ARG GLAB_VERSION=1.128.0
 ARG NVM_VERSION=0.41.0
 ARG CLAUDE_CODE_VERSION=2.1.319
+ARG OPENCODE_VERSION=1.19.0
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -56,12 +57,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends /tmp/glab.deb \
     && rm -rf /tmp/glab.deb /var/lib/apt/lists/*
 
-# Node (for the agent CLIs only; projects get theirs through nvm) and Claude Code.
+# Node (for the agent CLIs only; projects get theirs through nvm), Claude Code
+# and opencode.
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+       "opencode-ai@${OPENCODE_VERSION}" \
     && npm cache clean --force
 
 # Version managers (R-532). uv and go are single binaries; SDKMAN, nvm and

@@ -281,13 +281,11 @@ pub struct Env {
     pub host: Option<Arc<xherd_plugin::host::Host>>,
     /// Toolchain plugins in registry order (R-652).
     pub toolchains: Arc<Vec<(String, xherd_plugin::toolchain::Toolchain)>>,
-    /// Marks the worktree trusted in the runtime's file before each session
-    /// (the runtime rewrites that file itself, and may drop the entry).
-    pub trust: Option<Arc<crate::TrustWriter>>,
-    /// How to continue the runtime's last conversation, when it can.
-    pub resume: Option<Arc<crate::Resumer>>,
-    /// How to read token usage from the runtime's transcript (R-1205).
-    pub usage: Option<Arc<xherd_plugin::runtime::Usage>>,
+    /// Per runtime plugin: the trust writer (the worktree is marked trusted
+    /// before each session: the runtime rewrites that file itself, and may
+    /// drop the entry), how to continue its last conversation, and how to
+    /// read token usage from its transcript (R-1205).
+    pub runtimes: Arc<BTreeMap<String, crate::RuntimeKit>>,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -309,6 +307,7 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         auth_screen_line: None,
         next_delivery: 0,
         first_unacked: false,
+        prompt_on_launch: false,
         resume_session: None,
         resume_unconfirmed: false,
         auto_resumes: Vec::new(),
@@ -333,6 +332,9 @@ struct Actor {
     /// lose typed input, so the command stays in `next_prompt` and is typed
     /// again at the next `session-start` until a prompt is submitted.
     first_unacked: bool,
+    /// The session was started with `next_prompt` on its launch line
+    /// (`promptArgs`): its `session-start` waits for the ack, types nothing.
+    prompt_on_launch: bool,
     /// Launch the next session with the runtime's own resume of this session id.
     resume_session: Option<String>,
     /// The last start used a runtime resume and no `session-start` came yet:
@@ -614,7 +616,19 @@ impl Actor {
             && r.event == ReportEvent::SessionStart
             && self.agent.next_prompt.is_some()
         {
-            self.send_first_prompt().await;
+            if std::mem::take(&mut self.prompt_on_launch) {
+                // Submitted by the runtime; the ack clears `next_prompt`.
+                self.first_unacked = true;
+                let text = self.agent.next_prompt.clone();
+                self.log(
+                    None,
+                    "first-prompt",
+                    Some(json!({"text": text, "onLaunch": true})),
+                )
+                .await;
+            } else {
+                self.send_first_prompt().await;
+            }
         }
         result
     }
@@ -624,29 +638,27 @@ impl Actor {
     /// next stop. Without a session id or a runtime that has transcripts there
     /// is nothing to measure.
     fn measure_usage(&self) {
+        let kit = self.runtime_kit();
         let (Some(session), Some(r), Some(usage)) = (
             self.agent.session.clone(),
-            self.env.resume.clone(),
-            self.env.usage.clone(),
+            kit.and_then(|k| k.resume.clone()),
+            kit.and_then(|k| k.usage.clone()),
         ) else {
             return;
         };
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        let scratch = self.workdir().ok().map(|w| w.join(".xherd"));
         tokio::spawn(async move {
             // The transcript is in the agent user's home (R-1203).
-            let Some(path) = r.transcript(&session, &xherd_core::runner::agent_env).await else {
+            let env = xherd_core::runner::agent_env;
+            let Some(text) = r.read(&session, &env, scratch.as_deref()).await else {
                 return;
             };
-            let tokens = match xherd_core::runner::read_file(&path).await {
-                Ok(Some(b)) => Some(usage.totals(&String::from_utf8_lossy(&b)).budget_tokens()),
-                _ => None,
-            };
-            if let Some(tokens) = tokens {
-                let _ = tx.send(Msg::WorkDone {
-                    generation,
-                    result: WorkResult::Usage { session, tokens },
-                });
-            }
+            let tokens = usage.totals(&text).budget_tokens();
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::Usage { session, tokens },
+            });
         });
     }
 
@@ -920,11 +932,7 @@ impl Actor {
     /// Enters needed to submit `cmd`: the pack's `slashEnters` for its own
     /// commands, else one.
     fn enters_for(&self, cmd: &str) -> u32 {
-        let runtime = self
-            .agent
-            .runtime
-            .as_deref()
-            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let runtime = self.runtime_name();
         self.agent
             .pack
             .as_deref()
@@ -1680,15 +1688,28 @@ impl Actor {
             .clone()
             .filter(|a| !a.is_empty())
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
-        let argv = match (self.resume_session.take(), &self.env.resume) {
+        let resume = self.runtime_kit().and_then(|k| k.resume.clone());
+        let argv = match (self.resume_session.take(), &resume) {
             (Some(id), Some(r)) => match r.argv(&id, &xherd_core::runner::agent_env).await {
                 Some(extra) => {
                     self.resume_unconfirmed = true;
-                    argv.into_iter().chain(extra).collect()
+                    // A continued session takes its prompt from `promptEnv`
+                    // when the runtime has one, else it is typed.
+                    let env = self
+                        .agent
+                        .next_prompt
+                        .as_deref()
+                        .and_then(|p| r.0.prompt_env_argv(&id, p));
+                    self.prompt_on_launch = env.is_some();
+                    env.unwrap_or_default()
+                        .into_iter()
+                        .chain(argv)
+                        .chain(extra)
+                        .collect()
                 }
-                None => argv,
+                None => self.with_launch_prompt(argv),
             },
-            _ => argv,
+            _ => self.with_launch_prompt(argv),
         };
         self.revoke_tokens().await;
         let token = mint_token(
@@ -1731,6 +1752,25 @@ impl Actor {
         Ok(())
     }
 
+    /// `argv` with the pending `next_prompt` on it, for a runtime that takes
+    /// its first prompt at launch (`promptArgs`); else `argv` as it is.
+    fn with_launch_prompt(&mut self, argv: Vec<String>) -> Vec<String> {
+        let args = self
+            .runtime_kit()
+            .map(|k| k.prompt_args.clone())
+            .unwrap_or_default();
+        let extra = self
+            .agent
+            .next_prompt
+            .as_deref()
+            .and_then(|p| xherd_plugin::runtime::Terminal::prompt_argv(&args, p));
+        self.prompt_on_launch = extra.is_some();
+        match extra {
+            Some(extra) => argv.into_iter().chain(extra).collect(),
+            None => argv,
+        }
+    }
+
     /// The argv of a new session: the runtime, wrapped in `xherd toolchain
     /// exec` when the worktree's version files ask for tools (R-652). The plan
     /// is written at every start, so version files edited since count.
@@ -1741,8 +1781,8 @@ impl Actor {
         };
         let settings = self.env.settings.get();
         let off = |n: &str| settings.disabled_plugins.iter().any(|d| d == n);
-        if let Some(t) = &self.env.trust
-            && !off(xherd_flow::approve::DEFAULT_RUNTIME)
+        if let Some(t) = self.runtime_kit().and_then(|k| k.trust.as_ref())
+            && !off(self.runtime_name())
             && let Err(e) = t.ensure(wd).await
         {
             tracing::warn!(agent = %self.agent.name, error = %e, "runtime trust not written");
@@ -2250,6 +2290,8 @@ impl Actor {
             .clone()
             .filter(|a| !a.is_empty())
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
+        self.agent.next_prompt = Some(cmd.to_string());
+        let argv = self.with_launch_prompt(argv);
         self.env
             .driver
             .respawn(&self.ctx(), &self.session_argv(argv).await)
@@ -2258,7 +2300,6 @@ impl Actor {
         self.delivery = None;
         self.agent.session = None;
         self.agent.session_since = Some(self.now());
-        self.agent.next_prompt = Some(cmd.to_string());
         self.log(None, "fresh-session", Some(json!({"next": cmd})))
             .await;
         Ok(())
@@ -2340,7 +2381,8 @@ impl Actor {
         // After a handoff the next session starts fresh from the note (R-027).
         let handed_off =
             self.agent.handoff_at.take().is_some() && self.env.settings.get().fresh_sessions;
-        self.resume_session = match (&self.env.resume, &self.agent.session) {
+        let resume = self.runtime_kit().and_then(|k| k.resume.clone());
+        self.resume_session = match (&resume, &self.agent.session) {
             (Some(r), Some(id))
                 if !handed_off
                     && !self.resume_unconfirmed
@@ -2352,6 +2394,18 @@ impl Actor {
         };
     }
 
+    /// The agent's runtime plugin (agents from before the choice: Claude Code).
+    fn runtime_name(&self) -> &str {
+        self.agent
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME)
+    }
+
+    fn runtime_kit(&self) -> Option<&crate::RuntimeKit> {
+        self.env.runtimes.get(self.runtime_name())
+    }
+
     fn resume_command(&self) -> Option<String> {
         self.pack_command("resume")
     }
@@ -2360,11 +2414,7 @@ impl Actor {
     /// runtime; `None` for flow `none` or a pack without it.
     fn pack_command(&self, key: &str) -> Option<String> {
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
-        let runtime = self
-            .agent
-            .runtime
-            .as_deref()
-            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let runtime = self.runtime_name();
         pack.command(runtime, pack.commands.get(key)?, &[])
             .map_err(
                 |e| tracing::warn!(agent = %self.agent.name, key, error = %e, "no pack command"),

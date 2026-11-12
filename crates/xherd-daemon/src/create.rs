@@ -71,21 +71,27 @@ impl Daemon {
             ));
         }
 
-        let rt_name = xherd_flow::approve::DEFAULT_RUNTIME;
-        let rt = self
-            .plugins
-            .get(rt_name)
-            .filter(|_| self.plugin_enabled(rt_name))
-            .ok_or_else(|| format!("runtime plugin {rt_name} is not installed or is switched off"))
-            .and_then(|p| Terminal::of(&p.manifest))
-            .map_err(|e| refuse("runtime_unusable", e))?;
-
         let git = Git::new("git");
         // A URL is cloned (or fetched) here, before the other checks: the
         // clone is kept for the next agent even if a later check fails.
         let repo = self.locate_repo(&req.repo).await?.path;
         // Request, then profile, then Settings (R-002, R-109, R-135).
         let profile = self.profile_for_repo(&repo).await;
+        let rt_name = req
+            .runtime
+            .clone()
+            .or(profile.as_ref().and_then(|p| p.runtime.clone()))
+            .unwrap_or(self.live_config().default_runtime);
+        let rt_name = rt_name.as_str();
+        let rt = self.runtime_terminal(rt_name)?;
+        if let Some(p) = pack
+            && !p.install.contains_key(rt_name)
+        {
+            return Err(refuse(
+                "runtime_unusable",
+                format!("the {} pack has no commands for {rt_name}", p.name),
+            ));
+        }
         let autonomy = req
             .autonomy
             .or(profile.as_ref().and_then(|p| p.autonomy))
@@ -235,10 +241,22 @@ impl Daemon {
         .await
         .map_err(|e| refuse("push_guard", e.to_string()))?;
         if let Some(h) = &rt.hooks {
-            let rules = permission_rules(pack);
-            install_hooks(&git, &workdir, h, &self.xherd_bin, &rules).await?;
+            let allow = permission_rules(pack, rt_name);
+            install_hooks(&git, &workdir, h, &self.xherd_bin, &allow).await?;
         }
         Ok(())
+    }
+
+    /// A runtime plugin agents can be started with: installed, of kind
+    /// runtime, switched on, with a usable terminal driver.
+    pub(crate) fn runtime_terminal(&self, name: &str) -> Result<Terminal, ActionError> {
+        self.plugins
+            .get(name)
+            .filter(|p| p.manifest.kind == xherd_plugin::Kind::Runtime)
+            .filter(|_| self.plugin_enabled(name))
+            .ok_or_else(|| format!("runtime plugin {name} is not installed or is switched off"))
+            .and_then(|p| Terminal::of(&p.manifest))
+            .map_err(|e| refuse("runtime_unusable", e))
     }
 
     /// A worktree a backup restore recreated has no `.xherd/agent.json` (it is
@@ -264,6 +282,43 @@ impl Daemon {
     }
 }
 
+/// What the daemon uses of one runtime plugin besides launching it: built
+/// once at start for every runtime plugin, chosen by the agent's runtime.
+#[derive(Debug, Clone, Default)]
+pub struct RuntimeKit {
+    pub trust: Option<TrustWriter>,
+    pub resume: Option<Resumer>,
+    pub usage: Option<runtime::Usage>,
+    /// `promptArgs`: the first prompt goes on the launch line (empty: typed).
+    pub prompt_args: Vec<String>,
+}
+
+/// Every runtime plugin's [`RuntimeKit`], by plugin name.
+pub fn runtime_kits(
+    plugins: &xherd_plugin::Registry,
+    worktrees: &Path,
+) -> std::collections::BTreeMap<String, RuntimeKit> {
+    plugins
+        .of_kind(xherd_plugin::Kind::Runtime)
+        .filter_map(|p| {
+            let t = Terminal::of(&p.manifest).ok()?;
+            let kit = RuntimeKit {
+                trust: t.trust.map(|trust| TrustWriter {
+                    trust,
+                    root: worktrees.to_path_buf(),
+                }),
+                resume: t.resume.map(Resumer),
+                usage: t.usage,
+                prompt_args: t.prompt_args,
+            };
+            Some((p.manifest.name.clone(), kit))
+        })
+        .collect()
+}
+
+/// Longest export xherd reads: a long session with large tool outputs.
+const EXPORT_MAX: usize = 64 * 1024 * 1024;
+
 /// Continue the runtime's last conversation (R-027): the launch arguments for
 /// a session id, only while the runtime still has that session's transcript.
 #[derive(Debug, Clone)]
@@ -276,22 +331,82 @@ impl Resumer {
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Option<Vec<String>> {
         let args = self.0.argv(session)?;
-        self.transcript(session, env).await.map(|_| args)
+        let found = match self.0.export.is_empty() {
+            true => self.transcript_file(session, env).await.is_some(),
+            // Only whether the runtime still has it: the text is not needed.
+            false => self.export(session, "/dev/null").await.is_some(),
+        };
+        found.then_some(args)
     }
 
-    /// The transcript file of `session`, when the runtime has it.
+    /// The transcript of `session` as text, when the runtime has it: its
+    /// file, or the export's output. An export to `{file}` writes into
+    /// `scratch` (the worktree's `.xherd/`, shared by the agent user and the
+    /// daemon, R-1203); without one it cannot be read.
+    pub async fn read(
+        &self,
+        session: &str,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+        scratch: Option<&Path>,
+    ) -> Option<String> {
+        if self.0.exports_to_file() {
+            let file = scratch?.join(format!("runtime-export-{}.json", xherd_core::new_id()));
+            let f = file.to_string_lossy();
+            let ran = self.export(session, &f).await;
+            let text = match ran {
+                Some(_) => xherd_core::runner::read_file(&file).await.ok().flatten(),
+                None => None,
+            };
+            let _ = std::fs::remove_file(&file);
+            return text.map(|b| String::from_utf8_lossy(&b).into_owned());
+        }
+        if !self.0.export.is_empty() {
+            return self.export(session, "").await;
+        }
+        let path = self.transcript_file(session, env).await?;
+        match xherd_core::runner::read_file(&path).await {
+            Ok(Some(b)) => Some(String::from_utf8_lossy(&b).into_owned()),
+            _ => None,
+        }
+    }
+
+    /// The transcript file of `session`.
     ///
     /// Looked up as the agent user: the runtime keeps it in the agent's home
     /// (R-1203).
-    pub async fn transcript(
+    async fn transcript_file(
         &self,
         session: &str,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Option<PathBuf> {
         runtime::plain_id(session).then_some(())?;
-        let dir = xherd_flow::install::expand(&self.0.transcripts, env).ok()?;
-        let file = self.0.file.replace("{session}", session);
+        let (Some(dir), Some(file)) = (&self.0.transcripts, &self.0.file) else {
+            return None;
+        };
+        let dir = xherd_flow::install::expand(dir, env).ok()?;
+        let file = file.replace("{session}", session);
         xherd_core::runner::find_in_subdirs_as_agent(Path::new(&dir), &file).await
+    }
+
+    /// The export command's output, run as the agent user (its sessions are
+    /// in the agent's home); `None` when it fails, i.e. no such session.
+    async fn export(&self, session: &str, file: &str) -> Option<String> {
+        let argv = self.0.export_argv(session, file)?;
+        let mut cmd = xherd_core::exec::Cmd::new(argv)
+            .timeout(std::time::Duration::from_secs(60))
+            .as_agent();
+        cmd.max_output = EXPORT_MAX;
+        match xherd_core::exec::run(cmd).await {
+            Ok(o) if o.code == Some(0) => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+            Ok(o) => {
+                tracing::debug!(session, code = ?o.code, stderr = %o.stderr, "runtime export failed");
+                None
+            }
+            Err(e) => {
+                tracing::debug!(session, error = %e, "runtime export failed");
+                None
+            }
+        }
     }
 }
 
@@ -429,48 +544,38 @@ async fn prepare_xherd_dir(
         .map_err(|e| refuse("git", e.to_string()))
 }
 
-/// The XAP calls an agent makes, as runtime allow rules. The prompts call
+/// The XAP calls an agent makes, as shell command patterns. The prompts call
 /// plain `xherd` (on the session's PATH), which the runtime can match; a
 /// `$XHERD_BIN` variable cannot be checked and asks every time.
 const XAP_ALLOW: &[&str] = &[
-    "Bash(xherd stage *)",
-    "Bash(xherd gate *)",
-    "Bash(xherd ask *)",
-    "Bash(xherd tasks *)",
-    "Bash(xherd task *)",
-    "Bash(xherd commit *)",
-    "Bash(xherd pr *)",
-    "Bash(xherd handoff *)",
-    "Bash(xherd issue *)",
+    "xherd stage *",
+    "xherd gate *",
+    "xherd ask *",
+    "xherd tasks *",
+    "xherd task *",
+    "xherd commit *",
+    "xherd pr *",
+    "xherd handoff *",
+    "xherd issue *",
 ];
 
-/// The runtime allow rules written into a new worktree: reading the pack's
-/// installed commands and the XAP calls. This is where profile and toolchain
-/// commands will be added.
-fn permission_rules(pack: Option<&xherd_flow::Pack>) -> Vec<String> {
-    let mut rules: Vec<String> = pack
-        .map(command_dirs)
-        .unwrap_or_default()
-        .iter()
-        // `//` marks an absolute path; a single `/` is relative to the
-        // project root and would never match this folder.
-        .map(|d| format!("Read(//{}/**)", d.trim_matches('/')))
-        .collect();
-    rules.extend(XAP_ALLOW.iter().map(|s| s.to_string()));
-    rules
+/// What the runtime allows without asking in a new worktree: reading the
+/// pack's installed commands and the XAP calls. This is where profile and
+/// toolchain commands will be added.
+fn permission_rules(pack: Option<&xherd_flow::Pack>, runtime: &str) -> runtime::Allow {
+    runtime::Allow {
+        commands: XAP_ALLOW.iter().map(|s| s.to_string()).collect(),
+        read_dirs: pack.map(|p| command_dirs(p, runtime)).unwrap_or_default(),
+    }
 }
 
-/// Folders the default runtime's pack commands are installed in (outside the
+/// Folders the runtime's pack commands are installed in (outside the
 /// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
 /// plan cannot be made (no HOME).
-fn command_dirs(pack: &xherd_flow::Pack) -> Vec<String> {
+fn command_dirs(pack: &xherd_flow::Pack, runtime: &str) -> Vec<String> {
     let env = xherd_core::runner::agent_env;
     let plan = pack
-        .plan_install(
-            xherd_flow::approve::DEFAULT_RUNTIME,
-            xherd_flow::install::BUILTIN_FILES,
-            &env,
-        )
+        .plan_install(runtime, xherd_flow::install::BUILTIN_FILES, &env)
         .unwrap_or_default();
     let mut dirs: Vec<String> = plan
         .iter()
@@ -489,7 +594,7 @@ async fn install_hooks(
     workdir: &Path,
     h: &runtime::HookFile,
     xherd_bin: &str,
-    allow_rules: &[String],
+    allow: &runtime::Allow,
 ) -> Result<(), ActionError> {
     let f = workdir.join(&h.file);
     let existing = xherd_core::runner::read_file(&f)
@@ -497,7 +602,7 @@ async fn install_hooks(
         .ok()
         .flatten()
         .map(|b| String::from_utf8_lossy(&b).into_owned());
-    let text = runtime::merge_hooks(existing.as_deref(), h, xherd_bin, allow_rules)
+    let text = runtime::hook_file_text(existing.as_deref(), h, xherd_bin, allow)
         .map_err(|e| refuse("runtime_hooks", e))?;
     xherd_core::runner::write_file(&f, text.as_bytes(), None)
         .await
@@ -512,17 +617,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn permission_rules_are_the_command_reads_then_the_xap_calls() {
+    fn permission_rules_are_the_command_reads_and_the_xap_calls() {
         let xap: Vec<String> = XAP_ALLOW.iter().map(|s| s.to_string()).collect();
-        assert_eq!(permission_rules(None), xap);
+        let none = permission_rules(None, "claude-code");
+        assert_eq!((none.commands, none.read_dirs.len()), (xap.clone(), 0));
         let pack = xherd_flow::builtin();
-        let dirs = command_dirs(&pack);
-        let rules = permission_rules(Some(&pack));
-        assert_eq!(rules.len(), dirs.len() + xap.len());
-        assert_eq!(rules[dirs.len()..], xap[..]);
-        for (r, d) in rules.iter().zip(&dirs) {
-            assert_eq!(*r, format!("Read(//{}/**)", d.trim_matches('/')));
+        for rt in ["claude-code", "opencode"] {
+            let rules = permission_rules(Some(&pack), rt);
+            assert_eq!(rules.commands, xap);
+            assert_eq!(rules.read_dirs, command_dirs(&pack, rt));
         }
+        let dirs = |rt| command_dirs(&pack, rt);
+        assert_ne!(
+            dirs("claude-code"),
+            dirs("opencode"),
+            "each runtime's own folder"
+        );
     }
 
     #[tokio::test]
@@ -533,8 +643,10 @@ mod tests {
         std::fs::write(proj.join("abc-123.jsonl"), "{}").unwrap();
         let r = Resumer(runtime::Resume {
             args: vec!["--resume".into(), "{session}".into()],
-            transcripts: format!("{}/projects", home.path().display()),
-            file: "{session}.jsonl".into(),
+            transcripts: Some(format!("{}/projects", home.path().display())),
+            file: Some("{session}.jsonl".into()),
+            export: Vec::new(),
+            prompt_env: Default::default(),
         });
         let env = |_: &str| None;
         assert_eq!(
@@ -544,6 +656,58 @@ mod tests {
         assert_eq!(r.argv("missing", &env).await, None);
         assert_eq!(r.argv("../abc-123", &env).await, None);
         assert_eq!(r.argv("", &env).await, None);
+    }
+
+    #[tokio::test]
+    async fn resume_through_an_export_command() {
+        // Prints the session's transcript for `s-1` only, like `opencode export`.
+        let r = Resumer(runtime::Resume {
+            args: vec!["--session".into(), "{session}".into()],
+            transcripts: None,
+            file: None,
+            export: vec![
+                "sh".into(),
+                "-c".into(),
+                r#"test "$0" = s-1 && echo '{"info": {"tokens": {"input": 3}}}'"#.into(),
+                "{session}".into(),
+            ],
+            prompt_env: Default::default(),
+        });
+        let env = |_: &str| None;
+        assert_eq!(
+            r.argv("s-1", &env).await,
+            Some(vec!["--session".to_string(), "s-1".to_string()])
+        );
+        assert_eq!(r.argv("s-2", &env).await, None, "export failed: gone");
+        assert!(
+            r.read("s-1", &env, None)
+                .await
+                .unwrap()
+                .contains("\"input\": 3")
+        );
+        assert_eq!(r.read("s 1", &env, None).await, None, "odd id never runs");
+
+        // An export to a file, in the scratch folder, removed after reading.
+        let dir = tempfile::tempdir().unwrap();
+        let r = Resumer(runtime::Resume {
+            export: vec![
+                "sh".into(),
+                "-c".into(),
+                r#"test "$0" = s-1 && echo '{"ok": 1}' > "$1""#.into(),
+                "{session}".into(),
+                "{file}".into(),
+            ],
+            ..r.0
+        });
+        assert!(
+            r.argv("s-1", &env).await.is_some(),
+            "checked against /dev/null"
+        );
+        assert_eq!(r.argv("s-2", &env).await, None);
+        let text = r.read("s-1", &env, Some(dir.path())).await.unwrap();
+        assert_eq!(text.trim(), r#"{"ok": 1}"#);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0, "removed");
+        assert_eq!(r.read("s-1", &env, None).await, None, "no scratch folder");
     }
 
     #[test]

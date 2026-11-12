@@ -99,7 +99,7 @@ impl Daemon {
             },
             "profile": profile.as_ref().map(|p| json!({
                 "id": p.id, "name": p.name, "autonomy": p.autonomy,
-                "permissionMode": p.permission_mode,
+                "permissionMode": p.permission_mode, "runtime": p.runtime,
             })),
         }))
     }

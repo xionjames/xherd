@@ -89,6 +89,7 @@ fn req(t: &T, key: &str) -> NewAgent {
         prompt: Some("add login".into()),
         autonomy: None,
         permission_mode: None,
+        runtime: None,
     }
 }
 
@@ -404,15 +405,25 @@ async fn refuses_without_a_runtime_plugin() {
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.builtin_plugins.clear();
     let d = Daemon::start(paths, o).await.unwrap();
+    // The runtime is chosen after the repository (a profile may name it).
+    let repo = home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let git = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(git.success());
     let r = NewAgent {
         ticket_key: "SC-6".into(),
         slug: None,
-        repo: home.path().to_string_lossy().into_owned(),
+        repo: repo.to_string_lossy().into_owned(),
         base: None,
         flow: None,
         prompt: None,
         autonomy: None,
         permission_mode: None,
+        runtime: None,
     };
     assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
 }
@@ -471,4 +482,69 @@ async fn url_uses_and_fetches_xherds_clone() {
     assert_eq!(e.code, "bad_repo_url");
     let e = t.d.resolve_repo("relative/app").await.unwrap_err();
     assert_eq!(e.code, "not_a_repo");
+}
+
+#[tokio::test]
+async fn opencode_agents_get_its_plugin_file_and_mode() {
+    let t = setup().await;
+    let mut r = req(&t, "SC-20");
+    r.runtime = Some("opencode".into());
+    let a = t.d.new_agent(r).await.unwrap();
+    assert_eq!(a.runtime.as_deref(), Some("opencode"));
+    assert_eq!(
+        a.next_prompt.as_deref(),
+        Some("/xherd/feature SC-20 add login")
+    );
+    // Default mode `edits`, through opencode's environment variable.
+    let launch = a.launch.clone().unwrap();
+    assert_eq!(launch[0], "env");
+    assert!(launch[1].starts_with("OPENCODE_PERMISSION="), "{launch:?}");
+    assert_eq!(launch[2..], ["opencode"]);
+    let wt = Path::new(a.workdir.as_deref().unwrap());
+    let js = std::fs::read_to_string(wt.join(".opencode/plugin/xherd.js")).unwrap();
+    assert!(js.starts_with("// Written by xherd"));
+    assert!(js.contains(r#""session.idle":"stop""#));
+    assert!(js.contains(r#""xherd task *""#));
+    assert!(!wt.join(".claude/settings.local.json").exists());
+    let ignored = git(wt, &["check-ignore", ".opencode/plugin/xherd.js"]);
+    assert!(ignored.status.success(), "kept out of git");
+}
+
+#[tokio::test]
+async fn the_runtime_comes_from_the_request_then_the_profile_then_settings() {
+    let t = setup().await;
+    let a = t.d.new_agent(req(&t, "SC-21")).await.unwrap();
+    assert_eq!(a.runtime.as_deref(), Some("claude-code"), "setting default");
+
+    let saved = t.d.save_config(
+        serde_json::from_value(serde_json::json!({"defaultRuntime": "opencode"})).unwrap(),
+    );
+    assert!(saved.is_ok(), "{:?}", saved.err().map(|e| e.message));
+    let a = t.d.new_agent(req(&t, "SC-22")).await.unwrap();
+    assert_eq!(a.runtime.as_deref(), Some("opencode"), "changed setting");
+
+    let p: xherd_core::profile::Profile = serde_json::from_value(serde_json::json!({
+        "name": "app",
+        "match": [t.repo.path().canonicalize().unwrap().to_string_lossy()],
+        "runtime": "claude-code"
+    }))
+    .unwrap();
+    t.d.create_profile(p).await.unwrap();
+    let a = t.d.new_agent(req(&t, "SC-23")).await.unwrap();
+    assert_eq!(a.runtime.as_deref(), Some("claude-code"), "profile");
+
+    let mut r = req(&t, "SC-24");
+    r.runtime = Some("opencode".into());
+    assert_eq!(
+        t.d.new_agent(r).await.unwrap().runtime.as_deref(),
+        Some("opencode")
+    );
+
+    let mut r = req(&t, "SC-25");
+    r.runtime = Some("github".into());
+    assert_eq!(t.d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
+    let bad = t.d.save_config(
+        serde_json::from_value(serde_json::json!({"defaultRuntime": "nope"})).unwrap(),
+    );
+    assert!(bad.unwrap_err().message.contains("defaultRuntime"));
 }

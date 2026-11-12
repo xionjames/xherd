@@ -113,6 +113,7 @@ impl Daemon {
         });
 
         // Plugin checks: required only for the default runtime.
+        let default_rt = self.live_config().default_runtime;
         let mut set = tokio::task::JoinSet::new();
         for p in self.plugins.all().filter(|p| self.plugin_enabled(p.name())) {
             let p = p.clone();
@@ -125,8 +126,7 @@ impl Daemon {
         let mut plugin_checks = Vec::new();
         while let Some(Ok((p, results))) = set.join_next().await {
             for r in results {
-                let runtime = p.manifest.kind == Kind::Runtime
-                    && r.plugin == xherd_flow::approve::DEFAULT_RUNTIME;
+                let runtime = p.manifest.kind == Kind::Runtime && r.plugin == default_rt;
                 let fix = p
                     .manifest
                     .checks
@@ -190,13 +190,32 @@ impl Daemon {
                 },
             });
         }
-        out.push(self.pack_check(env).await);
+        for rt in self.pack_runtimes() {
+            out.push(self.pack_check(&rt, rt == default_rt, env).await);
+        }
         out
     }
 
-    /// The xherd commands are where the default runtime finds them.
-    async fn pack_check(&self, env: &(dyn Fn(&str) -> Option<String> + Sync)) -> Check {
-        let rt = xherd_flow::approve::DEFAULT_RUNTIME;
+    /// Runtimes switched on that the built-in pack has commands for.
+    pub(crate) fn pack_runtimes(&self) -> Vec<String> {
+        let Some(p) = self.packs.get(xherd_flow::BUILTIN) else {
+            return Vec::new();
+        };
+        self.plugins
+            .of_kind(Kind::Runtime)
+            .map(|r| r.name().to_string())
+            .filter(|n| p.install.contains_key(n) && self.plugin_enabled(n))
+            .collect()
+    }
+
+    /// The xherd commands are where the runtime finds them: required for the
+    /// default runtime (id `pack`), stated for the others (`pack:<runtime>`).
+    async fn pack_check(
+        &self,
+        rt: &str,
+        default: bool,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Check {
         let missing = match self.packs.get(xherd_flow::BUILTIN) {
             Some(p) => p
                 .plan_install(rt, xherd_flow::install::BUILTIN_FILES, env)
@@ -209,10 +228,13 @@ impl Daemon {
             Err(e) => (false, e),
         };
         Check {
-            id: PACK_CHECK.into(),
+            id: match default {
+                true => PACK_CHECK.into(),
+                false => format!("{PACK_CHECK}:{rt}"),
+            },
             group: "runtime",
             label: format!("xherd commands installed for {rt}"),
-            required: true,
+            required: default,
             ok,
             detail,
             fix: (!ok).then(|| Fix::Action {
@@ -227,12 +249,14 @@ impl Daemon {
         id: &str,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<(), ActionError> {
-        match id {
-            PACK_CHECK => self
-                .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, env)
-                .await
-                .map(|_| ()),
-            _ => Err(ActionError {
+        let rt = match id.split_once(':') {
+            None if id == PACK_CHECK => Some(self.live_config().default_runtime),
+            Some((PACK_CHECK, rt)) => Some(rt.to_string()),
+            _ => None,
+        };
+        match rt {
+            Some(rt) => self.install(Some(&rt), None, env).await.map(|_| ()),
+            None => Err(ActionError {
                 code: "not_fixable",
                 message: format!("check {id} has no automatic fix"),
             }),
