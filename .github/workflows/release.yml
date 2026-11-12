@@ -2,7 +2,8 @@
 # - binaries: static Linux (musl), x86_64 and arm64, on a GitHub release, as
 #   .tar.gz, .deb and .rpm (deploy/nfpm/nfpm.yaml); macOS is on the roadmap;
 # - the image ghcr.io/<owner>/<repo> for amd64 + arm64, tagged X.Y.Z, X.Y, X and latest
-#   (no X for 0.x: those are development versions).
+#   (no X for 0.x: those are development versions);
+# - compose.yaml (deploy/compose/compose.release.yaml) for running the image.
 # A tag with a suffix (`v0.2.0-rc.1`) is a prerelease: no X.Y, X or latest.
 name: Release
 
@@ -194,11 +195,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: bin-*
           path: dist
           merge-multiple: true
+      - name: Compose file for the published image
+        run: cp deploy/compose/compose.release.yaml dist/compose.yaml
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
