@@ -143,6 +143,13 @@ pub struct Agent {
     pub pr_conflict: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_polled_at: Option<Millis>,
+    /// The last poll's check runs, reviewers and merge state, for the UI.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pr_checks: Vec<crate::pr::CheckRun>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pr_reviewers: Vec<crate::pr::Reviewer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_mergeable: Option<crate::pr::Mergeable>,
     /// Ids of the PR comments already handled or ignored (R-304).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pr_comments_seen: Vec<String>,
@@ -216,6 +223,9 @@ impl Agent {
             pr_ci_failed: false,
             pr_conflict: false,
             pr_polled_at: None,
+            pr_checks: Vec::new(),
+            pr_reviewers: Vec::new(),
+            pr_mergeable: None,
         }
     }
 

@@ -160,6 +160,35 @@ impl Git {
         .ok()
     }
 
+    /// Whether `head` merges into `base` without conflicts, worked out by
+    /// `git merge-tree --write-tree` (git ≥ 2.38; the worktree and index are
+    /// not touched). `None` when git cannot tell (older git, unknown refs).
+    pub async fn merges_cleanly(&self, dir: &Path, base: &str, head: &str) -> Option<bool> {
+        let cmd = Cmd::new([
+            self.bin.as_str(),
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            base,
+            head,
+        ])
+        .cwd(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .timeout(self.timeout)
+        .as_agent();
+        match run(cmd).await.ok()? {
+            o if o.timed_out => None,
+            o => match o.code {
+                Some(0) => Some(true),
+                // A conflict prints the tree; a bad ref also exits 1, silently.
+                Some(1) if !o.stdout.iter().all(u8::is_ascii_whitespace) => Some(false),
+                _ => None,
+            },
+        }
+    }
+
     pub async fn fetch(&self, dir: &Path, remote: &str) -> Result<()> {
         self.run_env(dir, NO_PROMPT, &["fetch", "--quiet", "--prune", remote])
             .await

@@ -1987,8 +1987,14 @@ async fn a_watched_pr_is_polled_for_ci_conflicts_and_merge() {
     let d = bin_dir.path();
     let gh = fake_gh_pr(d, "https://github.com/acme/app/pull/7");
     let put = |f: &str, v: &str| std::fs::write(d.join(f), v).unwrap();
-    put("view.json", r#"{"state":"OPEN","mergeable":"MERGEABLE"}"#);
-    put("checks.json", r#"[{"name":"build","bucket":"pass"}]"#);
+    put(
+        "view.json",
+        r#"{"state":"OPEN","mergeable":"MERGEABLE","reviewRequests":[{"login":"ann"}],"latestReviews":[{"author":{"login":"bob"},"state":"APPROVED"}]}"#,
+    );
+    put(
+        "checks.json",
+        r#"[{"name":"build","bucket":"pass","workflow":"CI","link":"https://ci/1"}]"#,
+    );
     let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
     let mut rx = t.d.hub.subscribe();
     xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
@@ -2006,6 +2012,19 @@ async fn a_watched_pr_is_polled_for_ci_conflicts_and_merge() {
     let a = until(&t, |a| a.pr_state.is_some()).await;
     assert_eq!(a.pr_ci, Some(xherd_core::pr::Ci::Passing));
     assert_eq!(a.status, Status::Watching);
+    assert_eq!(a.pr_checks[0].link.as_deref(), Some("https://ci/1"));
+    assert_eq!(a.pr_checks[0].workflow.as_deref(), Some("CI"));
+    assert_eq!(
+        a.pr_reviewers
+            .iter()
+            .map(|r| (r.name.as_str(), r.state))
+            .collect::<Vec<_>>(),
+        [
+            ("ann", xherd_core::pr::ReviewState::Pending),
+            ("bob", xherd_core::pr::ReviewState::Approved)
+        ]
+    );
+    assert_eq!(a.pr_mergeable, Some(xherd_core::pr::Mergeable::Yes));
 
     // A check fails (gh exits 1 with the list on stdout) and the PR conflicts.
     put("checks.json", r#"[{"name":"build","bucket":"fail"}]"#);
@@ -2034,6 +2053,69 @@ async fn a_watched_pr_is_polled_for_ci_conflicts_and_merge() {
     assert!(said.contains("merge conflict"), "{said}");
     assert!(said.contains("pull request was merged"), "{said}");
     assert_eq!(said.matches("merge conflict").count(), 1);
+}
+
+/// When the host does not know whether the PR merges, the daemon fetches
+/// and works it out in the worktree (#75).
+#[tokio::test]
+async fn an_unknown_merge_state_is_worked_out_locally() {
+    use xherd_daemon::actor::TickKind;
+    let bin_dir = tempfile::tempdir().unwrap();
+    let d = bin_dir.path();
+    let gh = fake_gh_pr(d, "https://github.com/acme/app/pull/7");
+    let put = |f: &str, v: &str| std::fs::write(d.join(f), v).unwrap();
+    put(
+        "view.json",
+        r#"{"state":"OPEN","mergeable":"UNKNOWN","baseRefName":"main"}"#,
+    );
+    put("checks.json", "[]");
+    let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
+
+    // origin/main and the agent's branch change the same line.
+    let wt = t.wt.path();
+    let remote = tempfile::tempdir().unwrap();
+    let origin = remote.path().join("origin.git");
+    let other = remote.path().join("other");
+    git(
+        remote.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(wt.join("a.txt"), "base\n").unwrap();
+    git(wt, &["add", "a.txt"]);
+    git(wt, &["commit", "-q", "-m", "a"]);
+    git(wt, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(wt, &["push", "-q", "origin", "main"]);
+    git(
+        remote.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(other.join("a.txt"), "theirs\n").unwrap();
+    git(&other, &["commit", "-q", "-am", "theirs"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+    std::fs::write(wt.join("a.txt"), "ours\n").unwrap();
+    git(wt, &["commit", "-q", "-am", "ours"]);
+
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    until(&t, |a| a.status == Status::Watching).await;
+    t.d.sup.tick(TickKind::PrPoll);
+    let a = until(&t, |a| a.pr_state.is_some()).await;
+    assert_eq!(a.pr_mergeable, Some(xherd_core::pr::Mergeable::No));
+    assert!(a.pr_conflict, "announced like a host-reported conflict");
 }
 
 #[tokio::test]

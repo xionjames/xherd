@@ -689,9 +689,17 @@ impl Actor {
         // Set here so a slow host is not asked again by the next tick.
         self.agent.pr_polled_at = Some(now);
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        let (git, agent_base) = (self.env.git.clone(), self.agent.base.clone());
         tokio::spawn(async move {
             let result = match host.pr_snapshot(&wd, &url).await {
-                Ok(snap) => {
+                Ok(mut snap) => {
+                    if snap.state == xherd_core::pr::PrState::Open
+                        && snap.mergeable == xherd_core::pr::Mergeable::Unknown
+                    {
+                        snap.mergeable =
+                            local_mergeable(&git, &wd, snap.base.as_deref(), agent_base.as_deref())
+                                .await;
+                    }
                     let comments = host
                         .pr_comments(&wd, &url)
                         .await
@@ -2962,6 +2970,37 @@ impl Actor {
                 _ => {}
             },
         }
+    }
+}
+
+/// Whether the agent's branch merges into the PR's base, worked out in the
+/// worktree when the host cannot say (#75): fetch `origin`, then merge
+/// `HEAD` into `origin/<base>` without touching any file. The base is the
+/// host's, else the agent's own; `Unknown` when neither is known or git
+/// cannot tell (a failed fetch included: stale refs would mislead).
+async fn local_mergeable(
+    git: &xherd_git::Git,
+    wd: &Path,
+    host_base: Option<&str>,
+    agent_base: Option<&str>,
+) -> xherd_core::pr::Mergeable {
+    use xherd_core::pr::Mergeable;
+    let Some(base) = host_base.or(agent_base) else {
+        return Mergeable::Unknown;
+    };
+    let base = if base.starts_with("origin/") {
+        base.to_string()
+    } else {
+        format!("origin/{base}")
+    };
+    if let Err(e) = git.fetch(wd, "origin").await {
+        tracing::warn!(error = %e, "fetch for the merge check failed");
+        return Mergeable::Unknown;
+    }
+    match git.merges_cleanly(wd, &base, "HEAD").await {
+        Some(true) => Mergeable::Yes,
+        Some(false) => Mergeable::No,
+        None => Mergeable::Unknown,
     }
 }
 

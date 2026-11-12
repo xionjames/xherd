@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use xherd_core::exec::{Cmd, run};
-use xherd_core::pr::{CheckRun, Comment, Mergeable, PrState, Snapshot};
+use xherd_core::pr::{CheckRun, Comment, Mergeable, PrState, ReviewState, Reviewer, Snapshot};
 
 use crate::{Context, Plugin, PluginError, run_command};
 
@@ -164,14 +164,28 @@ impl Host {
                 .and_then(Value::as_str)
                 .unwrap_or("gh");
             let s = self
-                .gh(gh, dir, &["pr", "view", url, "--json", "state,mergeable"])
+                .gh(
+                    gh,
+                    dir,
+                    &[
+                        "pr",
+                        "view",
+                        url,
+                        "--json",
+                        "state,mergeable,mergeStateStatus,baseRefName,reviewRequests,latestReviews",
+                    ],
+                )
                 .await?;
-            let s = self.json("pr view", &s)?;
+            let s = github_status(&self.json("pr view", &s)?);
             // `gh pr checks` exits 1 when a check failed and 8 while some are
             // pending, with the list on stdout; 1 with nothing on stdout is
             // "no checks reported" (or a real failure, told by stderr).
             let out = self
-                .gh_raw(gh, dir, &["pr", "checks", url, "--json", "name,bucket"])
+                .gh_raw(
+                    gh,
+                    dir,
+                    &["pr", "checks", url, "--json", "name,bucket,link,workflow"],
+                )
                 .await?;
             let c = match out.code {
                 Some(0 | 8) => self.json("pr checks", &out.stdout)?,
@@ -190,13 +204,9 @@ impl Host {
             };
             (s, c)
         };
-        let (state, mergeable) = parse_status(&status).map_err(|e| self.shape("pr-status", &e))?;
-        let checks = parse_checks(&checks).map_err(|e| self.shape("pr-checks", &e))?;
-        Ok(Snapshot {
-            state,
-            mergeable,
-            checks,
-        })
+        let mut snap = parse_status(&status).map_err(|e| self.shape("pr-status", &e))?;
+        snap.checks = parse_checks(&checks).map_err(|e| self.shape("pr-checks", &e))?;
+        Ok(snap)
     }
 
     /// `pr-comments {url}` (R-304): every comment on the pull request at
@@ -368,10 +378,13 @@ impl Host {
     }
 }
 
-/// `{state, mergeable?}` of `pr-status`. State is `open`, `merged` or `closed`
-/// in any case; `mergeable` is a bool or text (`MERGEABLE`, `CONFLICTING`,
-/// `yes`, `no`…) and unknown when absent or not recognised.
-pub fn parse_status(v: &Value) -> Result<(PrState, Mergeable), String> {
+/// `{state, mergeable?, base?, reviewers?}` of `pr-status`, as a snapshot
+/// without checks. State is `open`, `merged` or `closed` in any case;
+/// `mergeable` is a bool or text (`MERGEABLE`, `CONFLICTING`, `yes`, `no`…)
+/// and unknown when absent or not recognised. `reviewers` is
+/// `[{name, state}]`, state one of `pending`, `approved`,
+/// `changes-requested`, `commented`, `dismissed` (any case, `_` for `-`).
+pub fn parse_status(v: &Value) -> Result<Snapshot, String> {
     let state = match v["state"].as_str().map(str::to_ascii_lowercase).as_deref() {
         Some("open") => PrState::Open,
         Some("merged") => PrState::Merged,
@@ -388,12 +401,84 @@ pub fn parse_status(v: &Value) -> Result<(PrState, Mergeable), String> {
         },
         _ => Mergeable::Unknown,
     };
-    Ok((state, mergeable))
+    let base = match &v["base"] {
+        Value::Null => None,
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        _ => return Err("base is not a branch name".into()),
+    };
+    let reviewers = match &v["reviewers"] {
+        Value::Null => Vec::new(),
+        Value::Array(list) => list
+            .iter()
+            .map(|r| {
+                let name = r["name"].as_str().ok_or("a reviewer has no name")?;
+                let s = r["state"].as_str().unwrap_or_default();
+                let state = match s.to_ascii_lowercase().replace('_', "-").as_str() {
+                    "pending" => ReviewState::Pending,
+                    "approved" => ReviewState::Approved,
+                    "changes-requested" => ReviewState::ChangesRequested,
+                    "commented" => ReviewState::Commented,
+                    "dismissed" => ReviewState::Dismissed,
+                    _ => return Err(format!("reviewer {name} has an unknown state {s:?}")),
+                };
+                Ok(Reviewer {
+                    name: name.to_string(),
+                    state,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        _ => return Err("reviewers is not a list".into()),
+    };
+    Ok(Snapshot {
+        state,
+        mergeable,
+        checks: Vec::new(),
+        reviewers,
+        base,
+    })
 }
 
-/// `[{name, bucket}]` of `pr-checks`.
+/// `gh pr view --json state,mergeable,mergeStateStatus,baseRefName,
+/// reviewRequests,latestReviews` in the `pr-status` shape. A reviewer asked
+/// again after reviewing is `pending`; a merge state of `DIRTY` stands in
+/// for a `mergeable` GitHub has not computed yet.
+fn github_status(v: &Value) -> Value {
+    let mut reviewers: Vec<Value> = Vec::new();
+    let requested = v["reviewRequests"].as_array().into_iter().flatten();
+    for r in requested {
+        // Users have a login, teams a slug (or at least a name).
+        if let Some(name) = ["login", "slug", "name"]
+            .iter()
+            .find_map(|k| r[*k].as_str().filter(|s| !s.is_empty()))
+        {
+            reviewers.push(json!({"name": name, "state": "pending"}));
+        }
+    }
+    for r in v["latestReviews"].as_array().into_iter().flatten() {
+        let (Some(name), Some(state)) = (r["author"]["login"].as_str(), r["state"].as_str()) else {
+            continue;
+        };
+        if !reviewers.iter().any(|x| x["name"] == name) {
+            reviewers.push(json!({"name": name, "state": state}));
+        }
+    }
+    let mergeable = match (v["mergeable"].as_str(), v["mergeStateStatus"].as_str()) {
+        (Some("UNKNOWN") | None, Some("DIRTY")) => json!("CONFLICTING"),
+        (m, _) => json!(m),
+    };
+    json!({
+        "state": v["state"],
+        "mergeable": mergeable,
+        "base": v["baseRefName"],
+        "reviewers": reviewers,
+    })
+}
+
+/// `[{name, bucket, workflow?, link?}]` of `pr-checks`; an empty `workflow`
+/// or `link` counts as absent.
 pub fn parse_checks(v: &Value) -> Result<Vec<CheckRun>, String> {
     let list = v.as_array().ok_or("expected a list of checks")?;
+    let text = |c: &Value, k: &str| c[k].as_str().filter(|s| !s.is_empty()).map(str::to_string);
     list.iter()
         .map(|c| {
             Ok(CheckRun {
@@ -402,6 +487,8 @@ pub fn parse_checks(v: &Value) -> Result<Vec<CheckRun>, String> {
                     .as_str()
                     .ok_or("a check has no bucket")?
                     .to_ascii_lowercase(),
+                workflow: text(c, "workflow"),
+                link: text(c, "link"),
             })
         })
         .collect()
@@ -577,7 +664,10 @@ mod tests {
 
     #[test]
     fn status_parses_gh_and_plugin_shapes() {
-        let s = |v: Value| parse_status(&v).unwrap();
+        let s = |v: Value| {
+            let s = parse_status(&v).unwrap();
+            (s.state, s.mergeable)
+        };
         assert_eq!(
             s(json!({"state": "OPEN", "mergeable": "CONFLICTING"})),
             (PrState::Open, Mergeable::No)
@@ -595,12 +685,81 @@ mod tests {
             Mergeable::Unknown
         );
         assert!(parse_status(&json!({"state": "draft"})).is_err());
+
+        let p = parse_status(&json!({"state": "open", "base": "main", "reviewers": [
+            {"name": "ann", "state": "CHANGES_REQUESTED"},
+            {"name": "core", "state": "pending"},
+        ]}))
+        .unwrap();
+        assert_eq!(p.base.as_deref(), Some("main"));
+        assert_eq!(
+            p.reviewers
+                .iter()
+                .map(|r| (r.name.as_str(), r.state))
+                .collect::<Vec<_>>(),
+            [
+                ("ann", ReviewState::ChangesRequested),
+                ("core", ReviewState::Pending)
+            ]
+        );
+        let bad = json!({"state": "open", "reviewers": [{"name": "x", "state": "meh"}]});
+        assert!(parse_status(&bad).is_err());
+    }
+
+    #[test]
+    fn gh_view_becomes_the_status_shape() {
+        let v = json!({
+            "state": "OPEN",
+            "mergeable": "UNKNOWN",
+            "mergeStateStatus": "DIRTY",
+            "baseRefName": "main",
+            "reviewRequests": [
+                {"__typename": "User", "login": "ann"},
+                {"__typename": "Team", "name": "Core", "slug": "core"},
+            ],
+            "latestReviews": [
+                {"author": {"login": "ann"}, "state": "COMMENTED"},
+                {"author": {"login": "bob"}, "state": "APPROVED"},
+            ],
+        });
+        let s = parse_status(&github_status(&v)).unwrap();
+        assert_eq!(
+            s.mergeable,
+            Mergeable::No,
+            "DIRTY when GitHub has no answer"
+        );
+        assert_eq!(s.base.as_deref(), Some("main"));
+        assert_eq!(
+            s.reviewers
+                .iter()
+                .map(|r| (r.name.as_str(), r.state))
+                .collect::<Vec<_>>(),
+            [
+                ("ann", ReviewState::Pending),
+                ("core", ReviewState::Pending),
+                ("bob", ReviewState::Approved)
+            ],
+            "asked again = pending"
+        );
+        let plain =
+            json!({"state": "OPEN", "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"});
+        assert_eq!(
+            parse_status(&github_status(&plain)).unwrap().mergeable,
+            Mergeable::Yes
+        );
     }
 
     #[test]
     fn checks_parse_and_lowercase_buckets() {
-        let c = parse_checks(&json!([{"name": "ci", "bucket": "FAIL"}])).unwrap();
+        let c = parse_checks(&json!([
+            {"name": "ci", "bucket": "FAIL", "workflow": "", "link": "https://x/1"}
+        ]))
+        .unwrap();
         assert_eq!((c[0].name.as_str(), c[0].bucket.as_str()), ("ci", "fail"));
+        assert_eq!(
+            (c[0].workflow.as_deref(), c[0].link.as_deref()),
+            (None, Some("https://x/1"))
+        );
         assert!(parse_checks(&json!([{"bucket": "pass"}])).is_err());
         assert!(parse_checks(&json!({})).is_err());
     }

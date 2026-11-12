@@ -98,6 +98,40 @@ async fn excludes_are_shared_and_not_duplicated() {
 }
 
 #[tokio::test]
+async fn merges_cleanly_tells_conflicts_apart() {
+    let d = tempfile::tempdir().unwrap();
+    let g = init_repo(d.path()).await;
+    let dir = d.path();
+    let commit = |branch: &'static str, file: &'static str, text: &'static str| {
+        let g = g.clone();
+        async move {
+            g.run(dir, &["checkout", "--quiet", branch]).await.unwrap();
+            std::fs::write(dir.join(file), text).unwrap();
+            g.run(dir, &["commit", "--quiet", "-am", "x"])
+                .await
+                .unwrap();
+        }
+    };
+    g.run(dir, &["branch", "clean"]).await.unwrap();
+    g.run(dir, &["branch", "clash"]).await.unwrap();
+    commit("main", "a.txt", "main\n").await;
+    commit("clash", "a.txt", "clash\n").await;
+    std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+    g.run(dir, &["checkout", "--quiet", "clean"]).await.unwrap();
+    g.run(dir, &["add", "b.txt"]).await.unwrap();
+    g.run(dir, &["commit", "--quiet", "-m", "b"]).await.unwrap();
+
+    assert_eq!(g.merges_cleanly(dir, "main", "clean").await, Some(true));
+    assert_eq!(g.merges_cleanly(dir, "main", "clash").await, Some(false));
+    assert_eq!(g.merges_cleanly(dir, "main", "no-such").await, None);
+    assert_eq!(
+        g.run(dir, &["status", "--porcelain"]).await.unwrap(),
+        "",
+        "nothing in the worktree changed"
+    );
+}
+
+#[tokio::test]
 async fn failures_carry_stderr() {
     let d = tempfile::tempdir().unwrap();
     let g = init_repo(d.path()).await;
