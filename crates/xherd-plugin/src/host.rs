@@ -95,6 +95,11 @@ pub struct Host {
 }
 
 impl Host {
+    /// The built-in GitLab plugin (merge requests through `glab api`).
+    fn is_gitlab(&self) -> bool {
+        self.plugin.builtin() && self.plugin.name() == crate::gitlab::GITLAB
+    }
+
     /// `pr-for-branch {branch} → {url|null}` (R-302): the pull request of
     /// `branch`, looked up from the worktree `dir` (which knows the remote).
     pub async fn pr_for_branch(
@@ -103,6 +108,9 @@ impl Host {
         branch: &str,
     ) -> Result<Option<String>, PluginError> {
         let name = "pr-for-branch";
+        if self.is_gitlab() {
+            return self.gl_pr_for_branch(dir, branch).await;
+        }
         if !self.plugin.builtin() {
             let v = run_command(
                 &self.plugin,
@@ -151,6 +159,9 @@ impl Host {
     /// `pr-status {url}` and `pr-checks {url}` (R-303): what a poll of the
     /// pull request at `url` found. Built-in `github` asks `gh`.
     pub async fn pr_snapshot(&self, dir: &Path, url: &str) -> Result<Snapshot, PluginError> {
+        if self.is_gitlab() {
+            return self.gl_pr_snapshot(dir, url).await;
+        }
         let (status, checks) = if !self.plugin.builtin() {
             let input = json!({"url": url, "worktree": dir});
             let s = run_command(&self.plugin, "pr-status", input.clone(), &self.ctx).await?;
@@ -214,6 +225,9 @@ impl Host {
     /// `github` reads three endpoints through `gh api`.
     pub async fn pr_comments(&self, dir: &Path, url: &str) -> Result<Vec<Comment>, PluginError> {
         let name = "pr-comments";
+        if self.is_gitlab() {
+            return self.gl_pr_comments(dir, url).await;
+        }
         if !self.plugin.builtin() {
             let v = run_command(
                 &self.plugin,
@@ -271,6 +285,9 @@ impl Host {
         body: &str,
     ) -> Result<(), PluginError> {
         let name = "pr-reply";
+        if self.is_gitlab() {
+            return self.gl_pr_reply(dir, url, to, body).await;
+        }
         if !self.plugin.builtin() {
             run_command(
                 &self.plugin,
@@ -313,7 +330,7 @@ impl Host {
         serde_json::from_value(v).map_err(|e| self.shape(name, &e.to_string()))
     }
 
-    fn json(&self, name: &str, bytes: &[u8]) -> Result<Value, PluginError> {
+    pub(crate) fn json(&self, name: &str, bytes: &[u8]) -> Result<Value, PluginError> {
         serde_json::from_slice(bytes).map_err(|e| PluginError::BadJson {
             plugin: self.plugin.name().into(),
             name: name.into(),
@@ -321,7 +338,7 @@ impl Host {
         })
     }
 
-    fn shape(&self, name: &str, error: &str) -> PluginError {
+    pub(crate) fn shape(&self, name: &str, error: &str) -> PluginError {
         PluginError::Shape {
             plugin: self.plugin.name().into(),
             name: name.into(),
@@ -338,19 +355,34 @@ impl Host {
         dir: &Path,
         args: &[&str],
     ) -> Result<xherd_core::exec::Output, PluginError> {
+        self.cli_raw(gh, "GH_PROMPT_DISABLED", "GH_TOKEN", dir, args)
+            .await
+    }
+
+    /// Run a host's CLI (`gh`, `glab`) in `dir`: colour and prompts off
+    /// (`prompt_off` is the variable the CLI reads for that), the `token`
+    /// secret, if set, as `token_env`.
+    pub(crate) async fn cli_raw(
+        &self,
+        bin: &str,
+        prompt_off: &str,
+        token_env: &str,
+        dir: &Path,
+        args: &[&str],
+    ) -> Result<xherd_core::exec::Output, PluginError> {
         let secs = self.plugin.manifest.timeout_seconds;
-        let mut argv = vec![gh.to_string()];
+        let mut argv = vec![bin.to_string()];
         argv.extend(args.iter().map(|s| s.to_string()));
         let mut cmd = Cmd::new(argv)
             .cwd(dir)
             .timeout(Duration::from_secs(secs))
-            .env("GH_PROMPT_DISABLED", "1")
+            .env(prompt_off, "1")
             .env("NO_COLOR", "1")
             .as_agent();
         if let Some(t) = self.ctx.secrets.get("token").and_then(Value::as_str)
             && !t.is_empty()
         {
-            cmd = cmd.env("GH_TOKEN", t).redact(vec![t.to_string()]);
+            cmd = cmd.env(token_env, t).redact(vec![t.to_string()]);
         }
         let out = run(cmd).await?;
         if out.timed_out {
@@ -366,6 +398,15 @@ impl Host {
     /// `gh_raw`, failing on any exit code but 0.
     async fn gh(&self, gh: &str, dir: &Path, args: &[&str]) -> Result<Vec<u8>, PluginError> {
         let out = self.gh_raw(gh, dir, args).await?;
+        self.ok(out, args)
+    }
+
+    /// The stdout of a CLI run that exited 0, else the failure.
+    pub(crate) fn ok(
+        &self,
+        out: xherd_core::exec::Output,
+        args: &[&str],
+    ) -> Result<Vec<u8>, PluginError> {
         if out.code != Some(0) {
             return Err(PluginError::Failed {
                 plugin: self.plugin.name().into(),
