@@ -247,31 +247,29 @@ impl ActorSettings {
     }
 }
 
-/// `host` with the token kept for `remote_host` in Settings → Git access,
-/// unless the plugin has a token of its own (read from disk on each use, so a
-/// new token applies at once).
+/// `host` with its secrets as they are on disk now, and, without a `token` of
+/// its own, the one kept for `remote_host` in Settings → Git access (read on
+/// each use, so a new token applies at once).
 fn with_git_token(
     host: Arc<xherd_plugin::host::Host>,
     remote_host: Option<&str>,
     secrets: &std::path::Path,
 ) -> Arc<xherd_plugin::host::Host> {
-    if host
-        .ctx
-        .secrets
-        .get("token")
-        .is_some_and(|t| !t.is_null() && t != "")
-    {
-        return host;
-    }
-    let Some(t) = remote_host.and_then(|r| {
-        xherd_core::config::Secrets::load(secrets)
-            .ok()
-            .and_then(|s| s.git_token(r))
-    }) else {
+    let Ok(all) = xherd_core::config::Secrets::load(secrets) else {
         return host;
     };
     let mut h = (*host).clone();
-    h.ctx.secrets.insert("token".into(), t.into());
+    // The plugin's own secrets as they are now (saved in the UI, no restart).
+    h.ctx.secrets =
+        xherd_plugin::resolve_secrets(&h.plugin.manifest, &all.for_plugin(h.plugin.name()));
+    let own = h
+        .ctx
+        .secrets
+        .get("token")
+        .is_some_and(|t| t.as_str().is_some_and(|t| !t.is_empty()));
+    if !own && let Some(t) = remote_host.and_then(|r| all.git_token(r)) {
+        h.ctx.secrets.insert("token".into(), t.into());
+    }
     Arc::new(h)
 }
 

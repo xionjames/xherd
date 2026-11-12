@@ -381,7 +381,14 @@ impl Daemon {
     }
 
     pub(crate) fn plugin_context(&self, p: &xherd_plugin::Plugin) -> xherd_plugin::Context {
-        plugin_context(p, &self.paths, &self.config, &self.secrets, &self.xherd_bin)
+        // Secrets are read live: one saved in the UI applies at once.
+        plugin_context(
+            p,
+            &self.paths,
+            &self.config,
+            &self.live_secrets(),
+            &self.xherd_bin,
+        )
     }
 
     /// The agent's documents for the UI: every `*.md` in the spec folder

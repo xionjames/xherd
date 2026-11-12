@@ -312,7 +312,7 @@ impl Daemon {
             .any(|n| n == name)
     }
 
-    fn live_secrets(&self) -> Secrets {
+    pub(crate) fn live_secrets(&self) -> Secrets {
         Secrets::load(&self.paths.secrets()).unwrap_or_else(|_| (*self.secrets).clone())
     }
 
@@ -608,6 +608,68 @@ impl Daemon {
         tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &[], &argv)
             .await
             .map_err(|e| fail("driver", e.to_string()))
+    }
+
+    /// The secret settings a plugin declares and whether each has a value
+    /// (never the value).
+    pub fn plugin_secret_status(&self, plugin: &str) -> Result<Value, ActionError> {
+        let p = self
+            .plugins
+            .get(plugin)
+            .ok_or_else(|| fail("no_plugin", format!("no plugin named {plugin}")))?;
+        let stored = self.live_secrets().for_plugin(plugin);
+        let keys: serde_json::Map<String, Value> = p
+            .manifest
+            .settings
+            .iter()
+            .filter(|s| s.secret)
+            .map(|s| {
+                let set = stored
+                    .get(&s.key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| !v.is_empty());
+                (s.key.clone(), Value::Bool(set))
+            })
+            .collect();
+        Ok(Value::Object(keys))
+    }
+
+    /// Set (`Some`) or clear (`None` or empty) a plugin's declared secret
+    /// settings in `secrets.json` (mode 0600). Other keys are kept.
+    pub fn set_plugin_secrets(
+        &self,
+        plugin: &str,
+        values: std::collections::BTreeMap<String, Option<String>>,
+    ) -> Result<Value, ActionError> {
+        let p = self
+            .plugins
+            .get(plugin)
+            .ok_or_else(|| fail("no_plugin", format!("no plugin named {plugin}")))?;
+        for k in values.keys() {
+            if !p.manifest.settings.iter().any(|s| s.secret && &s.key == k) {
+                return Err(fail(
+                    "bad_config",
+                    format!("{plugin} has no secret setting {k:?}"),
+                ));
+            }
+        }
+        let mut s = self.live_secrets();
+        let mut mine = s.for_plugin(plugin);
+        for (k, v) in values {
+            match v.as_deref().map(str::trim) {
+                Some(v) if !v.is_empty() => {
+                    mine.insert(k.clone(), v.into());
+                }
+                _ => {
+                    mine.remove(&k);
+                }
+            }
+            tracing::info!(plugin, key = %k, "plugin secret changed");
+        }
+        s.0.insert(plugin.into(), Value::Object(mine));
+        s.save(&self.paths.secrets())
+            .map_err(|e| fail("io", e.to_string()))?;
+        self.plugin_secret_status(plugin)
     }
 
     /// Run the `install` argv of a plugin's required tool in the login
