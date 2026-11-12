@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use xherd_core::paths::Paths;
+use xherd_plugin::Broken;
 
 /// The shared, agent-readable folder the daemon owns (`XHERD_SHARED`).
 fn shared() -> PathBuf {
@@ -24,17 +25,18 @@ fn two_users() -> bool {
 }
 
 /// The folder external plugins are loaded from: `<data>/plugins` itself, or
-/// in the two-user container a copy of it the agents' user can run.
-pub fn external_dir(paths: &Paths) -> PathBuf {
+/// in the two-user container a copy of it the agents' user can run. Also the
+/// plugins that could not be copied there (listed as broken, R-507).
+pub fn external_dir(paths: &Paths) -> (PathBuf, Vec<Broken>) {
     if !two_users() {
-        return paths.plugins();
+        return (paths.plugins(), Vec::new());
     }
     let dst = shared().join("plugins");
     match mirror(&paths.plugins(), &dst) {
-        Ok(()) => dst,
+        Ok(skipped) => (dst, skipped),
         Err(e) => {
             tracing::warn!(error = %e, "could not copy the plugins where the agents' user can run them");
-            paths.plugins()
+            (paths.plugins(), Vec::new())
         }
     }
 }
@@ -70,9 +72,10 @@ const MAX_DEPTH: usize = 16;
 /// Replace `dst` with a copy of `src`: folders 0755, files 0555 when `src`'s
 /// has an execute bit, else 0444, so the agents' user can read and run them
 /// but not change them. Symlinks are skipped (one could point at the daemon's
-/// files); a plugin over 64 MiB is refused. A missing `src` leaves an empty
-/// `dst`.
-pub fn mirror(src: &Path, dst: &Path) -> io::Result<()> {
+/// files). Each plugin folder is copied on its own: one that cannot be (over
+/// 64 MiB, nested too deeply, unreadable) is left out and returned, and the
+/// others are copied anyway. A missing `src` leaves an empty `dst`.
+pub fn mirror(src: &Path, dst: &Path) -> io::Result<Vec<Broken>> {
     use std::os::unix::fs::PermissionsExt;
     if dst.exists() {
         // Files are read-only for everyone, so make the folders writable first.
@@ -81,8 +84,34 @@ pub fn mirror(src: &Path, dst: &Path) -> io::Result<()> {
     }
     std::fs::create_dir_all(dst)?;
     std::fs::set_permissions(dst, std::fs::Permissions::from_mode(0o755))?;
-    let mut total = 0u64;
-    copy(src, dst, 0, &mut total)
+    let mut skipped = Vec::new();
+    let Ok(rd) = std::fs::read_dir(src) else {
+        return Ok(skipped);
+    };
+    for e in rd.flatten() {
+        let (from, to) = (e.path(), dst.join(e.file_name()));
+        if !e.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let copied = std::fs::create_dir(&to).and_then(|()| {
+            let mut total = 0u64;
+            copy(&from, &to, 0, &mut total)?;
+            std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755))
+        });
+        if let Err(error) = copied {
+            let name = e.file_name().to_string_lossy().into_owned();
+            tracing::warn!(plugin = %name, %error, "plugin not copied where the agents' user can run it");
+            let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755));
+            let _ = chmod_tree(&to);
+            let _ = std::fs::remove_dir_all(&to);
+            skipped.push(Broken {
+                name,
+                dir: from,
+                error: format!("not copied for the agents' user: {error}"),
+            });
+        }
+    }
+    Ok(skipped)
 }
 
 fn chmod_tree(p: &Path) -> io::Result<()> {
@@ -149,7 +178,7 @@ mod tests {
         std::fs::write(src.join("p/lib/a.txt"), "a").unwrap();
         std::os::unix::fs::symlink("/etc/passwd", src.join("p/link")).unwrap();
 
-        mirror(&src, &dst).unwrap();
+        assert!(mirror(&src, &dst).unwrap().is_empty());
         assert_eq!(mode(&dst), 0o755);
         assert_eq!(mode(&dst.join("p/lib")), 0o755);
         assert_eq!(mode(&dst.join("p/xherd-plugin.json")), 0o444);
@@ -169,10 +198,33 @@ mod tests {
         assert!(std::fs::read_dir(&dst).unwrap().next().is_none());
     }
 
+    /// One plugin that cannot be copied costs only itself.
+    #[test]
+    fn a_plugin_that_cannot_be_copied_leaves_the_others() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("src"), d.path().join("dst"));
+        std::fs::create_dir_all(src.join("good")).unwrap();
+        std::fs::write(src.join("good/xherd-plugin.json"), "{}").unwrap();
+        let mut deep = src.join("deep");
+        for _ in 0..=MAX_DEPTH + 1 {
+            deep = deep.join("d");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+
+        let skipped = mirror(&src, &dst).unwrap();
+        assert_eq!(
+            skipped.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+            ["deep"]
+        );
+        assert!(skipped[0].error.contains("nest too deeply"), "{skipped:?}");
+        assert!(dst.join("good/xherd-plugin.json").exists());
+        assert!(!dst.join("deep").exists(), "a half copy is removed");
+    }
+
     #[test]
     fn natively_nothing_moves() {
         let paths = Paths::at(PathBuf::from("/data"));
-        assert_eq!(external_dir(&paths), PathBuf::from("/data/plugins"));
+        assert_eq!(external_dir(&paths).0, PathBuf::from("/data/plugins"));
         assert_eq!(
             config_dir(&paths, "x"),
             PathBuf::from("/data/plugin-config/x")

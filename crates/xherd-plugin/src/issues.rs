@@ -1,7 +1,8 @@
 //! Reading a ticket and its comments through a tracker plugin (`ticket-get`).
 //! The built-in `github-issues` asks `gh issue view`, `gitlab-issues` asks
 //! `glab api`; an external tracker answers the command through the protocol.
-//! Everything here is read-only: nothing is posted to a tracker.
+//! Reading changes nothing; `ticket-comment` posts only text the user has
+//! accepted (R-308).
 //!
 //! The text is written by other people, so it is untrusted: the UI renders it
 //! through the sanitiser, and anything that hands it to an agent must wrap it
@@ -350,6 +351,16 @@ pub fn jira_view(
     })
 }
 
+/// An issue reference that can go onto a command line or into an API path:
+/// a plain name that cannot be read as an option (no leading `-`).
+fn plain_ref(issue: &str) -> bool {
+    !issue.is_empty()
+        && !issue.starts_with('-')
+        && issue
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// Longest comment xherd posts: a summary, not a document.
 pub const MAX_COMMENT: usize = 10_000;
 
@@ -385,11 +396,7 @@ impl Host {
             .await?;
             return Ok(());
         }
-        if issue.is_empty()
-            || !issue
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        {
+        if !plain_ref(issue) {
             return Err(self.shape(name, &format!("{issue:?} is not an issue reference")));
         }
         let marked = format!("{body}\n\n{}", xherd_core::pr::MARKER);
@@ -480,11 +487,7 @@ impl Host {
             return serde_json::from_value(v).map_err(|e| self.shape(name, &e.to_string()));
         }
         // The reference goes onto a command line or into an API path.
-        if issue.is_empty()
-            || !issue
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        {
+        if !plain_ref(issue) {
             return Err(self.shape(name, &format!("{issue:?} is not an issue reference")));
         }
         match self.plugin.name() {
@@ -697,6 +700,8 @@ mod tests {
                 .await
                 .is_err()
         );
+        // Nor one that the CLI would read as an option.
+        assert!(host.ticket_get(d.path(), "k", "--web").await.is_err());
         assert_eq!(
             std::fs::read_to_string(d.path().join("calls"))
                 .unwrap()

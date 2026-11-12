@@ -34,6 +34,12 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
+/// Event kinds that are records, not history: `prune_events` keeps them.
+/// `ticket-comment` says a summary was posted on the agent's ticket, which
+/// must not be offered again once the retention period has passed. Plain
+/// names only (they go into the SQL text).
+pub const KEPT_EVENTS: &[&str] = &["ticket-comment"];
+
 /// An event in the agent log; `id` makes replays idempotent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
@@ -736,10 +742,32 @@ impl Store {
         .await
     }
 
-    /// Delete events older than `before`. Returns how many were removed.
+    /// Delete events older than `before`, except the kinds in [`KEPT_EVENTS`].
+    /// Returns how many were removed.
     pub async fn prune_events(&self, before: Millis) -> Result<usize> {
-        self.write(move |c| Ok(c.execute("DELETE FROM events WHERE at < ?1", [before])?))
-            .await
+        self.write(move |c| {
+            let kept = KEPT_EVENTS
+                .iter()
+                .map(|k| format!("'{k}'"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!("DELETE FROM events WHERE at < ?1 AND kind NOT IN ({kept})");
+            Ok(c.execute(&sql, [before])?)
+        })
+        .await
+    }
+
+    /// Whether agent `agent_id` has an event of `kind`.
+    pub async fn agent_has_event(&self, agent_id: &str, kind: &str) -> Result<bool> {
+        let (a, k) = (agent_id.to_string(), kind.to_string());
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE agent_id = ?1 AND kind = ?2)",
+                [a, k],
+                |r| r.get(0),
+            )?)
+        })
+        .await
     }
 
     // ---- tokens (only hashes are stored) -------------------------------------
@@ -896,6 +924,20 @@ mod tests {
         assert_eq!(ev[0].payload.as_ref().unwrap()["x"], 1);
         assert_eq!(s.prune_events(15).await.unwrap(), 1);
         assert_eq!(s.events("a", 10).await.unwrap().len(), 1);
+        // A record kind outlives the retention period.
+        s.insert_event(Event {
+            id: "e3".into(),
+            agent_id: "a".into(),
+            kind: "ticket-comment".into(),
+            payload: None,
+            at: 5,
+        })
+        .await
+        .unwrap();
+        assert_eq!(s.prune_events(100).await.unwrap(), 1);
+        assert!(s.agent_has_event("a", "ticket-comment").await.unwrap());
+        assert!(!s.agent_has_event("b", "ticket-comment").await.unwrap());
+        assert!(!s.agent_has_event("a", "k").await.unwrap());
     }
 
     #[tokio::test]

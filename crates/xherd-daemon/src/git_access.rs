@@ -442,6 +442,7 @@ impl Daemon {
         c.save(&self.paths.config())
             .map_err(|e| fail("io", e.to_string()))?;
         if !u.tokens.is_empty() {
+            let _write = self.secrets_write.lock().unwrap_or_else(|e| e.into_inner());
             let mut s = self.live_secrets();
             let mut git = s.for_plugin(GIT_SECRETS);
             for (host, t) in u.tokens {
@@ -653,6 +654,7 @@ impl Daemon {
                 ));
             }
         }
+        let _write = self.secrets_write.lock().unwrap_or_else(|e| e.into_inner());
         let mut s = self.live_secrets();
         let mut mine = s.for_plugin(plugin);
         for (k, v) in values {

@@ -823,7 +823,6 @@ struct DoctorReq {
     repo: Option<String>,
 }
 
-/// `GET /agents/:id/git-access` (R-688): the doctor for the agent's host.
 /// Which tracker reads the agent's ticket, and whether a summary was posted.
 async fn ticket_status(
     _: User,
@@ -866,6 +865,7 @@ async fn agent_ticket(
     Ok(Json(d.agent_ticket(&id).await?))
 }
 
+/// `GET /agents/:id/git-access` (R-688): the doctor for the agent's host.
 async fn agent_git_access(
     _: User,
     State(d): State<Daemon>,

@@ -170,6 +170,9 @@ pub struct Daemon {
     pub companion: open_in::Companion,
     /// When the work log last booked agent time (ms; 0 = not yet).
     pub worklog_flushed: Arc<std::sync::atomic::AtomicI64>,
+    /// Held while `secrets.json` is read, changed and saved, so two saves
+    /// (Git access tokens, plugin secrets) never drop each other's change.
+    pub secrets_write: Arc<std::sync::Mutex<()>>,
 }
 
 impl Daemon {
@@ -220,7 +223,8 @@ impl Daemon {
                 .await?;
         }
 
-        let plugins = Registry::load(opts.builtin_plugins, &plugin_dirs::external_dir(&paths));
+        let (external, not_copied) = plugin_dirs::external_dir(&paths);
+        let plugins = Registry::load(opts.builtin_plugins, &external).with_broken(not_copied);
         for b in plugins.broken() {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
         }
@@ -294,6 +298,7 @@ impl Daemon {
             local_peers: Arc::new(opts.local_peers),
             companion: open_in::Companion::default(),
             worklog_flushed: Arc::default(),
+            secrets_write: Arc::default(),
         };
         d.import_ledgers().await;
         d.repair_restored().await;

@@ -51,13 +51,19 @@ pub fn parse_mr_url(url: &str) -> Option<(String, String, u64)> {
 /// `git@h:g/p.git`, `ssh://git@h/g/p`).
 pub fn remote_project(url: &str) -> Option<(String, String)> {
     let url = url.trim();
-    let (host, path) = if let Some((_, rest)) = url.split_once("://") {
+    let (host, path) = if let Some((scheme, rest)) = url.split_once("://") {
         let rest = rest.rsplit_once('@').map_or(rest, |(_, r)| r);
-        rest.split_once('/')?
+        let (host, path) = rest.split_once('/')?;
+        // An ssh port (`host:2222`) is not where the API is; an https one is.
+        let host = if scheme == "https" {
+            host
+        } else {
+            host.split_once(':').map_or(host, |(h, _)| h)
+        };
+        (host, path)
     } else {
         url.split_once('@')?.1.split_once(':')?
     };
-    // A port (`host:8443`) is not part of the API host's name for ssh.
     let path = path.trim_matches('/');
     let path = path.strip_suffix(".git").unwrap_or(path);
     (!host.is_empty() && path.split('/').all(plain)).then(|| (host.into(), path.into()))
@@ -373,6 +379,16 @@ mod tests {
                 "{r}"
             );
         }
+        assert_eq!(
+            remote_project("ssh://git@gitlab.example.com:2222/g/p.git"),
+            Some(("gitlab.example.com".into(), "g/p".into())),
+            "the ssh port is not the API's"
+        );
+        assert_eq!(
+            remote_project("https://gitlab.example.com:8443/g/p.git"),
+            Some(("gitlab.example.com:8443".into(), "g/p".into())),
+            "an https port is"
+        );
         assert_eq!(remote_project("/local/path"), None);
         assert_eq!(branch_query("feat/x-1").as_deref(), Some("feat%2Fx-1"));
         assert_eq!(branch_query("a&b=c"), None);

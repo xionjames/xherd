@@ -154,6 +154,13 @@ impl Registry {
     pub fn broken(&self) -> &[Broken] {
         &self.broken
     }
+
+    /// Add plugins that failed before loading (e.g. could not be copied
+    /// where they run): listed with the others, never usable.
+    pub fn with_broken(mut self, more: Vec<Broken>) -> Registry {
+        self.broken.extend(more);
+        self
+    }
 }
 
 /// Settings resolution (R-506): manifest default → Settings → profile override

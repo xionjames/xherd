@@ -1,6 +1,6 @@
 //! The ticket of an agent, read through a tracker plugin (`ticket-get`): the
-//! Ticket panel shows its title, state, text and comments. Read-only: xherd
-//! posts nothing to a tracker (R-308).
+//! Ticket panel shows its title, state, text and comments. The only thing
+//! ever posted is a summary the user has read, edited and sent (R-308).
 
 use std::sync::Arc;
 
@@ -86,7 +86,12 @@ impl Daemon {
             ctx: self.plugin_context(&p),
             plugin: p,
         });
-        let host = crate::actor::with_git_token(host, remote.as_deref(), &self.paths.secrets());
+        // The repository host's token goes only to a tracker that serves that
+        // host (github-issues for github.com), never to one for any host.
+        let served = remote
+            .as_deref()
+            .filter(|r| trackers.iter().any(|(n, t)| n == &tracker && t.serves(r)));
+        let host = crate::actor::with_git_token(host, served, &self.paths.secrets());
         Ok((
             a,
             Some(Resolved {
@@ -122,11 +127,11 @@ impl Daemon {
     /// ask it every time it opens.
     pub async fn ticket_status(&self, who: &str) -> Result<Value, ActionError> {
         let (a, r) = self.resolve_ticket(who).await?;
+        // Kept past the event retention period (`KEPT_EVENTS`).
         let posted = self
             .store
-            .events_of_kind("ticket-comment")
+            .agent_has_event(&a.id, "ticket-comment")
             .await
-            .map(|es| es.iter().any(|e| e.agent_id == a.id))
             .unwrap_or(false);
         Ok(match r {
             Some(r) => json!({"tracker": r.tracker, "issue": r.issue, "posted": posted}),

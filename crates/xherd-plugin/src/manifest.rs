@@ -205,6 +205,11 @@ impl Manifest {
         if !NAME.is_match(&self.name) {
             return Err(format!("name {:?} must match {}", self.name, NAME.as_str()));
         }
+        // `secrets.json` keeps the Git-access host tokens under this key, in
+        // the plugins' namespace: a plugin of that name would read them.
+        if self.name == xherd_core::config::GIT_SECRETS {
+            return Err(format!("name {:?} is reserved", self.name));
+        }
         if parse_version(&self.version).is_none() {
             return Err(format!("version {:?} is not X.Y.Z", self.version));
         }
@@ -360,6 +365,13 @@ mod tests {
         assert_eq!(r.as_check().argv.last().map(String::as_str), Some("glab"));
         assert_eq!(r.instructions_for("macos"), Some("brew install glab"));
         assert_eq!(r.instructions_for("linux"), Some("see the docs"));
+    }
+
+    #[test]
+    fn the_git_secrets_name_is_reserved() {
+        let m = r#"{"name": "git", "kind": "host", "version": "0.1.0",
+            "settings": [{"key": "github.com", "secret": true}]}"#;
+        assert!(Manifest::parse(m).unwrap_err().contains("reserved"));
     }
 
     #[test]

@@ -247,9 +247,9 @@ impl ActorSettings {
     }
 }
 
-/// `host` with its secrets as they are on disk now, and, without a `token` of
-/// its own, the one kept for `remote_host` in Settings → Git access (read on
-/// each use, so a new token applies at once).
+/// `host` with its secrets as they are on disk now, and, when it declares a
+/// `token` secret but has none of its own, the one kept for `remote_host` in
+/// Settings → Git access (read on each use, so a new token applies at once).
 pub(crate) fn with_git_token(
     host: Arc<xherd_plugin::host::Host>,
     remote_host: Option<&str>,
@@ -267,7 +267,18 @@ pub(crate) fn with_git_token(
         .secrets
         .get("token")
         .is_some_and(|t| t.as_str().is_some_and(|t| !t.is_empty()));
-    if !own && let Some(t) = remote_host.and_then(|r| all.git_token(r)) {
+    // Only a plugin that asks for a `token` gets the host's one: it is never
+    // handed to a plugin that did not declare it.
+    let declares = h
+        .plugin
+        .manifest
+        .settings
+        .iter()
+        .any(|s| s.secret && s.key == "token");
+    if declares
+        && !own
+        && let Some(t) = remote_host.and_then(|r| all.git_token(r))
+    {
         h.ctx.secrets.insert("token".into(), t.into());
     }
     Arc::new(h)
@@ -294,15 +305,15 @@ pub(crate) async fn origin_host(wd: &std::path::Path) -> Option<String> {
 /// Which host plugin serves a remote on `remote_host` (D24): the provider
 /// named on its row in Settings → Git access, else the plugin whose patterns
 /// claim the name, else `github` (what every remote used before providers).
-/// A switched-off plugin is never chosen.
+/// A switched-off plugin is never chosen, and none stands in for it: `None`.
 pub fn pick_host(
     hosts: &[Arc<xherd_plugin::host::Host>],
     git_hosts: &[xherd_core::config::GitHost],
     disabled: &[String],
     remote_host: Option<&str>,
 ) -> Option<Arc<xherd_plugin::host::Host>> {
-    let on = |h: &&Arc<xherd_plugin::host::Host>| !disabled.iter().any(|n| n == h.plugin.name());
-    let named = |n: &str| hosts.iter().filter(on).find(|h| h.plugin.name() == n);
+    let on = |h: &Arc<xherd_plugin::host::Host>| !disabled.iter().any(|n| n == h.plugin.name());
+    let named = |n: &str| hosts.iter().find(|h| h.plugin.name() == n);
     let by_row = remote_host.and_then(|r| {
         git_hosts
             .iter()
@@ -311,17 +322,20 @@ pub fn pick_host(
     });
     let claimed = || {
         let r = remote_host?;
-        hosts.iter().filter(on).find(|h| {
+        hosts.iter().find(|h| {
             xherd_plugin::git::Git::of(&h.plugin.manifest)
                 .ok()
                 .flatten()
                 .is_some_and(|g| g.claims(r))
         })
     };
+    // The remote's own provider, even when it is switched off: another
+    // plugin (`gh` on a GitLab merge request) would only fail on every poll.
     by_row
         .and_then(named)
         .or_else(claimed)
         .or_else(|| named(xherd_plugin::host::GITHUB))
+        .filter(|h| on(h))
         .cloned()
 }
 
@@ -3212,6 +3226,22 @@ mod pick_host_tests {
         );
     }
 
+    /// A plugin that declares no `token` secret (Jira, an external tracker)
+    /// never receives the host's token.
+    #[test]
+    fn the_host_token_goes_only_to_a_plugin_that_declares_one() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("secrets.json");
+        std::fs::write(&f, r#"{"git": {"github.com": "ghp-1"}}"#).unwrap();
+        let reg = xherd_plugin::Registry::load(xherd_plugin::builtins(), d.path());
+        let jira = Arc::new(xherd_plugin::host::Host {
+            plugin: reg.get("jira").unwrap().clone(),
+            ctx: xherd_plugin::Context::default(),
+        });
+        let with = with_git_token(jira, Some("github.com"), &f);
+        assert_eq!(with.ctx.secrets.get("token"), None);
+    }
+
     #[test]
     fn a_remote_goes_to_its_provider() {
         let hs = hosts();
@@ -3244,10 +3274,13 @@ mod pick_host_tests {
             pick(&rows, none, Some("git.example.com")).as_deref(),
             Some("gitlab")
         );
-        // A switched-off plugin is never used.
+        // A switched-off plugin is never used, and no other one stands in
+        // for it (gh cannot read a GitLab merge request).
         let off = ["gitlab".to_string()];
+        assert_eq!(pick(&rows, &off, Some("gitlab.com")), None);
+        assert_eq!(pick(&rows, &off, Some("git.example.com")), None);
         assert_eq!(
-            pick(&rows, &off, Some("gitlab.com")).as_deref(),
+            pick(&[], &off, Some("github.com")).as_deref(),
             Some("github")
         );
     }
