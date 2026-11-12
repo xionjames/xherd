@@ -164,8 +164,9 @@ impl Daemon {
             }
         }
         let mut out = std::collections::BTreeMap::new();
-        while let Some(Ok((tool, r))) = set.join_next().await {
-            let Ok(o) = r else { continue };
+        // A task that panicked loses only its own tool, not the ones after it.
+        while let Some(joined) = set.join_next().await {
+            let Ok((tool, Ok(o))) = joined else { continue };
             if !o.success() {
                 continue;
             }
