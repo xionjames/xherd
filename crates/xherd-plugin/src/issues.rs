@@ -125,7 +125,7 @@ pub fn gitlab_view(issue: &Value, notes: &[Value]) -> Result<TicketView, String>
 /// result anyway.
 pub fn adf_to_markdown(v: &Value) -> String {
     fn inline(n: &Value) -> String {
-        let text = match n["type"].as_str() {
+        match n["type"].as_str() {
             Some("text") => {
                 let mut t = n["text"].as_str().unwrap_or_default().to_string();
                 for m in n["marks"].as_array().into_iter().flatten() {
@@ -154,8 +154,7 @@ pub fn adf_to_markdown(v: &Value) -> String {
                 n["attrs"]["url"].as_str().unwrap_or_default().into()
             }
             _ => children(n, ""),
-        };
-        text
+        }
     }
     fn children(n: &Value, sep: &str) -> String {
         n["content"]
