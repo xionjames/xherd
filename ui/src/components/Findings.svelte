@@ -51,24 +51,31 @@
         {#if !findings.some((f) => !f.resolved)}<span class="pill live">✓ all fixed</span>{/if}
       </span>
     </div>
-    <ul class="list">
-      {#each sorted as f (f.id)}
-        <li class="item sev-{f.severity}" class:done={f.resolved}>
-          <span class="pill sev-{f.severity}">{GLYPH[f.severity]} {f.severity}</span>
-          <span class="mono muted">{f.id}</span>
-          <span class="grow">{f.title}</span>
-          {#if f.location}<span class="mono muted">{f.location}</span>{/if}
-          <span class="muted state">{stateText(f)}</span>
-        </li>
-      {/each}
-    </ul>
+    <div class="tscroll">
+      <table class="tbl">
+        <thead><tr><th>Severity</th><th>Finding</th><th class="hide-sm">Location</th><th>State</th></tr></thead>
+        <tbody>
+          {#each sorted as f (f.id)}
+            <tr class="sev-{f.severity}" class:done={f.resolved}>
+              <td><span class="pill sev-{f.severity}">{GLYPH[f.severity]} {f.severity}</span></td>
+              <td><span class="mono muted">{f.id}</span> {f.title}
+                {#if f.location}<div class="hint mono sm-only">{f.location}</div>{/if}</td>
+              <td class="mono muted hide-sm">{f.location ?? ''}</td>
+              <td class="muted state">{stateText(f)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
   </section>
 {/if}
 
 <style>
-  .item { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-top: 1px solid var(--fence-soft); box-shadow: inset 3px 0 0 var(--sev-minor); flex-wrap: wrap; }
-  .item.sev-blocker { box-shadow: inset 3px 0 0 var(--sev-blocker); }
-  .item.sev-major { box-shadow: inset 3px 0 0 var(--sev-major); }
-  .item.done { opacity: .6; }
+  tr td:first-child { box-shadow: inset 3px 0 0 var(--sev-minor); }
+  tr.sev-blocker td:first-child { box-shadow: inset 3px 0 0 var(--sev-blocker); }
+  tr.sev-major td:first-child { box-shadow: inset 3px 0 0 var(--sev-major); }
+  tr.done td { opacity: .6; }
   .state { font-size: 12px; }
+  .sm-only { display: none; }
+  @media (max-width: 760px) { .sm-only { display: block; } }
 </style>
