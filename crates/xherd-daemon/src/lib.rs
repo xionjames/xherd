@@ -36,7 +36,7 @@ pub mod toolchains;
 pub mod worklog;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
-pub use create::{Resumer, TrustWriter};
+pub use create::{Resumer, RuntimeKit, TrustWriter};
 pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
 pub use supervisor::SupervisorHandle;
 pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
@@ -244,24 +244,10 @@ impl Daemon {
             },
             pr_poll_override,
         ));
-        let trust = plugins
-            .get(xherd_flow::approve::DEFAULT_RUNTIME)
-            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok())
-            .and_then(|t| t.trust)
-            .map(|trust| {
-                Arc::new(TrustWriter {
-                    trust,
-                    root: config.workspace_root().join("worktrees"),
-                })
-            });
-        let terminal = plugins
-            .get(xherd_flow::approve::DEFAULT_RUNTIME)
-            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest).ok());
-        let resume = terminal
-            .as_ref()
-            .and_then(|t| t.resume.clone())
-            .map(|r| Arc::new(Resumer(r)));
-        let usage = terminal.and_then(|t| t.usage).map(Arc::new);
+        let runtimes = Arc::new(create::runtime_kits(
+            &plugins,
+            &config.workspace_root().join("worktrees"),
+        ));
         let toolchains = plugins
             .of_kind(xherd_plugin::Kind::Toolchain)
             .filter_map(|p| match xherd_plugin::toolchain::Toolchain::of(&p.manifest) {
@@ -283,9 +269,7 @@ impl Daemon {
             git: xherd_git::Git::new("git"),
             host,
             toolchains: Arc::new(toolchains),
-            trust,
-            resume,
-            usage,
+            runtimes,
         };
         let agents = store.list_agents().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
@@ -323,10 +307,7 @@ impl Daemon {
             // The container is set up without a shell: commands go where the
             // agents find them at every start (user-edited files are kept).
             let env = xherd_core::runner::agent_env;
-            if let Err(e) = d
-                .install(Some(xherd_flow::approve::DEFAULT_RUNTIME), None, &env)
-                .await
-            {
+            if let Err(e) = d.install(None, None, &env).await {
                 tracing::warn!(error = %e.message, "installing the xherd commands failed");
             }
         }

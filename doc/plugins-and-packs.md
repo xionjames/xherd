@@ -9,6 +9,7 @@ A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in 
 | Built-in | Kind | Does |
 |---|---|---|
 | `claude-code` | runtime | Launch argv, permission modes, hook file and event map, trust file, transcript lookup, token usage, read-only check command |
+| `opencode` | runtime | The same for opencode: permission modes through `OPENCODE_PERMISSION`, a JavaScript plugin file as its hook file, the first prompt on the launch line, transcripts through `opencode export` |
 | `github` | host | Pull request lookup, status, checks, comments, replies and templates through the `gh` CLI |
 | `sdkman`, `nvm`, `uv`, `go`, `rustup` | toolchain | Which version files they read and how to find or install a tool |
 
@@ -71,13 +72,14 @@ A toolchain plugin's `data.toolchain` lists tools. For each: which version files
 A runtime plugin's `data.terminal` says how to run an agent CLI in tmux:
 
 - `launch`: the argv.
-- `permissionModes`: for each of `ask`, `edits`, `auto`, `all`, the explicit flags. `ask` is required and nothing else is allowed, so a mode can never be a free-form string.
-- `hooks`: the file the runtime reads hooks from and a map from its events to xherd's (`session-start`, `user-prompt-submit`, `post-tool-use`, `notification`, `stop`).
+- `permissionModes`: for each of `ask`, `edits`, `auto`, `all`, the explicit flags: a list of arguments, or `{"args": [...], "env": {...}}` for a runtime that reads its permissions from the environment (xherd starts it through `env K=V`). `ask` and `edits` are required and nothing else is allowed, so a mode can never be a free-form string.
+- `hooks`: the file the runtime reads hooks from and a map from its events to xherd's (`session-start`, `user-prompt-submit`, `post-tool-use`, `notification`, `stop`). `format` says how it is written: `claude-settings` (default: a JSON settings file whose `hooks` map runs `xherd hook`; the user's entries are kept) or `opencode-plugin` (a JavaScript plugin owned by xherd, e.g. `.opencode/plugin/xherd.js`; its events are `start`, `chat.message`, `tool.execute.after`, `permission.asked`, `question.asked`, `session.idle`; it also allows the XAP calls and the command folder in opencode's permissions). Either way the file is kept out of git.
+- `promptArgs`: launch arguments that give a new session its first prompt (`{prompt}` once), for a runtime whose input is not ready when its start hook fires. Without them xherd types the prompt at `session-start`.
 - `trust`: where the runtime remembers trusted folders, so xherd can trust each new worktree.
-- `resume` and `usage`: where transcripts live, and how to count tokens in them, for resuming a conversation and for budgets.
+- `resume` and `usage`: how to continue the last conversation (`args` with `{session}`), where its transcript is, and how to count tokens in it (for budgets). The transcript is a file (`transcripts` folder + `file` name) or what an `export` command writes, `{session}` once: on stdout, or into `{file}` (a path xherd picks in the worktree's `.xherd/`) when a pipe is not reliable. `promptEnv` (variables with `{prompt}` and `{session}`) gives a continued session its first prompt when the runtime ignores `promptArgs` then. `usage.fields` names a counter in each record, or a JSON pointer inside it (`/cache/write`); a transcript that is one JSON document is read as a single record.
 - `check`: how to run the runtime once, headless and read-only, to answer a question (TODO conditions). `argv` holds `{prompt}` and `{system}` once each; `modelArgs` (with `{model}`) are added when a model is chosen. List only tools that cannot change anything: xherd relies on it. The run must end with a line `XHERD_RESULT {"met": true, "summary": "…"}`. A runtime without `check` cannot check conditions.
 
-Only Claude Code is built in. Another runtime needs these pieces; there is no runtime other than Claude Code yet.
+Claude Code and opencode are built in. An agent's runtime is chosen when it is created (`xherd new --runtime`, the New agent form, a repo profile's `runtime`, else the `defaultRuntime` setting) and stays the same for its whole life. The pack must have commands for it (`install.<runtime>` in `xherd-flow.yaml`).
 
 ## Flow packs
 

@@ -63,7 +63,13 @@ impl Daemon {
                     format!("pack {name} has nothing to install for runtime {r}"),
                 ));
             }
-            None => p.install.keys().map(String::as_str).collect(),
+            // Every runtime switched on that the pack supports.
+            None => p
+                .install
+                .keys()
+                .map(String::as_str)
+                .filter(|r| self.plugin_enabled(r) && self.plugins.get(r).is_some())
+                .collect(),
         };
         let mut out = Vec::new();
         for rt in runtimes {

@@ -34,6 +34,9 @@ pub struct NewAgent {
     /// Tool-permission mode (R-002a); default: the profile's, else the setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<crate::permission::PermissionMode>,
+    /// Runtime plugin; default: the profile's, else the setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
 }
 
 pub const FLOW_NONE: &str = "none";
@@ -231,6 +234,7 @@ mod tests {
             prompt: None,
             autonomy: None,
             permission_mode: None,
+            runtime: None,
         }
     }
 

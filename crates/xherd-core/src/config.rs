@@ -9,6 +9,10 @@ use crate::paths::write_atomic;
 
 pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 
+/// The runtime of agents created before they named one, and the default
+/// `defaultRuntime`.
+pub const DEFAULT_RUNTIME: &str = "claude-code";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("reading {path}: {source}")]
@@ -88,6 +92,9 @@ pub struct Config {
     /// Tool-permission mode of new agents (R-002a); a profile or the request
     /// overrides it.
     pub permission_mode: crate::permission::PermissionMode,
+    /// Runtime plugin of new agents (`claude-code`, `opencode`); a profile or
+    /// the request overrides it. Also the runtime of TODO condition checks.
+    pub default_runtime: String,
     /// Settings → Open in (R-706, R-707).
     pub open_in: OpenIn,
     /// Consecutive automatic approvals after which the next gate waits for a
@@ -164,6 +171,7 @@ impl Default for Config {
             max_review_loops: 3,
             autonomy: crate::autonomy::Autonomy::Ask,
             permission_mode: Default::default(),
+            default_runtime: DEFAULT_RUNTIME.into(),
             open_in: OpenIn::default(),
             max_auto_approvals_in_row: 10,
             agent_token_budget: 0,
@@ -297,6 +305,7 @@ impl Config {
         self.max_review_loops = s.max_review_loops;
         self.autonomy = s.autonomy;
         self.permission_mode = s.permission_mode;
+        self.default_runtime = s.default_runtime;
         self.open_in = s.open_in;
         self.max_auto_approvals_in_row = s.max_auto_approvals_in_row;
         self.agent_token_budget = s.agent_token_budget;

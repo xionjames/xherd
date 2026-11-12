@@ -1,0 +1,108 @@
+{
+  "name": "opencode",
+  "kind": "runtime",
+  "version": "0.1.0",
+  "label": "opencode",
+  "description": "The opencode CLI in a tmux session (terminal driver).",
+  "data": {
+    "terminal": {
+      "launch": [
+        "opencode"
+      ],
+      "permissionModes": {
+        "ask": {
+          "env": {
+            "OPENCODE_PERMISSION": "{\"*\":\"ask\",\"read\":\"allow\",\"glob\":\"allow\",\"grep\":\"allow\",\"list\":\"allow\",\"lsp\":\"allow\",\"todoread\":\"allow\",\"todowrite\":\"allow\",\"edit\":\"ask\",\"bash\":\"ask\",\"webfetch\":\"ask\",\"websearch\":\"ask\",\"task\":\"ask\",\"external_directory\":\"ask\",\"doom_loop\":\"ask\"}"
+          }
+        },
+        "edits": {
+          "env": {
+            "OPENCODE_PERMISSION": "{\"*\":\"ask\",\"read\":\"allow\",\"glob\":\"allow\",\"grep\":\"allow\",\"list\":\"allow\",\"lsp\":\"allow\",\"todoread\":\"allow\",\"todowrite\":\"allow\",\"edit\":\"allow\",\"bash\":\"ask\",\"webfetch\":\"ask\",\"websearch\":\"ask\",\"task\":\"ask\",\"external_directory\":\"ask\",\"doom_loop\":\"ask\"}"
+          }
+        },
+        "auto": {
+          "env": {
+            "OPENCODE_PERMISSION": "{\"*\":\"allow\",\"read\":\"allow\",\"glob\":\"allow\",\"grep\":\"allow\",\"list\":\"allow\",\"lsp\":\"allow\",\"todoread\":\"allow\",\"todowrite\":\"allow\",\"edit\":\"allow\",\"bash\":\"allow\",\"webfetch\":\"allow\",\"websearch\":\"allow\",\"task\":\"allow\",\"external_directory\":\"ask\",\"doom_loop\":\"ask\"}"
+          }
+        },
+        "all": {
+          "args": [
+            "--auto"
+          ],
+          "env": {
+            "OPENCODE_PERMISSION": "{\"*\":\"allow\",\"read\":\"allow\",\"glob\":\"allow\",\"grep\":\"allow\",\"list\":\"allow\",\"lsp\":\"allow\",\"todoread\":\"allow\",\"todowrite\":\"allow\",\"edit\":\"allow\",\"bash\":\"allow\",\"webfetch\":\"allow\",\"websearch\":\"allow\",\"task\":\"allow\",\"external_directory\":\"allow\",\"doom_loop\":\"allow\"}"
+          }
+        }
+      },
+      "hooks": {
+        "file": ".opencode/plugin/xherd.js",
+        "format": "opencode-plugin",
+        "events": {
+          "start": "session-start",
+          "chat.message": "user-prompt-submit",
+          "tool.execute.after": "post-tool-use",
+          "permission.asked": "notification",
+          "question.asked": "notification",
+          "session.idle": "stop"
+        }
+      },
+      "promptArgs": [
+        "--prompt",
+        "{prompt} "
+      ],
+      "resume": {
+        "args": [
+          "--session",
+          "{session}"
+        ],
+        "export": [
+          "sh",
+          "-c",
+          "exec opencode export \"$0\" > \"$1\"",
+          "{session}",
+          "{file}"
+        ],
+        "promptEnv": {
+          "XHERD_PROMPT": "{prompt}",
+          "XHERD_PROMPT_SESSION": "{session}"
+        }
+      },
+      "check": {
+        "argv": [
+          "env",
+          "OPENCODE_PERMISSION={\"*\":\"deny\",\"read\":\"allow\",\"glob\":\"allow\",\"grep\":\"allow\",\"list\":\"allow\",\"webfetch\":\"allow\",\"edit\":\"deny\",\"task\":\"deny\",\"todowrite\":\"deny\",\"external_directory\":\"deny\",\"doom_loop\":\"deny\",\"bash\":{\"*\":\"deny\",\"gh pr view\":\"allow\",\"gh pr view *\":\"allow\",\"gh pr checks\":\"allow\",\"gh pr checks *\":\"allow\",\"gh pr list\":\"allow\",\"gh pr list *\":\"allow\",\"gh issue view\":\"allow\",\"gh issue view *\":\"allow\",\"git log\":\"allow\",\"git log *\":\"allow\",\"git status\":\"allow\",\"git status *\":\"allow\",\"git diff\":\"allow\",\"git diff *\":\"allow\",\"git show\":\"allow\",\"git show *\":\"allow\"}}",
+          "opencode",
+          "run",
+          "{system}\n\n{prompt}"
+        ],
+        "modelArgs": [
+          "--model",
+          "{model}"
+        ]
+      },
+      "usage": {
+        "records": "/info/tokens",
+        "fields": {
+          "input": "input",
+          "output": "output",
+          "cacheWrite": "/cache/write",
+          "cacheRead": "/cache/read"
+        }
+      }
+    }
+  },
+  "checks": [
+    {
+      "name": "opencode",
+      "argv": [
+        "opencode",
+        "--version"
+      ]
+    }
+  ],
+  "login": [
+    "opencode",
+    "auth",
+    "login"
+  ]
+}

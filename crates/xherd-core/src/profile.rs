@@ -40,6 +40,9 @@ pub struct Profile {
     /// Tool-permission mode of new agents (R-002a).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<crate::permission::PermissionMode>,
+    /// Runtime plugin of new agents (`opencode`…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
     /// Replace the global `sensitivePaths` (an empty list switches it off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensitive_paths: Option<Vec<String>>,
@@ -196,6 +199,11 @@ fn clean_command(field: &str, c: &mut Option<String>) -> Result<(), String> {
 /// repeated entries). `others` are the names of the other profiles.
 pub fn check(p: &mut Profile, others: &[&str]) -> Result<(), String> {
     p.name = p.name.trim().to_string();
+    p.runtime = p
+        .runtime
+        .take()
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
     if !plain(&p.name) || p.name.chars().count() > MAX_NAME {
         return Err(format!("name: 1 to {MAX_NAME} characters"));
     }

@@ -542,6 +542,24 @@ mod tests {
             .unwrap();
         assert_eq!(c, "/xherd:commit C01");
         assert!(p.command("codex", "{prefix}next", &[]).is_err());
+        let s = p
+            .command("opencode", &f.start, &[("key", "SC-1"), ("prompt", "x")])
+            .unwrap();
+        assert_eq!(s, "/xherd/feature SC-1 x");
+        assert_eq!(p.install["opencode"].slash_enters, 2);
+        let env = |k: &str| (k == "HOME").then(|| "/home/u".to_string());
+        let plan = p
+            .plan_install("opencode", crate::install::BUILTIN_FILES, &env)
+            .unwrap();
+        let next = plan.iter().find(|f| f.path.ends_with("next.md")).unwrap();
+        assert_eq!(
+            next.path,
+            std::path::Path::new("/home/u/.config/opencode/command/xherd/next.md")
+        );
+        assert!(
+            next.text
+                .contains("/home/u/.config/opencode/command/xherd/rules.md")
+        );
     }
 
     fn with(stages: &str) -> Result<Pack, PackError> {

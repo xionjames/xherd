@@ -10,7 +10,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 |---|---|
 | `xherd daemon` | Run the daemon in the foreground. Logs are JSON on stderr; `XHERD_LOG=debug` for more |
 | `xherd status` | Is the daemon up? |
-| `xherd install [--runtime R] [--pack P]` | Install the pack's commands (`/xherd:*`) for agent runtimes. Default: the xherd pack, every runtime. Runs in the daemon, so commands land where agents run |
+| `xherd install [--runtime R] [--pack P]` | Install the pack's commands (`/xherd:*`) for agent runtimes. Default: the xherd pack, every runtime plugin that is switched on. Runs in the daemon, so commands land where agents run |
 | `xherd docker init` | Write `~/.config/xherd/compose.yaml` and `.env` for the detected engine |
 | `xherd docker doctor` | Check engine, mounts, ownership, SSH agent and port binding; each finding has a fix |
 | `xherd docker update [--no-pull]` | Pause live agents, take a backup (the last 3 of these are kept; a failed backup stops the update unless `--force`), pull and recreate the container, wait for health, resume |
@@ -52,6 +52,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `--base` | Base branch (default: the repository's default) |
 | `--autonomy` | `ask` (default) or `important` |
 | `--mode` | Tool permissions: `ask`, `edits`, `auto` or `all` (container only); default: the repo profile's, else the `permissionMode` setting |
+| `--runtime` | Runtime plugin: `claude-code` or `opencode`; default: the repo profile's, else the `defaultRuntime` setting |
 
 ## Called by the runtime and by agents
 

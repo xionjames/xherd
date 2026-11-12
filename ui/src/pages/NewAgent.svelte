@@ -10,9 +10,10 @@
   import Panel from '../components/Panel.svelte';
   import Seg from '../components/Seg.svelte';
   import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
+  import { runtimes, runtimeLabel } from '../lib/runtimes';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
-  let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '' });
+  let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '' });
   let busy = $state(false);
   let autonomyTouched = false; // a profile's autonomy fills the selector until the user picks one
   const keyOk = $derived(/^[A-Z0-9][A-Z0-9_-]*$/.test(f.ticketKey));
@@ -21,7 +22,7 @@
 
   // Repository: a local path or a remote URL, which the daemon clones into
   // the workspace once and fetches later (POST /repos/resolve).
-  type Resolved = { path: string; cloned: boolean; warning: string | null; branches: string[]; base: string | null; profile: { id: string; name: string; autonomy?: string; permissionMode?: PermissionMode } | null; suggestedMatch: string };
+  type Resolved = { path: string; cloned: boolean; warning: string | null; branches: string[]; base: string | null; profile: { id: string; name: string; autonomy?: string; permissionMode?: PermissionMode; runtime?: string } | null; suggestedMatch: string };
   let known = $state<{ path: string }[]>([]);
   let repo = $state<{ input: string; busy: boolean; data: Resolved | null; error: string | null }>(
     { input: '', busy: false, data: null, error: null });
@@ -72,6 +73,7 @@
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
     body.autonomy = f.autonomy;
     if (f.mode) body.permissionMode = f.mode;
+    if (f.runtime) body.runtime = f.runtime;
     try {
       const r = await post<{ agent: Agent }>('/agents', body);
       upsertAgent(r.agent);
@@ -126,6 +128,12 @@
       <span class="hint">{f.autonomy === 'ask'
         ? 'Every gate waits for you.'
         : 'Design, tasks, review and commit gates are approved by xherd when nothing needs you; spec and ship always wait.'}</span></div>
+    <label class="f">Runtime
+      <select bind:value={f.runtime}>
+        <option value="">{repo.data?.profile?.runtime ? `${repo.data.profile.runtime} (profile)` : 'Default (Settings)'}</option>
+        {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
+      </select>
+      <span class="hint">The coding agent that runs in the terminal. Set the default in Settings → Gates &amp; autonomy.</span></label>
     <label class="f">Tool permissions
       <select bind:value={f.mode}>
         <option value="">{repo.data?.profile?.permissionMode ? `${repo.data.profile.permissionMode} (profile)` : 'Default (Settings)'}</option>

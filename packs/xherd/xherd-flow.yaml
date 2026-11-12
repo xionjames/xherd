@@ -12,6 +12,14 @@ install:
     prefix: "/xherd:"
     commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xherd/{name}.md", format: command }
     args: "$ARGUMENTS"
+  # opencode names a command by its path under command/: xherd/next.md is
+  # /xherd/next. A command without arguments needs a second Enter (the first
+  # picks it in the completion list); after one with arguments it does nothing.
+  opencode:
+    prefix: "/xherd/"
+    slashEnters: 2
+    commands: { from: commands/*.md, to: "${XDG_CONFIG_HOME:-~/.config}/opencode/command/xherd/{name}.md", format: command }
+    args: "$ARGUMENTS"
 
 commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review" }
 

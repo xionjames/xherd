@@ -9,17 +9,18 @@
   import Callout from './Callout.svelte';
   import Dialog from './Dialog.svelte';
   import { modes } from '../lib/modes';
+  import { runtimes, runtimeLabel } from '../lib/runtimes';
   import { app } from '../lib/store.svelte';
 
   type Profile = {
     id: string; name: string; match: string[];
     baseBranch?: string; stagingBranch?: string; hotfixBase?: string;
-    autonomy?: string; permissionMode?: string; sensitivePaths?: string[]; maxDiffLines?: number;
+    autonomy?: string; permissionMode?: string; runtime?: string; sensitivePaths?: string[]; maxDiffLines?: number;
     agentTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
   };
   type Form = {
     id: string; name: string; match: string; baseBranch: string; stagingBranch: string; hotfixBase: string;
-    autonomy: string; permissionMode: string; sensitivePaths: string; maxDiffLines: string; agentTokenBudget: string;
+    autonomy: string; permissionMode: string; runtime: string; sensitivePaths: string; maxDiffLines: string; agentTokenBudget: string;
     testCommand: string; lintCommand: string; instructions: string;
   };
 
@@ -31,7 +32,7 @@
   let importing = $state(false);
   let imported = $state('');
 
-  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', hotfixBase: '', autonomy: '', permissionMode: '', sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
+  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', hotfixBase: '', autonomy: '', permissionMode: '', runtime: '', sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
   const opt = (s: string) => (s.trim() ? s.trim() : undefined);
   const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
@@ -39,7 +40,7 @@
   function toForm(p: Profile): Form {
     return {
       id: p.id, name: p.name, match: p.match.join('\n'), baseBranch: p.baseBranch ?? '', stagingBranch: p.stagingBranch ?? '',
-      hotfixBase: p.hotfixBase ?? '', autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '',
+      hotfixBase: p.hotfixBase ?? '', autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '',
       sensitivePaths: p.sensitivePaths ? p.sensitivePaths.join('\n') : '', maxDiffLines: p.maxDiffLines?.toString() ?? '',
       agentTokenBudget: p.agentTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
     };
@@ -57,6 +58,7 @@
       baseBranch: opt(f.baseBranch), stagingBranch: opt(f.stagingBranch), hotfixBase: opt(f.hotfixBase),
       autonomy: opt(f.autonomy),
       permissionMode: opt(f.permissionMode),
+      runtime: opt(f.runtime),
       sensitivePaths: noSensitive ? [] : lines(f.sensitivePaths).length ? lines(f.sensitivePaths) : undefined,
       maxDiffLines: num(f.maxDiffLines), agentTokenBudget: num(f.agentTokenBudget),
       testCommand: opt(f.testCommand), lintCommand: opt(f.lintCommand), instructions: opt(f.instructions),
@@ -191,6 +193,11 @@
           <select bind:value={form.autonomy}><option value="">global setting</option><option value="ask">ask</option><option value="important">important</option></select></label>
         <label class="f">Tool permissions of new agents
           <select bind:value={form.permissionMode}><option value="">global setting</option>{#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}</select></label>
+        <label class="f">Runtime of new agents
+          <select bind:value={form.runtime}><option value="">global setting</option>
+            {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
+            {#if form.runtime && !runtimes(app.state?.plugins).some((r) => r.name === form?.runtime)}<option value={form.runtime}>{form.runtime} (switched off)</option>{/if}
+          </select></label>
         <label class="f">Largest commit
           <span class="unit"><input type="number" min="1" bind:value={form.maxDiffLines} placeholder="global" /><span>changed lines</span></span></label>
         <label class="f">Token budget per agent

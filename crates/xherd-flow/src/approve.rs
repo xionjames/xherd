@@ -9,8 +9,9 @@ use xherd_core::domain::{Gate, HashedFile, Role, Task, TaskStatus};
 
 use crate::{Facts, Flow, Pack, frontmatter};
 
-/// Runtime used when an agent does not name one (v1 ships Claude Code only).
-pub const DEFAULT_RUNTIME: &str = "claude-code";
+/// Runtime of an agent that does not name one (created before runtimes
+/// could be chosen).
+pub use xherd_core::config::DEFAULT_RUNTIME;
 
 /// [`Facts`] read from an agent's spec folder.
 pub struct DirFacts<'a> {

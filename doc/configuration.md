@@ -2,7 +2,7 @@
 
 xherd keeps its settings in `config.json` in the data root (`XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd`; in the container, `/var/lib/xherd-daemon/data`). Secrets (git tokens, plugin secrets) are in `secrets.json`, mode `0600`, never in `config.json`.
 
-Most settings are edited in the web UI (Settings) and saved to the file. A change saved through the UI or `PUT /api/v1/config` **applies at once** for every setting except `port`, `bind`, `maxConcurrentAgents`, `workspace`, `tmuxSocket` and `pluginSettings`, which are read at daemon start (the UI says "restart needed" when those differ). Live: the timeouts and limits (`idleAlertMinutes`, `gateParkMinutes`, `pauseTimeoutSec`, `freshSessions`, `maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, `maxAutoApprovalsInRow`, the budgets, `maxDiffLines`, `sensitivePaths`), `autonomy`, `permissionMode`, `openIn`, `toolchainDefaults`, `eventRetentionDays`, `ntfyServer`/`ntfyTopic`, `mutedNotifications`, `desktopNotifications`, `welcomed`, `disabledPlugins` (the host, trust writer and toolchain plugins skip a disabled plugin), the commit identity and git access. A hand edit of `config.json` still needs a restart.
+Most settings are edited in the web UI (Settings) and saved to the file. A change saved through the UI or `PUT /api/v1/config` **applies at once** for every setting except `port`, `bind`, `maxConcurrentAgents`, `workspace`, `tmuxSocket` and `pluginSettings`, which are read at daemon start (the UI says "restart needed" when those differ). Live: the timeouts and limits (`idleAlertMinutes`, `gateParkMinutes`, `pauseTimeoutSec`, `freshSessions`, `maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, `maxAutoApprovalsInRow`, the budgets, `maxDiffLines`, `sensitivePaths`), `autonomy`, `permissionMode`, `defaultRuntime`, `openIn`, `toolchainDefaults`, `eventRetentionDays`, `ntfyServer`/`ntfyTopic`, `mutedNotifications`, `desktopNotifications`, `welcomed`, `disabledPlugins` (the host, trust writer and toolchain plugins skip a disabled plugin), the commit identity and git access. A hand edit of `config.json` still needs a restart.
 
 Files are written atomically. Keys this version does not know are kept when saving. A `config.json` newer than the running xherd is refused with a message to update.
 
@@ -29,6 +29,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `autonomy` | `ask` | Default for new agents: `ask` or `important`. `never` is not available yet |
 | `openIn` | `{}` | Settings → Open in: `hidden` (entry ids left out of the menu: `vscode`, `cursor`, `zed`, `devcontainer`, `terminal`, `companion:<app>`, `cmd:<id>`), `terminal` (`terminal`, `iterm`, `ghostty`, `x-terminal-emulator`; unset = the computer's default) and `commands` (`[{"id", "label", "argv"}]`, `{dir}` and `{agent}` replaced). The companion runs a command only once you confirmed that argv on your computer |
 | `permissionMode` | `edits` | Tool permissions of new agents: `ask` (asks before every tool use that needs permission), `edits` (accepts file edits), `auto` (the runtime's own checks decide), `all` (asks nothing; only accepted in the container) |
+| `defaultRuntime` | `claude-code` | Runtime plugin of new agents (`claude-code`, `opencode`); also runs TODO condition checks. Must be a runtime plugin that is switched on |
 | `maxAutoApprovalsInRow` | `10` | After this many automatic approvals in a row the next gate waits for you; `0` = no limit |
 | `agentTokenBudget` | `0` | Tokens one agent may use; `0` = off. 80 % notifies once, 100 % pauses the agent at its next stop |
 | `dailyTokenBudget` | `0` | Same, over all agents per UTC day |
@@ -54,6 +55,7 @@ Settings → Repo profiles (stored in the database, not `config.json`; `GET/POST
 | `baseBranch` | Where new agents start when the request names no base |
 | `autonomy` | Default autonomy of new agents (the New agent form shows it once the repository is known) |
 | `permissionMode` | Default tool permissions of new agents |
+| `runtime` | Runtime plugin of new agents (`opencode`…) |
 | `sensitivePaths`, `maxDiffLines` | Replace the global values; an empty list switches the sensitive-path hold off |
 | `agentTokenBudget` | Replaces the global per-agent budget (0 = off); the daily budget stays global |
 | `testCommand` | One shell command (one line) run in the worktree at each commit proposal; if it fails or times out, the commit is held for a human (only the exit status is shown) |
@@ -65,7 +67,7 @@ Changes apply to running agents at once, except `instructions`, which is written
 
 ## What the UI can change
 
-Settings → General, Gates & autonomy, Notifications, Git access and Plugins cover: `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays`, `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `permissionMode`, `maxAutoApprovalsInRow`, `ntfyServer`, `ntfyTopic`, `mutedNotifications`, `desktopNotifications`, the commit identities, git hosts and plugin settings. The remaining keys (`maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, the budgets, `maxDiffLines`, `sensitivePaths`) are accepted by `PUT /api/v1/config` with range checks but have no form yet; edit `config.json` and restart.
+Settings → General, Gates & autonomy, Notifications, Git access and Plugins cover: `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays`, `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `permissionMode`, `defaultRuntime`, `maxAutoApprovalsInRow`, `ntfyServer`, `ntfyTopic`, `mutedNotifications`, `desktopNotifications`, the commit identities, git hosts and plugin settings. The remaining keys (`maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, the budgets, `maxDiffLines`, `sensitivePaths`) are accepted by `PUT /api/v1/config` with range checks but have no form yet; edit `config.json` and restart.
 
 ## Per-agent files
 

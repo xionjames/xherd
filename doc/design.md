@@ -263,9 +263,9 @@ install:
     prefix: "$xherd-"
     commands: { from: commands/*.md, to: "~/.codex/skills/xherd-{name}/SKILL.md", format: skill }     # verify path
   opencode:
-    prefix: "/xherd-"
+    prefix: "/xherd/"            # opencode names a command by its path under command/
     slashEnters: 2
-    commands: { from: commands/*.md, to: "~/.config/opencode/command/xherd-{name}.md", format: command }
+    commands: { from: commands/*.md, to: "${XDG_CONFIG_HOME:-~/.config}/opencode/command/xherd/{name}.md", format: command }
 
 schemas: { spec.md: schemas/spec.schema.json, pr.md: schemas/pr.schema.json }
 parse: null                      # built-in parser; external packs: ["./parse"]
@@ -738,7 +738,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
   - [x] Repo profiles, first slice (branch `m5-profiles`): `profiles` table, CRUD/import/export API, Settings → Repo profiles; matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-agent token budget, test command tripwire (R-115) and repo instructions, each falling back to the global setting
   - [ ] Profile fields still to build: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, stage hooks, spec folder mode, colour, default flow/pack, ticket prefix, tool permissions, per-profile daily budget and cost estimate
-  - [ ] Codex and opencode
+  - [x] opencode runtime (branch `runtime-opencode`; runtime chosen per agent, profile, `defaultRuntime`)
+  - [ ] Codex runtime
   - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
   - [x] Kanban: the Board with stages and tasks as work units (Pending / In progress / Done), TODOs and swimlanes; the Herd's By stage layout with agents in columns by role (cards declared by packs and profiles, R-1101, come with profiles)
   - [ ] Toolchain plugins and Welcome installer
