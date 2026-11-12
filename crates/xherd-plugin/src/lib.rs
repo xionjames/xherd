@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use xherd_core::exec::{Cmd, ExecError, run};
 
+pub mod git;
 pub mod host;
 pub mod manifest;
 pub mod runtime;
@@ -25,6 +26,8 @@ pub fn builtins() -> Vec<Manifest> {
         include_str!("../../../plugins/opencode/xherd-plugin.json"),
         include_str!("../../../plugins/codex/xherd-plugin.json"),
         include_str!("../../../plugins/github/xherd-plugin.json"),
+        include_str!("../../../plugins/gitlab/xherd-plugin.json"),
+        include_str!("../../../plugins/bitbucket/xherd-plugin.json"),
         include_str!("../../../plugins/sdkman/xherd-plugin.json"),
         include_str!("../../../plugins/nvm/xherd-plugin.json"),
         include_str!("../../../plugins/uv/xherd-plugin.json"),

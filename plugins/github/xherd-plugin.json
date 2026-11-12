@@ -12,5 +12,46 @@
   "checks": [
     { "name": "gh", "argv": ["gh", "--version"] },
     { "name": "gh auth", "argv": ["gh", "auth", "status"], "optional": true }
-  ]
+  ],
+  "data": {
+    "git": {
+      "hosts": [
+        "github.com"
+      ],
+      "credential": {
+        "helper": "!gh auth git-credential",
+        "tokenUser": "x-access-token"
+      },
+      "login": [
+        "gh",
+        "auth",
+        "login",
+        "--hostname",
+        "{host}",
+        "--git-protocol",
+        "https",
+        "--web"
+      ],
+      "api": {
+        "base": "https://api.github.com",
+        "user": {
+          "path": "/user",
+          "scopesHeader": "x-oauth-scopes",
+          "requireScope": "repo"
+        },
+        "repo": {
+          "path": "/repos/{path}",
+          "ssoHeader": "x-github-sso",
+          "onSso": {
+            "detail": "the organisation uses SSO and the token is not authorised for it",
+            "fix": "authorise the token for SSO: {url}"
+          },
+          "onNotFound": {
+            "detail": "the token cannot see the repository: no access, or the organisation does not allow this OAuth app",
+            "fix": "ask an organisation owner to approve the app, or use a token with access"
+          }
+        }
+      }
+    }
+  }
 }
