@@ -89,7 +89,8 @@ pub enum Trigger {
     Unpark,
     /// User paused (handoff written, session ended).
     Pause,
-    /// User resumed a paused, cancelled or errored agent.
+    /// User resumed a paused, cancelled, errored or parked agent (a parked
+    /// one keeps its gate and stops at it again).
     Resume,
     /// PR open and nothing left to do.
     Watch,
@@ -119,7 +120,7 @@ pub fn next_status(from: Status, trigger: Trigger) -> Option<Status> {
         (T::Pause, S::Queued | S::Running | S::Blocked | S::Idle | S::WaitingInput | S::Parked) => {
             Some(S::Paused)
         }
-        (T::Resume, S::Paused | S::Cancelled | S::Error) => Some(S::Queued),
+        (T::Resume, S::Paused | S::Cancelled | S::Error | S::Parked) => Some(S::Queued),
         (T::Watch, S::Idle) => Some(S::Watching),
         (T::PrComments, S::Watching) => Some(S::Queued),
         (T::PrFinished, S::Watching) => Some(S::Done),
@@ -162,6 +163,7 @@ mod tests {
             (S::Paused, T::Resume, S::Queued),
             (S::Cancelled, T::Resume, S::Queued),
             (S::Error, T::Resume, S::Queued),
+            (S::Parked, T::Resume, S::Queued),
             (S::Idle, T::Watch, S::Watching),
             (S::Watching, T::PrComments, S::Queued),
             (S::Watching, T::PrFinished, S::Done),

@@ -712,6 +712,77 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
     assert_ne!(a.status, Status::Parked);
 }
 
+/// The agent of `t`, stopped at a gate, parked; a daemon started on it.
+async fn parked(t: &T) -> Daemon {
+    let mut a = get(t).await;
+    a.status = Status::Parked;
+    t.d.store.put_agent(&a).await.unwrap();
+    let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
+    Daemon::start(t.d.paths.clone(), o).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_parked_agent_can_be_resumed_and_keeps_its_gate() {
+    let t = setup().await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let d = parked(&t).await;
+    let a = d.action("SC-1", UserAction::Resume).await.unwrap();
+    assert_ne!(a.status, Status::Parked);
+    assert!(a.gate.is_some());
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:resume"));
+}
+
+#[tokio::test]
+async fn changes_requested_on_a_parked_agent_start_its_next_session() {
+    let t = setup().await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(&t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let d = parked(&t).await;
+    let a = d
+        .action(
+            "SC-1",
+            UserAction::RequestChanges {
+                comment: "split R3".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_ne!(a.status, Status::Parked);
+    assert!(a.gate.is_some());
+    let p = a.next_prompt.unwrap_or_default();
+    assert!(p.contains("split R3"), "{p}");
+}
+
+#[tokio::test]
+async fn a_parked_question_is_answered_with_send() {
+    let t = setup().await;
+    xap(&t, "q1", "ask", json!({"text": "which db?"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let d = parked(&t).await;
+    let a = d
+        .action(
+            "SC-1",
+            UserAction::Send {
+                text: "postgres".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_ne!(a.status, Status::Parked);
+    assert!(a.gate.is_none());
+    assert_eq!(a.next_prompt.as_deref(), Some("postgres"));
+    assert!(sends(&t).is_empty());
+}
+
 async fn session_start(t: &T, seq: u64) {
     let r = Report {
         id: format!("start-{seq}"),
