@@ -785,3 +785,16 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D21 | Drained updates and backups before updates/migrations | Accepted |
 | D22 | MIT licence | Accepted |
 | D23 | Every step is a new session fed by `memory.md` (state, decisions, code map) and the approved documents, never by conversation history; the session stays open while a gate waits so change requests keep their context | Accepted |
+| D24 | Git hosts are bound to a provider (a `host` plugin) that supplies the API, the credential helper, the login, the doctor's API checks and its own install; transport stays in core per hostname; issues stay with trackers (revises D19, R-689…R-693) | Proposed |
+
+### D24 in detail (proposed)
+
+D19 holds: access is per hostname and has a doctor. What changes is that its provider-specific parts, now compiled into `xherd-daemon` (`git_access.rs`: `Credential::{Gh, Glab, Xherd, None}`, `gh`/`glab` login, the GitHub-only API checks on `x-oauth-scopes` and `x-github-sso`), move into the provider's manifest, so GitLab, Gitea, Bitbucket and a self-hosted host need no change to the daemon.
+
+- **Model.** Provider = `host` plugin (API and access specifics). Host = `{host, provider, protocols, credential, username, caFile, preferHttps, preferSsh}` in `config.json`. Transport stays in core: SSH agent, known hosts, token storage, `managed_gitconfig`, the pre-push guard.
+- **Manifest.** `data.git` (hostnames, credential helper and token username, login argv, doctor checks with fixes, token scopes) and `requires` / `install` / `instructions` for the provider's CLI (R-690, R-691). The `credential` enum becomes a provider reference; existing values migrate (R-693).
+- **Install.** Container only, from the UI, in the same terminal session as plugin logins; native shows instructions (R-653 applies). The image already carries `gh` and `glab`, so GitHub and GitLab need no install there.
+- **Security.** Provider argv is data: fixed argv, values as whole arguments (the toolchain `"$1"` rule); the credential helper runs inside git, so an external provider's helper is shown and confirmed at install (R-692, D16).
+- **UI.** Welcome's Plugins step lists providers as cards (state, options, install); the Git hosts step lists hostnames with their provider; a provider card shows the hosts that use it.
+- **Order of work.** (1) move `gh`/`glab` credential, login and the GitHub doctor checks into the `github` manifest without changing behaviour; (2) a provider field on host rows and in the UI; (3) a built-in `gitlab` provider on `glab` (`pr-for-branch`, `pr-status`, `pr-checks`, `pr-comments`, `pr-reply`, `pr-template`); (4) Gitea and Bitbucket as external plugins on the same protocol. Each is its own commit.
+- **Risks.** A larger plugin protocol; `glab`'s output differs from `gh`'s; where an install into the agents' home puts a binary that both git (the credential helper) and the daemon can run in the two-user container is not checked.
