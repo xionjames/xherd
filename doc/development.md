@@ -1,6 +1,6 @@
 # Development
 
-For people changing xherd itself. Read [Architecture](architecture.md) first. `AGENTS.md` at the repository root is the working guide for coding agents and records the current status and gotchas; keep it current when you change behaviour.
+For people changing xherd itself. Read [Architecture](architecture.md) first; [Running from source](from-source.md) covers building and running the image or the binary. `AGENTS.md` at the repository root is the working guide for coding agents and records the current status and gotchas; keep it current when you change behaviour.
 
 ## Prerequisites
 

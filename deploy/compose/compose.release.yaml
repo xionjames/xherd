@@ -1,0 +1,32 @@
+# xherd with the published image. Attached to every GitHub release as
+# compose.yaml (.github/workflows/release.yml); doc/getting-started.md uses it:
+#
+#   curl -fLO https://github.com/xionjames/xherd/releases/latest/download/compose.yaml
+#   printf 'XHERD_WORKSPACE=%s/xherd\nXHERD_UID=%s\nXHERD_GID=%s\n' "$HOME" "$(id -u)" "$(id -g)" > .env
+#   mkdir -p ~/xherd && docker compose up -d
+#
+# Then open http://127.0.0.1:4740/. To build the image from this repository
+# instead, use compose.yaml in this folder.
+services:
+  xherd:
+    # Set XHERD_IMAGE in .env to stay on one version (ghcr.io/xionjames/xherd:0.1.0).
+    image: ${XHERD_IMAGE:-ghcr.io/xionjames/xherd:latest}
+    container_name: xherd
+    restart: unless-stopped
+    environment:
+      XHERD_WORKSPACE: ${XHERD_WORKSPACE:?set XHERD_WORKSPACE in .env (absolute path)}
+      XHERD_UID: ${XHERD_UID:?set XHERD_UID in .env (id -u)}
+      XHERD_GID: ${XHERD_GID:?set XHERD_GID in .env (id -g)}
+    # Loopback only: the daemon gives local rights to what arrives here.
+    ports: ["127.0.0.1:${XHERD_PORT:-4740}:4740"]
+    volumes:
+      # Same path inside and out, so worktrees open in your IDE.
+      - ${XHERD_WORKSPACE}:${XHERD_WORKSPACE}
+      - xherd-home:/home/xherd
+      # The daemon's own data: its user only, not the agents' (R-1203).
+      - xherd-data:/var/lib/xherd-daemon
+      # SSH agent (Docker Desktop, OrbStack): uncomment.
+      # - /run/host-services/ssh-auth.sock:/run/host-ssh-agent.sock
+volumes:
+  xherd-home: {}
+  xherd-data: {}

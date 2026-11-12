@@ -73,7 +73,8 @@ All with mocked data.
 
 ## Documentation
 
-- [Getting started](doc/getting-started.md): run it (Docker recommended), first agent, everyday commands
+- [Getting started](doc/getting-started.md): install a release (Docker recommended), first agent, everyday commands
+- [Running from source](doc/from-source.md): build the image or the binary from this repository
 - [Docker](doc/docker.md): topology, the two-user container, git access, toolchains, operating
 - [Architecture](doc/architecture.md): crates, actors, gates, sessions, plugins, guardrails
 - [CLI reference](doc/cli.md) and [Configuration](doc/configuration.md)
