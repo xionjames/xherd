@@ -212,12 +212,144 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Terminals on Linux (and other non-macOS Unix): id = binary, and the
+/// arguments that come before the command to run. Order = preference when
+/// the desktop names no default. Keep the ids in `config::TERMINAL_APPS`.
+const UNIX_TERMINALS: &[(&str, &[&str])] = &[
+    ("ghostty", &["-e"]),
+    ("konsole", &["-e"]),
+    ("gnome-terminal", &["--"]),
+    ("kitty", &[]),
+    ("alacritty", &["-e"]),
+    ("wezterm", &["start", "--"]),
+    ("xfce4-terminal", &["-x"]),
+    ("foot", &[]),
+    ("xterm", &["-e"]),
+    ("xdg-terminal-exec", &[]),
+    ("x-terminal-emulator", &["-e"]),
+];
+
+/// Terminals on macOS: id and the app bundle that shows it is installed
+/// (`Terminal` always is).
+const MAC_TERMINALS: &[(&str, &str)] = &[
+    ("terminal", "Terminal.app"),
+    ("iterm", "iTerm.app"),
+    ("ghostty", "Ghostty.app"),
+];
+
+/// The terminal a KDE Plasma `kdeglobals` names (`[General]`
+/// `TerminalApplication=ghostty` or `TerminalService=com.mitchellh.ghostty.desktop`),
+/// as one of `UNIX_TERMINALS`.
+fn kde_terminal(kdeglobals: &str) -> Option<&'static str> {
+    let mut general = false;
+    let mut found = None;
+    for l in kdeglobals.lines().map(str::trim) {
+        if l.starts_with('[') {
+            general = l == "[General]";
+            continue;
+        }
+        let Some((k, v)) = l.split_once('=').filter(|_| general) else {
+            continue;
+        };
+        let v = v.trim();
+        let id = match k.trim() {
+            "TerminalApplication" => {
+                let bin = v.split_whitespace().next().unwrap_or("");
+                let bin = bin.rsplit('/').next().unwrap_or(bin);
+                UNIX_TERMINALS.iter().find(|(id, _)| *id == bin)
+            }
+            "TerminalService" => UNIX_TERMINALS
+                .iter()
+                .find(|(id, _)| v.to_ascii_lowercase().contains(id)),
+            _ => None,
+        };
+        // TerminalApplication wins over TerminalService.
+        if let Some((id, _)) = id
+            && (found.is_none() || k.trim() == "TerminalApplication")
+        {
+            found = Some(*id);
+        }
+    }
+    found
+}
+
+/// The desktop's own default terminal on Linux: `$TERMINAL`, KDE's
+/// `kdeglobals`, then GNOME's `gsettings`. `None` when none names a known one.
+fn desktop_terminal() -> Option<&'static str> {
+    let known = |s: &str| {
+        let bin = s.trim().trim_matches('\'').split_whitespace().next()?;
+        let bin = bin.rsplit('/').next().unwrap_or(bin);
+        UNIX_TERMINALS
+            .iter()
+            .find(|(id, _)| *id == bin)
+            .map(|(id, _)| *id)
+    };
+    if let Some(t) = std::env::var("TERMINAL").ok().and_then(|t| known(&t)) {
+        return Some(t);
+    }
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))?;
+    if let Some(t) = std::fs::read_to_string(config.join("kdeglobals"))
+        .ok()
+        .and_then(|t| kde_terminal(&t))
+    {
+        return Some(t);
+    }
+    let out = std::process::Command::new("gsettings")
+        .args([
+            "get",
+            "org.gnome.desktop.default-applications.terminal",
+            "exec",
+        ])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    known(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The terminals installed here, the default one first (R-707).
+fn host_terminals() -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        return MAC_TERMINALS
+            .iter()
+            .filter(|(id, app)| {
+                *id == "terminal"
+                    || Path::new("/Applications").join(app).exists()
+                    || home
+                        .as_ref()
+                        .is_some_and(|h| h.join("Applications").join(app).exists())
+            })
+            .map(|(id, _)| id.to_string())
+            .collect();
+    }
+    let mut found: Vec<String> = UNIX_TERMINALS
+        .iter()
+        .filter(|(id, _)| on_path(id))
+        .map(|(id, _)| id.to_string())
+        .collect();
+    if let Some(d) = desktop_terminal().filter(|d| found.iter().any(|f| f == d)) {
+        found.retain(|f| f != d);
+        found.insert(0, d.to_string());
+    }
+    found
+}
+
 /// The argv that opens `app` with a shell in the agent's worktree (R-707):
-/// `<xherd> shell <agent>`, in one of a fixed list of terminal apps. `None`
-/// for an unknown app or a name that is not plain.
-pub fn terminal_argv(app: &str, xherd: &str, agent: &str) -> Option<Vec<String>> {
+/// `<xherd> shell <agent>`, in one of a fixed list of terminal apps (the
+/// macOS ones when `mac`). `None` for an unknown app or a name that is not
+/// plain.
+pub fn terminal_argv(app: &str, xherd: &str, agent: &str, mac: bool) -> Option<Vec<String>> {
     if !plain_name(agent) {
         return None;
+    }
+    if !mac {
+        let (bin, pre) = UNIX_TERMINALS.iter().find(|(id, _)| *id == app)?;
+        let mut v = vec![bin.to_string()];
+        v.extend(pre.iter().map(|s| s.to_string()));
+        v.extend([xherd.to_string(), "shell".into(), agent.to_string()]);
+        return Some(v);
     }
     let cmd = format!("{} shell {agent}", sh_quote(xherd));
     // AppleScript string literal.
@@ -248,17 +380,8 @@ pub fn terminal_argv(app: &str, xherd: &str, agent: &str) -> Option<Vec<String>>
             format!("create window with default profile command {lit}"),
         ),
         "ghostty" => direct(&["open", "-na", "Ghostty", "--args", "-e"]),
-        "x-terminal-emulator" => direct(&["x-terminal-emulator", "-e"]),
         _ => return None,
     })
-}
-
-fn default_terminal() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "terminal"
-    } else {
-        "x-terminal-emulator"
-    }
 }
 
 /// A user command's fingerprint: the sha256 of its argv as JSON.
@@ -318,15 +441,31 @@ fn confirmed(app: &str, argv: &[String]) -> Result<(), String> {
 }
 
 /// One request from the daemon: the terminal, a user command, or an app.
-fn handle(apps: &BTreeMap<String, Vec<String>>, r: &Value) -> Result<String, String> {
+fn handle(
+    apps: &BTreeMap<String, Vec<String>>,
+    terminals: &[String],
+    r: &Value,
+) -> Result<String, String> {
     let (Some(app), Some(dir)) = (r["app"].as_str(), r["dir"].as_str()) else {
         return Err("ignored a malformed request".into());
     };
     let agent = r["agent"].as_str().unwrap_or("");
     if app == "terminal" {
-        let term = r["terminal"].as_str().unwrap_or(default_terminal());
+        let mac = cfg!(target_os = "macos");
+        let fallback = if mac {
+            "terminal"
+        } else {
+            "x-terminal-emulator"
+        };
+        // A choice made for another OS (Settings is shared) falls back to
+        // this computer's default.
+        let term = r["terminal"]
+            .as_str()
+            .filter(|t| terminal_argv(t, "xherd", "a", mac).is_some())
+            .or(terminals.first().map(String::as_str))
+            .unwrap_or(fallback);
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let argv = terminal_argv(term, &exe.to_string_lossy(), agent)
+        let argv = terminal_argv(term, &exe.to_string_lossy(), agent, mac)
             .ok_or_else(|| format!("ignored a terminal request for {term} / {agent:?}"))?;
         launch(&argv, dir)?;
         return Ok(format!("opened a shell for {agent} in {term}"));
@@ -351,10 +490,16 @@ fn handle(apps: &BTreeMap<String, Vec<String>>, r: &Value) -> Result<String, Str
 /// (R-704, R-706, R-707). Runs until interrupted.
 pub fn companion(client: &Client) -> i32 {
     let apps = host_apps();
+    let terminals = host_terminals();
     let names: Vec<&str> = apps.keys().map(String::as_str).collect();
     println!(
-        "companion connected to {}, offering the terminal{}{}",
+        "companion connected to {}, offering the terminal ({}){}{}",
         client.url,
+        if terminals.is_empty() {
+            "none found".to_string()
+        } else {
+            terminals.join(", ")
+        },
         if names.is_empty() { "" } else { ", " },
         names.join(", ")
     );
@@ -366,13 +511,14 @@ pub fn companion(client: &Client) -> i32 {
         );
     }
     let path = format!(
-        "/companion/next?wait=25&features=terminal,commands&apps={}",
-        names.join(",")
+        "/companion/next?wait=25&features=terminal,commands&apps={}&terminals={}",
+        names.join(","),
+        terminals.join(",")
     );
     loop {
         match client.call("GET", &path, None) {
             Ok(v) if v["request"].is_null() => {}
-            Ok(v) => match handle(&apps, &v["request"]) {
+            Ok(v) => match handle(&apps, &terminals, &v["request"]) {
                 Ok(m) => println!("{m}"),
                 Err(e) => eprintln!("{e}"),
             },
@@ -403,23 +549,50 @@ mod tests {
 
     #[test]
     fn terminal_commands_are_built_in_and_quoted() {
-        let t = terminal_argv("terminal", "/opt/x y/xherd", "SC-1").unwrap();
+        let t = terminal_argv("terminal", "/opt/x y/xherd", "SC-1", true).unwrap();
         assert_eq!(t[0], "osascript");
         assert_eq!(t[6], r#"do script "'/opt/x y/xherd' shell SC-1""#);
-        let g = terminal_argv("ghostty", "/b/xherd", "SC-1").unwrap();
+        let g = terminal_argv("ghostty", "/b/xherd", "SC-1", true).unwrap();
         assert_eq!(
             g.join(" "),
             "open -na Ghostty --args -e /b/xherd shell SC-1"
         );
-        let quote = terminal_argv("iterm", r#"/a"b/xherd"#, "SC-1").unwrap();
+        let quote = terminal_argv("iterm", r#"/a"b/xherd"#, "SC-1", true).unwrap();
         assert!(
             quote[6].ends_with(r#""'/a\"b/xherd' shell SC-1""#),
             "{}",
             quote[6]
         );
-        assert!(terminal_argv("xterm", "/b/xherd", "SC-1").is_none());
-        assert!(terminal_argv("terminal", "/b/xherd", "a;rm -rf ~").is_none());
-        assert!(terminal_argv("terminal", "/b/xherd", "").is_none());
+        assert!(terminal_argv("xterm", "/b/xherd", "SC-1", true).is_none());
+        assert!(terminal_argv("terminal", "/b/xherd", "a;rm -rf ~", true).is_none());
+        assert!(terminal_argv("terminal", "/b/xherd", "", true).is_none());
+    }
+
+    #[test]
+    fn linux_terminals_run_the_binary_directly() {
+        let argv = |app| terminal_argv(app, "/b/xherd", "SC-1", false).map(|v| v.join(" "));
+        assert_eq!(argv("ghostty").unwrap(), "ghostty -e /b/xherd shell SC-1");
+        assert_eq!(argv("konsole").unwrap(), "konsole -e /b/xherd shell SC-1");
+        assert_eq!(
+            argv("gnome-terminal").unwrap(),
+            "gnome-terminal -- /b/xherd shell SC-1"
+        );
+        assert_eq!(argv("kitty").unwrap(), "kitty /b/xherd shell SC-1");
+        assert!(argv("terminal").is_none());
+        assert!(argv("iterm").is_none());
+        assert!(terminal_argv("konsole", "/b/xherd", "a b", false).is_none());
+    }
+
+    #[test]
+    fn kde_names_its_default_terminal() {
+        let g = "[General]\nTerminalApplication=ghostty\nTerminalService=org.kde.konsole.desktop\n";
+        assert_eq!(kde_terminal(g), Some("ghostty"));
+        let g = "[General]\nTerminalService=com.mitchellh.ghostty.desktop\n";
+        assert_eq!(kde_terminal(g), Some("ghostty"));
+        let g = "[General]\nTerminalApplication=/usr/bin/kitty --single-instance\n";
+        assert_eq!(kde_terminal(g), Some("kitty"));
+        assert_eq!(kde_terminal("[KDE]\nTerminalApplication=kitty\n"), None);
+        assert_eq!(kde_terminal("[General]\nTerminalApplication=st\n"), None);
     }
 
     #[test]

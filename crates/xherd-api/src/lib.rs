@@ -759,6 +759,9 @@ struct CompanionQuery {
     /// Request kinds it understands: `terminal`, `commands` (R-706, R-707).
     #[serde(default)]
     features: String,
+    /// Terminal apps installed there, its default first (R-707).
+    #[serde(default)]
+    terminals: String,
     #[serde(default)]
     wait: Option<u64>,
 }
@@ -780,6 +783,7 @@ async fn companion_next(
     let offer = xherd_daemon::open_in::Offer {
         apps: list(&q.apps),
         features: list(&q.features),
+        terminals: list(&q.terminals),
     };
     let wait = std::time::Duration::from_secs(q.wait.unwrap_or(25).min(30));
     let r = d.companion.next(offer, wait).await;

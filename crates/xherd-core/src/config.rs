@@ -207,8 +207,24 @@ pub struct OpenCommand {
     pub argv: Vec<String>,
 }
 
-/// Terminal apps the companion knows how to open (R-707).
-pub const TERMINAL_APPS: &[&str] = &["terminal", "iterm", "ghostty", "x-terminal-emulator"];
+/// Terminal apps the companion knows how to open (R-707): macOS's `terminal`
+/// and `iterm`, `ghostty` on both, the rest on Linux (the companion's
+/// `UNIX_TERMINALS`).
+pub const TERMINAL_APPS: &[&str] = &[
+    "terminal",
+    "iterm",
+    "ghostty",
+    "konsole",
+    "gnome-terminal",
+    "kitty",
+    "alacritty",
+    "wezterm",
+    "xfce4-terminal",
+    "foot",
+    "xterm",
+    "xdg-terminal-exec",
+    "x-terminal-emulator",
+];
 
 /// Where git gets an HTTPS password for a host (R-684). Never a URL or
 /// `.git/config`.

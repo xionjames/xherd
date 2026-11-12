@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(c.open_in.hidden, ["zed"]);
         assert_eq!(c.open_in.commands[0].label, "IDEA");
         for bad in [
-            json!({"terminal": "xterm"}),
+            json!({"terminal": "st"}),
             json!({"commands": [{"id": "Idea", "label": "x", "argv": ["idea"]}]}),
             json!({"commands": [{"id": "a", "label": "x", "argv": ["a"]}, {"id": "a", "label": "y", "argv": ["b"]}]}),
             json!({"commands": [{"id": "a", "label": "x", "argv": []}]}),

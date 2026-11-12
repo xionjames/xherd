@@ -17,9 +17,15 @@
   type OpenIn = { hidden?: string[]; terminal?: string; commands?: Command[] };
   // A new row's id follows its name; a saved one keeps its id (hidden marks use it).
   type Row = { id: string; label: string; cmd: string; fresh?: boolean };
-  type View = { links: { id: string; label: string }[]; companion: { apps: string[]; features: string[] } | null };
+  type View = { links: { id: string; label: string }[]; companion: { apps: string[]; features: string[]; terminals?: string[] } | null };
 
-  const TERMINALS = [['terminal', 'Terminal (macOS)'], ['iterm', 'iTerm (macOS)'], ['ghostty', 'Ghostty (macOS)'], ['x-terminal-emulator', 'x-terminal-emulator (Linux)']];
+  // Every terminal the companion knows (config::TERMINAL_APPS). The list shows
+  // the ones the companion found on its computer, or all of them without one.
+  const TERMINALS: Record<string, string> = {
+    terminal: 'Terminal (macOS)', iterm: 'iTerm (macOS)', ghostty: 'Ghostty', konsole: 'Konsole', 'gnome-terminal': 'GNOME Terminal',
+    kitty: 'kitty', alacritty: 'Alacritty', wezterm: 'WezTerm', 'xfce4-terminal': 'Xfce Terminal', foot: 'foot', xterm: 'xterm',
+    'xdg-terminal-exec': 'xdg-terminal-exec (Linux)', 'x-terminal-emulator': 'x-terminal-emulator (Debian alternatives)',
+  };
 
   let view = $state<View | null>(null);
   let hidden = $state<string[]>([]);
@@ -53,6 +59,13 @@
   const body = $derived<OpenIn>({ hidden, ...(terminal ? { terminal } : {}), commands });
   const norm = (o: OpenIn) => JSON.stringify({ h: [...(o.hidden ?? [])].sort(), t: o.terminal ?? '', c: o.commands ?? [] });
   const dirty = $derived(norm(body) !== norm(saved));
+
+  const found = $derived((view?.companion?.terminals ?? []).filter((t) => t in TERMINALS));
+  const termOptions = $derived.by(() => {
+    const ids = found.length ? [...found] : Object.keys(TERMINALS);
+    if (terminal && !ids.includes(terminal)) ids.push(terminal);
+    return ids.map((id) => [id, TERMINALS[id] ?? id] as const);
+  });
 
   const entries = $derived([
     ...(view?.links ?? []).map((l) => ({ id: l.id, label: l.label, where: 'link' })),
@@ -96,10 +109,11 @@
   <Panel title="Terminal" hint="Open in → Terminal opens a shell in the agent's worktree (inside the container in Docker mode).">
     <label class="f">Terminal app
       <select bind:value={terminal}>
-        <option value="">Default for this computer</option>
-        {#each TERMINALS as [v, l] (v)}<option value={v}>{l}</option>{/each}
+        <option value="">Default for this computer{found.length ? ` (${TERMINALS[found[0]]})` : ''}</option>
+        {#each termOptions as [v, l] (v)}<option value={v}>{l}{found.length && !found.includes(v) ? ' (not found)' : ''}</option>{/each}
       </select>
-      <span class="hint">The command is built into xherd (<span class="mono">xherd shell &lt;agent&gt;</span>), so it never needs confirming.</span></label>
+      <span class="hint">{found.length ? 'Found on the companion\'s computer.' : view?.companion ? 'This companion does not list its terminals: update xherd there.' : 'Start the companion to list the terminals installed on this computer.'}
+        The command is built into xherd (<span class="mono">xherd shell &lt;agent&gt;</span>), so it never needs confirming.</span></label>
   </Panel>
 
   <Panel title="Your commands" hint="Programs to open the worktree with. {'{dir}'} is the worktree, {'{agent}'} the agent's name.">

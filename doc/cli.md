@@ -40,7 +40,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `xherd attach <agent>` | Attach this terminal to the agent's tmux session (in the container when using Docker) |
 | `xherd shell <agent>` | A shell in the agent's worktree |
 | `xherd open <agent> [--app A]` | Open the worktree in an app on this computer: apps from `~/.config/xherd/open.json`, else editors found on `PATH` |
-| `xherd companion` | Run Open-in requests from the browser on this computer: the terminal (`xherd shell <agent>` in Terminal, iTerm, Ghostty or `x-terminal-emulator`), its apps, and your commands from Settings → Open in, each asked about here (`[y/N]`) the first time and after any change, then remembered in `~/.config/xherd/open-approved.json`. Keep it open in a terminal: without one it refuses commands it has not confirmed |
+| `xherd companion` | Run Open-in requests from the browser on this computer: the terminal (`xherd shell <agent>` in the chosen terminal, else this computer's default: on macOS Terminal, iTerm or Ghostty; on Linux the desktop's default (`$TERMINAL`, KDE's `kdeglobals`, GNOME's `gsettings`) among those installed, e.g. Ghostty, Konsole, GNOME Terminal, kitty), its apps, and your commands from Settings → Open in, each asked about here (`[y/N]`) the first time and after any change, then remembered in `~/.config/xherd/open-approved.json`. Keep it open in a terminal: without one it refuses commands it has not confirmed |
 
 `xherd new` options:
 
