@@ -733,20 +733,28 @@ fn ls() -> i32 {
         println!("no agents");
         return 0;
     }
-    println!(
-        "{:<24} {:<14} {:<16} GATE / PR",
-        "NAME", "STATUS", "SESSION"
-    );
-    for a in agents {
-        println!(
-            "{:<24} {:<14} {:<16} {}",
-            a["name"].as_str().unwrap_or("?"),
-            a["status"].as_str().unwrap_or("?"),
-            a["session"].as_str().unwrap_or("-"),
-            gate_or_pr(&a)
-        );
-    }
+    print!("{}", ls_table(&agents));
     0
+}
+
+/// `xherd ls` as text: each column as wide as its longest value, the
+/// runtime's session id cut to 8 characters (its full form is a UUID).
+fn ls_table(agents: &[Value]) -> String {
+    let mut rows = vec![["NAME", "STATUS", "SESSION", "GATE / PR"].map(String::from)];
+    for a in agents {
+        let session = a["session"].as_str().unwrap_or("-");
+        rows.push([
+            a["name"].as_str().unwrap_or("?").to_string(),
+            a["status"].as_str().unwrap_or("?").to_string(),
+            session.chars().take(8).collect(),
+            gate_or_pr(a),
+        ]);
+    }
+    let width = |i: usize| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
+    let (w0, w1, w2) = (width(0), width(1), width(2));
+    rows.iter()
+        .map(|r| format!("{:<w0$}  {:<w1$}  {:<w2$}  {}\n", r[0], r[1], r[2], r[3]))
+        .collect()
 }
 
 /// The open gate, else the pull request once there is one.
@@ -922,6 +930,22 @@ fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ls_columns_fit_long_names_and_sessions() {
+        let agents = [
+            serde_json::json!({"name": "SHOP-151-order-export-csv", "status": "waiting-input",
+                "session": "5c0e9f1a-2b7d-4e8a-9f3c-1d2e3f4a5b6c",
+                "gate": {"kind": "commit", "id": "C02", "files": ["a.ts"]}}),
+            serde_json::json!({"name": "SHOP-9-x", "status": "paused"}),
+        ];
+        assert_eq!(
+            ls_table(&agents),
+            "NAME                       STATUS         SESSION   GATE / PR\n\
+             SHOP-151-order-export-csv  waiting-input  5c0e9f1a  commit C02: a.ts\n\
+             SHOP-9-x                   paused         -         -\n"
+        );
+    }
 
     /// Shell words of a one-line command (double and single quotes only).
     fn words(s: &str) -> Vec<String> {
