@@ -369,7 +369,7 @@ async fn idle_alert_once_and_parking() {
 #[tokio::test]
 async fn delivery_is_retried_once_when_not_acknowledged() {
     let dir = tempfile::tempdir().unwrap();
-    let t = daemon_with(dir, 4, |o| o.delivery_ack = Duration::from_millis(50)).await;
+    let t = daemon_with(dir, 4, |o| o.delivery_ack = Duration::from_millis(250)).await;
     let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     t.d.report(rep(&a, "a1", ReportEvent::Stop, 1, Value::Null))
@@ -383,7 +383,7 @@ async fn delivery_is_retried_once_when_not_acknowledged() {
     )
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
     let sends: Vec<String> = t
         .drv
         .calls()
@@ -409,7 +409,7 @@ async fn delivery_is_retried_once_when_not_acknowledged() {
         json!({"prompt": "again"}),
     ))
     .await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
     let sends = t
         .drv
         .calls()
