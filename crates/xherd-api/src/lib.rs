@@ -93,6 +93,7 @@ pub fn router(d: Daemon) -> Router {
             get(plugin_secrets).put(put_plugin_secrets),
         )
         .route("/api/v1/toolchains", get(toolchains))
+        .route("/api/v1/toolchains/installed", get(toolchains_installed))
         .route("/api/v1/toolchains/install", post(toolchain_install))
         .route(
             "/api/v1/toolchains/{tool}/versions",
@@ -903,6 +904,11 @@ async fn plugin_login(
     Ok(Json(
         json!({"session": xherd_daemon::git_access::PLUGIN_LOGIN_ID}),
     ))
+}
+
+/// The versions already installed, per tool (native and container).
+async fn toolchains_installed(_: User, State(d): State<Daemon>) -> Json<Value> {
+    Json(json!({"installed": d.toolchain_installed().await}))
 }
 
 /// Settings → Toolchains: the tools and their default versions.

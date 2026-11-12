@@ -3200,15 +3200,14 @@ mod pick_host_tests {
             None
         );
         assert_eq!(tok(&with_git_token(gl.clone(), None, &f)), None);
-        // The plugin's own token wins.
-        let mut own = (*gl).clone();
-        own.ctx.secrets.insert("token".into(), "mine".into());
+        // The plugin's own token (saved in the UI) wins, and applies without a restart.
+        std::fs::write(
+            &f,
+            r#"{"git": {"gitlab.example.com": "glpat-1"}, "gitlab": {"token": "mine"}}"#,
+        )
+        .unwrap();
         assert_eq!(
-            tok(&with_git_token(
-                Arc::new(own),
-                Some("gitlab.example.com"),
-                &f
-            )),
+            tok(&with_git_token(gl, Some("gitlab.example.com"), &f)),
             Some("mine".into())
         );
     }

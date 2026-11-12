@@ -43,20 +43,28 @@
           ],
           "env": {
             "RUSTUP_TOOLCHAIN": "{v}"
-          }
+          },
+          "installed": [
+            "sh",
+            "-c",
+            "rustup toolchain list </dev/null | awk '{print $1}' | sed -E 's/-(x86_64|aarch64|i686|arm)[A-Za-z0-9_-]*$//' | sort -u"
+          ]
         }
       ]
     }
   },
-  "checks": [
+  "requires": [
     {
       "name": "rustup",
-      "argv": [
+      "check": [
         "sh",
         "-c",
         "if command -v rustup >/dev/null 2>&1; then exit 0; fi; echo \"rustup not found (install it: https://rustup.rs)\" >&2; exit 1"
       ],
-      "optional": true
+      "optional": true,
+      "instructions": {
+        "any": "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # see https://rustup.rs"
+      }
     }
   ]
 }

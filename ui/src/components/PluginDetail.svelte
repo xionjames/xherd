@@ -33,7 +33,8 @@
     catch (e) { showError('Could not remove the secret', e); }
   }
   const secretsDirty = $derived(secretFields.some((s) => (secretNew[s.key] ?? '') !== ''));
-  const dirty = $derived(secretsDirty || fields.some((s) => (values[s.key] ?? '') !== saved(s.key)));
+  const fieldsDirty = $derived(fields.some((s) => (values[s.key] ?? '') !== saved(s.key)));
+  const dirty = $derived(secretsDirty || fieldsDirty);
   let busy = $state(false);
   const checks = $derived((setup.checks ?? []).filter((c) => c.id.startsWith(`plugin:${plugin.name}:`)));
   const loginFails = $derived(plugin.login && checks.some((c) => c.id.endsWith(':login') && !c.ok));
@@ -49,7 +50,8 @@
     try {
       const mine = Object.fromEntries(fields.map((s) => [s.key, values[s.key] ?? '']).filter(([, v]) => v !== ''));
       // The server replaces this plugin's settings as a whole, so an emptied field is cleared.
-      await put('/config', { pluginSettings: { [plugin.name]: mine } });
+      // Only when a plain setting changed: it needs a daemon restart, a secret does not.
+      if (fieldsDirty) await put('/config', { pluginSettings: { [plugin.name]: mine } });
       const fresh = Object.fromEntries(Object.entries(secretNew).filter(([, v]) => v !== ''));
       if (Object.keys(fresh).length) {
         secretSet = await put<Record<string, boolean>>(`/plugins/${plugin.name}/secrets`, { values: fresh });
@@ -96,11 +98,7 @@
       <a href="#/settings?tab=git">Git access</a></p>
   {/if}
   {#if plugin.kind === 'toolchain'}
-    {#if app.state?.sandbox}
-      {#key plugin.name}<Toolchains plugin={plugin.name} />{/key}
-    {:else}
-      <p class="hint">xherd runs natively, so it does not install languages on this computer: it uses what it finds. Install the version manager and the versions yourself; the checks below say whether it is found.</p>
-    {/if}
+    {#key plugin.name}<Toolchains plugin={plugin.name} />{/key}
   {/if}
   {#snippet foot()}
     {#if loginFails}<button class="btn" onclick={login}>Log in</button>{/if}

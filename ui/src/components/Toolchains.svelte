@@ -21,6 +21,9 @@
   /** Per tool: the offered versions, or why there are none (typed instead). */
   let offered = $state<Record<string, Ver[] | string>>({});
   let { plugin }: { plugin: string } = $props();
+  /** Installed versions per tool (local, works natively too). */
+  let installedVersions = $state<Record<string, string[]>>({});
+  $effect(() => { get<{ installed: Record<string, string[]> }>('/toolchains/installed').then((r) => (installedVersions = r.installed)).catch(() => {}); });
 
   async function load() {
     try {
@@ -95,6 +98,8 @@
         </div>
         {#if offered[t.tool] === 'loading'}<span class="hint">Listing versions…</span>
         {:else if typeof offered[t.tool] === 'string'}<span class="hint">Could not list versions ({offered[t.tool]}); type one.</span>{/if}
+        {#if installedVersions[t.tool]?.length}<span class="hint">Installed: <span class="mono">{installedVersions[t.tool].join(', ')}</span></span>
+        {:else}<span class="hint">No version found installed.</span>{/if}
         {#if t.default}<span class="hint">Default: <span class="mono">{t.default}</span></span>{/if}
       </li>
     {/each}

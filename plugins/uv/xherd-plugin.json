@@ -39,20 +39,29 @@
             "sh",
             "-c",
             "uv python list --only-downloads </dev/null | sed -nE 's/^cpython-([0-9]+\\.[0-9]+\\.[0-9]+)-.*/\\1/p' | sort -ruV"
+          ],
+          "installed": [
+            "sh",
+            "-c",
+            "uv python list --only-installed </dev/null | sed -nE 's/^cpython-([0-9]+\\.[0-9]+\\.[0-9]+)-.*/\\1/p' | sort -ruV | uniq"
           ]
         }
       ]
     }
   },
-  "checks": [
+  "requires": [
     {
       "name": "uv",
-      "argv": [
+      "check": [
         "sh",
         "-c",
         "if command -v uv >/dev/null 2>&1; then exit 0; fi; echo \"uv not found (install it: https://docs.astral.sh/uv/)\" >&2; exit 1"
       ],
-      "optional": true
+      "optional": true,
+      "instructions": {
+        "macos": "brew install uv",
+        "any": "curl -LsSf https://astral.sh/uv/install.sh | sh   # see https://docs.astral.sh/uv/"
+      }
     }
   ]
 }

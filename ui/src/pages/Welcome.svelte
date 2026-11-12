@@ -3,7 +3,7 @@
   import Logo from '../components/Logo.svelte';
   import CheckRow from '../components/CheckRow.svelte';
   import { app, reload } from '../lib/store.svelte';
-  import { put, post } from '../lib/api';
+  import { get, put, post } from '../lib/api';
   import { route, go } from '../lib/router.svelte';
   import { setup, loadChecks, failingRequired } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -51,6 +51,26 @@
   let loggingIn = $state<string | null>(null);
   // The plugin whose options are open.
   let opened = $state<string | null>(null);
+  // Versions found installed per tool, for the language cards (local commands, native or container).
+  let installed = $state<Record<string, string[]>>({});
+  let toolsByPlugin = $state<Record<string, string[]>>({});
+  $effect(() => {
+    if (step !== 2) return;
+    get<{ installed: Record<string, string[]> }>('/toolchains/installed').then((r) => (installed = r.installed)).catch(() => {});
+    get<{ tools: { plugin: string; tool: string }[] }>('/toolchains').then((r) => {
+      const m: Record<string, string[]> = {};
+      for (const t of r.tools) (m[t.plugin] ??= []).push(t.tool);
+      toolsByPlugin = m;
+    }).catch(() => {});
+  });
+  // "node v20.11.0, v18.19.1 installed", at most three versions.
+  function foundText(p: PluginInfo): string {
+    const parts = (toolsByPlugin[p.name] ?? []).flatMap((t) => {
+      const v = installed[t] ?? [];
+      return v.length ? [`${t} ${v.slice(0, 3).join(', ')}${v.length > 3 ? ` +${v.length - 3}` : ''}`] : [];
+    });
+    return parts.join('; ');
+  }
   // What a card says without being opened: off, ready, or not ready and why.
   function pstate(p: PluginInfo): { tone: 'off' | 'ok' | 'bad' | 'opt'; text: string } {
     if (!p.enabled) return { tone: 'off', text: 'Off' };
@@ -60,7 +80,11 @@
     const missing = p.settings.find((s) => s.required && !s.secret && !saved[s.key]);
     if (missing) return { tone: 'bad', text: `Needs ${missing.label || missing.key}` };
     // A language manager with no versions yet is the normal state: they install on first use.
-    if (p.kind === 'toolchain' && app.state?.sandbox) return { tone: 'ok', text: 'Ready · versions install on first use' };
+    if (p.kind === 'toolchain') {
+      const found = foundText(p);
+      if (found) return { tone: 'ok', text: `Ready · ${found} installed` };
+      if (app.state?.sandbox) return { tone: 'ok', text: 'Ready · versions install on first use' };
+    }
     return { tone: 'ok', text: 'Ready' };
   }
 

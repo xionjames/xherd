@@ -134,6 +134,58 @@ impl Daemon {
             .map_err(|e| fail("driver", e.to_string()))
     }
 
+    /// The versions already installed for each tool whose plugin says how to
+    /// list them (`installed`), asked in parallel as the agents' user. Local
+    /// commands only, so this works natively too; a tool whose command fails
+    /// or prints nothing is left out.
+    pub async fn toolchain_installed(&self) -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut set = tokio::task::JoinSet::new();
+        let mut seen = std::collections::HashSet::new();
+        for p in self.plugins.of_kind(xherd_plugin::Kind::Toolchain) {
+            if !self.plugin_enabled(&p.manifest.name) {
+                continue;
+            }
+            let Ok(tc) = Toolchain::of(&p.manifest) else {
+                continue;
+            };
+            for t in tc.tools {
+                let (Some(argv), true) = (t.installed.clone(), seen.insert(t.name.clone())) else {
+                    continue;
+                };
+                let mut cmd = xherd_core::exec::Cmd::new(argv)
+                    .as_agent()
+                    .timeout(std::time::Duration::from_secs(10));
+                for k in &tc.pass_env {
+                    if let Some(v) = xherd_core::runner::agent_env(k) {
+                        cmd = cmd.env(k, v);
+                    }
+                }
+                set.spawn(async move { (t.name, xherd_core::exec::run(cmd).await) });
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        while let Some(Ok((tool, r))) = set.join_next().await {
+            let Ok(o) = r else { continue };
+            if !o.success() {
+                continue;
+            }
+            let mut seen = std::collections::HashSet::new();
+            let mut v: Vec<String> = o
+                .stdout_str()
+                .lines()
+                .map(str::trim)
+                .filter(|v| valid_version(v) && seen.insert(v.to_string()))
+                .take(50)
+                .map(str::to_string)
+                .collect();
+            v.sort_by(|a, b| natural_cmp(b, a));
+            if !v.is_empty() {
+                out.insert(tool, v);
+            }
+        }
+        out
+    }
+
     /// The versions the tool's plugin offers (`list` command, best first),
     /// each marked installed when `resolve` finds it. Container only: the
     /// list needs the network and the agents' toolchain homes.

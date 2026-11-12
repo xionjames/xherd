@@ -40,20 +40,28 @@
             "bash",
             "-c",
             ". \"${NVM_DIR:-$HOME/.nvm}/nvm.sh\" --no-use && nvm ls-remote --no-colors </dev/null | grep -oE '^[ >-]*v[0-9]+\\.[0-9]+\\.[0-9]+' | tr -d ' >-' | sort -ruV | head -80"
+          ],
+          "installed": [
+            "sh",
+            "-c",
+            "ls \"${NVM_DIR:-$HOME/.nvm}/versions/node\" 2>/dev/null | sort -ruV"
           ]
         }
       ]
     }
   },
-  "checks": [
+  "requires": [
     {
       "name": "nvm",
-      "argv": [
+      "check": [
         "bash",
         "-c",
         "if . \"${NVM_DIR:-$HOME/.nvm}/nvm.sh\" --no-use >/dev/null 2>&1; then exit 0; fi; echo \"nvm not found (install it: https://github.com/nvm-sh/nvm, or set NVM_DIR)\" >&2; exit 1"
       ],
-      "optional": true
+      "optional": true,
+      "instructions": {
+        "any": "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash   # then open a new shell; see https://github.com/nvm-sh/nvm"
+      }
     }
   ]
 }
