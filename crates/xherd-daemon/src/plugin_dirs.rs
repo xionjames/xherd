@@ -128,13 +128,13 @@ fn chmod_tree(p: &Path) -> io::Result<()> {
 
 fn copy(src: &Path, dst: &Path, depth: usize, total: &mut u64) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let Ok(rd) = std::fs::read_dir(src) else {
-        return Ok(());
-    };
     if depth > MAX_DEPTH {
         return Err(io::Error::other("plugin folders nest too deeply"));
     }
-    for e in rd.flatten() {
+    // An unreadable folder fails the plugin (listed as broken) instead of
+    // loading it with files missing.
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
         let (from, to) = (e.path(), dst.join(e.file_name()));
         let Ok(t) = e.file_type() else { continue };
         if t.is_symlink() {
@@ -219,6 +219,24 @@ mod tests {
         assert!(skipped[0].error.contains("nest too deeply"), "{skipped:?}");
         assert!(dst.join("good/xherd-plugin.json").exists());
         assert!(!dst.join("deep").exists(), "a half copy is removed");
+    }
+
+    /// A sub-folder that cannot be read fails its plugin: it is not copied empty.
+    #[test]
+    fn an_unreadable_folder_fails_its_plugin() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("src"), d.path().join("dst"));
+        std::fs::create_dir_all(src.join("p/locked")).unwrap();
+        std::fs::write(src.join("p/xherd-plugin.json"), "{}").unwrap();
+        let locked = src.join("p/locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let readable = std::fs::read_dir(&locked).is_ok(); // root reads anything
+        let skipped = mirror(&src, &dst).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !readable {
+            assert_eq!(skipped.len(), 1, "{skipped:?}");
+            assert!(!dst.join("p").exists());
+        }
     }
 
     #[test]

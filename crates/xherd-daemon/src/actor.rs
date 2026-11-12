@@ -250,9 +250,16 @@ impl ActorSettings {
 /// `host` with its secrets as they are on disk now, and, when it declares a
 /// `token` secret but has none of its own, the one kept for `remote_host` in
 /// Settings → Git access (read on each use, so a new token applies at once).
+///
+/// The plugin's own token is kept only for a host the user named: one with a
+/// row in Settings → Git access (`git_hosts`) or a plain, wildcard-free name in
+/// the plugin's `data.git.hosts`. The remote host comes from the agent's PR URL
+/// or its `origin`, both of which the agent can change; a pattern such as
+/// `*gitlab*` would otherwise hand the token to `gitlab.attacker.io`.
 pub(crate) fn with_git_token(
     host: Arc<xherd_plugin::host::Host>,
     remote_host: Option<&str>,
+    git_hosts: &[xherd_core::config::GitHost],
     secrets: &std::path::Path,
 ) -> Arc<xherd_plugin::host::Host> {
     let Ok(all) = xherd_core::config::Secrets::load(secrets) else {
@@ -262,6 +269,20 @@ pub(crate) fn with_git_token(
     // The plugin's own secrets as they are now (saved in the UI, no restart).
     h.ctx.secrets =
         xherd_plugin::resolve_secrets(&h.plugin.manifest, &all.for_plugin(h.plugin.name()));
+    let named = remote_host.is_some_and(|r| {
+        git_hosts.iter().any(|g| g.host.eq_ignore_ascii_case(r))
+            || xherd_plugin::git::Git::of(&h.plugin.manifest)
+                .ok()
+                .flatten()
+                .is_some_and(|g| {
+                    g.hosts
+                        .iter()
+                        .any(|p| !p.contains('*') && p.eq_ignore_ascii_case(r))
+                })
+    });
+    if !named {
+        h.ctx.secrets.remove("token");
+    }
     let own = h
         .ctx
         .secrets
@@ -587,7 +608,7 @@ impl Actor {
             &settings.disabled_plugins,
             remote_host,
         )
-        .map(|h| with_git_token(h, remote_host, &self.env.secrets))
+        .map(|h| with_git_token(h, remote_host, &settings.git_hosts, &self.env.secrets))
     }
 
     /// The host plugin for the agent's pull request.
@@ -1062,7 +1083,7 @@ impl Actor {
                 &settings.disabled_plugins,
                 remote.as_deref(),
             )
-            .map(|h| with_git_token(h, remote.as_deref(), &secrets)) else {
+            .map(|h| with_git_token(h, remote.as_deref(), &settings.git_hosts, &secrets)) else {
                 return;
             };
             let result = host
@@ -1260,7 +1281,7 @@ impl Actor {
                 &settings.disabled_plugins,
                 remote.as_deref(),
             )
-            .map(|h| with_git_token(h, remote.as_deref(), &secrets)) else {
+            .map(|h| with_git_token(h, remote.as_deref(), &settings.git_hosts, &secrets)) else {
                 return;
             };
             let result = host.pr_template(&wd).await.map_err(|e| e.to_string());
@@ -3207,23 +3228,63 @@ mod pick_host_tests {
         std::fs::write(&f, r#"{"git": {"gitlab.example.com": "glpat-1"}}"#).unwrap();
         let gl = hosts().remove(1);
         let tok = |h: &Arc<xherd_plugin::host::Host>| h.ctx.secrets.get("token").cloned();
-        let with = with_git_token(gl.clone(), Some("gitlab.example.com"), &f);
+        let with = with_git_token(gl.clone(), Some("gitlab.example.com"), &[], &f);
         assert_eq!(tok(&with), Some("glpat-1".into()));
         assert_eq!(
-            tok(&with_git_token(gl.clone(), Some("other.example.com"), &f)),
+            tok(&with_git_token(
+                gl.clone(),
+                Some("other.example.com"),
+                &[],
+                &f
+            )),
             None
         );
-        assert_eq!(tok(&with_git_token(gl.clone(), None, &f)), None);
+        assert_eq!(tok(&with_git_token(gl.clone(), None, &[], &f)), None);
         // The plugin's own token (saved in the UI) wins, and applies without a restart.
         std::fs::write(
             &f,
             r#"{"git": {"gitlab.example.com": "glpat-1"}, "gitlab": {"token": "mine"}}"#,
         )
         .unwrap();
+        let rows = [row("gitlab.example.com", None)];
         assert_eq!(
-            tok(&with_git_token(gl, Some("gitlab.example.com"), &f)),
+            tok(&with_git_token(gl, Some("gitlab.example.com"), &rows, &f)),
             Some("mine".into())
         );
+    }
+
+    /// The remote host is what the agent reports: a pattern such as `*gitlab*`
+    /// claims `gitlab.attacker.io`, but the plugin's own token is not sent there.
+    #[test]
+    fn the_plugins_own_token_goes_only_to_a_host_the_user_named() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("secrets.json");
+        std::fs::write(
+            &f,
+            r#"{"gitlab": {"token": "mine"}, "github": {"token": "gh"}}"#,
+        )
+        .unwrap();
+        let [gh, gl, _] = <[_; 3]>::try_from(hosts()).ok().unwrap();
+        let tok = |h: Arc<xherd_plugin::host::Host>, r: Option<&str>, rows: &[GitHost]| {
+            with_git_token(h, r, rows, &f)
+                .ctx
+                .secrets
+                .get("token")
+                .cloned()
+        };
+        // Unknown host, claimed only by the wildcard pattern: no token.
+        assert_eq!(tok(gl.clone(), Some("gitlab.attacker.io"), &[]), None);
+        assert_eq!(tok(gl.clone(), None, &[]), None);
+        // A host with a row in Git access (any case) gets it.
+        let rows = [row("gitlab.corp.example", None)];
+        assert_eq!(
+            tok(gl.clone(), Some("gitlab.corp.example"), &rows),
+            Some("mine".into())
+        );
+        assert_eq!(tok(gl, Some("gitlab.attacker.io"), &rows), None);
+        // A plain name in the plugin's own patterns needs no row.
+        assert_eq!(tok(gh.clone(), Some("github.com"), &[]), Some("gh".into()));
+        assert_eq!(tok(gh, Some("github.com.evil.io"), &[]), None);
     }
 
     /// A plugin that declares no `token` secret (Jira, an external tracker)
@@ -3238,7 +3299,7 @@ mod pick_host_tests {
             plugin: reg.get("jira").unwrap().clone(),
             ctx: xherd_plugin::Context::default(),
         });
-        let with = with_git_token(jira, Some("github.com"), &f);
+        let with = with_git_token(jira, Some("github.com"), &[], &f);
         assert_eq!(with.ctx.secrets.get("token"), None);
     }
 

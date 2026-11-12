@@ -408,7 +408,9 @@ impl Host {
                     .get("gh")
                     .and_then(Value::as_str)
                     .unwrap_or("gh");
-                self.gh(gh, dir, &["issue", "comment", issue, "--body", &marked])
+                // One argument, so a text starting with `-` is never read as an option.
+                let body_arg = format!("--body={marked}");
+                self.gh(gh, dir, &["issue", "comment", issue, &body_arg])
                     .await?;
                 Ok(())
             }
@@ -444,11 +446,12 @@ impl Host {
                     .get("acli")
                     .and_then(Value::as_str)
                     .unwrap_or("acli");
+                let body_arg = format!("--body={body}");
                 self.acli(
                     dir,
                     acli,
                     &[
-                        "jira", "workitem", "comment", "create", "--key", issue, "--body", body,
+                        "jira", "workitem", "comment", "create", "--key", issue, &body_arg,
                     ],
                 )
                 .await?;
@@ -1013,7 +1016,7 @@ esac"#,
         // The text is one argument (the fake echoes them joined) and carries the marker.
         assert!(
             calls.starts_with(
-                "issue comment 12 --body Update:\n- done $(rm -rf /) `x` \"q\"\n\n<!-- xherd -->"
+                "issue comment 12 --body=Update:\n- done $(rm -rf /) `x` \"q\"\n\n<!-- xherd -->"
             ),
             "{calls}"
         );
@@ -1053,12 +1056,25 @@ esac"#,
             .unwrap();
         let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
         assert!(
-            calls.contains("jira workitem comment create --key PAY-1 --body plain text\n"),
+            calls.contains("jira workitem comment create --key PAY-1 --body=plain text\n"),
             "{calls}"
         );
         assert!(
             !calls.lines().last().unwrap().contains("xherd"),
             "no marker on Jira"
+        );
+        // A text that starts with a dash stays the value of the flag.
+        host.ticket_comment(d.path(), "PAY-1", "PAY-1", "--key PAY-2")
+            .await
+            .unwrap();
+        let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
+        assert!(
+            calls
+                .lines()
+                .last()
+                .unwrap()
+                .ends_with("--key PAY-1 --body=--key PAY-2"),
+            "{calls}"
         );
     }
 

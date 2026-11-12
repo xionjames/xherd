@@ -404,7 +404,13 @@ impl Daemon {
     /// `PUT /git/hosts`: save hosts and tokens, rewrite the managed config.
     pub fn set_git_hosts(&self, u: HostsUpdate) -> Result<Value, ActionError> {
         let mut seen = std::collections::BTreeSet::new();
-        let providers = self.providers();
+        // A row may name a provider that is switched off (it still is one).
+        let providers: Vec<String> = self
+            .plugins
+            .of_kind(Kind::Host)
+            .filter(|p| matches!(Git::of(&p.manifest), Ok(Some(_))))
+            .map(|p| p.name().to_string())
+            .collect();
         for h in &u.hosts {
             let ok = !h.host.is_empty()
                 && h.host
@@ -429,7 +435,7 @@ impl Daemon {
                 return Err(fail("bad_config", "protocols are https and ssh"));
             }
             if let Some(p) = &h.provider
-                && !providers.iter().any(|(n, _)| n == p)
+                && !providers.contains(p)
             {
                 return Err(fail(
                     "bad_config",
@@ -437,10 +443,15 @@ impl Daemon {
                 ));
             }
         }
-        let mut c = self.live_config();
-        c.git_hosts = u.hosts;
-        c.save(&self.paths.config())
-            .map_err(|e| fail("io", e.to_string()))?;
+        let c = {
+            // Held from reading the config to saving it, like `save_config`.
+            let _w = self.config_write.lock().unwrap_or_else(|e| e.into_inner());
+            let mut c = self.live_config();
+            c.git_hosts = u.hosts;
+            c.save(&self.paths.config())
+                .map_err(|e| fail("io", e.to_string()))?;
+            c
+        };
         if !u.tokens.is_empty() {
             let _write = self.secrets_write.lock().unwrap_or_else(|e| e.into_inner());
             let mut s = self.live_secrets();

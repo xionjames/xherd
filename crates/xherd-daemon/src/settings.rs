@@ -395,6 +395,8 @@ impl Daemon {
     }
 
     pub fn save_config(&self, patch: ConfigPatch) -> Result<Value, ActionError> {
+        // Held from reading the config to saving it (`set_git_hosts` too).
+        let write = self.config_write.lock().unwrap_or_else(|e| e.into_inner());
         let mut c = self.saved_config()?;
         apply(&mut c, patch)?;
         self.check_disabled(&c.disabled_plugins)?;
@@ -404,6 +406,7 @@ impl Daemon {
             code: "io",
             message: e.to_string(),
         })?;
+        drop(write);
         // Settings the actors read apply at once (the rest needs a restart).
         self.settings.set(ActorSettings::from_config(
             &c,

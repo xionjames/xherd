@@ -110,9 +110,15 @@ impl Link {
         }
         let re =
             Regex::new(&self.pattern).map_err(|e| format!("pattern {:?}: {e}", self.pattern))?;
-        if repeats_a_repeat(&self.pattern) {
+        if repeats_a_repeat(&self.pattern) || repeats_an_alternation(&self.pattern) {
             return Err(format!(
-                "pattern {:?} repeats a repeated group",
+                "pattern {:?} repeats a repeated group or a group of alternatives",
+                self.pattern
+            ));
+        }
+        if let Some(what) = not_javascript(&self.pattern) {
+            return Err(format!(
+                "pattern {:?} uses {what}, which the browser does not read the same way",
                 self.pattern
             ));
         }
@@ -177,6 +183,76 @@ fn repeats_a_repeat(p: &str) -> bool {
     false
 }
 
+/// A quantified group of alternatives (`(a|ab)*`, `(\w|\d)+x`): overlapping
+/// branches backtrack exponentially in the browser's engine.
+fn repeats_an_alternation(p: &str) -> bool {
+    let b = p.as_bytes();
+    let (mut stack, mut i, mut class) = (Vec::<bool>::new(), 0, false);
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 1,
+            b'[' if !class => class = true,
+            b']' if class => class = false,
+            b'(' if !class => stack.push(false),
+            b'|' if !class => {
+                if let Some(top) = stack.last_mut() {
+                    *top = true;
+                }
+            }
+            b')' if !class => {
+                let alt = stack.pop().unwrap_or(false);
+                if alt
+                    && b.get(i + 1)
+                        .is_some_and(|c| matches!(c, b'+' | b'*' | b'{'))
+                {
+                    return true;
+                }
+                // `((a|ab))*`: an alternation inside makes the parent one.
+                if let Some(top) = stack.last_mut() {
+                    *top |= alt;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Syntax the `regex` crate accepts that JavaScript reads differently or not
+/// at all (the pattern is compiled twice, here and in the browser, where a
+/// failure would silently drop the rule): inline flags and named groups,
+/// POSIX classes, `\A` `\z` `\Z`, `\p` `\P`.
+fn not_javascript(p: &str) -> Option<&'static str> {
+    let b = p.as_bytes();
+    let (mut i, mut class) = (0, false);
+    while i < b.len() {
+        match b[i] {
+            b'\\' => {
+                match b.get(i + 1) {
+                    Some(b'A' | b'z' | b'Z') => return Some("\\A, \\z or \\Z"),
+                    Some(b'p' | b'P') => return Some("\\p"),
+                    _ => {}
+                }
+                i += 1;
+            }
+            b'[' if !class => {
+                class = true;
+                if b.get(i + 1) == Some(&b'[') && b.get(i + 2) == Some(&b':') {
+                    return Some("a POSIX class");
+                }
+            }
+            b']' if class => class = false,
+            b'(' if !class && b.get(i + 1) == Some(&b'?') && b.get(i + 2) != Some(&b':') => {
+                return Some("(? other than (?:");
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +289,14 @@ mod tests {
             json!({"links": [{"pattern": r"(\w*)*b", "url": "https://x/{0}"}]}),
             json!({"links": [{"pattern": "(a|b+){2,}", "url": "https://x/{0}"}]}),
             json!({"links": [{"pattern": "(?=a)b", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": "(a|ab)*c", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": r"(\w|\d)+x", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": "((a|ab))*c", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": "(?i)abc", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": "(?P<n>a)", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": "[[:alpha:]]+", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": r"\Aabc", "url": "https://x/{0}"}]}),
+            json!({"links": [{"pattern": r"\pL+", "url": "https://x/{0}"}]}),
             json!({"links": [{"pattern": r"(a)\1", "url": "https://x/{0}"}]}),
             json!({"links": [{"pattern": "a".repeat(201), "url": "https://x/{0}"}]}),
             json!({"links": [{"pattern": "a", "url": "http://x/{0}"}]}),
@@ -226,7 +310,15 @@ mod tests {
             assert!(Tracker::of(&manifest(bad.clone())).is_err(), "{bad}");
         }
         // Plain repeats and a quantified group with nothing repeated inside are fine.
-        for ok in [r"[A-Z]+-\d+", r"(ab)+", r"(\d+)\.(\d+)", r"[+*]+-\d+"] {
+        for ok in [
+            r"[A-Z]+-\d+",
+            r"(ab)+",
+            r"(\d+)\.(\d+)",
+            r"[+*]+-\d+",
+            r"(?:GH-)?(a|b)",
+            r"(a|b)?c",
+            r"[(|)]+x",
+        ] {
             let m = manifest(json!({"links": [{"pattern": ok, "url": "https://x/{0}"}]}));
             assert!(Tracker::of(&m).is_ok(), "{ok}");
         }
