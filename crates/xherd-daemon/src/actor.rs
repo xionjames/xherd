@@ -1584,11 +1584,16 @@ impl Actor {
                 "user.cancel"
             }
             UserAction::Send { text } => {
-                self.send(text, 1).await?;
+                if self.agent.status == Status::Parked {
+                    self.unpark_with(text.clone()).await;
+                } else {
+                    self.send(text, 1).await?;
+                }
                 // A message while a question is open is its answer (xap.md `ask`).
                 if matches!(self.agent.gate, Some(Gate::Question { .. })) {
                     self.agent.gate = None;
                     self.agent.generation += 1;
+                    // No-op for a parked agent (already queued).
                     self.agent.fire(Trigger::UserInput, self.now());
                     "user.answer"
                 } else {
@@ -2367,7 +2372,7 @@ impl Actor {
         if comment.trim().is_empty() {
             return Err(refuse("usage", "say what to change"));
         }
-        let gate = self.gate_for_user(false)?;
+        let gate = self.gate_for_user(true)?;
         // Remember the documents as the user read them, so the UI can show
         // what the agent changed in answer (no version history is kept).
         if let (Gate::Docs { files, .. }, Ok(wd)) = (&gate, self.workdir()) {
@@ -2383,7 +2388,12 @@ impl Actor {
             }
         }
         let text = xherd_flow::approve::changes_message(&gate, comment);
-        self.send(&text, 1).await?;
+        let parked = self.agent.status == Status::Parked;
+        if parked {
+            self.unpark_with(text).await;
+        } else {
+            self.send(&text, 1).await?;
+        }
         // For the work log's rework count (spec §16.4): which gate it was.
         let label = match &gate {
             Gate::Docs { stage, .. } => stage.clone(),
@@ -2392,8 +2402,19 @@ impl Actor {
         };
         self.log(None, "change-request", Some(json!({"gate": label})))
             .await;
-        self.agent.fire(Trigger::UserInput, self.now());
+        if !parked {
+            self.agent.fire(Trigger::UserInput, self.now());
+        }
         Ok(())
+    }
+
+    /// A message or change request for a parked agent (R-028): it gets a slot
+    /// again and the text is typed when its next session starts, which
+    /// continues the last conversation when the runtime can find it.
+    async fn unpark_with(&mut self, text: String) {
+        self.agent.next_prompt = Some(text);
+        self.agent.fire(Trigger::Unpark, self.now());
+        self.prepare_resume().await;
     }
 
     /// The agent stopped without a declared gate: open one from the flow's
