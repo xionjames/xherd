@@ -58,6 +58,61 @@ pub struct Check {
     pub optional: bool,
 }
 
+/// A command-line tool the plugin needs (R-691). It becomes a check named
+/// `requires:<name>`; when it fails, the container offers `install` from the
+/// UI (in a terminal, into the agents' home) and a native run shows
+/// `instructions` for its OS (xherd never installs on the host, R-653).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Requirement {
+    /// The binary's name.
+    pub name: String,
+    /// How to tell it is there; default: `command -v <name>`.
+    #[serde(default)]
+    pub check: Option<Vec<String>>,
+    /// argv that installs it, run in the container only.
+    #[serde(default)]
+    pub install: Option<Vec<String>>,
+    /// Text by OS (`macos`, `linux`, `any`) for a native run.
+    #[serde(default)]
+    pub instructions: BTreeMap<String, String>,
+    /// A missing optional tool is reported but never blocks.
+    #[serde(default)]
+    pub optional: bool,
+}
+
+impl Requirement {
+    /// The check this requirement stands for.
+    pub fn as_check(&self) -> Check {
+        Check {
+            name: format!("{REQUIRES_PREFIX}{}", self.name),
+            argv: self.check.clone().unwrap_or_else(|| {
+                vec![
+                    "sh".into(),
+                    "-c".into(),
+                    r#"command -v "$1" >/dev/null 2>&1 || { echo "$1 not found" >&2; exit 1; }"#
+                        .into(),
+                    "_".into(),
+                    self.name.clone(),
+                ]
+            }),
+            fix: None,
+            optional: self.optional,
+        }
+    }
+
+    /// The instructions for `os` (`std::env::consts::OS`), else `any`.
+    pub fn instructions_for(&self, os: &str) -> Option<&str> {
+        self.instructions
+            .get(os)
+            .or_else(|| self.instructions.get("any"))
+            .map(String::as_str)
+    }
+}
+
+/// Prefix of the check name a [`Requirement`] makes.
+pub const REQUIRES_PREFIX: &str = "requires:";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
@@ -86,6 +141,9 @@ pub struct Manifest {
     pub hooks: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     pub checks: Vec<Check>,
+    /// Tools the plugin needs (R-691).
+    #[serde(default)]
+    pub requires: Vec<Requirement>,
     /// Interactive login (runs in a terminal the UI shows). Its status is a
     /// check named [`LOGIN_CHECK`].
     #[serde(default)]
@@ -116,6 +174,15 @@ pub fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
 }
 
 impl Manifest {
+    /// The checks the plugin declares and those its requirements make.
+    pub fn all_checks(&self) -> Vec<Check> {
+        self.checks
+            .iter()
+            .cloned()
+            .chain(self.requires.iter().map(Requirement::as_check))
+            .collect()
+    }
+
     pub fn parse(json: &str) -> Result<Manifest, String> {
         let m: Manifest =
             serde_json::from_str(json).map_err(|e| format!("{MANIFEST_FILE}: {e}"))?;
@@ -161,6 +228,29 @@ impl Manifest {
                 return Err(format!("setting {:?} is declared twice", s.key));
             }
         }
+        let mut seen = std::collections::HashSet::new();
+        for r in &self.requires {
+            let plain = !r.name.is_empty()
+                && r.name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            if !plain || !seen.insert(&r.name) {
+                return Err(format!("requires {:?}: not a plain, unique name", r.name));
+            }
+            if let Some(i) = &r.install
+                && i.first().is_none_or(|p| p.starts_with("./"))
+            {
+                return Err(format!(
+                    "requires {}: install must name a program on PATH",
+                    r.name
+                ));
+            }
+            for t in r.instructions.values().chain(r.install.iter().flatten()) {
+                if t.chars().any(|c| c.is_control() && c != '\n') {
+                    return Err(format!("requires {}: control character", r.name));
+                }
+            }
+        }
         let argvs = self
             .commands
             .iter()
@@ -171,6 +261,11 @@ impl Manifest {
                     .iter()
                     .map(|c| (format!("check {}", c.name), &c.argv)),
             )
+            .chain(self.requires.iter().filter_map(|r| {
+                r.check
+                    .as_ref()
+                    .map(|c| (format!("requires {}", r.name), c))
+            }))
             .chain(
                 self.checks
                     .iter()
@@ -246,5 +341,43 @@ mod tests {
         assert_eq!(parse_version("1.2.3-rc.1"), Some((1, 2, 3)));
         assert_eq!(parse_version("1.x"), None);
         assert!(parse_version("0.10.0") > parse_version("0.9.9"));
+    }
+
+    #[test]
+    fn requirements_become_checks_and_say_how_to_install() {
+        let m = Manifest::parse(
+            r#"{"name": "p", "kind": "host", "version": "0.1.0",
+                "checks": [{"name": "c", "argv": ["true"]}],
+                "requires": [{"name": "glab", "optional": true,
+                    "install": ["sh", "-c", "echo hi"],
+                    "instructions": {"macos": "brew install glab", "any": "see the docs"}}]}"#,
+        )
+        .unwrap();
+        let names: Vec<_> = m.all_checks().into_iter().map(|c| c.name).collect();
+        assert_eq!(names, ["c", "requires:glab"]);
+        let r = &m.requires[0];
+        assert!(r.as_check().optional);
+        assert_eq!(r.as_check().argv.last().map(String::as_str), Some("glab"));
+        assert_eq!(r.instructions_for("macos"), Some("brew install glab"));
+        assert_eq!(r.instructions_for("linux"), Some("see the docs"));
+    }
+
+    #[test]
+    fn bad_requirements_are_refused() {
+        for bad in [
+            r#"{"name": "a b"}"#,
+            r#"{"name": "x", "install": ["./local.sh"]}"#,
+            r#"{"name": "x", "install": []}"#,
+            r#"{"name": "x", "instructions": {"any": "a\u0007b"}}"#,
+            r#"{"name": "x", "unknown": 1}"#,
+        ] {
+            let m = format!(
+                r#"{{"name": "p", "kind": "host", "version": "0.1.0", "requires": [{bad}]}}"#
+            );
+            assert!(Manifest::parse(&m).is_err(), "{bad}");
+        }
+        let twice = r#"{"name": "p", "kind": "host", "version": "0.1.0",
+            "requires": [{"name": "x"}, {"name": "x"}]}"#;
+        assert!(Manifest::parse(twice).is_err());
     }
 }

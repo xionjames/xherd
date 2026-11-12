@@ -398,7 +398,7 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 /// Run a plugin's checks: pass = exit 0 within 10 s (R-502).
 pub async fn run_checks(p: &Plugin, ctx: &Context) -> Vec<CheckResult> {
     let mut out = Vec::new();
-    for c in &p.manifest.checks {
+    for c in &p.manifest.all_checks() {
         let (ok, message) = if p.builtin() && c.argv[0].starts_with("./") {
             (false, "built-in plugin cannot run a ./ check".to_string())
         } else {

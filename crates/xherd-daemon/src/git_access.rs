@@ -610,6 +610,41 @@ impl Daemon {
             .map_err(|e| fail("driver", e.to_string()))
     }
 
+    /// Run the `install` argv of a plugin's required tool in the login
+    /// terminal (`/ws/setup/plugin-login`), container only: a native run
+    /// never installs on the host (R-653).
+    pub async fn start_plugin_install(&self, plugin: &str, tool: &str) -> Result<(), ActionError> {
+        if !self.sandbox {
+            return Err(fail(
+                "not_fixable",
+                "xherd runs natively and does not install tools on this computer; follow the instructions shown",
+            ));
+        }
+        let argv = self
+            .plugins
+            .get(plugin)
+            .ok_or_else(|| fail("no_plugin", format!("no plugin named {plugin}")))?
+            .manifest
+            .requires
+            .iter()
+            .find(|r| r.name == tool)
+            .and_then(|r| r.install.clone())
+            .ok_or_else(|| fail("not_fixable", format!("{plugin} has no install for {tool}")))?;
+        let tmux = xherd_term::Tmux::new(self.config.tmux_server());
+        if tmux.has_session(PLUGIN_LOGIN_SESSION).await {
+            let _ = tmux.kill_session(PLUGIN_LOGIN_SESSION).await;
+        }
+        let home =
+            PathBuf::from(xherd_core::runner::agent_env("HOME").unwrap_or_else(|| "/".into()));
+        // Wait for Enter on failure so the error stays on the screen (as for toolchains).
+        let script = "\"$@\" || { echo; echo 'Install failed. Press Enter to close.'; read _; }";
+        let mut wrapped = vec!["sh".to_string(), "-c".into(), script.into(), "_".into()];
+        wrapped.extend(argv);
+        tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &[], &wrapped)
+            .await
+            .map_err(|e| fail("driver", e.to_string()))
+    }
+
     /// `xherd git doctor` (R-687): in order, per protocol the host uses, up to
     /// the first failure; with a repository, its API and git transport too.
     /// Secrets never appear in the findings.

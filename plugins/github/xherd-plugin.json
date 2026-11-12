@@ -9,8 +9,18 @@
     { "key": "token", "label": "Token (GH_TOKEN; empty = gh's own login)", "secret": true }
   ],
   "timeoutSeconds": 30,
+  "requires": [
+    {
+      "name": "gh",
+      "check": ["gh", "--version"],
+      "instructions": {
+        "macos": "brew install gh",
+        "linux": "See https://github.com/cli/cli#installation (apt, dnf, or a release download)",
+        "any": "See https://github.com/cli/cli#installation"
+      }
+    }
+  ],
   "checks": [
-    { "name": "gh", "argv": ["gh", "--version"] },
     { "name": "gh auth", "argv": ["gh", "auth", "status"], "optional": true }
   ],
   "data": {
