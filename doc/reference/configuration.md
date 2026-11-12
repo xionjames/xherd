@@ -37,7 +37,8 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `sensitivePaths` | `[]` | Globs: a commit proposal touching one is held. `*` stays within a folder, `**` crosses folders, a pattern without `/` matches a file name anywhere |
 | `gitUserName`, `gitUserEmail` | none | Commit identity of agents (both needed) |
 | `gitIdentities` | `[]` | Identities by remote: `{scope: "github.com/my-company", name, email}`, matched on the remote URL over HTTPS or SSH |
-| `gitHosts` | `[]` | Git access per host: protocols, where the HTTPS token comes from (`gh`, `glab`, `xherd`, `none`), username, CA bundle, remote rewriting |
+| `gitHosts` | `[]` | Git access per host (Settings → Git access): `host`, `protocols`, `provider` (a host plugin: `github`, `gitlab`, `bitbucket` or an external one; unset = the first whose host patterns claim the name), `credential` (where git gets the HTTPS token: `provider` = the provider's CLI helper such as `gh auth git-credential`, `xherd` = the token kept in `secrets.json`, `none` = git's own configuration), `username`, `caFile`, `preferHttps` / `preferSsh` (rewrite remotes) |
+| `toolchainDefaults` | `{}` | Tool → version used when a worktree has no version file for it (`{"java": "21.0.5-tem"}`); set from Settings → Plugins → a toolchain. Version files always win |
 | `pluginSettings` | `{}` | Non-secret settings by plugin name (for example `github.gh`, the `gh` binary) |
 | `disabledPlugins` | `[]` | Plugins switched off. At least one of each kind stays on |
 | `updateCheck` | `true` | Check for new versions |
@@ -67,7 +68,25 @@ Changes apply to running agents at once, except `instructions`, which is written
 
 ## What the UI can change
 
-Settings → General, Gates & autonomy, Notifications, Git access and Plugins cover: `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays`, `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `permissionMode`, `defaultRuntime`, `maxAutoApprovalsInRow`, `ntfyServer`, `ntfyTopic`, `mutedNotifications`, `desktopNotifications`, the commit identities, git hosts and plugin settings. The remaining keys (`maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, the budgets, `maxDiffLines`, `sensitivePaths`) are accepted by `PUT /api/v1/config` with range checks but have no form yet; edit `config.json` and restart.
+| Settings tab | Keys |
+|---|---|
+| General | `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays` |
+| Gates & autonomy | `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `maxAutoApprovalsInRow`, `defaultRuntime`, `permissionMode` |
+| Notifications | `mutedNotifications`, `desktopNotifications`, `ntfyServer`, `ntfyTopic` |
+| Open in | `openIn` |
+| Git access | `gitUserName`, `gitUserEmail`, `gitIdentities`, `gitHosts` and their tokens |
+| Repo profiles | Profiles (in the database) |
+| Plugins | `disabledPlugins`, `pluginSettings`, plugin secrets, `toolchainDefaults` |
+
+The other keys (`maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, the budgets, `maxDiffLines`, `sensitivePaths`) have no form yet. `PUT /api/v1/config` sets them with range checks and they apply at once:
+
+```sh
+curl -X PUT http://127.0.0.1:4740/api/v1/config \
+  -H "Authorization: Bearer $(jq -r .userToken "$XHERD_HOME/config.json")" \
+  -H 'Content-Type: application/json' -d '{"maxSessionMinutes": 90}'
+```
+
+Or edit `config.json` by hand and restart the daemon. Per repository, a repo profile sets `sensitivePaths`, `maxDiffLines` and the per-agent budget from the UI.
 
 ## Per-agent files
 
@@ -82,3 +101,6 @@ Every worktree has a `.xherd/` folder (excluded from git through the repository'
 | `toolchain.json` | The tools the worktree's version files ask for |
 | `hooks/` | The worktree's git hooks, including the pre-push guard |
 | `commit-error.txt` | Written when git refuses an approved commit |
+| `HANDOFF.md` | The note an agent writes when paused; read again on resume |
+| `ledger/issues.jsonl` | Out-of-scope problems the agent recorded (`xherd issue add`) |
+| `AGENTS.proposed.md` | A proposed update of the repository's `AGENTS.md` (Shared memory) |

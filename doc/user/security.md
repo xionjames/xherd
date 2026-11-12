@@ -8,9 +8,9 @@ xherd runs coding agents that can read, write and execute. This page says what i
 |---|---|
 | An agent is wrong or overreaches | Approval gates: nothing moves on without a human approval (or an autonomy level you chose), and approvals are of exact content hashes |
 | An agent touches files it should not | Each agent has its own worktree; a commit proposal is checked against the `files:` of the tasks it lists (scope fence) |
-| A secret or a risky change slips into a commit | Tripwires on commit proposals: secret patterns, sensitive path globs, diff size. A hit holds the gate for a human |
+| A secret or a risky change slips into a commit | Tripwires on commit proposals: secret patterns, sensitive path globs, diff size, and a repo profile's lint and test commands. A hit holds the gate for a human |
 | A bad push | Pre-push guard in every worktree |
-| Text from a pull request or ticket steers the agent | Untrusted text is wrapped in a block with a per-message random token, and the instructions say not to follow it. A reply built from comments is only posted after a human-only approval |
+| Text from a pull request or ticket steers the agent | PR comments reach the agent wrapped in a block with a per-message random token, and the instructions say not to follow it. A reply built from comments is only posted after a human-only approval. Ticket text is shown to you, never given to agents, and the UI renders it without anything that loads by itself (no images, media or remote styles) |
 | Runaway cost or time | Token budgets (per agent and per day), a session length limit, a run limit of consecutive auto-approvals, a review loop limit |
 | An agent reads xherd's own secrets | In Docker: the daemon runs as a different user with its own volume (see below) |
 | A web page attacks the local daemon | Requests carrying another site's `Origin` are refused; local rights come from the address, not from a cookie |
@@ -48,9 +48,15 @@ The daemon runs as `xherd-daemon`; agents run as a user with your host ids. The 
 - Tripwire findings are masked to four characters, and messages never include the matched text.
 - Do not paste secrets into prompts: agent transcripts are plain files in the runtime's folder.
 
+- A host plugin's token goes only to hosts you named: a host with a row in Settings → Git access, or a name without wildcards in the plugin's own host list. A remote or PR URL that the agent controls cannot make xherd send a token to another server.
+- Nothing is posted to a ticket or a pull request without your click: PR replies after you approve the `pr-review` gate, a ticket summary after *Post to the ticket*. xherd's own posts carry a hidden marker so it never answers itself.
+
 ## Plugins
 
-Built-in plugins are embedded. External plugins in `<data root>/plugins/` run with your rights and are not pinned to a version; the security check lists them. Install only plugins you have read.
+Built-in plugins are embedded. External plugins in `<data root>/plugins/` are not pinned to a version; the security check lists them. Install only plugins you have read.
+
+- Natively they run with your rights.
+- In the container they run as the agents' user, not the daemon's: they can use the agents' `gh`/`glab` logins but cannot read `config.json`, `secrets.json` or the database. The daemon copies them at start to a folder that user can read (a restart picks up a new plugin). They receive only the secrets they declare.
 
 ## Reporting a problem
 

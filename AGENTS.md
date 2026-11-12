@@ -9,7 +9,7 @@ xherd: a daemon (Rust) that runs, watches and steers many coding agents, each in
 - `doc/internal/spec.md` — what (requirements `R-xxx`)
 - `doc/internal/design.md` — how (crates, architecture, milestones §18, decisions §19)
 - `doc/reference/xap.md` — agent protocol (`xherd hook|report|gate|task|commit …`)
-- `doc/user/getting-started.md` (end users: published releases), `doc/dev/from-source.md` (building the image or binary from the repo), `doc/user/docker.md`, `doc/dev/architecture.md`, `doc/dev/development.md`, `doc/reference/cli.md`, `doc/reference/configuration.md`, `doc/user/security.md`, `doc/extend/plugins.md` — the final user and developer docs (replace spec/design when those go; keep them current with behaviour changes)
+- The final docs, by reader (index `doc/README.md`; layout and rules in `doc/dev/development.md` → Writing docs): `doc/user/` (`getting-started.md` for published releases, `guide.md` using xherd, `docker.md`, `security.md`), `doc/reference/` (`cli.md`, `configuration.md`, `http-api.md`, `xap.md`), `doc/extend/` (`plugins.md`, `flow-packs.md`, `integrate-your-sdd.md`), `doc/dev/` (`from-source.md`, `development.md`, `architecture.md`). They replace spec/design when those go; **update them in the same change as the behaviour they describe** (a new CLI flag → `cli.md`, a config key → `configuration.md`, a route → `http-api.md`, a user-visible feature → `guide.md`). `README.md` at the root is the presentation page.
 - `ROADMAP.md` — what is left, by theme (the milestone checklist in `doc/internal/design.md` §18 stays the source of truth; update both)
 
 Decisions in `doc/internal/design.md` §19 are settled; do not re-open them in code. Cite requirement ids (`R-009`) in doc comments where code implements one.

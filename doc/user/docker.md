@@ -37,14 +37,14 @@ flowchart LR
 
 A git worktree stores absolute paths in its `.git` file and in the main repository's `.git/worktrees/<name>/gitdir`. Mounting the workspace at the identical path keeps those pointers valid on the host and in the container, and every path shown in the UI works in your IDE.
 
-Repositories outside the workspace are refused with a message telling you to clone into the workspace.
+Repositories outside the workspace are refused, with a message telling you to clone into the workspace or to mount their folder too: `xherd docker init --force --extra-path <folder>` mounts another host folder at the same path (`XHERD_EXTRA_PATHS` in the container), then restart.
 
 ## Two users inside the container
 
 `xherd init` (the entrypoint, the only root process) creates two unprivileged users and starts everything under `tini`:
 
-- **Agents' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files agents write are yours. Runs Claude Code, opencode or Codex, git and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
-- **Daemon's user** (`xherd-daemon`): runs the daemon with a system-only `PATH`. It owns the configuration, secrets and database in a volume the agents cannot read, and asks the runner to do anything that must happen as the agents' user (git commands, `verify:` commands, plugin commands).
+- **Agents' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files agents write are yours. Runs Claude Code, opencode or Codex, git, plugin commands and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
+- **Daemon's user** (`xherd-daemon`): runs the daemon with a system-only `PATH`. It owns the configuration, secrets and database in a volume the agents cannot read, and asks the runner to do anything that must happen as the agents' user (git commands, `verify:` commands, plugin commands and checks).
 
 An agent therefore cannot read your tokens or edit the daemon's configuration. Other consequences:
 
@@ -58,7 +58,7 @@ Native installs have a single user; `xherd security check` says so.
 
 See [Getting started](getting-started.md#run-with-docker) for the first start with a published image, and [Running from source](../dev/from-source.md#docker-built-from-the-repository) to build it from this repository (`deploy/compose/compose.yaml`). The image is built from `deploy/docker/Dockerfile` (multi-stage: UI, daemon, runtime on Debian trixie). Version pins are `ARG`s at the top of the runtime stage.
 
-`xherd docker init` writes an equivalent `compose.yaml` and `.env` to `~/.config/xherd/` for a published image, detecting the container engine.
+`xherd docker init` writes an equivalent `compose.yaml` and `.env` to `~/.config/xherd/` for a published image, detecting the container engine (`--workspace`, `--image`, `--port`, `--extra-path`, `--force` to rewrite). `xherd docker doctor` and `xherd docker update` work on that file. This needs the `xherd` binary on the host; with only the downloaded `compose.yaml`, use the `docker compose` commands of [Getting started](getting-started.md#everyday-operation).
 
 ### Environment
 
@@ -76,7 +76,9 @@ Settings → Git access stores a token per host (HTTPS) or lets you use SSH. On 
 
 ### Toolchains
 
-Agents get the languages a repository asks for. At every session start the daemon reads the worktree's version files (`.sdkmanrc`, `.nvmrc`, `.node-version`, `go.mod`, `rust-toolchain.toml`, `rust-toolchain`, `.python-version`, `pyproject.toml`) and starts the runtime through `xherd toolchain exec`, which installs missing tools into the `xherd-home` volume first. Nothing is baked into the image except the version managers' seeds.
+Agents get the languages a repository asks for (a native install installs nothing and uses your `PATH`). At every session start the daemon reads the worktree's version files (`.sdkmanrc`, `.nvmrc`, `.node-version`, `go.mod`, `rust-toolchain.toml`, `rust-toolchain`, `.python-version`, `pyproject.toml`) and starts the runtime through `xherd toolchain exec`, which installs missing tools into the `xherd-home` volume first. Nothing is baked into the image except the version managers' seeds. Settings → Plugins → a language shows its installed versions, sets a default for repositories without a version file (`toolchainDefaults`), and installs a version in a terminal in the browser.
+
+Tools a plugin needs that the image does not carry (for example Atlassian's `acli` for the Jira tracker) are installed the same way from the plugin's options, into the agents' home.
 
 ### Open in your IDE
 

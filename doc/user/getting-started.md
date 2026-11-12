@@ -71,7 +71,7 @@ Run these in the folder of `compose.yaml`.
 | Logs | `docker compose logs -f` |
 | Restart | `docker compose restart`: agents waiting at a gate are parked, the others resumed |
 | Stop | `docker compose down` (the volumes and the workspace stay) |
-| `xherd` commands | `docker exec -u xherd-daemon xherd xherd ls`, see [Everyday CLI](#everyday-cli) |
+| `xherd` commands | `docker exec -u xherd-daemon xherd xherd ls`, see [Everyday CLI](guide.md#everyday-cli) |
 
 ### Update
 
@@ -98,7 +98,7 @@ tar -xzf xherd-<version>-x86_64-unknown-linux-musl.tar.gz \
 
 You also need:
 
-- **Claude Code**, installed and logged in (`claude`, then `/login`, once).
+- A runtime: **Claude Code** logged in (`claude`, then `/login`, once), or opencode, or Codex (`codex login`).
 - **`gh`** (GitHub) or **`glab`** (GitLab) for pull requests, logged in. Settings → Git access can also hold a token per host.
 - The toolchains your repositories need: natively xherd uses what is on your `PATH` and installs nothing.
 
@@ -106,7 +106,7 @@ Start the daemon and install the xherd commands into Claude Code once:
 
 ```sh
 xherd daemon            # keep it running (a terminal, tmux, or your own service)
-xherd install           # in another terminal: the /xherd:* commands for Claude Code
+xherd install           # in another terminal: the xherd commands for each runtime that is on
 ```
 
 Open <http://127.0.0.1:4740/>.
@@ -117,85 +117,20 @@ To update, install the newer package and restart `xherd daemon`.
 
 ## First run
 
-1. **Welcome** (opens by itself the first time). It walks you through the setup checks, the Claude Code login (in a browser terminal) the commit identity and git hosts. Settings → Git access has both again: the identity, and HTTPS tokens or SSH keys per host.
-2. **Setup checks** must pass before you can create agents. Each failing check shows the fix.
+1. **Welcome** opens by itself the first time. It walks you through the plugins (which runtime, git hosts and trackers you use, and their logins, in a terminal in the browser), your commit identity, your git hosts (HTTPS tokens or SSH), and the setup checks. Everything it sets is in Settings later.
+2. **Setup checks** must pass before you can create agents. Each failing check shows its fix.
 3. **Create an agent** from the UI (**New agent**) or the CLI:
 
    ```sh
    xherd new PROJ-123 --repo https://github.com/you/project "Add login with passkeys"
    ```
 
-   `--repo` takes a URL (cloned once into `<workspace>/repos/`) or a local path (in Docker, one inside the workspace). Other flags: `--slug`, `--flow`, `--base`, `--autonomy`.
-
-## What happens to an agent
-
-```mermaid
-stateDiagram-v2
-    [*] --> queued: xherd new
-    queued --> running: slot free
-    running --> idle: stopped, nothing waits
-    running --> waiting_input: stopped at a gate
-    idle --> waiting_input: stopped at a gate
-    waiting_input --> running: you approve / send / request changes
-    running --> blocked: dialog on screen
-    blocked --> running: answered
-    waiting_input --> parked: waited too long
-    parked --> queued: approval arrives
-    idle --> watching: draft PR open
-    watching --> queued: new PR comments
-    watching --> done: PR merged or closed
-    watching --> queued: resume
-    running --> paused: pause
-    paused --> queued: resume
-    running --> error: session lost
-    error --> queued: resume
-    running --> cancelled: cancel
-    cancelled --> queued: resume
-```
-
-*`waiting_input` is shown as `waiting-input` in the UI and API; pause and cancel also apply from the other live statuses.*
-
-The built-in `feature` flow goes through these stages, each ending in a gate where the agent stops:
-
-| Stage | Gate | You review |
-|---|---|---|
-| spec | `spec.md` | What will be built |
-| design | `design.md` | How |
-| tasks | `tasks.md` | Task list with a `verify:` command each |
-| implement | commit proposal | The diff of exactly the proposed files; xherd makes the commit when you approve |
-| review | `review.md` | Findings; must-fix ones become tasks and loop back |
-| ship | `pr.md` | The branch as it will be pushed; the agent then opens a draft PR |
-| pr-review | `pr-review.md` | Decisions on PR comments (fix, reply, skip); always human-only |
-
-Approvals are by content hash: you approve exactly what you read, and editing an approved document re-opens its gate. Every step starts a **fresh session**; a short `memory.md` carries over what the next step needs.
-
-## Everyday CLI
-
-In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `docker exec -u xherd-daemon xherd xherd ls`); for a terminal or your IDE, use the agent page's Terminal tab and **Open in** menu instead of `attach`, `shell` and `open`.
-
-| Command | Does |
-|---|---|
-| `xherd ls` | Agents, with the open gate or the PR URL |
-| `xherd diff <agent>` | What you are being asked to approve |
-| `xherd approve <agent>` / `xherd changes <agent> "<comment>"` | Approve or ask for revisions |
-| `xherd send <agent> "<text>"` | Type into the agent's session (also answers a question gate) |
-| `xherd pause\|resume\|cancel <agent>` | Lifecycle; `xherd pause --all` stops every agent at once |
-| `xherd attach <agent>` / `xherd shell <agent>` | Terminal in the agent's session / worktree |
-| `xherd open <agent>` | Open the worktree in your IDE (apps from `~/.config/xherd/open.json`, else editors on `PATH`) |
-| `xherd autonomy <agent> <level>` | What xherd may approve by itself |
-| `xherd backup create` | Archive of the agents and their work |
-| `xherd security check` | Exposure overview: binding, plugins, limits |
-
-The UI shows the same, plus the terminal, documents, findings and settings. The full list is in the [CLI reference](../reference/cli.md).
-
-## Autonomy
-
-By default every gate waits for you (`ask`). `xherd new --autonomy`, the agent page, or the config `autonomy` key lets xherd approve routine gates itself. Critical gates, the ship gate of a hotfix and `pr`-role stages are always human-only. Tripwires (secrets in a diff, sensitive paths, oversized diffs, a run limit of consecutive auto-approvals) hold a gate for you whatever the level. Auto-approvals are listed under **Needs attention**.
+   `--repo` takes a URL (cloned once into `<workspace>/repos/`) or a local path (in Docker, one inside the workspace). The agent writes a spec and stops for your approval: the [user guide](guide.md) takes it from there.
 
 ## Next
 
-- [Docker setup](docker.md): topology, the two users in the container, git access, toolchains
-- [Configuration](../reference/configuration.md) and [CLI reference](../reference/cli.md)
+- [Using xherd](guide.md): gates and reviews, autonomy, pull requests, TODOs, notifications, the everyday CLI
+- [Docker](docker.md): topology, the two users in the container, git access, toolchains
 - [Security model](security.md)
-- [Add xherd support to your SDD](../extend/integrate-your-sdd.md)
-- [Running from source](../dev/from-source.md) and [Development](../dev/development.md), to build or change xherd
+- [Configuration](../reference/configuration.md) and [CLI reference](../reference/cli.md)
+- [Running from source](../dev/from-source.md), to build xherd yourself

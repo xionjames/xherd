@@ -16,9 +16,10 @@ For people changing xherd itself. Read [Architecture](architecture.md) first; [R
 | `crates/` | The Rust workspace (see [Architecture](architecture.md#crates)) |
 | `ui/` | Web UI: Svelte 5, Vite, TypeScript, pnpm |
 | `packs/xherd/` | The built-in flow pack: `xherd-flow.yaml`, `FORMAT.md` (document formats), `commands/*.md` (agent prompts) |
-| `plugins/` | Built-in plugin manifests: `claude-code`, `github`, `sdkman`, `nvm`, `uv`, `go`, `rustup` |
-| `deploy/docker`, `deploy/compose` | Dockerfile and the compose file |
-| `doc/` | This documentation |
+| `plugins/` | Built-in plugin manifests: runtimes `claude-code`, `opencode`, `codex`; hosts `github`, `gitlab`, `bitbucket`; trackers `jira`, `github-issues`, `gitlab-issues`; toolchains `sdkman`, `nvm`, `uv`, `go`, `rustup` |
+| `deploy/docker`, `deploy/compose`, `deploy/nfpm` | Dockerfile, the compose files (build from source, and the release one), `.deb`/`.rpm` packaging |
+| `scripts/` | `demo.sh` and its seed data, for screenshots |
+| `doc/` | This documentation ([index](../README.md)) |
 
 ## Build, run, test
 
@@ -37,6 +38,7 @@ cargo fmt --all --check
 cd ui && pnpm install && pnpm build     # ui/dist, served by the daemon
 cd ui && pnpm dev                       # Vite dev server, proxies /api to XHERD_URL (default 127.0.0.1:4740)
 cd ui && pnpm check                     # svelte-check
+cd ui && pnpm test                      # vitest
 ```
 
 Debug builds serve `ui/dist` from disk; release builds embed it at compile time, so build the UI before `cargo build --release`.
@@ -53,6 +55,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 - Integration tests in `xherd-daemon/tests/` and `xherd-cli/tests/` use real `git` and `tmux`. tmux tests use a private socket (`-L xherd-test-…`) and never touch your sessions.
 - Tests must never write to the real `$HOME` or `~/xherd`: set `workspace` in `config.json`, point the Claude Code trust file at a fixture, pass your own `env` closure, and use a fake `gh` script (`pluginSettings.github.gh`). See `tests/create.rs`, `tests/checks.rs` and `tests/xap.rs` for the setups.
 - `prompt_calls_parse` parses every `xherd …` call in the pack prompts with clap; `every_template_has_a_prompt` checks each manifest command has a prompt file.
+- UI unit tests (`pnpm test`, vitest) cover the pure helpers in `ui/src/lib/` (argv parsing, diffs, flows, tracker links, comment notes).
 
 ## Conventions
 
@@ -64,7 +67,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 - Files the daemon writes go through `paths::write_atomic`; secrets are mode 0600.
 - Pack manifests and `ConfigPatch` use `deny_unknown_fields`.
 - Keep code minimal: no abstraction for a single use. Cite a requirement id in doc comments where code implements one.
-- UI: tokens and component classes live in `ui/src/app.css`. `--gate` (coral) means "needs a human" and nothing else. Status is never colour alone. Agent-written Markdown goes through `lib/markdown.ts` (marked + DOMPurify), never raw. UI panels key effects on `const id = $derived(agent.id)`, not `agent.id`.
+- UI: tokens and component classes live in `ui/src/app.css`. `--gate` (ember orange) means "needs a human" and nothing else. Status is never colour alone. Agent-written Markdown goes through `lib/markdown.ts` (marked + DOMPurify), never raw. UI panels key effects on `const id = $derived(agent.id)`, not `agent.id`.
 - Dependencies: `rusqlite` is pinned to the version `rusqlite_migration` uses; bump both together.
 
 ## Common changes
@@ -73,13 +76,17 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 **Change a flow or prompt** — edit `packs/xherd/`. A new file must be added to `xherd_flow::install::BUILTIN_FILES` (a test compares the folder to the list). Prompts teach plain `xherd <call>` on one line inside backticks, never through a variable.
 
-**Add a setting** — add the field to `Config` (`xherd-core`), to `ConfigPatch` with a range check (`xherd-daemon::settings`), and to the Settings page. Settings are saved to `config.json` and most apply at the next daemon start; `restartNeeded` tells the UI.
+**Add a setting** — add the field to `Config` (`xherd-core`), to `ConfigPatch` with a range check (`xherd-daemon::settings`), and to the Settings page. To make it live (most are), add it to `Config::apply_live_from` and, if actors read it, to `ActorSettings::from_config`; otherwise `restartNeeded` tells the UI a restart is due. Document it in [Configuration](../reference/configuration.md).
 
-**Add a plugin** — a folder with `xherd-plugin.json`. Built-ins are embedded from `plugins/` through `xherd_plugin::builtins()`; external ones are loaded from the data root and override built-ins by name.
+**Add a plugin** — a folder with `xherd-plugin.json` ([Plugins](../extend/plugins.md)). Built-ins are embedded from `plugins/` through `xherd_plugin::builtins()`; external ones are loaded from the data root and override built-ins by name. A built-in that runs a CLI declares it in `requires`, with the version the Dockerfile pins.
 
 **Change the database** — append a migration in `xherd-store/src/schema.rs`; never edit an existing one. The store copies the database with `VACUUM INTO` before migrating.
 
-**Change the UI** — add the type to `lib/types.ts` (mirrors the wire JSON), call through `lib/api.ts`, and register panels in `lib/panels.ts`. Only screens for features that exist are shown.
+**Change the UI** — add the type to `lib/types.ts` (mirrors the wire JSON), call through `lib/api.ts`, and register panels in `lib/panels.ts`. Only screens for features that exist are shown. Use the components listed at the top of `app.css` (`PageHead`, `Panel`, `SaveBar`, `Tabs`, `Seg`, `Callout`, `Dialog`), never `alert`/`confirm`.
+
+**Add an API route** — in `crates/xherd-api/src/lib.rs`, with the `User` or `AgentAuth` extractor, and list it in [HTTP API](../reference/http-api.md).
+
+**Change behaviour users see** — update the doc that describes it (see [Writing docs](#writing-docs)), `AGENTS.md`, and the checklist in `doc/internal/design.md` §18 and `ROADMAP.md` when a milestone item moves.
 
 ## Docker image
 
@@ -98,9 +105,24 @@ Push a tag `vX.Y.Z` on a commit of main (`git tag v0.2.0 && git push origin v0.2
 
 One commit per working piece, on a branch per piece of work; tests and clippy pass at each commit. Do not commit `target/`, `ui/dist` or local `.env` files.
 
+## Writing docs
+
+`README.md` at the root is the presentation page. Everything else is in `doc/`, by reader ([index](../README.md)):
+
+| Folder | For | Holds |
+|---|---|---|
+| `doc/user/` | People running xherd | Install, the user guide, Docker, security |
+| `doc/reference/` | Looking things up | CLI, configuration, HTTP API, XAP |
+| `doc/extend/` | Plugin, pack and SDD authors | Plugins, flow packs, SDD integration |
+| `doc/dev/` | People changing xherd | Running from source, this page, architecture |
+| `doc/internal/` | Working documents | The product spec and the design (requirement ids `R-xxx`, decisions); to be retired as the docs above cover them |
+
+Write for the reader of that folder: user docs name screens and commands, not types. Say what is not built rather than leaving it out. Images go in `doc/assets/` (`scripts/demo.sh` for screenshots with mocked data). Diagrams are Mermaid, which GitHub renders.
+
 ## Further reading
 
 - [XAP reference](../reference/xap.md): the agent protocol
-- [Add xherd support to your SDD](../extend/integrate-your-sdd.md)
+- [HTTP API](../reference/http-api.md)
+- [Plugins](../extend/plugins.md) and [Flow packs](../extend/flow-packs.md)
 - `packs/xherd/FORMAT.md`: formats of the documents agents write
 - `ROADMAP.md`: what is left, by theme
