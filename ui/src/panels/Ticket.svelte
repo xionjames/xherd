@@ -5,7 +5,8 @@
   // rendered through the same sanitiser as agent documents.
   import Panel from '../components/Panel.svelte';
   import type { Agent } from '../lib/types';
-  import { get } from '../lib/api';
+  import { get, post } from '../lib/api';
+  import { showError } from '../lib/errors.svelte';
   import { render } from '../lib/markdown';
   import { agoText } from '../lib/format';
 
@@ -38,6 +39,29 @@
   const https = (u?: string) => (u && /^https:\/\//.test(u) ? u : undefined);
   const when = (iso?: string) => { const t = iso ? Date.parse(iso) : NaN; return Number.isNaN(t) ? '' : agoText(t); };
   const t = $derived(answer?.ticket);
+
+  // A short summary of what the agent did, drafted by xherd. It is posted only
+  // when the user presses Post, with the text as edited here (R-308).
+  let draft = $state<string | null>(null);
+  let posting = $state(false);
+  let posted = $state(false);
+  async function makeDraft() {
+    try {
+      draft = (await get<{ text: string }>(`/agents/${id}/ticket-summary`)).text;
+      posted = false;
+    } catch (e) { showError('Could not draft a summary', e); }
+  }
+  async function postDraft() {
+    if (!draft?.trim()) return;
+    posting = true;
+    try {
+      await post(`/agents/${id}/ticket-comment`, { body: draft });
+      posted = true;
+      draft = null;
+      await load();
+    } catch (e) { showError('Could not post the comment', e); }
+    finally { posting = false; }
+  }
 </script>
 
 <div class="stack">
@@ -66,6 +90,19 @@
   </Panel>
 
   {#if t}
+    <Panel title="Summary for the ticket" hint="xherd drafts it from the finished tasks, commits and pull request. You read and edit it; nothing is posted until you press Post.">
+      {#if draft === null}
+        {#if posted}<p class="hint">✓ Posted as a comment on the ticket.</p>{/if}
+        <div class="row"><button class="btn" onclick={makeDraft}>{posted ? 'Draft another summary' : 'Draft a summary'}</button></div>
+      {:else}
+        <label class="f">Comment to post on {answer?.tracker} #{answer?.issue}
+          <textarea rows="9" bind:value={draft} spellcheck="true"></textarea></label>
+        <div class="row">
+          <button class="btn primary" disabled={posting || !draft.trim()} onclick={postDraft}>{posting ? 'Posting…' : 'Post to the ticket'}</button>
+          <button class="btn ghost" disabled={posting} onclick={() => (draft = null)}>Cancel</button>
+        </div>
+      {/if}
+    </Panel>
     <Panel title={`Comments (${t.comments.length})`}>
       {#if !t.comments.length}
         <p class="empty">No comments.</p>

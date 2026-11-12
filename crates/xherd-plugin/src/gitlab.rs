@@ -211,7 +211,7 @@ impl Host {
     }
 
     /// `glab api` against `host`; `args` follow `api --hostname <host>`.
-    async fn glab_api(
+    pub(crate) async fn glab_api(
         &self,
         dir: &Path,
         host: &str,
