@@ -73,6 +73,19 @@ A host plugin also declares its git access in `data.git` (the built-in `github`,
 
 Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. A plugin's options page (Settings → Plugins) lists the hosts that use it.
 
+### Issue trackers (`data.tracker`)
+
+A `tracker` plugin says how text in the UI becomes a link to the ticket. xherd's core never calls a tracker (spec N1); the links only point you at it.
+
+```json
+"settings": [{ "key": "baseUrl", "label": "Jira site", "required": true }],
+"data": { "tracker": { "links": [
+  { "pattern": "\\b[A-Z][A-Z0-9]{1,9}-\\d+\\b", "url": "{baseUrl}/browse/{0}" }
+] } }
+```
+
+`pattern` is a regular expression run in the browser over agent-written text and the ticket key on the agent page (outside code and existing links). `url` is `https://…` or starts with `{baseUrl}` (the plugin's `baseUrl` setting, https only; a rule whose base URL is missing is left out); `{0}` is the match and `{1}`…`{9}` its groups, percent-encoded. A manifest is refused when a pattern does not compile with the linear-time `regex` crate (no backreferences or lookaround), is over 200 characters, or repeats a repeated group (`(a+)+`), and when a URL uses a group the pattern lacks. The built-in `jira` (`PAY-412`), `github-issues` (`owner/repo#12`) and `gitlab-issues` (`group/project#12`, `baseUrl` default `https://gitlab.com`) use it. Having no tracker is allowed. Reading and commenting on tickets through a tracker's CLI is not built yet.
+
 ### Tools a plugin needs (`requires`)
 
 Any plugin can list the command-line tools it needs:

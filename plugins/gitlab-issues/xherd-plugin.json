@@ -1,0 +1,17 @@
+{
+  "name": "gitlab-issues",
+  "kind": "tracker",
+  "version": "0.1.0",
+  "label": "GitLab Issues",
+  "description": "Turns group/project#12 in the UI into a link to the GitLab issue.",
+  "settings": [
+    { "key": "baseUrl", "label": "GitLab site", "default": "https://gitlab.com" }
+  ],
+  "data": {
+    "tracker": {
+      "links": [
+        { "pattern": "\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)#(\\d+)\\b", "url": "{baseUrl}/{1}/-/issues/{2}" }
+      ]
+    }
+  }
+}

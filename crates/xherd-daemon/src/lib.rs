@@ -391,6 +391,46 @@ impl Daemon {
         )
     }
 
+    /// The link rules of every enabled tracker plugin (D24-style `data.tracker`),
+    /// with `{baseUrl}` filled from its setting. A rule that needs a base URL
+    /// the plugin has not got (empty, or not https) is left out; `{0}`…`{9}`
+    /// stay for the browser to fill. A broken manifest is logged and skipped.
+    pub fn tracker_links(&self) -> Vec<serde_json::Value> {
+        let mut out = Vec::new();
+        for p in self.plugins.of_kind(xherd_plugin::Kind::Tracker) {
+            if !self.plugin_enabled(p.name()) {
+                continue;
+            }
+            let tracker = match xherd_plugin::tracker::Tracker::of(&p.manifest) {
+                Ok(Some(t)) => t,
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(plugin = p.name(), "{e}");
+                    continue;
+                }
+            };
+            let base = self
+                .plugin_context(p)
+                .settings
+                .get("baseUrl")
+                .and_then(serde_json::Value::as_str)
+                .map(|b| b.trim().trim_end_matches('/').to_string())
+                .filter(|b| b.starts_with("https://") && !b.chars().any(char::is_control));
+            for l in tracker.links {
+                let url = if l.url.contains("{baseUrl}") {
+                    match &base {
+                        Some(b) => l.url.replace("{baseUrl}", b),
+                        None => continue,
+                    }
+                } else {
+                    l.url
+                };
+                out.push(serde_json::json!({"plugin": p.name(), "pattern": l.pattern, "url": url}));
+            }
+        }
+        out
+    }
+
     /// The agent's documents for the UI: every `*.md` in the spec folder
     /// (`spec.md` form) plus the open gate's files, gate files first.
     pub async fn docs(&self, who: &str) -> Result<Vec<String>, ActionError> {

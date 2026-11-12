@@ -43,7 +43,8 @@
 
   const plugins = $derived(app.state?.plugins ?? []);
   // The last plugin on in its kind cannot be switched off.
-  const lastOn = (p: PluginInfo) => p.enabled && plugins.filter((q) => q.kind === p.kind && q.enabled).length === 1;
+  // Having no issue tracker is fine; every other kind keeps one.
+  const lastOn = (p: PluginInfo) => p.kind !== 'tracker' && p.enabled && plugins.filter((q) => q.kind === p.kind && q.enabled).length === 1;
   const loginCheck = (p: PluginInfo) => setup.checks?.find((c) => c.id === `plugin:${p.name}:login`);
   // An enabled plugin that needs a login and is not logged in holds the step.
   const needLogin = $derived(plugins.filter((p) => p.enabled && p.login && loginCheck(p) && !loginCheck(p)!.ok));

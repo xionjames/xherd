@@ -2,6 +2,7 @@
   // Agent page: your-call band, hero (name, meta, actions, progress), tabs of
   // panels from the registry.
   import Icon from '../components/Icon.svelte';
+  import { linkFor } from '../lib/links';
   import AgentDot from '../components/AgentDot.svelte';
   import Stepper from '../components/Stepper.svelte';
   import StatusPill from '../components/StatusPill.svelte';
@@ -106,7 +107,7 @@
     <div class="hid">
       <div class="row">
         <span class="lbl">{repoName(agent)} · {agent.flow ?? 'no workflow'}</span>
-        <span class="pill acc mono">{agent.ticketKey}</span>
+        {#if linkFor(agent.ticketKey)}<a class="pill acc mono" href={linkFor(agent.ticketKey)} target="_blank" rel="noopener noreferrer" title="Open the ticket">{agent.ticketKey}</a>{:else}<span class="pill acc mono">{agent.ticketKey}</span>{/if}
       </div>
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
