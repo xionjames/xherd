@@ -44,5 +44,16 @@
         }
       ]
     }
-  }
+  },
+  "checks": [
+    {
+      "name": "nvm",
+      "argv": [
+        "bash",
+        "-c",
+        "if . \"${NVM_DIR:-$HOME/.nvm}/nvm.sh\" --no-use >/dev/null 2>&1; then exit 0; fi; echo \"nvm not found (install it: https://github.com/nvm-sh/nvm, or set NVM_DIR)\" >&2; exit 1"
+      ],
+      "optional": true
+    }
+  ]
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // First-run wizard: welcome → where it runs → tools → checks → ready.
+  // First-run wizard: welcome → plugins → commit identity → git hosts → checks → ready.
   import Logo from '../components/Logo.svelte';
   import CheckRow from '../components/CheckRow.svelte';
   import { app, reload } from '../lib/store.svelte';
@@ -7,13 +7,14 @@
   import { route, go } from '../lib/router.svelte';
   import { setup, loadChecks, failingRequired } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
-  import GitAccess from '../components/GitAccess.svelte';
+  import GitIdentity from '../components/GitIdentity.svelte';
+  import GitHosts from '../components/GitHosts.svelte';
   import TermView from '../components/TermView.svelte';
-  import Toolchains from '../components/Toolchains.svelte';
+  import PluginDetail from '../components/PluginDetail.svelte';
   import Panel from '../components/Panel.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
 
-  const STEPS = ['Welcome', 'Where it runs', 'Your tools', 'Git access', 'Connect & check', 'Ready'];
+  const STEPS = ['Welcome', 'Plugins', 'Commit identity', 'Git hosts', 'Connect & check', 'Ready'];
   const step = $derived(Math.min(Math.max(Number(route.query.get('step') ?? 1), 1), STEPS.length));
   const to = (n: number) => go('/welcome', { step: String(n) });
   const blocked = $derived(failingRequired().length > 0);
@@ -24,15 +25,44 @@
   // The checks decide whether setup can be skipped, so load them on every step.
   $effect(() => { if (!setup.checks && !setup.running) loadChecks(); });
 
+  // Steps 3 and 4 have one button: it saves what was edited, then goes on.
+  let idStep = $state<GitIdentity>();
+  let hostsStep = $state<GitHosts>();
+  let idUnsaved = $state(false);
+  let idReady = $state(false);
+  let hostsUnsaved = $state(false);
+  let moving = $state(false);
+  const unsaved = $derived(step === 3 ? idUnsaved : step === 4 ? hostsUnsaved : false);
+  async function next() {
+    moving = true;
+    try {
+      const ok = step === 3 ? await idStep?.save() : step === 4 ? await hostsStep?.saveAll() : true;
+      if (ok !== false) to(step + 1);
+    } finally { moving = false; }
+  }
+
   const plugins = $derived(app.state?.plugins ?? []);
   // The last plugin on in its kind cannot be switched off.
   const lastOn = (p: PluginInfo) => p.enabled && plugins.filter((q) => q.kind === p.kind && q.enabled).length === 1;
   const loginCheck = (p: PluginInfo) => setup.checks?.find((c) => c.id === `plugin:${p.name}:login`);
   // An enabled plugin that needs a login and is not logged in holds the step.
-  const toolsBlocked = $derived(plugins.some((p) => p.enabled && p.login && loginCheck(p) && !loginCheck(p)!.ok));
+  const needLogin = $derived(plugins.filter((p) => p.enabled && p.login && loginCheck(p) && !loginCheck(p)!.ok));
+  const toolsBlocked = $derived(needLogin.length > 0);
   let loggingIn = $state<string | null>(null);
-  // Toolchain plugin whose versions are open (they are listed only when opened).
-  let versionsOpen = $state<string | null>(null);
+  // The plugin whose options are open.
+  let opened = $state<string | null>(null);
+  // What a card says without being opened: off, ready, or not ready and why.
+  function pstate(p: PluginInfo): { tone: 'off' | 'ok' | 'bad' | 'opt'; text: string } {
+    if (!p.enabled) return { tone: 'off', text: 'Off' };
+    const bad = (setup.checks ?? []).find((c) => c.id.startsWith(`plugin:${p.name}:`) && !c.ok);
+    if (bad) return { tone: bad.required ? 'bad' : 'opt', text: bad.id.endsWith(':login') ? 'Not logged in' : bad.detail.split('\n')[0] };
+    const saved = ((setup.config?.config.pluginSettings ?? {}) as Record<string, Record<string, unknown>>)[p.name] ?? {};
+    const missing = p.settings.find((s) => s.required && !s.secret && !saved[s.key]);
+    if (missing) return { tone: 'bad', text: `Needs ${missing.label || missing.key}` };
+    // A language manager with no versions yet is the normal state: they install on first use.
+    if (p.kind === 'toolchain' && app.state?.sandbox) return { tone: 'ok', text: 'Ready · versions install on first use' };
+    return { tone: 'ok', text: 'Ready' };
+  }
 
   async function toggle(p: PluginInfo) {
     const off = plugins.filter((q) => (q.name === p.name ? q.enabled : !q.enabled)).map((q) => q.name);
@@ -83,9 +113,8 @@
     {#if step === 1}
       <h1 class="big">Run many coding agents, decide only what matters</h1>
       <p class="muted lead">xherd starts each agent in its own git worktree and terminal session, follows it through spec, design, tasks, build, review and ship, and stops it at the gates where your call is needed. Everything else runs on its own.</p>
-      <p class="muted">A few steps set it up: where it runs, which tools it uses, and a check that everything works.</p>
-    {:else if step === 2}
-      <h1>Where xherd runs</h1>
+      <p class="muted">A few steps set it up: the plugins it uses, who commits, how it reaches your git hosts, and a check that everything works.</p>
+      <h2>Where xherd runs</h2>
       <Panel>
         <dl class="kv">
           <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.buildVersion}</dd>
@@ -98,13 +127,14 @@
           <p class="hint">To run xherd in Docker instead, run <span class="mono">xherd docker init</span> on this computer. Change the workspace in Settings.</p>
         {/if}
       </Panel>
-    {:else if step === 3}
-      <h1>Your tools</h1>
-      <p class="muted">Switch on what you use; at least one of each kind stays on. A plugin that needs a login is set up here.</p>
+    {:else if step === 2}
+      <h1>Plugins</h1>
+      <p class="muted">Switch on what you use; at least one of each kind stays on. A card says whether the plugin is ready; open Options to set it up.</p>
       {#each kinds as k (k)}
         <span class="lbl">{KIND[k] ?? k}</span>
         <div class="cards">
           {#each plugins.filter((p) => p.kind === k) as p (p.name)}
+            {@const st = pstate(p)}
             {@const lc = p.enabled && p.login ? loginCheck(p) : undefined}
             <div class="tool" class:on={p.enabled}>
               <label class="tp"><input type="checkbox" checked={p.enabled}
@@ -112,40 +142,31 @@
                 <span class="tick" aria-hidden="true">✓</span>
                 <div><h3>{p.label || p.name}</h3><p class="hint">{p.description}</p></div></label>
               <div class="tf">
-                <span class="state">{p.enabled ? 'On' : 'Off'}</span>
-                <span class="grow">· {p.builtin ? 'Built in' : 'Installed'}</span>
-                {#if lc}
-                  <span class="ckst {lc.ok ? 'ok' : 'bad'}" aria-label={lc.ok ? 'logged in' : 'not logged in'}>{lc.ok ? '✓' : '✕'}</span>
-                  {lc.ok ? 'Logged in' : 'Not logged in'}
-                  {#if !lc.ok}<button class="btn primary sm" onclick={() => startLogin(p)}>Log in</button>{/if}
-                {/if}
+                <span class="ckst {st.tone === 'off' ? '' : st.tone}" aria-hidden="true">{st.tone === 'ok' ? '✓' : st.tone === 'bad' ? '✕' : st.tone === 'opt' ? '–' : '○'}</span>
+                <span class="grow wrap-any" class:muted={st.tone === 'off'}>{st.text}</span>
+                {#if st.text === 'Not logged in'}<button class="btn primary sm" onclick={() => startLogin(p)}>Log in</button>{/if}
+                {#if p.enabled}<button class="btn sm" onclick={() => (opened = opened === p.name ? null : p.name)}>Options</button>{/if}
               </div>
             </div>
           {/each}
         </div>
+        {#each plugins.filter((p) => p.kind === k && p.name === opened && p.enabled) as p (p.name)}
+          <PluginDetail plugin={p} onclose={() => (opened = null)} />
+        {/each}
       {/each}
-      {#if app.state?.sandbox}
-        {@const langs = plugins.filter((p) => p.kind === 'toolchain' && p.enabled)}
-        {#if langs.length}
-          <span class="lbl">Language versions</span>
-          <p class="hint">Optional: install a version now, or set the default for repositories that do not pin one. Otherwise versions install on first use. You can change all of this later in Settings → Plugins.</p>
-          {#each langs as p (p.name)}
-            <details ontoggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) versionsOpen = p.name; else if (versionsOpen === p.name) versionsOpen = null; }}>
-              <summary>{p.label || p.name}</summary>
-              {#if versionsOpen === p.name}{#key p.name}<Toolchains plugin={p.name} />{/key}{/if}
-            </details>
-          {/each}
-        {/if}
-      {/if}
       {#if loggingIn}
         <TermView path="/ws/setup/plugin-login" title={`Log in to ${plugins.find((p) => p.name === loggingIn)?.label ?? loggingIn}`}
           height="360px" onclose={loginEnded} hint="Follow the steps; the check runs again when it ends." />
       {/if}
-      {#if toolsBlocked}<p class="hint">Log in to continue; Settings has the same login later.</p>{/if}
+      {#if toolsBlocked}<p class="hint">To continue, log in to {needLogin.map((p) => p.label || p.name).join(' and ')} or switch {needLogin.length > 1 ? 'them' : 'it'} off.</p>{/if}
+    {:else if step === 3}
+      <h1>Commit identity</h1>
+      <p class="muted">Who agents commit as. Git refuses to commit without a name and email.</p>
+      <GitIdentity heading={false} bar={false} bind:this={idStep} bind:unsaved={idUnsaved} bind:ready={idReady} />
     {:else if step === 4}
-      <h1>Git access</h1>
-      <p class="muted">How agents fetch and push: your SSH agent, a browser login to GitHub or GitLab, or a token. Check each host before you go on; you can skip this and come back in Settings.</p>
-      <GitAccess />
+      <h1>Git hosts</h1>
+      <p class="muted">How agents fetch and push: your SSH agent, a browser login to GitHub or GitLab, or a token. Check each host before you go on; without access agents cannot reach private repositories or push, and the same page is in Settings later.</p>
+      <GitHosts heading={false} bar={false} bind:this={hostsStep} bind:unsaved={hostsUnsaved} />
     {:else if step === 5}
       <h1>Connect &amp; check</h1>
       <p class="muted">Required checks must pass before agents can start.</p>
@@ -162,7 +183,8 @@
     <div class="row end wnav">
       {#if step > 1}<button class="btn ghost lg" onclick={() => to(step - 1)}>Back</button>{/if}
       {#if step < STEPS.length}
-        <button class="btn primary lg" disabled={step === 3 && toolsBlocked} onclick={() => to(step + 1)}>Next: {STEPS[step].toLowerCase()}</button>
+        <button class="btn primary lg" disabled={moving || (step === 2 && toolsBlocked) || (step === 3 && !idReady)} onclick={next}>
+          {moving ? 'Saving…' : unsaved ? 'Save and continue' : `Next: ${STEPS[step].toLowerCase()}`}</button>
       {:else if blocked}
         <button class="btn primary lg" onclick={() => finish('/setup')}>Open setup checks</button>
       {:else}

@@ -532,9 +532,14 @@ Supported: Docker Desktop (reference), and OrbStack, Colima, Podman Desktop, Ran
 | R-683 | Host keys: GitHub, GitLab and Bitbucket keys pre-seeded; other hosts' fingerprints shown in the UI for the user to accept. |
 | R-684 | HTTPS: tokens through a git credential helper (`gh`, `glab`, or `xherd credential`), never in URLs or `.git/config`; optional CA bundle per host. |
 | R-685 | Settings → Git access per host: protocols, credential source, username, CA; optional `preferHttps`/`preferSsh` rewrite (off by default). Host plugins reuse the token. |
-| R-686 | Welcome step "Git access": use the SSH agent, log in with GitHub's device flow (`gh auth login --web`, code shown in the UI), or paste a token; each ends with a live test of git transport and API access. |
+| R-686 | Welcome steps "Commit identity" (name and email agents commit as; required, git refuses to commit without it) and "Git hosts": use the SSH agent, log in with GitHub's device flow (`gh auth login --web`, code shown in the UI), or paste a token; each ends with a live test of git transport and API access. |
 | R-687 | `xherd git doctor [host] [--repo URL]` checks, in order: agent socket readable, key loaded (`ssh-add -l`), host key known, credential helper configured, token valid with the needed permissions, organisation SSO authorised, OAuth app allowed by the organisation, git vs API access separately. It prints the first failure with its fix and never prints secrets. |
 | R-688 | An auth failure during an agent's push or a host command blocks the agent with reason "git access" and shows the doctor result. |
+| R-689 | **Providers and hosts (proposed, revises D19).** A *provider* is a `host` plugin (GitHub, GitLab, Gitea, Bitbucket, …): it owns the host's API (pull requests, checks, comments, replies, templates) and what is specific to its access. A *host* is configuration: a hostname bound to one provider, with its protocols, credential source, username and CA. Several hosts may share a provider (`gitlab.com` and `git.example.com` both use `gitlab`). The provider of a known hostname is filled in by itself; any other hostname is bound by choosing a provider. Issues are not a provider's job: they come from `tracker` plugins. |
+| R-690 | A provider's manifest declares, in a `data.git` block: the hostnames it claims (patterns), the git credential helper (argv) and the token's username, the browser login (argv with `{host}`; absent = paste a token), the ordered doctor checks of its API (each with its fix), and the token permissions it needs (shown in the UI). Transport stays in xherd and per hostname: SSH agent and keys, known hosts, token storage, the managed gitconfig, `preferHttps`/`preferSsh` rewrites, the pre-push guard. |
+| R-691 | A provider that needs a command-line tool declares `requires` (the binary and its check), `install` (argv) and `instructions` (text per OS). In the container the install runs from the UI in a terminal, into the agents' home; natively xherd never installs on the host and shows the instructions (as R-653). The card, Setup checks and the Git hosts step say what is missing. A provider that talks to the API with a token needs none of this. |
+| R-692 | Every argv a provider supplies is fixed; `{host}` and other values reach commands only as whole arguments, never spliced into shell text. An external provider is installed through the D16 flow, which shows the commands (credential helper, login, install) before they can run. |
+| R-693 | A `config.json` written before providers keeps loading: `credential` `gh` binds the host to `github`, `glab` to `gitlab`, `xherd` and `none` to no provider. |
 
 ### 12.4 Toolchains in the shared container
 
@@ -725,7 +730,7 @@ Rewritten on every start, resume and autonomy change: workspace notes (folder ag
 | **Kanban** | Tasks of all agents plus stage cards and TODOs; filters and swimlanes in the URL. |
 | **New agent / New TODO** | Generated form including pack inputs; ticket link preview; repo picker or clone; branch list. |
 | **Settings** | General, Notifications, Open in, Git access, Toolchains, Repo profiles, Plugins (install, settings, ACP badges), Runtime per step, Backups, Remote access. |
-| **Setup checks / Welcome** | First-run wizard: where it runs → tools (runtime, tracker, host) → git access → toolchains → checks → ready. Until required checks pass, other screens are disabled. |
+| **Setup checks / Welcome** | First-run wizard: where it runs → plugins (runtime, tracker, host, toolchain) → commit identity → git hosts → checks → ready. Toolchains are plugins, so they are set up with the others (installs only in the container, R-653). Until required checks pass, other screens are disabled. |
 | **Work log** | Agent time and user time per day and ticket; per-ticket cycle time, review–fix rounds and auto-approval rework (§16.4). |
 
 ### 17.3 Phones

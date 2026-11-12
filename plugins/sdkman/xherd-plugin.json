@@ -149,5 +149,16 @@
         }
       ]
     }
-  }
+  },
+  "checks": [
+    {
+      "name": "sdkman",
+      "argv": [
+        "sh",
+        "-c",
+        "if test -s \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\"; then exit 0; fi; echo \"SDKMAN not found (install it: https://sdkman.io/install, or set SDKMAN_DIR)\" >&2; exit 1"
+      ],
+      "optional": true
+    }
+  ]
 }

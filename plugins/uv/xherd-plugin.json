@@ -43,5 +43,16 @@
         }
       ]
     }
-  }
+  },
+  "checks": [
+    {
+      "name": "uv",
+      "argv": [
+        "sh",
+        "-c",
+        "if command -v uv >/dev/null 2>&1; then exit 0; fi; echo \"uv not found (install it: https://docs.astral.sh/uv/)\" >&2; exit 1"
+      ],
+      "optional": true
+    }
+  ]
 }

@@ -117,7 +117,7 @@ To update, install the newer package and restart `xherd daemon`.
 
 ## First run
 
-1. **Welcome** (opens by itself the first time). It walks you through the setup checks, the Claude Code login (in a browser terminal) and git access. Settings → Git access takes HTTPS tokens or SSH keys per host and a commit identity.
+1. **Welcome** (opens by itself the first time). It walks you through the setup checks, the Claude Code login (in a browser terminal) the commit identity and git hosts. Settings → Git access has both again: the identity, and HTTPS tokens or SSH keys per host.
 2. **Setup checks** must pass before you can create agents. Each failing check shows the fix.
 3. **Create an agent** from the UI (**New agent**) or the CLI:
 

@@ -3,14 +3,15 @@
   // config.json; most apply at once.
   import { app } from '../lib/store.svelte';
   import { put } from '../lib/api';
-  import { route, href } from '../lib/router.svelte';
+  import { route, href, go } from '../lib/router.svelte';
   import { setup, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
-  import GitAccess from '../components/GitAccess.svelte';
+  import GitIdentity from '../components/GitIdentity.svelte';
+  import GitHosts from '../components/GitHosts.svelte';
   import Backups from '../components/Backups.svelte';
   import Profiles from '../components/Profiles.svelte';
   import OpenIn from '../components/OpenIn.svelte';
-  import Toolchains from '../components/Toolchains.svelte';
+  import PluginDetail from '../components/PluginDetail.svelte';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
   import Tabs from '../components/Tabs.svelte';
@@ -35,17 +36,12 @@
     if (on) next.delete(k); else next.add(k);
     form.mutedNotifications = [...next].sort().join(',');
   }
-  let plugins = $state<Record<string, Record<string, string>>>({});
   let saving = $state(false);
   let ready = $state(false);
 
   function fill(v: ConfigView) {
     const c = v.config;
     form = Object.fromEntries(FIELDS.map((k) => [k, typeof c[k] === 'boolean' ? (c[k] as boolean) : String(c[k] ?? '')]));
-    const ps = (c.pluginSettings ?? {}) as Record<string, Record<string, unknown>>;
-    plugins = Object.fromEntries(
-      (app.state?.plugins ?? []).map((p) => [p.name, Object.fromEntries(p.settings.filter((s) => !s.secret).map((s) => [s.key, String(ps[p.name]?.[s.key] ?? '')]))]),
-    );
     ready = true;
   }
   $effect(() => { if (setup.config && app.state && !ready) fill(setup.config); });
@@ -57,21 +53,12 @@
     return Object.fromEntries(FIELDS.map((k) => [k, typeof c[k] === 'boolean' ? (c[k] as boolean) : String(c[k] ?? '')])) as Form;
   });
   const changed = $derived(FIELDS.filter((k) => form[k] !== undefined && form[k] !== saved[k]));
-  const savedPlugins = (p: string, k: string) => String(((setup.config?.config.pluginSettings ?? {}) as Record<string, Record<string, unknown>>)[p]?.[k] ?? '');
-  const changedPlugins = $derived(
-    Object.entries(plugins).filter(([p, kv]) => Object.entries(kv).some(([k, v]) => v !== savedPlugins(p, k))).map(([p]) => p),
-  );
-  const dirty = $derived(changed.length + changedPlugins.length);
+  const dirty = $derived(changed.length);
 
   async function save() {
     saving = true;
     const body: Record<string, unknown> = {};
     for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'permissionMode' || k === 'defaultRuntime' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : Number(form[k]);
-    if (changedPlugins.length) {
-      body.pluginSettings = Object.fromEntries(
-        changedPlugins.map((p) => [p, Object.fromEntries(Object.entries(plugins[p]).filter(([, v]) => v !== ''))]),
-      );
-    }
     try {
       setup.config = await put<ConfigView>('/config', body);
       fill(setup.config);
@@ -98,7 +85,8 @@
     <Callout tone="info">Saved settings differ from the running daemon. <b>Restart the daemon</b> to apply them.</Callout>
   {/if}
   {#if tab === 'git'}
-    <GitAccess />
+    <GitIdentity />
+    <GitHosts note={false} />
   {:else if tab === 'openin'}
     <OpenIn />
   {:else if tab === 'profiles'}
@@ -197,22 +185,7 @@
     </div>
   {:else if tab === 'plugins' && open}
     <a href={href('/settings', { tab: 'plugins' })}>← All plugins</a>
-    <Panel title={open.label || open.name} hint={`${open.kind} · ${open.version}${open.builtin ? ' · built in' : ''} · ${open.enabled ? 'on' : 'off'}`}>
-      {#if open.description}<p class="muted">{open.description}</p>{/if}
-      {#each open.settings as s (s.key)}
-        {#if s.secret}
-          <div class="f">{s.label || s.key}<span class="hint">Secret: kept in secrets.json, not editable here yet.</span></div>
-        {:else if plugins[open.name]}
-          <label class="f">{s.label || s.key}{#if s.required} *{/if}
-            <input bind:value={plugins[open.name][s.key]} placeholder={s.default != null ? String(s.default) : ''} /></label>
-        {/if}
-      {:else}
-        <p class="empty">This plugin has no settings.</p>
-      {/each}
-    </Panel>
-    {#if open.kind === 'toolchain'}
-      {#key open.name}<Toolchains plugin={open.name} />{/key}
-    {/if}
+    {#key open.name}<PluginDetail plugin={open} onclose={() => go('/settings', { tab: 'plugins' })} />{/key}
   {:else}
     {#snippet pcard(p: PluginInfo)}
       <a class="pcard" href={href('/settings', { tab: 'plugins', plugin: p.name })}>
@@ -253,7 +226,7 @@
       </div>
     {/if}
   {/if}
-  {#if setup.config && ready && ['general', 'gates', 'notifications', 'plugins'].includes(tab) && (tab !== 'plugins' || open)}
+  {#if setup.config && ready && ['general', 'gates', 'notifications'].includes(tab)}
     <SaveBar {dirty} busy={saving} onsave={save} ondiscard={() => setup.config && fill(setup.config)} />
   {/if}
 </div>
