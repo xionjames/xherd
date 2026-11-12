@@ -144,6 +144,7 @@ stateDiagram-v2
     idle --> watching: draft PR open
     watching --> queued: new PR comments
     watching --> done: PR merged or closed
+    watching --> queued: resume
     running --> paused: pause
     paused --> queued: resume
     running --> error: session lost

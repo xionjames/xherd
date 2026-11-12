@@ -22,16 +22,24 @@ export function stageLabel(s: StageInfo): string {
 
 /** State of each stage: done (or skipped, when the agent never entered it)
  *  before the current one, waiting (gate open) or running at the current one,
- *  nothing after. Agents without a record of visited stages show all done. */
+ *  nothing after. A done agent has every stage behind it; a watching one is
+ *  at the flow's last PR stage (watching the PR is that stage's work), with
+ *  the stages it went through done. Agents without a record of visited
+ *  stages show all done. */
 export function steps(a: Agent, f: FlowInfo): { stage: StageInfo; state: StepState }[] {
   const cur = a.stage ? f.stages.findIndex((s) => s.id === a.stage) : -1;
-  const finished = a.status === 'done' || a.status === 'watching';
   const visited = a.visitedStages ?? [];
   const passed = (id: string): StepState => (visited.length && !visited.includes(id) ? 'skip' : 'ok');
+  const watchAt = a.status === 'watching' ? f.stages.map((s) => s.role).lastIndexOf('pr') : -1;
+  const done = a.status === 'done' || (a.status === 'watching' && watchAt < 0);
   return f.stages.map((stage, i) => {
     let state: StepState = 'todo';
-    if (finished && (cur < 0 || i <= cur)) state = i === cur ? 'ok' : passed(stage.id);
-    else if (i < cur) state = passed(stage.id);
+    if (done) state = i === cur ? 'ok' : passed(stage.id);
+    else if (watchAt >= 0) {
+      if (i === watchAt) state = 'cur';
+      else if (i <= cur) state = passed(stage.id);
+      else if (!visited.length || visited.includes(stage.id)) state = 'ok';
+    } else if (i < cur) state = passed(stage.id);
     else if (i === cur) state = a.gate ? 'now' : 'cur';
     return { stage, state };
   });

@@ -875,6 +875,12 @@ impl Actor {
     /// PR. Without a declared PR, a stop in the ship stage asks the host
     /// plugin for the branch's PR (R-302). Flow `none` keeps its session (no
     /// ship stage).
+    ///
+    /// Only a stop where the flow's work is over counts: the ship or a PR
+    /// stage, or the implement stage with every task done (the end of
+    /// `pr-apply`). An agent sent back to an earlier stage after the PR
+    /// opened (a new review, say) keeps its session: a stop there means
+    /// the turn ended, not the work (it may wait on a background task).
     async fn after_ship(&mut self) {
         if self.agent.status != Status::Idle
             || self.agent.gate.is_some()
@@ -882,8 +888,29 @@ impl Actor {
         {
             return;
         }
+        use xherd_core::domain::Role;
+        let pack = self.agent.pack.as_ref().and_then(|p| self.env.packs.get(p));
+        let role = self
+            .agent
+            .stage
+            .as_deref()
+            .and_then(|s| self.stage_role(pack, s));
         if self.agent.pr_url.is_none() {
-            self.find_pr();
+            if role == Some(Role::Ship) {
+                self.find_pr();
+            }
+            return;
+        }
+        let over = match role {
+            Some(Role::Ship | Role::Pr) => true,
+            Some(Role::Implement) => self
+                .agent
+                .tasks
+                .iter()
+                .all(|t| t.status == TaskStatus::Done),
+            _ => false,
+        };
+        if !over {
             return;
         }
         let before = self.agent.status;
@@ -895,22 +922,10 @@ impl Actor {
     }
 
     /// Look the branch's PR up through the host plugin (slow: spawned, back
-    /// as `WorkDone`). Only in the ship stage, where the agent opens it.
+    /// as `WorkDone`). Only in the ship stage, where the agent opens it
+    /// (`after_ship` checks).
     fn find_pr(&self) {
-        let ship = match (&self.agent.pack, &self.agent.flow, &self.agent.stage) {
-            (Some(p), Some(f), Some(stage)) => self
-                .env
-                .packs
-                .get(p)
-                .and_then(|p| p.flow(f))
-                .is_some_and(|f| {
-                    f.stages
-                        .iter()
-                        .any(|s| &s.id == stage && s.role == xherd_core::domain::Role::Ship)
-                }),
-            _ => false,
-        };
-        let (Some(host), Ok(wd), true) = (self.host(), self.workdir(), ship) else {
+        let (Some(host), Ok(wd)) = (self.host(), self.workdir()) else {
             return;
         };
         let (tx, generation, branch) = (

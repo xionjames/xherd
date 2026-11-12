@@ -1,6 +1,7 @@
 <script lang="ts">
   // The herd by stage (R-210): one card per agent in the column of its
-  // current stage's role, in flow order, plus Not started and Finished. The
+  // current stage's role, in flow order, plus Not started, Watching PR and
+  // Finished. The
   // count in each header shows where agents pile up. Cards outlined with
   // --gate need you.
   import StatusPill from './StatusPill.svelte';
@@ -14,12 +15,14 @@
 
   const ROLE_ORDER = ['explore', 'spec', 'design', 'tasks', 'implement', 'review', 'ship', 'pr'];
   const NOT_STARTED = 'start';
+  const WATCHING = 'watching';
   const FINISHED = 'finished';
 
   /** The column of an agent's current stage: its role, so a column looks the
    *  same in every pack. */
   function stageCol(a: Agent): string {
-    if (a.status === 'done' || a.status === 'watching' || a.status === 'cancelled') return FINISHED;
+    if (a.status === 'watching') return WATCHING;
+    if (a.status === 'done' || a.status === 'cancelled') return FINISHED;
     const stage = a.stage ? flowOf(a, app.state?.flows ?? [])?.stages.find((s) => s.id === a.stage) : undefined;
     return stage ? stage.role : NOT_STARTED;
   }
@@ -31,8 +34,8 @@
     const cols: [string, string][] = [];
     if (used.has(NOT_STARTED)) cols.push([NOT_STARTED, 'Not started']);
     for (const r of ROLE_ORDER) if (roles.has(r) || used.has(r)) cols.push([r, STAGE_LABEL[r] ?? r]);
-    for (const r of used) if (!cols.some(([c]) => c === r) && r !== FINISHED) cols.push([r, r]);
-    cols.push([FINISHED, 'Finished']);
+    for (const r of used) if (!cols.some(([c]) => c === r) && r !== FINISHED && r !== WATCHING) cols.push([r, r]);
+    cols.push([WATCHING, 'Watching PR'], [FINISHED, 'Finished']);
     return cols;
   });
 </script>

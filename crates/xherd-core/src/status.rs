@@ -120,7 +120,11 @@ pub fn next_status(from: Status, trigger: Trigger) -> Option<Status> {
         (T::Pause, S::Queued | S::Running | S::Blocked | S::Idle | S::WaitingInput | S::Parked) => {
             Some(S::Paused)
         }
-        (T::Resume, S::Paused | S::Cancelled | S::Error | S::Parked) => Some(S::Queued),
+        // From watching: the user picks the work up again (a session ended
+        // too early, or more to do before the PR is merged).
+        (T::Resume, S::Paused | S::Cancelled | S::Error | S::Parked | S::Watching) => {
+            Some(S::Queued)
+        }
         (T::Watch, S::Idle) => Some(S::Watching),
         (T::PrComments, S::Watching) => Some(S::Queued),
         (T::PrFinished, S::Watching) => Some(S::Done),
@@ -164,6 +168,7 @@ mod tests {
             (S::Cancelled, T::Resume, S::Queued),
             (S::Error, T::Resume, S::Queued),
             (S::Parked, T::Resume, S::Queued),
+            (S::Watching, T::Resume, S::Queued),
             (S::Idle, T::Watch, S::Watching),
             (S::Watching, T::PrComments, S::Queued),
             (S::Watching, T::PrFinished, S::Done),
