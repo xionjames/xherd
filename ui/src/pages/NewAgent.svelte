@@ -86,7 +86,7 @@
   }
 </script>
 
-<PageHead title="New agent" sub="One ticket, one worktree, one agent." />
+<PageHead width="narrow" title="New agent" sub="One ticket, one worktree, one agent." />
 <form class="stack narrow" onsubmit={create}>
   <Panel>
     <div class="g2">

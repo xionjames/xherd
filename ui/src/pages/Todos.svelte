@@ -78,7 +78,7 @@
   const done = $derived((todos ?? []).filter((t) => t.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)).slice(0, 20));
 </script>
 
-<PageHead title="TODOs" sub="Reminders for you, not for agents. When one comes due it needs you and you get a notification. A reminder with a condition only comes due when the condition is met.">
+<PageHead width="mid" title="TODOs" sub="Reminders for you, not for agents. When one comes due it needs you and you get a notification. A reminder with a condition only comes due when the condition is met.">
   {#snippet actions()}
     {#if !showForm}<button class="btn primary" onclick={() => (showForm = true)}>New TODO</button>{/if}
   {/snippet}
