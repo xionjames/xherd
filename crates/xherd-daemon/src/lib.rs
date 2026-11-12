@@ -23,6 +23,7 @@ pub mod git_access;
 pub mod install;
 pub mod notifier;
 pub mod open_in;
+mod plugin_dirs;
 pub mod pr_round;
 pub mod profiles;
 pub mod repos;
@@ -111,8 +112,8 @@ fn plugin_context(
         secrets: xherd_plugin::resolve_secrets(m, &secrets.for_plugin(&m.name)),
         xherd_bin: xherd_bin.to_string(),
         xherd_url: config.url(),
-        config_dir: paths.plugin_config(&m.name),
-        state_dir: paths.plugin_state(&m.name),
+        config_dir: plugin_dirs::config_dir(paths, &m.name),
+        state_dir: plugin_dirs::state_dir(paths, &m.name),
         ..xherd_plugin::Context::default()
     }
 }
@@ -218,7 +219,7 @@ impl Daemon {
                 .await?;
         }
 
-        let plugins = Registry::load(opts.builtin_plugins, &paths.plugins());
+        let plugins = Registry::load(opts.builtin_plugins, &plugin_dirs::external_dir(&paths));
         for b in plugins.broken() {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
         }
