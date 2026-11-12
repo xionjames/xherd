@@ -111,6 +111,8 @@ export interface Agent {
   nextPrompt?: string;
   /** What xherd may approve by itself (R-109). */
   autonomy?: 'ask' | 'important' | 'never';
+  /** Tool permissions (R-002a); missing on agents created before it existed. */
+  permissionMode?: import('./modes').PermissionMode;
 }
 
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean }

@@ -41,6 +41,7 @@ pub struct ConfigPatch {
     pub pr_poll_minutes: Option<u64>,
     pub max_review_loops: Option<u32>,
     pub autonomy: Option<xherd_core::autonomy::Autonomy>,
+    pub permission_mode: Option<xherd_core::permission::PermissionMode>,
     pub max_auto_approvals_in_row: Option<u32>,
     pub agent_token_budget: Option<u64>,
     pub daily_token_budget: Option<u64>,
@@ -132,6 +133,9 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             return Err(bad("autonomy never is not available yet (v1.x, R-1209)"));
         }
         c.autonomy = a;
+    }
+    if let Some(m) = p.permission_mode {
+        c.permission_mode = m;
     }
     if let Some(n) = p.max_auto_approvals_in_row {
         c.max_auto_approvals_in_row = n;

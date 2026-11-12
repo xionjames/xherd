@@ -475,6 +475,15 @@ Resolution runs at every session start: the daemon reads the version files into 
 
 `GET /agents/:id/open-targets` lists what works from a local browser (R-671): VS Code, Cursor and Zed URLs (Zed's `zed://file` **verify**), Dev Containers in the container (the container id is its hostname), and the companion's apps. JetBrains Toolbox URLs need an open project, so JetBrains goes through the companion. openvscode-server (R-705) comes with remote devices.
 
+**Settings → Open in** (R-706, R-707). `config.json` `openIn` (live): `hidden` (entry ids left out of the menu: `vscode`, `cursor`, `zed`, `devcontainer`, `terminal`, `companion:<app>`, `cmd:<id>`), `terminal` (`terminal`, `iterm`, `ghostty`, `x-terminal-emulator`; unset = the host's default: Terminal on macOS, `x-terminal-emulator` on Linux) and `commands` (`[{id, label, argv}]`, `argv[0]` non-empty, `{dir}` and `{agent}` replaced). The companion's long poll also says which request kinds it understands (`features=terminal,commands`), so an older companion is never offered entries it cannot run. A request is `{app, dir, agent}` plus `terminal` for `app: "terminal"` and `argv` for `cmd:<id>`.
+
+- **Terminal**: the companion builds the command itself from the xherd binary's own path and the agent name (refused unless `[A-Za-z0-9._-]+`), `<xherd> shell <agent>`, and runs it in the chosen app: Terminal and iTerm through `osascript` (`do script`, `create window with default profile command`), Ghostty through `open -na Ghostty --args -e …` (**verify**), Linux through `x-terminal-emulator -e …`. The daemon only picks the app from that list, so nothing new can run.
+- **User commands**: the argv comes from the daemon, so the companion trusts it only after the user says yes **in the companion's terminal**: it prints the label and the argv and asks `[y/N]`; a yes stores the sha256 of the argv's JSON in `~/.config/xherd/open-approved.json`. The same argv later runs at once; any change asks again. Without a terminal to ask on (stdin not a tty) it refuses and says why. The UI says "confirm it in the companion's window" after sending one.
+
+`GET /open-in` serves the Settings page: the link entries for this daemon, whether a companion is polling, its apps and features. Saving goes through `PUT /config` like every setting.
+
+**Tool-permission mode** (R-002a): `Agent.permission_mode` (from `NewAgent.permissionMode`, else the profile's `permissionMode`, else config `permissionMode`, default `edits`), checked against the runtime's `permissionModes`; `all` is refused (`mode_unavailable`) unless `sandbox`. `agent.launch` is rebuilt from it with `Terminal::argv`. `UserAction::SetMode` (`POST /agents/{id}/mode {mode}`, `xherd mode <agent> <mode>`, the select on the agent page) does the same on a live agent; the running session keeps its mode until the next start (fresh session, resume, restart), which the UI says. Agents saved before the field existed keep their stored `launch`.
+
 ### 8.8 Server and Kubernetes
 
 No same-path requirement (clients do not read the files). Open-in is resolved per client: browser VS Code always; Remote-SSH URLs when `XHERD_SSH_HOST` is set. Kubernetes: one Deployment (replicas 1, `Recreate`), PVCs for workspace and home, Secrets for git and model credentials, ingress with WebSocket support, `/healthz` probes, optional SSH sidecar on the workspace PVC. A pod restart ends tmux sessions; agents resume with fresh sessions.
@@ -697,6 +706,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Toolchain resolution
   - [x] Open-in (URL schemes, Dev Containers, companion)
   - [x] Git access setup and doctor
+  - [ ] Settings → Open in: hide entries, user commands confirmed on the host, built-in terminal entry (R-706, R-707)
+  - [x] Tool-permission mode per agent, changeable live (R-002a)
 - [ ] **M4 → v1.0**
   - [x] Guardrails
     - [x] "Viewed" marks per file in the Changes panel (`diff_viewed`, `/agents/:id/viewed`) and a Setup check `runner` that pings the runner

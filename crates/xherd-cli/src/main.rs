@@ -76,6 +76,9 @@ enum Cmd {
         /// What xherd may approve by itself: ask (default) or important.
         #[arg(long)]
         autonomy: Option<xherd_core::autonomy::Autonomy>,
+        /// Tool permissions: ask, edits, auto or all (container only); default: the profile's, else Settings.
+        #[arg(long)]
+        mode: Option<xherd_core::permission::PermissionMode>,
         prompt: Option<String>,
     },
     /// List agents.
@@ -91,6 +94,11 @@ enum Cmd {
     Autonomy {
         agent: String,
         level: xherd_core::autonomy::Autonomy,
+    },
+    /// Change an agent's tool permissions (ask, edits, auto, all); used from its next session start.
+    Mode {
+        agent: String,
+        mode: xherd_core::permission::PermissionMode,
     },
     /// Pause an agent (it writes a handoff note first), or with --all every live agent at once, with no note (kill switch).
     Pause {
@@ -339,8 +347,24 @@ fn main() -> ExitCode {
             repo,
             base,
             autonomy,
+            mode,
             prompt,
-        } => new_agent(key, slug, flow, repo, base, autonomy, prompt),
+        } => new_agent(
+            repo,
+            xherd_core::new::NewAgent {
+                ticket_key: key,
+                slug,
+                repo: String::new(),
+                base,
+                flow,
+                prompt,
+                autonomy,
+                permission_mode: mode,
+            },
+        ),
+        Cmd::Mode { agent, mode } => {
+            action(&agent, "mode", Some(serde_json::json!({"mode": mode})))
+        }
         Cmd::Autonomy { agent, level } => action(
             &agent,
             "autonomy",
@@ -776,15 +800,7 @@ fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
     }
 }
 
-fn new_agent(
-    key: String,
-    slug: Option<String>,
-    flow: Option<String>,
-    repo: Option<String>,
-    base: Option<String>,
-    autonomy: Option<xherd_core::autonomy::Autonomy>,
-    prompt: Option<String>,
-) -> i32 {
+fn new_agent(repo: Option<String>, mut req: xherd_core::new::NewAgent) -> i32 {
     // The daemon has its own working directory: send an absolute path.
     let repo = match repo {
         Some(r) if r.contains("://") || r.starts_with("git@") => r,
@@ -799,10 +815,8 @@ fn new_agent(
             }
         }
     };
-    let body = serde_json::json!({
-        "ticketKey": key, "slug": slug, "repo": repo, "base": base, "flow": flow, "prompt": prompt,
-        "autonomy": autonomy,
-    });
+    req.repo = repo;
+    let body = serde_json::to_value(&req).expect("serialisable");
     match Client::new().and_then(|c| c.call("POST", "/agents", Some(body))) {
         Ok(v) => {
             let a = &v["agent"];

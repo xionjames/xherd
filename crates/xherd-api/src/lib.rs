@@ -1061,6 +1061,8 @@ struct ActionBody {
     message: Option<String>,
     /// Autonomy: `ask` or `important`.
     level: Option<xherd_core::autonomy::Autonomy>,
+    /// Mode: `ask`, `edits`, `auto` or `all` (R-002a).
+    mode: Option<xherd_core::permission::PermissionMode>,
 }
 
 async fn agent_action(
@@ -1079,6 +1081,17 @@ async fn agent_action(
             )
         })
     };
+    if action == "mode" {
+        let mode = b.mode.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "body {\"mode\": \"ask\"|\"edits\"|\"auto\"|\"all\"} required",
+            )
+        })?;
+        let agent = d.set_permission_mode(&id, mode).await?;
+        return Ok(Json(json!({"agent": agent})));
+    }
     let a = match action.as_str() {
         "pause" => UserAction::Pause,
         "resume" => UserAction::Resume,

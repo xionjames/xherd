@@ -141,6 +141,10 @@ pub struct Agent {
     /// Which gates xherd may approve by itself (R-109).
     #[serde(default)]
     pub autonomy: Autonomy,
+    /// Tool-permission mode (R-002a); `None` for agents saved before it
+    /// existed, which keep their stored `launch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<crate::permission::PermissionMode>,
     /// Gates approved automatically since a human last approved one (R-120).
     #[serde(default)]
     pub auto_in_row: u32,
@@ -188,6 +192,7 @@ impl Agent {
             tokens_session_id: None,
             budget_warned: false,
             autonomy: Autonomy::Ask,
+            permission_mode: None,
             auto_in_row: 0,
             review_rounds: 0,
             pr_state: None,

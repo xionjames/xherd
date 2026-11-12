@@ -69,6 +69,12 @@ pub enum UserAction {
     SetAutonomy {
         level: xherd_core::autonomy::Autonomy,
     },
+    /// Change the tool-permission mode (R-002a) with the runtime's argv for
+    /// it, built by `Daemon::set_permission_mode`; used from the next start.
+    SetMode {
+        mode: xherd_core::permission::PermissionMode,
+        launch: Vec<String>,
+    },
     Get,
 }
 
@@ -1616,6 +1622,14 @@ impl Actor {
             UserAction::SetAutonomy { level } => {
                 self.set_autonomy(*level).await?;
                 "user.autonomy"
+            }
+            UserAction::SetMode { mode, launch } => {
+                if self.agent.permission_mode == Some(*mode) {
+                    return Ok(());
+                }
+                self.agent.permission_mode = Some(*mode);
+                self.agent.launch = Some(launch.clone());
+                "user.mode"
             }
         };
         self.log(None, kind, None).await;

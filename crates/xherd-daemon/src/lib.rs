@@ -355,6 +355,31 @@ impl Daemon {
         self.sup.action(who, a).await
     }
 
+    /// Change an agent's tool-permission mode (R-002a). The running session
+    /// keeps its mode; the next start uses the new one.
+    pub async fn set_permission_mode(
+        &self,
+        who: &str,
+        mode: xherd_core::permission::PermissionMode,
+    ) -> Result<Agent, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        let name = a
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let rt = self
+            .plugins
+            .get(name)
+            .ok_or_else(|| format!("runtime plugin {name} is not installed"))
+            .and_then(|p| xherd_plugin::runtime::Terminal::of(&p.manifest))
+            .map_err(|e| ActionError {
+                code: "runtime_unusable",
+                message: e,
+            })?;
+        let launch = create::mode_launch(&rt, mode, self.sandbox)?;
+        self.action(who, UserAction::SetMode { mode, launch }).await
+    }
+
     /// The kill switch (R-032): pause every live agent now, without asking
     /// for handoff notes. Returns the names paused.
     pub async fn pause_all(&self) -> Result<Vec<String>, ActionError> {

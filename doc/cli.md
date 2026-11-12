@@ -36,6 +36,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `xherd pause --all` | Kill switch: pause every queued and live agent now, with no handoff note; nothing new starts |
 | `xherd pause\|resume\|cancel <agent>` | Lifecycle. Pause asks the agent for a handoff note first (up to `pauseTimeoutSec`), then ends the session; cancel ends it at once. Both keep the worktree |
 | `xherd autonomy <agent> <ask\|important>` | Change what xherd may approve by itself (rewrites the agent's instructions and tries an auto-approval at once) |
+| `xherd mode <agent> <ask\|edits\|auto\|all>` | Change the agent's tool permissions; the running session keeps its mode, the next session start uses the new one. `all` only in the container |
 | `xherd attach <agent>` | Attach this terminal to the agent's tmux session (in the container when using Docker) |
 | `xherd shell <agent>` | A shell in the agent's worktree |
 | `xherd open <agent> [--app A]` | Open the worktree in an app on this computer: apps from `~/.config/xherd/open.json`, else editors found on `PATH` |
@@ -50,6 +51,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `--repo` | A local path, or a URL cloned once into `<workspace>/repos/<host>/<path>`. Default: the current directory |
 | `--base` | Base branch (default: the repository's default) |
 | `--autonomy` | `ask` (default) or `important` |
+| `--mode` | Tool permissions: `ask`, `edits`, `auto` or `all` (container only); default: the repo profile's, else the `permissionMode` setting |
 
 ## Called by the runtime and by agents
 

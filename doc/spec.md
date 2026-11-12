@@ -130,6 +130,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 |---|---|
 | R-001 | Input: ticket key, optional slug, repository (path or URL), optional base branch, flow, prompt, autonomy, tool permissions, runtime/model per step, driver, workspace kind. |
 | R-002 | Everything is validated **before** anything is created: key format (`^[A-Z0-9][A-Z0-9_-]*$`, upper-cased) and the tracker's narrower pattern; slug `^[a-z0-9][a-z0-9-]{0,40}$`; the repo is a git repo (fetched first if xherd cloned it); profile resolved; plugins usable; flow exists in the selected pack (`none` requires a prompt); requested tool-permission mode exists in every runtime used, and `all` requires the sandbox flag; agent name, branch and worktree path are free; base branch resolves (profile → repo default; a plain name in a clone resolves to `origin/<name>`). Any failure returns one clear error and changes nothing. |
+| R-002a | **Tool-permission mode** per agent (`ask`, `edits`, `auto`, `all`; §4.1 of the design): from the request, else the repo profile, else the global setting (default `edits`). It can be changed on a live agent; the new mode applies from the next session start (fresh session, resume, restart), since the runtime takes it at launch. `all` is offered and accepted only in the container. |
 | R-003 | A valid agent is saved as `queued` and started when a slot is free (§5.3). |
 
 ### 5.2 Launching
@@ -572,6 +573,8 @@ Supported: Docker Desktop (reference), and OrbStack, Colima, Podman Desktop, Ran
 | R-703 | Host companion (`xherd` on the host, client mode): `xherd attach <agent>` (over the daemon's terminal websocket), `xherd open <agent> [--app NAME]`, `xherd shell <agent>`, `xherd login [URL]`. |
 | R-704 | Optional host bridge (`xherd companion`, later built into the desktop app): runs only the configured Open-in commands with `{dir}` substituted, for requests authenticated by the daemon. |
 | R-705 | VS Code in the browser (openvscode-server) inside the container, for remote devices. |
+| R-706 | Settings → Open in manages the entries: show or hide each one (links, companion apps, the terminal) and add **user commands** (a label and an argv with `{dir}`). The companion runs a user command only after the user confirms that exact argv **on the host**, once (it asks in its own terminal and remembers the argv's hash); a changed argv asks again, and a companion that cannot ask refuses it. Commands in the host's `open.json` and the known editors need no confirmation: the host already chose them. |
+| R-707 | **Open in terminal** is built in: the companion opens a native terminal window (macOS Terminal, iTerm or Ghostty; Linux `x-terminal-emulator`) running `xherd shell <agent>`, a shell in the agent's worktree (inside the container in Docker mode). The command is part of the xherd binary, so it needs no confirmation; Settings only chooses the terminal app from that fixed list. |
 
 ## 13. Guardrails and security
 

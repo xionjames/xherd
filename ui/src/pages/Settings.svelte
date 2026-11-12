@@ -16,6 +16,7 @@
   import SaveBar from '../components/SaveBar.svelte';
   import Callout from '../components/Callout.svelte';
   import type { ConfigView, PluginInfo } from '../lib/types';
+  import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
 
   const TABS = ['general', 'gates', 'notifications', 'git', 'profiles', 'backups', 'plugins', 'about'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
@@ -23,7 +24,7 @@
   const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
+  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
   let form = $state<Form>({});
   const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['auto-approved', 'Something was approved for you'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
@@ -63,7 +64,7 @@
   async function save() {
     saving = true;
     const body: Record<string, unknown> = {};
-    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : Number(form[k]);
+    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'permissionMode' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : Number(form[k]);
     if (changedPlugins.length) {
       body.pluginSettings = Object.fromEntries(
         changedPlugins.map((p) => [p, Object.fromEntries(Object.entries(plugins[p]).filter(([, v]) => v !== ''))]),
@@ -153,6 +154,11 @@
         <label class="f">Stop auto-approving after
           <span class="unit"><input type="number" min="0" bind:value={form.maxAutoApprovalsInRow} /><span>in a row</span></span>
           <span class="hint">The next gate waits for you. 0 = no limit.</span></label>
+      </Panel>
+      <Panel title="Tool permissions" hint="What an agent's runtime may do without asking you.">
+        <label class="f">Tool permissions of new agents
+          <select bind:value={form.permissionMode}>{#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}</select>
+          <span class="hint">{MODE_HINT[(form.permissionMode as PermissionMode) ?? 'edits']} A repo profile or the New agent form can choose another; each agent can change it.</span></label>
       </Panel>
     </div>
   {:else if tab === 'notifications'}

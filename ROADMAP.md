@@ -52,7 +52,7 @@ by theme; update it together with them.
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
 - [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)
 - [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the agent's until guardrails)
-- [ ] Per-agent permission mode (`ask` / `edits` / `auto` / `all` exist; new agents always use `edits`)
+- [x] Per-agent tool-permission mode (R-002a): New agent form / `xherd new --mode`, repo profile, Settings default; changed live on the agent page or `xherd mode` (applies from the next session start); `all` only in the container
 
 ## Context and flow quality
 

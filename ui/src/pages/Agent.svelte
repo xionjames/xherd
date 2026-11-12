@@ -15,6 +15,7 @@
   import { agoText, needsYou, repoName, shortBase } from '../lib/format';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
+  import { MODE_HINT, modes } from '../lib/modes';
 
   let { agent }: { agent: Agent } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -78,6 +79,12 @@
     catch (err) { showError('Could not change the autonomy', err); }
   }
 
+  async function setMode(e: Event) {
+    const mode = (e.currentTarget as HTMLSelectElement).value;
+    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/mode`, { mode })).agent); }
+    catch (err) { showError('Could not change the tool permissions', err); }
+  }
+
   async function act(action: string, label: string) {
     menu = false;
     try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`)).agent); }
@@ -102,6 +109,12 @@
           <label class="row" style="gap:6px;flex-wrap:nowrap">autonomy
             <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
               <option value="ask">ask</option><option value="important">important</option>
+            </select></label>
+        {/if}
+        {#if agent.permissionMode}
+          <label class="row" style="gap:6px;flex-wrap:nowrap" title={`${MODE_HINT[agent.permissionMode]} A change applies from the next session start (approved gate, resume).`}>tools
+            <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
+              {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
             </select></label>
         {/if}
         <span>started {agoText(agent.createdAt)}</span>
