@@ -223,7 +223,8 @@ impl Daemon {
                 .await?;
         }
 
-        let plugins = Registry::load(opts.builtin_plugins, &plugin_dirs::external_dir(&paths));
+        let (external, not_copied) = plugin_dirs::external_dir(&paths);
+        let plugins = Registry::load(opts.builtin_plugins, &external).with_broken(not_copied);
         for b in plugins.broken() {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
         }
