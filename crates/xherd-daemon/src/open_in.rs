@@ -51,6 +51,9 @@ pub const COMMANDS: &str = "commands";
 pub struct Offer {
     pub apps: Vec<String>,
     pub features: Vec<String>,
+    /// Terminal apps installed on the companion's computer, its default first
+    /// (R-707); empty from an older companion.
+    pub terminals: Vec<String>,
 }
 
 #[derive(Default)]
@@ -309,6 +312,7 @@ mod tests {
         let old = Offer {
             apps: vec!["code".into()],
             features: vec![],
+            ..Default::default()
         };
         let ids = |o: &Offer| -> Vec<String> {
             companion_targets(Some(o), &cmds)
@@ -320,6 +324,7 @@ mod tests {
         let new = Offer {
             apps: vec!["code".into()],
             features: vec![TERMINAL.into(), COMMANDS.into()],
+            ..Default::default()
         };
         assert_eq!(ids(&new), ["terminal", "companion:code", "cmd:idea"]);
     }
@@ -331,6 +336,7 @@ mod tests {
         let offer = Offer {
             apps: vec!["idea".into()],
             features: vec![],
+            ..Default::default()
         };
         assert_eq!(c.next(offer.clone(), Duration::from_millis(10)).await, None);
         assert_eq!(c.offer(), Some(offer.clone()));
