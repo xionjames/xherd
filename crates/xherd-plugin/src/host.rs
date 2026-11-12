@@ -95,6 +95,18 @@ pub struct Host {
 }
 
 impl Host {
+    /// A built-in host with no pull-request commands (`bitbucket`: git access
+    /// only) says so instead of being asked through `gh`.
+    fn no_prs(&self, name: &str) -> Result<(), PluginError> {
+        if self.plugin.builtin() && !matches!(self.plugin.name(), GITHUB | crate::gitlab::GITLAB) {
+            return Err(self.shape(
+                name,
+                &format!("{} has no pull request support yet", self.plugin.name()),
+            ));
+        }
+        Ok(())
+    }
+
     /// The built-in GitLab plugin (merge requests through `glab api`).
     fn is_gitlab(&self) -> bool {
         self.plugin.builtin() && self.plugin.name() == crate::gitlab::GITLAB
@@ -108,6 +120,7 @@ impl Host {
         branch: &str,
     ) -> Result<Option<String>, PluginError> {
         let name = "pr-for-branch";
+        self.no_prs(name)?;
         if self.is_gitlab() {
             return self.gl_pr_for_branch(dir, branch).await;
         }
@@ -159,6 +172,7 @@ impl Host {
     /// `pr-status {url}` and `pr-checks {url}` (R-303): what a poll of the
     /// pull request at `url` found. Built-in `github` asks `gh`.
     pub async fn pr_snapshot(&self, dir: &Path, url: &str) -> Result<Snapshot, PluginError> {
+        self.no_prs("pr-status")?;
         if self.is_gitlab() {
             return self.gl_pr_snapshot(dir, url).await;
         }
@@ -225,6 +239,7 @@ impl Host {
     /// `github` reads three endpoints through `gh api`.
     pub async fn pr_comments(&self, dir: &Path, url: &str) -> Result<Vec<Comment>, PluginError> {
         let name = "pr-comments";
+        self.no_prs(name)?;
         if self.is_gitlab() {
             return self.gl_pr_comments(dir, url).await;
         }
@@ -285,6 +300,7 @@ impl Host {
         body: &str,
     ) -> Result<(), PluginError> {
         let name = "pr-reply";
+        self.no_prs(name)?;
         if self.is_gitlab() {
             return self.gl_pr_reply(dir, url, to, body).await;
         }

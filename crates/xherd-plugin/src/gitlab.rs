@@ -555,4 +555,26 @@ esac
         // A reply to something that is not a comment id never reaches glab.
         assert!(host.pr_reply(&repo, url, "issue:../:1", "x").await.is_err());
     }
+
+    /// A host with git access only says so; it is never asked through `gh`.
+    #[tokio::test]
+    async fn bitbucket_has_no_pull_requests_yet() {
+        let d = tempfile::tempdir().unwrap();
+        let reg = crate::Registry::load(crate::builtins(), d.path());
+        let host = Host {
+            plugin: reg.get("bitbucket").unwrap().clone(),
+            ctx: crate::Context::default(),
+        };
+        let e = host
+            .pr_for_branch(d.path(), "x")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no pull request support"), "{e}");
+        assert!(
+            host.pr_snapshot(d.path(), "https://bitbucket.org/a/b/pull-requests/1")
+                .await
+                .is_err()
+        );
+    }
 }

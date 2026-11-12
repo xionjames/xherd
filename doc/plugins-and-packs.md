@@ -52,7 +52,7 @@ Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `flow`, `notifie
 
 xherd runs a command's argv in the agent's worktree (as the agents' user in the container), writes one JSON object to its stdin — `{command, input, settings, secrets, agent}` — and reads one JSON value from stdout. stderr goes to the log with secrets redacted. A non-zero exit or output of the wrong shape is a failure of that call; xherd logs it and carries on (a failed PR poll never blocks an agent).
 
-A host plugin answers these commands; the built-in `github` plugin implements them in Rust and an external plugin answers them through the protocol:
+A host plugin answers these commands; the built-in `github` plugin implements them in Rust through `gh`, the built-in `gitlab` plugin through `glab api` (GitLab's REST API; merge requests, their approvals, the head pipeline's jobs and discussions), and an external plugin answers them through the protocol. Which plugin serves an agent is decided by the host of its remote: the provider on its row in Settings → Git access, else the plugin whose `data.git` `hosts` claim the name, else `github`. The built-in `bitbucket` has git access only and answers these commands with an error saying so:
 
 | Command | Input | Answer |
 |---|---|---|
@@ -64,14 +64,14 @@ A host plugin answers these commands; the built-in `github` plugin implements th
 
 Treat the shapes in `host.rs` as the contract; this table is a summary.
 
-A host plugin also declares its git access in `data.git` (the built-in `github`, `gitlab` and `bitbucket` do; the reading code is `crates/xherd-plugin/src/git.rs`). A host in Settings → Git access whose credential is `gh` or `glab` takes these from the provider:
+A host plugin also declares its git access in `data.git` (the built-in `github`, `gitlab` and `bitbucket` do; the reading code is `crates/xherd-plugin/src/git.rs`). A host in Settings → Git access is bound to a provider (the `provider` field, a plugin name; empty = the first provider claiming its name) and, with the credential `provider`, takes these from it:
 
 - `hosts`: host names it claims (`github.com`, `*gitlab*`; `*` matches any run of characters). They decide the token user and which provider's API checks the doctor uses for a host.
 - `credential`: `helper` (the git credential helper, e.g. `!gh auth git-credential`; absent for a provider with no CLI, whose token xherd keeps) and `tokenUser` (the name git sends with a token; a host no provider claims gets `x-access-token`).
 - `login`: the browser login argv; `{host}` is replaced. Without it the host takes a pasted token.
 - `api`: the doctor's API checks: `base` (`{host}` is replaced; https only), `user` (`path`, and optionally `scopesHeader` + `requireScope`), and optionally `repo` (`path` with `{path}`, `ssoHeader`, and the `onSso` / `onNotFound` verdicts: a `detail` and a `fix`, which may use `{url}`).
 
-Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. The git part is a proposal's first step (D24): binding hosts to a provider directly, and PR commands for GitLab, come later.
+Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. A plugin's options page (Settings → Plugins) lists the hosts that use it. `install` / `instructions` blocks for a provider's CLI (R-691) are not built yet.
 
 ### Toolchain plugins
 

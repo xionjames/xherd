@@ -3128,7 +3128,7 @@ mod pick_host_tests {
     fn hosts() -> Vec<Arc<xherd_plugin::host::Host>> {
         let d = tempfile::tempdir().unwrap();
         let reg = xherd_plugin::Registry::load(xherd_plugin::builtins(), d.path());
-        ["github", "gitlab"]
+        ["github", "gitlab", "bitbucket"]
             .iter()
             .map(|n| {
                 Arc::new(xherd_plugin::host::Host {
@@ -3166,6 +3166,11 @@ mod pick_host_tests {
         assert_eq!(
             pick(&[], none, Some("github.com")).as_deref(),
             Some("github")
+        );
+        // Bitbucket is its own provider even without PR commands.
+        assert_eq!(
+            pick(&[], none, Some("bitbucket.org")).as_deref(),
+            Some("bitbucket")
         );
         // Unknown names and no remote keep the old behaviour: GitHub.
         assert_eq!(

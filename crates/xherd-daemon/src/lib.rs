@@ -117,8 +117,9 @@ fn plugin_context(
     }
 }
 
-/// The host plugins that handle pull requests: built-in `github` and
-/// `gitlab`, and external host plugins (D24). An external plugin of the same
+/// Every host plugin (D24): built-in `github` and `gitlab` handle pull
+/// requests, `bitbucket` only git access (its PR commands say so), and external
+/// host plugins answer through the protocol. An external plugin of the same
 /// name replaces a built-in one. Which one serves an agent is decided by the
 /// host of its remote (`actor::pick_host`).
 fn host_plugins(
@@ -130,7 +131,6 @@ fn host_plugins(
 ) -> Vec<Arc<xherd_plugin::host::Host>> {
     plugins
         .of_kind(xherd_plugin::Kind::Host)
-        .filter(|p| !p.builtin() || matches!(p.name(), "github" | "gitlab"))
         .map(|p| {
             let mut ctx = plugin_context(p, paths, config, secrets, xherd_bin);
             // The GitHub plugin reuses the token of Settings → Git access (R-685).
