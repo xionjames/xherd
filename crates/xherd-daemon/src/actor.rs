@@ -250,7 +250,7 @@ impl ActorSettings {
 /// `host` with its secrets as they are on disk now, and, without a `token` of
 /// its own, the one kept for `remote_host` in Settings → Git access (read on
 /// each use, so a new token applies at once).
-fn with_git_token(
+pub(crate) fn with_git_token(
     host: Arc<xherd_plugin::host::Host>,
     remote_host: Option<&str>,
     secrets: &std::path::Path,
@@ -274,7 +274,7 @@ fn with_git_token(
 }
 
 /// The host name of the worktree's `origin` remote.
-async fn origin_host(wd: &std::path::Path) -> Option<String> {
+pub(crate) async fn origin_host(wd: &std::path::Path) -> Option<String> {
     let out = xherd_core::exec::run(
         xherd_core::exec::Cmd::new([
             "git",

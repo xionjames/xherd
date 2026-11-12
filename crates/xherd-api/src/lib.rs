@@ -85,6 +85,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
         .route("/api/v1/agents/{id}/git-access", get(agent_git_access))
+        .route("/api/v1/agents/{id}/ticket", get(agent_ticket))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
@@ -820,6 +821,15 @@ struct DoctorReq {
 }
 
 /// `GET /agents/:id/git-access` (R-688): the doctor for the agent's host.
+/// The agent's ticket and its comments, read through a tracker plugin.
+async fn agent_ticket(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.agent_ticket(&id).await?))
+}
+
 async fn agent_git_access(
     _: User,
     State(d): State<Daemon>,

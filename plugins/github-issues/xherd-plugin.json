@@ -3,12 +3,41 @@
   "kind": "tracker",
   "version": "0.1.0",
   "label": "GitHub Issues",
-  "description": "Turns owner/repo#12 in the UI into a link to the GitHub issue.",
+  "description": "Turns owner/repo#12 in the UI into a link to the GitHub issue, and shows the ticket and its comments (the ticket key is the issue number, with an optional GH- prefix).",
   "data": {
     "tracker": {
       "links": [
-        { "pattern": "\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\\d+)\\b", "url": "https://github.com/{1}/issues/{2}" }
+        {
+          "pattern": "\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\\d+)\\b",
+          "url": "https://github.com/{1}/issues/{2}"
+        }
+      ],
+      "key": "^(?:GH-)?(\\d+)$",
+      "hosts": [
+        "github.com"
       ]
     }
-  }
+  },
+  "settings": [
+    {
+      "key": "gh",
+      "label": "gh binary",
+      "default": "gh"
+    },
+    {
+      "key": "token",
+      "label": "Token (GH_TOKEN; empty = gh's own login)",
+      "secret": true
+    }
+  ],
+  "requires": [
+    {
+      "name": "gh",
+      "optional": true,
+      "instructions": {
+        "macos": "brew install gh",
+        "any": "See https://github.com/cli/cli#installation"
+      }
+    }
+  ]
 }

@@ -17,6 +17,8 @@ use crate::host::{Host, parse_checks, parse_status, parse_stream};
 
 /// The plugin's name in the registry.
 pub const GITLAB: &str = "gitlab";
+/// The tracker plugin that reads issues through the same `glab`.
+pub const GITLAB_ISSUES: &str = "gitlab-issues";
 
 fn plain(s: &str) -> bool {
     !s.is_empty()
@@ -199,7 +201,7 @@ fn reply_path(to: &str, mr: &str) -> Option<String> {
 }
 
 impl Host {
-    fn glab_bin(&self) -> String {
+    pub(crate) fn glab_bin(&self) -> String {
         self.ctx
             .settings
             .get("glab")
@@ -221,14 +223,19 @@ impl Host {
             .await
     }
 
-    async fn glab_get(&self, dir: &Path, host: &str, path: &str) -> Result<Value, PluginError> {
+    pub(crate) async fn glab_get(
+        &self,
+        dir: &Path,
+        host: &str,
+        path: &str,
+    ) -> Result<Value, PluginError> {
         let args = [path];
         let out = self.glab_api(dir, host, &args).await?;
         let bytes = self.ok(out, &args)?;
         self.json(path, &bytes)
     }
 
-    async fn glab_list(
+    pub(crate) async fn glab_list(
         &self,
         dir: &Path,
         host: &str,

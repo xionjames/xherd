@@ -10,6 +10,7 @@ import PullRequest from '../panels/PullRequest.svelte';
 import Activity from '../panels/Activity.svelte';
 import TerminalPanel from '../panels/Terminal.svelte';
 import Memory from '../panels/Memory.svelte';
+import Ticket from '../panels/Ticket.svelte';
 
 export const PANELS: Record<string, Component<{ agent: Agent }>> = {
   documents: Documents,
@@ -20,6 +21,7 @@ export const PANELS: Record<string, Component<{ agent: Agent }>> = {
   log: Activity,
   terminal: TerminalPanel,
   memory: Memory,
+  ticket: Ticket,
 };
 
 export interface TabDef {
@@ -38,6 +40,7 @@ export const AGENT_VIEW: TabDef[] = [
   { id: 'tasks', panel: 'tasks', label: 'Tasks', icon: 'tasks', noFlow: false },
   { id: 'commits', panel: 'commits', label: 'Commits', icon: 'commit', noFlow: false },
   { id: 'changes', panel: 'diff', label: 'Changes', icon: 'diff', noFlow: true },
+  { id: 'ticket', panel: 'ticket', label: 'Ticket', icon: 'doc', noFlow: true },
   { id: 'pr', panel: 'pr', label: 'Pull request', icon: 'pr', noFlow: true },
   { id: 'memory', panel: 'memory', label: 'Shared memory', icon: 'doc', noFlow: false },
   { id: 'activity', panel: 'log', label: 'Activity', icon: 'activity', noFlow: true },
