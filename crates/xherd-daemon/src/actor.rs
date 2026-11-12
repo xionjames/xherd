@@ -305,15 +305,15 @@ pub(crate) async fn origin_host(wd: &std::path::Path) -> Option<String> {
 /// Which host plugin serves a remote on `remote_host` (D24): the provider
 /// named on its row in Settings → Git access, else the plugin whose patterns
 /// claim the name, else `github` (what every remote used before providers).
-/// A switched-off plugin is never chosen.
+/// A switched-off plugin is never chosen, and none stands in for it: `None`.
 pub fn pick_host(
     hosts: &[Arc<xherd_plugin::host::Host>],
     git_hosts: &[xherd_core::config::GitHost],
     disabled: &[String],
     remote_host: Option<&str>,
 ) -> Option<Arc<xherd_plugin::host::Host>> {
-    let on = |h: &&Arc<xherd_plugin::host::Host>| !disabled.iter().any(|n| n == h.plugin.name());
-    let named = |n: &str| hosts.iter().filter(on).find(|h| h.plugin.name() == n);
+    let on = |h: &Arc<xherd_plugin::host::Host>| !disabled.iter().any(|n| n == h.plugin.name());
+    let named = |n: &str| hosts.iter().find(|h| h.plugin.name() == n);
     let by_row = remote_host.and_then(|r| {
         git_hosts
             .iter()
@@ -322,17 +322,20 @@ pub fn pick_host(
     });
     let claimed = || {
         let r = remote_host?;
-        hosts.iter().filter(on).find(|h| {
+        hosts.iter().find(|h| {
             xherd_plugin::git::Git::of(&h.plugin.manifest)
                 .ok()
                 .flatten()
                 .is_some_and(|g| g.claims(r))
         })
     };
+    // The remote's own provider, even when it is switched off: another
+    // plugin (`gh` on a GitLab merge request) would only fail on every poll.
     by_row
         .and_then(named)
         .or_else(claimed)
         .or_else(|| named(xherd_plugin::host::GITHUB))
+        .filter(|h| on(h))
         .cloned()
 }
 
@@ -3271,10 +3274,13 @@ mod pick_host_tests {
             pick(&rows, none, Some("git.example.com")).as_deref(),
             Some("gitlab")
         );
-        // A switched-off plugin is never used.
+        // A switched-off plugin is never used, and no other one stands in
+        // for it (gh cannot read a GitLab merge request).
         let off = ["gitlab".to_string()];
+        assert_eq!(pick(&rows, &off, Some("gitlab.com")), None);
+        assert_eq!(pick(&rows, &off, Some("git.example.com")), None);
         assert_eq!(
-            pick(&rows, &off, Some("gitlab.com")).as_deref(),
+            pick(&[], &off, Some("github.com")).as_deref(),
             Some("github")
         );
     }
