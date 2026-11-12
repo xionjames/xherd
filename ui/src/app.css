@@ -224,7 +224,8 @@ label.f.chk.top { align-items: flex-start; }
 .ci.ok, .ckst.ok { background: var(--live); color: var(--pen); }
 .ci.bad, .ckst.bad { background: var(--halt); color: var(--on-halt); }
 .ci.info { background: var(--accent); color: var(--on-accent); }
-.ci.need { background: var(--pen); color: var(--gate); box-shadow: inset 0 0 0 1px var(--gate); }
+.ci.need { background: none; color: var(--gate); }
+.ci.need .ic { width: 18px; height: 18px; }
 .ci .ic { width: 13px; height: 13px; }
 .ckst.opt { background: var(--pen-2); color: var(--ink-3); }
 .toast { position: fixed; z-index: 60; bottom: 16px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); box-shadow: var(--shadow); }
@@ -309,7 +310,8 @@ label.f.chk.top { align-items: flex-start; }
 .st.cur { background: var(--accent-wash); color: var(--accent); }
 .st.cur i { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .st.now { background: var(--gate-wash); color: var(--gate); box-shadow: inset 0 0 0 1px var(--gate-line); }
-.st.now i { background: var(--pen); border-color: var(--gate); color: var(--gate); }
+.st.now i { background: none; border-color: transparent; color: var(--gate); }
+.st.now i .ic { width: 18px; height: 18px; }
 .st .t { font-size: 11px; font-weight: 500; color: var(--ink-3); }
 .st.skip { color: var(--ink-3); }
 .st.skip i { border-style: dashed; color: var(--ink-3); }

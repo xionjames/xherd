@@ -10,6 +10,6 @@
 </script>
 
 <div class="callout {tone} {cls}" role="status">
-  <span class="ci {tone}" aria-hidden="true">{#if !glyph && tone === 'need'}<Icon name="hand" size={13} />{:else}{glyph ?? GLYPH[tone]}{/if}</span>
+  <span class="ci {tone}" aria-hidden="true">{#if !glyph && tone === 'need'}<Icon name="handSolid" size={18} solid />{:else}{glyph ?? GLYPH[tone]}{/if}</span>
   <div>{@render children()}</div>
 </div>
