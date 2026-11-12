@@ -130,6 +130,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 |---|---|
 | R-001 | Input: ticket key, optional slug, repository (path or URL), optional base branch, flow, prompt, autonomy, tool permissions, runtime/model per step, driver, workspace kind. |
 | R-002 | Everything is validated **before** anything is created: key format (`^[A-Z0-9][A-Z0-9_-]*$`, upper-cased) and the tracker's narrower pattern; slug `^[a-z0-9][a-z0-9-]{0,40}$`; the repo is a git repo (fetched first if xherd cloned it); profile resolved; plugins usable; flow exists in the selected pack (`none` requires a prompt); requested tool-permission mode exists in every runtime used, and `all` requires the sandbox flag; agent name, branch and worktree path are free; base branch resolves (profile → repo default; a plain name in a clone resolves to `origin/<name>`). Any failure returns one clear error and changes nothing. |
+| R-002a | **Tool-permission mode** per agent (`ask`, `edits`, `auto`, `all`; §4.1 of the design): from the request, else the repo profile, else the global setting (default `edits`). It can be changed on a live agent; the new mode applies from the next session start (fresh session, resume, restart), since the runtime takes it at launch. `all` is offered and accepted only in the container. |
 | R-003 | A valid agent is saved as `queued` and started when a slot is free (§5.3). |
 
 ### 5.2 Launching
@@ -227,6 +228,7 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-103 | Priority when several apply: commit > PR triage/replies > documents > question. |
 | R-104 | **Approve**: append an approval to the ledger (R-106), snapshot the reviewed text for "changed since you reviewed", log the event, and hand on the next command (§5.5). |
 | R-105 | **Request changes**: send the agent a message naming the gate, the files and the user's comment, asking it to revise and stop at the gate again. |
+| R-105a | **Open questions** of a documents gate come from the gate documents' `## Open questions` section (one list item per question; "None." or an empty section = none), not from a separate list the agent passes. The user answers each one with an inline comment on its list item: the comment boxes of those items open by themselves when the gate opens, and the answers are sent together with the other inline comments as one change request (R-105). A question asked outside the documents (`xherd ask` while the gate is open, or a `--question` that matches no list item) gets its own comment box above the documents. Unanswered questions stay open (R-113). |
 
 ### 6.2 Approval by content hash
 
@@ -304,7 +306,7 @@ Design may be skipped only when the change is small and local, has no data/API/c
 Documents live in the agent's spec folder (§7.5): `ticket.md`, `spec.md`, `design.md`, `tasks.md`, `commits.md`, `review.md`, `pr.md`, `memory.md` (short state for fresh sessions), `pr-review.md`, plus private `HANDOFF.md` and `pr-comments.json`.
 
 - Frontmatter carries `ticket`, `flow`, `stage`, optional `needs-human` + `reason`, `design: skip` (spec), `template` and `url` (pr). There is **no `approved` key**: approval lives in the ledger (§6.2).
-- Gate documents end with the agent's **assumptions**; the spec also lists **open questions** (none → "None.").
+- Gate documents end with the agent's **assumptions**; the spec and the design also list **open questions** (none → "None."), the only place the agent states them (R-105a).
 - Tasks have stable ids (`T01`…), state (todo, doing, blocked, done), refs to requirements, `files:` (binding, R-116), `depends:`, `evidence:`, optional `verify:` command, optional model **tier** hint, optional **codebase contract** (verified file:line references and things that do not exist), and `source:` (spec, review, pr).
 - Commits have ids (`C01`…), state (proposed, done, dropped), tasks, files, sha; one proposal at a time.
 
@@ -571,6 +573,8 @@ Supported: Docker Desktop (reference), and OrbStack, Colima, Podman Desktop, Ran
 | R-703 | Host companion (`xherd` on the host, client mode): `xherd attach <agent>` (over the daemon's terminal websocket), `xherd open <agent> [--app NAME]`, `xherd shell <agent>`, `xherd login [URL]`. |
 | R-704 | Optional host bridge (`xherd companion`, later built into the desktop app): runs only the configured Open-in commands with `{dir}` substituted, for requests authenticated by the daemon. |
 | R-705 | VS Code in the browser (openvscode-server) inside the container, for remote devices. |
+| R-706 | Settings → Open in manages the entries: show or hide each one (links, companion apps, the terminal) and add **user commands** (a label and an argv with `{dir}`). The companion runs a user command only after the user confirms that exact argv **on the host**, once (it asks in its own terminal and remembers the argv's hash); a changed argv asks again, and a companion that cannot ask refuses it. Commands in the host's `open.json` and the known editors need no confirmation: the host already chose them. |
+| R-707 | **Open in terminal** is built in: the companion opens a native terminal window (macOS Terminal, iTerm or Ghostty; Linux `x-terminal-emulator`) running `xherd shell <agent>`, a shell in the agent's worktree (inside the container in Docker mode). The command is part of the xherd binary, so it needs no confirmation; Settings only chooses the terminal app from that fixed list. |
 
 ## 13. Guardrails and security
 

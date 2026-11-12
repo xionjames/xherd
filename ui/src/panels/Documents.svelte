@@ -4,7 +4,8 @@
   import type { Agent } from '../lib/types';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
-  import { mdNoteText, type MdNote } from '../lib/notes';
+  import { mdNoteText, questionBlocks, type MdNote } from '../lib/notes';
+  import { tick } from 'svelte';
   import MdBlocks from '../components/MdBlocks.svelte';
   import { frontmatter, render } from '../lib/markdown';
   import { lineDiff } from '../lib/diff';
@@ -54,13 +55,21 @@
     if (text) n[key] = { text, quote }; else delete n[key];
     notes[selected] = n;
   };
-  const count = $derived(Object.values(notes).reduce((a, n) => a + Object.keys(n).length, 0));
+  // Questions the agent asked outside the documents (R-105a), answered here.
+  const asked = $derived(agent.gate?.kind === 'docs' ? (agent.gate.asked ?? []) : []);
+  let answers = $state<Record<string, string>>({});
+  const answered = $derived(asked.filter((q) => answers[q]?.trim()));
+  const count = $derived(Object.values(notes).reduce((a, n) => a + Object.keys(n).length, 0) + answered.length);
   async function sendNotes() {
-    const out = Object.entries(notes).flatMap(([p, n]) => mdNoteText(p, n));
+    const out = [
+      ...answered.map((q) => `Q: ${q}\nA: ${answers[q].trim()}`),
+      ...Object.entries(notes).flatMap(([p, n]) => mdNoteText(p, n)),
+    ];
     sending = true;
     try {
       await post(`/agents/${id}/request-changes`, { comment: `Review comments on the documents:\n\n${out.join('\n\n')}` });
       notes = {};
+      answers = {};
     } catch (e) { showError('Could not send the comments', e); }
     finally { sending = false; }
   }
@@ -74,6 +83,13 @@
     ),
   );
   const rendered = $derived(parsed ? render(parsed.body, added) : null);
+  // Open questions of a gate document get their answer boxes (R-105a).
+  const questions = $derived(rendered && selected && gateFiles.includes(selected) ? questionBlocks(rendered.blocks) : []);
+  // `?q=1` (the band's link) scrolls to the first question.
+  $effect(() => {
+    if (!route.query.get('q') || !questions.length) return;
+    tick().then(() => document.querySelector('.qblk')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
+  });
 </script>
 
 <div class="body">
@@ -103,13 +119,24 @@
       <div class="card"><DiffLines lines={lineDiff(doc.reviewed ?? '', doc.text)} /></div>
     {:else if parsed && rendered}
       {#if doc?.path === 'review.md'}<Findings {agent} />{/if}
+      {#if asked.length}
+        <div class="card cb asked">
+          <span class="lbl">Questions from the agent · not in the document</span>
+          {#each asked as q (q)}
+            <label class="gbox">
+              <span>{q}</span>
+              <textarea rows="2" bind:value={answers[q]} aria-label={`Answer: ${q}`} placeholder="Your answer"></textarea>
+            </label>
+          {/each}
+        </div>
+      {/if}
       <article class="paper">
         {#if parsed.meta.length}
           <div class="row meta">
             {#each parsed.meta as [k, v] (k)}<span class="pill">{k}: {v}</span>{/each}
           </div>
         {/if}
-        <div class="md"><MdBlocks blocks={rendered.blocks} notes={selected ? notes[selected] : undefined} onnote={setNote} /></div>
+        <div class="md"><MdBlocks blocks={rendered.blocks} notes={selected ? notes[selected] : undefined} onnote={setNote} {questions} /></div>
       </article>
     {/if}
   </div>
@@ -136,4 +163,6 @@
   .md :global(.chg) { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); padding-left: 10px; margin-left: -13px; border-radius: 2px; }
   .md :global(p), .md :global(ul), .md :global(ol) { margin: 0; }
   .meta { margin-bottom: 12px; }
+  .asked { display: grid; gap: 10px; margin-bottom: 12px; }
+  .asked .gbox { display: grid; gap: 4px; }
 </style>

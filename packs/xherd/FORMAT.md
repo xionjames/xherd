@@ -54,7 +54,7 @@ What this change does not do.
 "Design: needed" or "Design: skipped" with the reason.
 
 ## Open questions
-- … (or "None.")
+- … one list item per question (or "None.")
 
 ## Assumptions
 - …
@@ -70,7 +70,7 @@ Approving the spec approves the skip.
 Frontmatter as above (`stage: design`). Sections: `## Approach`,
 `## Components` (files and modules touched, with what changes),
 `## Data and interfaces`, `## Alternatives considered`, `## Risks`,
-`## Testing`, `## Assumptions`.
+`## Testing`, `## Open questions`, `## Assumptions`.
 
 ## tasks.md
 

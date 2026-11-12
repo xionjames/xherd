@@ -31,6 +31,9 @@ pub struct NewAgent {
     /// `ask` or `important` (R-001); default: the setting.
     #[serde(default)]
     pub autonomy: Option<crate::autonomy::Autonomy>,
+    /// Tool-permission mode (R-002a); default: the profile's, else the setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<crate::permission::PermissionMode>,
 }
 
 pub const FLOW_NONE: &str = "none";
@@ -227,6 +230,7 @@ mod tests {
             flow: None,
             prompt: None,
             autonomy: None,
+            permission_mode: None,
         }
     }
 

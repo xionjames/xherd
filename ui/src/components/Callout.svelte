@@ -3,12 +3,13 @@
   // (never coloured text), with the colour on the edge and the background.
   // `need` is for what waits on the user, like --gate.
   import type { Snippet } from 'svelte';
+  import Icon from './Icon.svelte';
   type Tone = 'ok' | 'bad' | 'info' | 'need' | 'plain';
-  const GLYPH: Record<Tone, string> = { ok: '✓', bad: '✕', info: 'i', need: '✋', plain: '•' };
+  const GLYPH: Record<Tone, string> = { ok: '✓', bad: '✕', info: 'i', need: '', plain: '•' };
   let { tone = 'plain', glyph, class: cls = '', children }: { tone?: Tone; glyph?: string; class?: string; children: Snippet } = $props();
 </script>
 
 <div class="callout {tone} {cls}" role="status">
-  <span class="ci {tone}" aria-hidden="true">{glyph ?? GLYPH[tone]}</span>
+  <span class="ci {tone}" aria-hidden="true">{#if !glyph && tone === 'need'}<Icon name="hand" size={13} />{:else}{glyph ?? GLYPH[tone]}{/if}</span>
   <div>{@render children()}</div>
 </div>

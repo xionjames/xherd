@@ -54,6 +54,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/open", post(open_in))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/companion/next", get(companion_next))
+        .route("/api/v1/open-in", get(open_in_view))
         .route("/api/v1/repos", get(repos))
         .route("/api/v1/repos/resolve", post(resolve_repo))
         .route("/api/v1/install", post(install))
@@ -746,10 +747,18 @@ async fn open_in(
     Ok(Json(json!({"ok": true})))
 }
 
+/// Settings → Open in (R-706): link entries and the companion's offer.
+async fn open_in_view(_: User, State(d): State<Daemon>) -> Json<Value> {
+    Json(d.open_in_view())
+}
+
 #[derive(Deserialize)]
 struct CompanionQuery {
     #[serde(default)]
     apps: String,
+    /// Request kinds it understands: `terminal`, `commands` (R-706, R-707).
+    #[serde(default)]
+    features: String,
     #[serde(default)]
     wait: Option<u64>,
 }
@@ -761,15 +770,19 @@ async fn companion_next(
     State(d): State<Daemon>,
     axum::extract::Query(q): axum::extract::Query<CompanionQuery>,
 ) -> ApiResult<Json<Value>> {
-    let apps = q
-        .apps
-        .split(',')
-        .map(str::trim)
-        .filter(|a| !a.is_empty())
-        .map(str::to_string)
-        .collect();
+    let list = |s: &str| {
+        s.split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let offer = xherd_daemon::open_in::Offer {
+        apps: list(&q.apps),
+        features: list(&q.features),
+    };
     let wait = std::time::Duration::from_secs(q.wait.unwrap_or(25).min(30));
-    let r = d.companion.next(apps, wait).await;
+    let r = d.companion.next(offer, wait).await;
     Ok(Json(json!({"request": r})))
 }
 
@@ -1061,6 +1074,8 @@ struct ActionBody {
     message: Option<String>,
     /// Autonomy: `ask` or `important`.
     level: Option<xherd_core::autonomy::Autonomy>,
+    /// Mode: `ask`, `edits`, `auto` or `all` (R-002a).
+    mode: Option<xherd_core::permission::PermissionMode>,
 }
 
 async fn agent_action(
@@ -1079,6 +1094,17 @@ async fn agent_action(
             )
         })
     };
+    if action == "mode" {
+        let mode = b.mode.ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "body {\"mode\": \"ask\"|\"edits\"|\"auto\"|\"all\"} required",
+            )
+        })?;
+        let agent = d.set_permission_mode(&id, mode).await?;
+        return Ok(Json(json!({"agent": agent})));
+    }
     let a = match action.as_str() {
         "pause" => UserAction::Pause,
         "resume" => UserAction::Resume,

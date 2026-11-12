@@ -7,6 +7,7 @@
   import StatusPill from '../components/StatusPill.svelte';
   import YourCallBand from '../components/YourCallBand.svelte';
   import Dialog from '../components/Dialog.svelte';
+  import Callout from '../components/Callout.svelte';
   import type { Agent } from '../lib/types';
   import { app, upsertAgent } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
@@ -15,6 +16,7 @@
   import { agoText, needsYou, repoName, shortBase } from '../lib/format';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
+  import { MODE_HINT, modes } from '../lib/modes';
 
   let { agent }: { agent: Agent } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -29,8 +31,9 @@
   });
   let confirmCancel = $state(false);
   let menu = $state(false);
-  // Open in… (R-701, R-702, R-704): links that work because the workspace
-  // has the same path on this computer, and the host companion's apps.
+  // Open in… (R-701, R-702, R-704, R-706, R-707): links that work because the
+  // workspace has the same path on this computer, and what the host companion
+  // runs: the terminal, its apps and your commands from Settings → Open in.
   type Target = { id: string; label: string; kind: 'url' | 'companion'; url?: string };
   let openMenu = $state(false);
   let targets = $state<Target[] | null>(null);
@@ -40,10 +43,14 @@
     try { targets = (await get<{ targets: Target[] }>(`/agents/${agent.id}/open-targets`)).targets; }
     catch (e) { openMenu = false; showError('Could not list editors', e); }
   }
+  // A command of yours runs only once confirmed in the companion's window.
+  let sentCmd = $state<string | null>(null);
   async function openWith(t: Target) {
     openMenu = false;
-    try { await post(`/agents/${agent.id}/open`, { app: t.id.replace(/^companion:/, '') }); }
-    catch (e) { showError(`Could not open in ${t.label}`, e); }
+    try {
+      await post(`/agents/${agent.id}/open`, { app: t.id });
+      sentCmd = t.id.startsWith('cmd:') ? t.label : null;
+    } catch (e) { showError(`Could not open in ${t.label}`, e); }
   }
 
   const flow = $derived(flowOf(agent, app.state?.flows ?? []));
@@ -78,6 +85,12 @@
     catch (err) { showError('Could not change the autonomy', err); }
   }
 
+  async function setMode(e: Event) {
+    const mode = (e.currentTarget as HTMLSelectElement).value;
+    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/mode`, { mode })).agent); }
+    catch (err) { showError('Could not change the tool permissions', err); }
+  }
+
   async function act(action: string, label: string) {
     menu = false;
     try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`)).agent); }
@@ -102,6 +115,12 @@
           <label class="row" style="gap:6px;flex-wrap:nowrap">autonomy
             <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
               <option value="ask">ask</option><option value="important">important</option>
+            </select></label>
+        {/if}
+        {#if agent.permissionMode}
+          <label class="row" style="gap:6px;flex-wrap:nowrap" title={`${MODE_HINT[agent.permissionMode]} A change applies from the next session start (approved gate, resume).`}>tools
+            <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
+              {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
             </select></label>
         {/if}
         <span>started {agoText(agent.createdAt)}</span>
@@ -131,8 +150,9 @@
                 {/if}
               {/each}
               {#if targets && !targets.some((t) => t.kind === 'companion')}
-                <span class="hint mpad">Run <span class="mono">xherd companion</span> on this computer to offer its apps here.</span>
+                <span class="hint mpad">Run <span class="mono">xherd companion</span> on this computer for the terminal and its apps.</span>
               {/if}
+              <a class="hint mpad" href={href('/settings', { tab: 'openin' })} onclick={() => (openMenu = false)}>Manage these…</a>
             </div>
           {/if}
         </div>
@@ -150,6 +170,10 @@
   </div>
   <Stepper {agent} {flow} />
 </header>
+{#if sentCmd}
+  <Callout tone="info">Sent to the companion: {sentCmd}. If it is new or changed, confirm it in the companion's window.
+    <button class="btn ghost sm" onclick={() => (sentCmd = null)}>OK</button></Callout>
+{/if}
 
 <div class="aview">
   <nav class="vnav" aria-label="Agent">
@@ -157,7 +181,7 @@
       {@const b = badge(t.id)}
       <a class="vtb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
         href={href(`/agent/${agent.name}`, { s: t.id })}>
-        <Icon name={t.icon} />{t.label}{#if b}<span class="tc {b.tone}">{b.n}</span>{/if}
+        <Icon name={t.icon} />{t.label}{#if b}<span class="tc {b.tone}">{#if b.n === '✋'}<Icon name="hand" size={12} />{:else}{b.n}{/if}</span>{/if}
       </a>
     {/each}
   </nav>

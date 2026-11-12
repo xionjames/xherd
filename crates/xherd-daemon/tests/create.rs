@@ -88,6 +88,7 @@ fn req(t: &T, key: &str) -> NewAgent {
         flow: None,
         prompt: Some("add login".into()),
         autonomy: None,
+        permission_mode: None,
     }
 }
 
@@ -275,6 +276,39 @@ async fn starts_claude_code_with_hooks() {
     panic!("agent never started");
 }
 
+/// The tool-permission mode (R-002a): from the request, `all` refused
+/// outside the container, and changed later for the next start.
+#[tokio::test]
+async fn permission_mode_from_the_request_and_changed_later() {
+    use xherd_core::permission::PermissionMode;
+    let t = setup().await;
+    let mut r = req(&t, "SC-8");
+    r.permission_mode = Some(PermissionMode::All);
+    assert_eq!(t.d.new_agent(r).await.unwrap_err().code, "mode_unavailable");
+    let mut r = req(&t, "SC-8");
+    r.permission_mode = Some(PermissionMode::Ask);
+    let a = t.d.new_agent(r).await.unwrap();
+    assert_eq!(a.permission_mode, Some(PermissionMode::Ask));
+    assert_eq!(
+        a.launch.as_deref().map(|l| l.join(" ")).as_deref(),
+        Some("claude --permission-mode manual")
+    );
+    let a =
+        t.d.set_permission_mode("SC-8", PermissionMode::Auto)
+            .await
+            .unwrap();
+    assert_eq!(a.permission_mode, Some(PermissionMode::Auto));
+    assert_eq!(
+        a.launch.as_deref().map(|l| l.join(" ")).as_deref(),
+        Some("claude --permission-mode auto")
+    );
+    let e =
+        t.d.set_permission_mode("SC-8", PermissionMode::All)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "mode_unavailable");
+}
+
 /// A worktree with version files starts through `xherd toolchain exec`, with
 /// the plan written for it (R-652); one without starts the runtime directly.
 #[tokio::test]
@@ -378,6 +412,7 @@ async fn refuses_without_a_runtime_plugin() {
         flow: None,
         prompt: None,
         autonomy: None,
+        permission_mode: None,
     };
     assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
 }

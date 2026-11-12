@@ -85,6 +85,11 @@ pub struct Config {
     /// Autonomy of new agents (R-109); global until profiles. `never` is not
     /// selectable yet.
     pub autonomy: crate::autonomy::Autonomy,
+    /// Tool-permission mode of new agents (R-002a); a profile or the request
+    /// overrides it.
+    pub permission_mode: crate::permission::PermissionMode,
+    /// Settings → Open in (R-706, R-707).
+    pub open_in: OpenIn,
     /// Consecutive automatic approvals after which the next gate waits for a
     /// human (R-120). 0 = no limit.
     pub max_auto_approvals_in_row: u32,
@@ -158,6 +163,8 @@ impl Default for Config {
             pr_poll_minutes: 5,
             max_review_loops: 3,
             autonomy: crate::autonomy::Autonomy::Ask,
+            permission_mode: Default::default(),
+            open_in: OpenIn::default(),
             max_auto_approvals_in_row: 10,
             agent_token_budget: 0,
             daily_token_budget: 0,
@@ -168,6 +175,32 @@ impl Default for Config {
         }
     }
 }
+
+/// Settings → Open in (R-706, R-707): entries left out of the menu, the
+/// terminal app the companion opens, and user commands, which the companion
+/// runs only after the user confirms each argv on the host.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct OpenIn {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<OpenCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpenCommand {
+    pub id: String,
+    pub label: String,
+    /// `{dir}` and `{agent}` are replaced.
+    pub argv: Vec<String>,
+}
+
+/// Terminal apps the companion knows how to open (R-707).
+pub const TERMINAL_APPS: &[&str] = &["terminal", "iterm", "ghostty", "x-terminal-emulator"];
 
 /// Where git gets an HTTPS password for a host (R-684). Never a URL or
 /// `.git/config`.
@@ -263,6 +296,8 @@ impl Config {
         self.pr_poll_minutes = s.pr_poll_minutes;
         self.max_review_loops = s.max_review_loops;
         self.autonomy = s.autonomy;
+        self.permission_mode = s.permission_mode;
+        self.open_in = s.open_in;
         self.max_auto_approvals_in_row = s.max_auto_approvals_in_row;
         self.agent_token_budget = s.agent_token_budget;
         self.daily_token_budget = s.daily_token_budget;

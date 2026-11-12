@@ -8,11 +8,14 @@
   const toggle = () => { shown = !shown; if (!shown) markAllRead(); };
   const label = $derived(count ? `Notifications, ${count} new` : 'Notifications');
   const go = (n: (typeof notices.list)[number]) => { openNotice(n); shown = false; };
+  // A press anywhere outside the bell and its list closes the list.
+  let root = $state<HTMLElement>();
+  const outside = (e: PointerEvent) => { if (shown && root && !root.contains(e.target as Node)) toggle(); };
 </script>
 
-<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && shown) toggle(); }} />
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && shown) toggle(); }} onpointerdown={outside} />
 
-<div class="bell">
+<div class="bell" bind:this={root}>
   <button class="bb" class:on={shown} aria-label={label} title={label} aria-expanded={shown} onclick={toggle}>
     <Icon name="bell" />{#if count}<span class="badge">{count}</span>{/if}
   </button>

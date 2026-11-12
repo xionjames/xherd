@@ -203,7 +203,11 @@ label.f.chk.top { align-items: flex-start; }
 .x a.tb.on { color: var(--ink); font-weight: 600; }
 .x a.tb.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 3px; border-radius: 3px 3px 0 0; background: var(--accent); }
 .tc { font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 9px; background: var(--pen-2); color: var(--ink-2); line-height: 18px; }
-.tc.g { background: var(--gate); color: var(--on-gate); }
+/* The waiting hand is the SVG icon drawn in --gate on a light ground, never
+   white on a filled --gate (an emoji keeps its own colours). */
+.tc.g { background: var(--gate-wash); color: var(--gate); box-shadow: inset 0 0 0 1px var(--gate-line); }
+.tc .ic { width: 12px; height: 12px; vertical-align: -2px; }
+.st i .ic { width: 14px; height: 14px; }
 .tc.h { background: var(--halt-wash); color: var(--halt); }
 
 /* ---- alerts ---- */
@@ -217,7 +221,8 @@ label.f.chk.top { align-items: flex-start; }
 .ci.ok, .ckst.ok { background: var(--live); color: var(--pen); }
 .ci.bad, .ckst.bad { background: var(--halt); color: var(--on-halt); }
 .ci.info { background: var(--accent); color: var(--on-accent); }
-.ci.need { background: var(--gate); color: var(--on-gate); }
+.ci.need { background: var(--pen); color: var(--gate); box-shadow: inset 0 0 0 1px var(--gate); }
+.ci .ic { width: 13px; height: 13px; }
 .ckst.opt { background: var(--pen-2); color: var(--ink-3); }
 .toast { position: fixed; z-index: 60; bottom: 16px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); box-shadow: var(--shadow); }
 
@@ -260,7 +265,7 @@ label.f.chk.top { align-items: flex-start; }
 .gband { display: flex; flex-direction: column; gap: 10px; padding: 12px var(--gut); background: var(--gate-wash); border-top: 1px solid var(--gate-line); border-bottom: 1px solid var(--gate-line); box-shadow: inset 5px 0 0 var(--gate); }
 .gband.halt { background: var(--halt-wash); border-color: var(--halt); box-shadow: inset 5px 0 0 var(--halt); }
 .gtop { display: flex; align-items: center; gap: 14px; }
-.ghand { width: 38px; height: 38px; border-radius: 10px; background: var(--gate); color: var(--on-gate); display: flex; align-items: center; justify-content: center; flex: none; }
+.ghand { width: 38px; height: 38px; border-radius: 10px; background: var(--pen); color: var(--gate); border: 1px solid var(--gate); display: flex; align-items: center; justify-content: center; flex: none; }
 .gband.halt .ghand { background: var(--halt); color: var(--on-halt); }
 .gtitle { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .gtitle h2 { font-size: 15px; }
@@ -301,7 +306,7 @@ label.f.chk.top { align-items: flex-start; }
 .st.cur { background: var(--accent-wash); color: var(--accent); }
 .st.cur i { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .st.now { background: var(--gate-wash); color: var(--gate); box-shadow: inset 0 0 0 1px var(--gate-line); }
-.st.now i { background: var(--gate); border-color: var(--gate); color: var(--on-gate); }
+.st.now i { background: var(--pen); border-color: var(--gate); color: var(--gate); }
 .st .t { font-size: 11px; font-weight: 500; color: var(--ink-3); }
 .st.skip { color: var(--ink-3); }
 .st.skip i { border-style: dashed; color: var(--ink-3); }
@@ -423,10 +428,12 @@ label.f.chk.top { align-items: flex-start; }
   .ln b { padding-right: 6px; }
   .lnote { margin-left: 0; }
 }
-.blk { position: relative; }
+.blk, .ln { position: relative; }
 .blk .bc { position: absolute; top: 0; right: -4px; opacity: 0; }
-.blk:hover .bc, .blk .bc:focus-visible { opacity: 1; }
-@media (hover: none) { .blk .bc { opacity: .6; } }
+.ln .bc { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); opacity: 0; }
+.x .ln .bc { height: 20px; padding: 0 6px; }
+.blk:hover .bc, .blk .bc:focus-visible, .ln:hover .bc { opacity: 1; }
+@media (hover: none) { .blk .bc { opacity: .6; } .ln .bc { display: none; } }
 
 /* ---- terminal (always dark) ---- */
 .term { display: flex; flex-direction: column; border-radius: var(--r-card); overflow: hidden; background: var(--term); border: 1px solid var(--term-line); }

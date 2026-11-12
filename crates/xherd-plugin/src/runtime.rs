@@ -24,6 +24,14 @@ pub const STRICT_PERMISSION_MODE: &str = "ask";
 /// never follows a default the runtime may change; `ask` is required.
 pub const PERMISSION_MODES: &[&str] = &["ask", "edits", "auto", "all"];
 
+#[test]
+fn modes_match_the_core_vocabulary() {
+    use xherd_core::permission::PermissionMode;
+    let core: Vec<&str> = PermissionMode::ALL.iter().map(|m| m.as_str()).collect();
+    assert_eq!(core, PERMISSION_MODES);
+    assert_eq!(PermissionMode::default().as_str(), DEFAULT_PERMISSION_MODE);
+}
+
 /// Appended to every hook command xherd writes, so its entries can be found
 /// and replaced without touching the user's own hooks (R-005b).
 pub const HOOK_TAG: &str = "# xherd";

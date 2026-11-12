@@ -37,6 +37,9 @@ pub struct Profile {
     /// Default autonomy of new agents (R-109).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autonomy: Option<Autonomy>,
+    /// Tool-permission mode of new agents (R-002a).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<crate::permission::PermissionMode>,
     /// Replace the global `sensitivePaths` (an empty list switches it off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensitive_paths: Option<Vec<String>>,

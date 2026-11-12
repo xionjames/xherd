@@ -475,6 +475,15 @@ Resolution runs at every session start: the daemon reads the version files into 
 
 `GET /agents/:id/open-targets` lists what works from a local browser (R-671): VS Code, Cursor and Zed URLs (Zed's `zed://file` **verify**), Dev Containers in the container (the container id is its hostname), and the companion's apps. JetBrains Toolbox URLs need an open project, so JetBrains goes through the companion. openvscode-server (R-705) comes with remote devices.
 
+**Settings → Open in** (R-706, R-707). `config.json` `openIn` (live): `hidden` (entry ids left out of the menu: `vscode`, `cursor`, `zed`, `devcontainer`, `terminal`, `companion:<app>`, `cmd:<id>`), `terminal` (`terminal`, `iterm`, `ghostty`, `x-terminal-emulator`; unset = the host's default: Terminal on macOS, `x-terminal-emulator` on Linux) and `commands` (`[{id, label, argv}]`, `argv[0]` non-empty, `{dir}` and `{agent}` replaced). The companion's long poll also says which request kinds it understands (`features=terminal,commands`), so an older companion is never offered entries it cannot run. A request is `{app, dir, agent}` plus `terminal` for `app: "terminal"` and `argv` for `cmd:<id>`.
+
+- **Terminal**: the companion builds the command itself from the xherd binary's own path and the agent name (refused unless `[A-Za-z0-9._-]+`), `<xherd> shell <agent>`, and runs it in the chosen app: Terminal and iTerm through `osascript` (`do script`, `create window with default profile command`), Ghostty through `open -na Ghostty --args -e …` (**verify**), Linux through `x-terminal-emulator -e …`. The daemon only picks the app from that list, so nothing new can run.
+- **User commands**: the argv comes from the daemon, so the companion trusts it only after the user says yes **in the companion's terminal**: it prints the label and the argv and asks `[y/N]`; a yes stores the sha256 of the argv's JSON in `~/.config/xherd/open-approved.json`. The same argv later runs at once; any change asks again. Without a terminal to ask on (stdin not a tty) it refuses and says why. The UI says "confirm it in the companion's window" after sending one.
+
+`GET /open-in` serves the Settings page: the link entries for this daemon, whether a companion is polling, its apps and features. Saving goes through `PUT /config` like every setting.
+
+**Tool-permission mode** (R-002a): `Agent.permission_mode` (from `NewAgent.permissionMode`, else the profile's `permissionMode`, else config `permissionMode`, default `edits`), checked against the runtime's `permissionModes`; `all` is refused (`mode_unavailable`) unless `sandbox`. `agent.launch` is rebuilt from it with `Terminal::argv`. `UserAction::SetMode` (`POST /agents/{id}/mode {mode}`, `xherd mode <agent> <mode>`, the select on the agent page) does the same on a live agent; the running session keeps its mode until the next start (fresh session, resume, restart), which the UI says. Agents saved before the field existed keep their stored `launch`.
+
 ### 8.8 Server and Kubernetes
 
 No same-path requirement (clients do not read the files). Open-in is resolved per client: browser VS Code always; Remote-SSH URLs when `XHERD_SSH_HOST` is set. Kubernetes: one Deployment (replicas 1, `Recreate`), PVCs for workspace and home, Secrets for git and model credentials, ingress with WebSocket support, `/healthz` probes, optional SSH sidecar on the workspace PVC. A pod restart ends tmux sessions; agents resume with fresh sessions.
@@ -553,6 +562,12 @@ Actors, gates, autonomy and XAP use only these; git-specific code registers as c
 ### 13.1 Web UI
 
 Svelte 5 + Vite + TypeScript, built to static files and embedded. xterm.js for terminals, marked + DOMPurify for Markdown, Mermaid loaded on demand, diff2html for diffs. Hash router with view state in the query string. One global store loaded from `/state`, kept live by `/ws`, fully reloaded on reconnect. Own design tokens (CSS variables) with light/dark themes; one reserved "needs you" colour. Playwright smoke tests against the built binary with a fake runtime.
+
+**Open questions (R-105a).** The document is the only source, so nothing has to be matched against a second copy:
+
+- Daemon: `xherd_flow::questions::parse(md)` returns the top-level list items under the `## Open questions` heading (raw text; a lone "None." in any case, with or without the period, or an empty section = none). The actor parses each gate document when it observes `gate open` and before `infer_gate`; `Gate::Docs.questions` holds the texts in document order (the UI finds the items in the rendered document itself, `questionBlocks` in `lib/notes.ts`, so it needs no location). `--question` texts and `xherd ask` during the docs gate go to `Gate::Docs.asked: Vec<String>`, except one equal to a parsed question after trimming and collapsing whitespace (dropped). R-113, the Needs-you count and notifications use both lists. An edited document re-opens the gate (R-107), which parses it again.
+- Pack: `FORMAT.md` gives `design.md` an `## Open questions` section too; the `feature` and `design` prompts stop passing `--question` and say to write every question there.
+- UI: in the Documents panel, the list items under `## Open questions` of a gate document (already one `MdBlocks` block each) get their comment boxes opened when the gate is open, with the placeholder "Your answer", and are marked as questions. `asked` questions get comment boxes above the documents, each quoting its question. All of them are sent with the other inline comments ("Send N comments", `lib/notes.ts`); empty boxes send nothing. The your-call band no longer holds answer boxes: it says "N open questions" and links to the Documents panel, scrolled to the first one. A `question` gate (`xherd ask` with no docs gate) keeps its answer box in the band.
 
 ### 13.2 Desktop app (post-v1): Electron
 
@@ -683,6 +698,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Diffs
   - [x] Highlight what changed in gate documents (spec, design, tasks…) after a change request; no version history kept
   - [x] Open questions answered inline: one text box per question
+  - [x] Open questions read from the gate documents and answered as inline comments on their list items (R-105a)
 - [x] **M3 Docker-first**
   - [x] Image with version managers
   - [x] `xherd init` (users, SSH proxy, git config)
@@ -690,6 +706,8 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Toolchain resolution
   - [x] Open-in (URL schemes, Dev Containers, companion)
   - [x] Git access setup and doctor
+  - [x] Settings → Open in: hide entries, user commands confirmed on the host, built-in terminal entry (R-706, R-707)
+  - [x] Tool-permission mode per agent, changeable live (R-002a)
 - [ ] **M4 → v1.0**
   - [x] Guardrails
     - [x] "Viewed" marks per file in the Changes panel (`diff_viewed`, `/agents/:id/viewed`) and a Setup check `runner` that pings the runner

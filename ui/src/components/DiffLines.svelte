@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { Line } from '../lib/diff';
   // With `notes` + `onnote`, a line number becomes a button that opens a
-  // comment box under the line (inline review, #25). Notes are keyed by `lineKey`.
+  // comment box under the line (inline review, #25), and so does the 💬 that
+  // shows on hover, as on rendered Markdown. Notes are keyed by `lineKey`.
   let { lines, notes, onnote }: {
     lines: Line[];
     notes?: Record<string, string>;
@@ -32,6 +33,7 @@
       <b>{l.old ?? ''}</b>
       <b>{#if commentable(l)}<button class="lnc" aria-label="Comment on this line" onclick={() => start(l)}>{l.new ?? l.old}</button>{:else}{l.new ?? ''}{/if}</b>
       <i aria-label={l.kind === 'a' ? 'added' : l.kind === 'd' ? 'removed' : undefined}>{SIGN[l.kind]}</i><span>{l.text}</span>
+      {#if commentable(l)}<button class="btn ghost sm bc" aria-label="Comment on this line" tabindex="-1" onclick={() => start(l)}>💬</button>{/if}
     </div>
     {#if commentable(l)}
       {@const k = lineKey(l)}

@@ -71,7 +71,7 @@ export interface Commit {
 }
 
 export type Gate =
-  | { kind: 'docs'; stage: string; role: Role; files: HashedFile[]; next?: string; needsHuman?: string; questions?: string[] }
+  | { kind: 'docs'; stage: string; role: Role; files: HashedFile[]; next?: string; needsHuman?: string; questions?: string[]; asked?: string[] }
   | ({ kind: 'commit' } & Commit)
   | { kind: 'pr-triage'; count: number }
   | { kind: 'pr-replies'; count: number }
@@ -111,6 +111,8 @@ export interface Agent {
   nextPrompt?: string;
   /** What xherd may approve by itself (R-109). */
   autonomy?: 'ask' | 'important' | 'never';
+  /** Tool permissions (R-002a); missing on agents created before it existed. */
+  permissionMode?: import('./modes').PermissionMode;
 }
 
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean }

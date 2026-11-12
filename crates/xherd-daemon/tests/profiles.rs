@@ -87,6 +87,7 @@ fn req(t: &T, key: &str) -> NewAgent {
         flow: None,
         prompt: Some("add login".into()),
         autonomy: None,
+        permission_mode: None,
     }
 }
 

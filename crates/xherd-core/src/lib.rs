@@ -12,6 +12,7 @@ pub mod guard;
 pub mod hash;
 pub mod new;
 pub mod paths;
+pub mod permission;
 pub mod pr;
 pub mod profile;
 pub mod queue;

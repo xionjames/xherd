@@ -85,7 +85,7 @@ Declares that the agent stops for approval of the listed documents/artifacts. Th
 | `--doc` / `--artifact` | Files to approve; each is hashed at declaration. |
 | `--next` | Dynamic flows: command to send after approval; must start with an allowed prefix. |
 | `--needs-human` | Forces a human approval (tripwire) with this reason. |
-| `--question` | Open questions shown with the gate (repeatable). |
+| `--question` | Extra open questions (repeatable). For packs whose documents have a `## Open questions` section (the xherd pack), the questions are read from the documents and this option is only for a question that has no place in them; one that matches a list item is not repeated. |
 
 Special stages: `pr-triage` and `pr-replies` (PR rounds, no documents).
 

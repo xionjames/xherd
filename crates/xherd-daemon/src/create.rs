@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use xherd_core::new::{self, FLOW_NONE, NewAgent};
 use xherd_core::paths::write_atomic;
+use xherd_core::permission::PermissionMode;
 use xherd_core::xap::Refusal;
 use xherd_core::{Agent, Status};
 use xherd_git::Git;
@@ -24,6 +25,23 @@ impl From<Refusal> for ActionError {
     fn from(r: Refusal) -> ActionError {
         refuse(r.code, r.message)
     }
+}
+
+/// The runtime's launch argv for a tool-permission mode (R-002a): the
+/// runtime must offer it, and `all` only runs in the container (T4).
+pub(crate) fn mode_launch(
+    rt: &Terminal,
+    mode: PermissionMode,
+    sandbox: bool,
+) -> Result<Vec<String>, ActionError> {
+    if !mode.allowed(sandbox) {
+        return Err(refuse(
+            "mode_unavailable",
+            "permission mode all asks nothing, so it is only offered in the container",
+        ));
+    }
+    rt.argv(mode.as_str())
+        .map_err(|e| refuse("mode_unavailable", e))
 }
 
 /// Last path component, for `worktrees/<repo>/<agent>`.
@@ -61,9 +79,6 @@ impl Daemon {
             .ok_or_else(|| format!("runtime plugin {rt_name} is not installed or is switched off"))
             .and_then(|p| Terminal::of(&p.manifest))
             .map_err(|e| refuse("runtime_unusable", e))?;
-        let launch = rt
-            .argv(runtime::DEFAULT_PERMISSION_MODE)
-            .map_err(|e| refuse("runtime_unusable", e))?;
 
         let git = Git::new("git");
         // A URL is cloned (or fetched) here, before the other checks: the
@@ -75,6 +90,11 @@ impl Daemon {
             .autonomy
             .or(profile.as_ref().and_then(|p| p.autonomy))
             .unwrap_or(self.live_config().autonomy);
+        let mode = req
+            .permission_mode
+            .or(profile.as_ref().and_then(|p| p.permission_mode))
+            .unwrap_or(self.live_config().permission_mode);
+        let launch = mode_launch(&rt, mode, self.sandbox)?;
         let agents = self
             .store
             .list_agents()
@@ -121,6 +141,7 @@ impl Daemon {
 
         let mut a = Agent::new(&c.name, &c.ticket_key, self.clock.now());
         a.autonomy = autonomy;
+        a.permission_mode = Some(mode);
         a.profile = profile.as_ref().map(|p| p.id.clone());
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());

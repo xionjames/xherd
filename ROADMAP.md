@@ -20,6 +20,7 @@ by theme; update it together with them.
 - [x] Agent page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked agents
 - [x] Gate documents: highlight what changed after a change request (spec, design, tasks…), without keeping version history
 - [x] Open questions: a text box per question to answer them inline
+- [x] Open questions read from the gate documents' `## Open questions` section and answered as inline comments on their list items, sent with the other comments (R-105a)
 - [x] Board (tasks of all agents by status) and Review with "Mark seen"; the notification bell is in
 - [x] Time (work log: agent and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
 - [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (agent, repository) and TODO cards; the Herd's By stage layout (agents in columns by role); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
@@ -31,6 +32,7 @@ by theme; update it together with them.
 
 - [x] Image with version managers, `xherd init`, `docker init/doctor/update`, toolchain resolution
 - [x] Open-in (URL schemes, Dev Containers, companion)
+- [x] Settings → Open in (R-706, R-707): hide entries, a built-in terminal entry (shell in the worktree, terminal app chosen), your own commands, run by the companion only after you confirm each argv on your computer
 - [x] Git access setup and doctor
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
 - [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`
@@ -51,7 +53,7 @@ by theme; update it together with them.
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
 - [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)
 - [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the agent's until guardrails)
-- [ ] Per-agent permission mode (`ask` / `edits` / `auto` / `all` exist; new agents always use `edits`)
+- [x] Per-agent tool-permission mode (R-002a): New agent form / `xherd new --mode`, repo profile, Settings default; changed live on the agent page or `xherd mode` (applies from the next session start); `all` only in the container
 
 ## Context and flow quality
 
