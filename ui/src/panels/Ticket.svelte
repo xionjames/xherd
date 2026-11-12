@@ -1,8 +1,9 @@
 <script lang="ts">
   // The agent's ticket and its comments, read through a tracker plugin
-  // (github-issues, gitlab-issues, or an external one). Read-only: xherd posts
-  // nothing to the tracker. The text is written by other people, so it is
-  // rendered through the same sanitiser as agent documents.
+  // (github-issues, gitlab-issues, or an external one). The only thing posted
+  // is the summary below, after the user presses Post (R-308). The text is
+  // written by other people, so it is sanitised and rendered with nothing in
+  // it loading by itself (external).
   import Panel from '../components/Panel.svelte';
   import type { Agent } from '../lib/types';
   import { get, post } from '../lib/api';
@@ -71,7 +72,7 @@
 </script>
 
 <div class="stack">
-  <Panel title="Ticket" hint={`Read through the tracker plugin; nothing is posted back.`}>
+  <Panel title="Ticket" hint={`Read through the tracker plugin; nothing is posted unless you press Post.`}>
     {#snippet head()}
       <span class="grow"></span>
       <button class="btn sm" disabled={loading} onclick={load}>{loading ? 'Loading…' : 'Refresh'}</button>

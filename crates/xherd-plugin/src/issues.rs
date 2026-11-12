@@ -1,7 +1,8 @@
 //! Reading a ticket and its comments through a tracker plugin (`ticket-get`).
 //! The built-in `github-issues` asks `gh issue view`, `gitlab-issues` asks
 //! `glab api`; an external tracker answers the command through the protocol.
-//! Everything here is read-only: nothing is posted to a tracker.
+//! Reading changes nothing; `ticket-comment` posts only text the user has
+//! accepted (R-308).
 //!
 //! The text is written by other people, so it is untrusted: the UI renders it
 //! through the sanitiser, and anything that hands it to an agent must wrap it

@@ -1,6 +1,6 @@
 //! The ticket of an agent, read through a tracker plugin (`ticket-get`): the
-//! Ticket panel shows its title, state, text and comments. Read-only: xherd
-//! posts nothing to a tracker (R-308).
+//! Ticket panel shows its title, state, text and comments. The only thing
+//! ever posted is a summary the user has read, edited and sent (R-308).
 
 use std::sync::Arc;
 
