@@ -771,3 +771,33 @@ async fn token_budget_warns_then_pauses_at_a_stop() {
     let events = d.store.events(&a.id, 50).await.unwrap();
     assert!(events.iter().any(|e| e.kind == "budget-exhausted"));
 }
+
+/// Git-access tokens and plugin secrets share `secrets.json`: saves made at
+/// the same time keep both changes.
+#[tokio::test]
+async fn concurrent_secret_saves_keep_each_other() {
+    let t = daemon(1).await;
+    let (a, b) = (t.d.clone(), t.d.clone());
+    let plugin = tokio::task::spawn_blocking(move || {
+        for i in 0..40 {
+            let v =
+                std::collections::BTreeMap::from([("token".to_string(), Some(format!("p{i}")))]);
+            a.set_plugin_secrets("github", v).unwrap();
+        }
+    });
+    let hosts = tokio::task::spawn_blocking(move || {
+        for i in 0..40 {
+            let u: xherd_daemon::git_access::HostsUpdate = serde_json::from_value(json!({
+                "hosts": [],
+                "tokens": {"git.example.com": format!("g{i}")}
+            }))
+            .unwrap();
+            b.set_git_hosts(u).unwrap();
+        }
+    });
+    plugin.await.unwrap();
+    hosts.await.unwrap();
+    let s = xherd_core::config::Secrets::load(&t.d.paths.secrets()).unwrap();
+    assert_eq!(s.for_plugin("github")["token"], "p39");
+    assert_eq!(s.git_token("git.example.com").as_deref(), Some("g39"));
+}
