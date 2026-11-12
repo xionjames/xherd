@@ -94,14 +94,24 @@
       }
     }
   },
-  "checks": [
+  "requires": [
     {
       "name": "codex",
-      "argv": [
+      "check": [
         "codex",
         "--version"
-      ]
-    },
+      ],
+      "install": [
+        "sh",
+        "-c",
+        "npm install -g --prefix \"$HOME/.local\" @openai/codex@0.167.2"
+      ],
+      "instructions": {
+        "any": "npm install -g @openai/codex   # or see https://github.com/openai/codex"
+      }
+    }
+  ],
+  "checks": [
     {
       "name": "login",
       "argv": [

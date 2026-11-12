@@ -241,3 +241,39 @@ fn builtin_toolchains_parse_and_match_the_plugins_folder() {
         [("java", "21.0.2-tem"), ("node", "20"), ("rust", "1.80.0")]
     );
 }
+
+/// The runtime plugins' container installs name the versions the image is
+/// built with (and xherd was checked against): the Dockerfile's `ARG`s.
+#[test]
+fn runtime_installs_use_the_image_versions() {
+    let dockerfile = include_str!("../../../deploy/docker/Dockerfile");
+    let arg = |name: &str| {
+        dockerfile
+            .lines()
+            .find_map(|l| l.strip_prefix(&format!("ARG {name}=")))
+            .unwrap_or_else(|| panic!("no ARG {name}"))
+            .trim()
+            .to_string()
+    };
+    for (plugin, tool, package, arg_name) in [
+        (
+            "claude-code",
+            "claude",
+            "@anthropic-ai/claude-code",
+            "CLAUDE_CODE_VERSION",
+        ),
+        ("opencode", "opencode", "opencode-ai", "OPENCODE_VERSION"),
+        ("codex", "codex", "@openai/codex", "CODEX_VERSION"),
+    ] {
+        let m = xherd_plugin::builtins()
+            .into_iter()
+            .find(|m| m.name == plugin)
+            .unwrap();
+        let r = m.requires.iter().find(|r| r.name == tool).unwrap();
+        let install = r.install.as_ref().unwrap().join(" ");
+        assert!(
+            install.ends_with(&format!("{package}@{}", arg(arg_name))),
+            "{plugin}: {install}"
+        );
+    }
+}
