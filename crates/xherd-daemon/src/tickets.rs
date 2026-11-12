@@ -86,7 +86,12 @@ impl Daemon {
             ctx: self.plugin_context(&p),
             plugin: p,
         });
-        let host = crate::actor::with_git_token(host, remote.as_deref(), &self.paths.secrets());
+        // The repository host's token goes only to a tracker that serves that
+        // host (github-issues for github.com), never to one for any host.
+        let served = remote
+            .as_deref()
+            .filter(|r| trackers.iter().any(|(n, t)| n == &tracker && t.serves(r)));
+        let host = crate::actor::with_git_token(host, served, &self.paths.secrets());
         Ok((
             a,
             Some(Resolved {

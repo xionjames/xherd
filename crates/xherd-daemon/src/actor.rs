@@ -247,9 +247,9 @@ impl ActorSettings {
     }
 }
 
-/// `host` with its secrets as they are on disk now, and, without a `token` of
-/// its own, the one kept for `remote_host` in Settings → Git access (read on
-/// each use, so a new token applies at once).
+/// `host` with its secrets as they are on disk now, and, when it declares a
+/// `token` secret but has none of its own, the one kept for `remote_host` in
+/// Settings → Git access (read on each use, so a new token applies at once).
 pub(crate) fn with_git_token(
     host: Arc<xherd_plugin::host::Host>,
     remote_host: Option<&str>,
@@ -267,7 +267,18 @@ pub(crate) fn with_git_token(
         .secrets
         .get("token")
         .is_some_and(|t| t.as_str().is_some_and(|t| !t.is_empty()));
-    if !own && let Some(t) = remote_host.and_then(|r| all.git_token(r)) {
+    // Only a plugin that asks for a `token` gets the host's one: it is never
+    // handed to a plugin that did not declare it.
+    let declares = h
+        .plugin
+        .manifest
+        .settings
+        .iter()
+        .any(|s| s.secret && s.key == "token");
+    if declares
+        && !own
+        && let Some(t) = remote_host.and_then(|r| all.git_token(r))
+    {
         h.ctx.secrets.insert("token".into(), t.into());
     }
     Arc::new(h)
@@ -3210,6 +3221,22 @@ mod pick_host_tests {
             tok(&with_git_token(gl, Some("gitlab.example.com"), &f)),
             Some("mine".into())
         );
+    }
+
+    /// A plugin that declares no `token` secret (Jira, an external tracker)
+    /// never receives the host's token.
+    #[test]
+    fn the_host_token_goes_only_to_a_plugin_that_declares_one() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("secrets.json");
+        std::fs::write(&f, r#"{"git": {"github.com": "ghp-1"}}"#).unwrap();
+        let reg = xherd_plugin::Registry::load(xherd_plugin::builtins(), d.path());
+        let jira = Arc::new(xherd_plugin::host::Host {
+            plugin: reg.get("jira").unwrap().clone(),
+            ctx: xherd_plugin::Context::default(),
+        });
+        let with = with_git_token(jira, Some("github.com"), &f);
+        assert_eq!(with.ctx.secrets.get("token"), None);
     }
 
     #[test]
