@@ -76,7 +76,7 @@
   })));
 </script>
 
-<PageHead title="Settings" sub="How many agents run at once, how long xherd waits for you, git access, and the plugins it uses.">
+<PageHead width="mid" title="Settings" sub="How many agents run at once, how long xherd waits for you, git access, and the plugins it uses.">
   {#snippet tabs()}<Tabs label="Settings" items={tabItems} current={tab} />{/snippet}
 </PageHead>
 

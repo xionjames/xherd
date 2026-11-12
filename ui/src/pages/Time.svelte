@@ -19,7 +19,7 @@
   const total = (d: Day, k: 'agentMs' | 'userMs') => d.tickets.reduce((n, t) => n + t[k], 0);
 </script>
 
-<PageHead title="Time" sub="Agent time is time spent running; your time is time with an agent's page open and in front. Days are UTC.">
+<PageHead width="mid" title="Time" sub="Agent time is time spent running; your time is time with an agent's page open and in front. Days are UTC.">
   {#snippet actions()}
     <select aria-label="Period" bind:value={days}>
       <option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>

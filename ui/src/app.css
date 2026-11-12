@@ -349,6 +349,11 @@ label.f.chk.top { align-items: flex-start; }
 .stack { display: flex; flex-direction: column; gap: 16px; padding: 20px var(--gut) 40px; min-width: 0; }
 .stack.narrow { max-width: 880px; }
 .stack.mid { max-width: 1120px; }
+/* Forms and reading pages are capped (long lines are hard to read) and sit in
+   the middle of a wide window; their header lines up with them. */
+.stack.narrow, .stack.mid { width: 100%; margin-inline: auto; }
+.phead.narrow { padding-inline: max(var(--gut), calc((100% - 880px) / 2 + var(--gut))); }
+.phead.mid { padding-inline: max(var(--gut), calc((100% - 1120px) / 2 + var(--gut))); }
 .body { display: flex; flex-wrap: wrap; gap: 20px; padding: 20px var(--gut) 40px; align-items: flex-start; }
 .colmain { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 .colside { flex: 1 1 280px; max-width: 320px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
