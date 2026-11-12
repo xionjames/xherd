@@ -3,15 +3,46 @@
   "kind": "tracker",
   "version": "0.1.0",
   "label": "GitLab Issues",
-  "description": "Turns group/project#12 in the UI into a link to the GitLab issue.",
+  "description": "Turns group/project#12 in the UI into a link to the GitLab issue, and shows the ticket and its comments (the ticket key is the issue number, with an optional GL- prefix).",
   "settings": [
-    { "key": "baseUrl", "label": "GitLab site", "default": "https://gitlab.com" }
+    {
+      "key": "baseUrl",
+      "label": "GitLab site",
+      "default": "https://gitlab.com"
+    },
+    {
+      "key": "glab",
+      "label": "glab binary",
+      "default": "glab"
+    },
+    {
+      "key": "token",
+      "label": "Token (GITLAB_TOKEN; empty = glab's own login)",
+      "secret": true
+    }
   ],
   "data": {
     "tracker": {
       "links": [
-        { "pattern": "\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)#(\\d+)\\b", "url": "{baseUrl}/{1}/-/issues/{2}" }
+        {
+          "pattern": "\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)#(\\d+)\\b",
+          "url": "{baseUrl}/{1}/-/issues/{2}"
+        }
+      ],
+      "key": "^(?:GL-)?(\\d+)$",
+      "hosts": [
+        "*gitlab*"
       ]
     }
-  }
+  },
+  "requires": [
+    {
+      "name": "glab",
+      "optional": true,
+      "instructions": {
+        "macos": "brew install glab",
+        "any": "See https://gitlab.com/gitlab-org/cli#installation"
+      }
+    }
+  ]
 }

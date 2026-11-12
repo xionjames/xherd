@@ -21,6 +21,16 @@ use crate::Manifest;
 pub struct Tracker {
     #[serde(default)]
     pub links: Vec<Link>,
+    /// Which tickets the tracker can read: a regular expression with one
+    /// group whose match is the issue reference handed to the plugin
+    /// (`^(?:GH-)?(\d+)$` turns `GH-12` or `12` into `12`). Without it the
+    /// tracker only makes links.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Git host names the tracker serves (`github.com`, `*gitlab*`): it is
+    /// asked about tickets of repositories on them before any other tracker.
+    #[serde(default)]
+    pub hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -46,7 +56,47 @@ impl Tracker {
             l.validate()
                 .map_err(|e| format!("tracker {}: {e}", m.name))?;
         }
+        t.validate_key()
+            .map_err(|e| format!("tracker {}: {e}", m.name))?;
+        for h in &t.hosts {
+            if h.is_empty()
+                || !h
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '*'))
+            {
+                return Err(format!("tracker {}: {h:?} is not a host pattern", m.name));
+            }
+        }
         Ok(Some(t))
+    }
+
+    fn validate_key(&self) -> Result<(), String> {
+        let Some(k) = &self.key else { return Ok(()) };
+        let re = Regex::new(k).map_err(|e| format!("key {k:?}: {e}"))?;
+        if k.len() > 100 || re.captures_len() != 2 {
+            return Err(format!(
+                "key {k:?} needs one group and at most 100 characters"
+            ));
+        }
+        Ok(())
+    }
+
+    /// The issue reference `ticket` stands for (the key's group), if this
+    /// tracker reads it. The reference is a plain name: it ends up in a
+    /// command line.
+    pub fn issue_ref(&self, ticket: &str) -> Option<String> {
+        let re = Regex::new(self.key.as_ref()?).ok()?;
+        let r = re.captures(ticket)?.get(1)?.as_str();
+        (!r.is_empty()
+            && r.len() <= 40
+            && r.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+        .then(|| r.to_string())
+    }
+
+    /// The tracker serves repositories on `host`.
+    pub fn serves(&self, host: &str) -> bool {
+        self.hosts.iter().any(|p| crate::git::host_matches(p, host))
     }
 }
 
@@ -202,5 +252,36 @@ mod tests {
                 ("gitlab-issues".to_string(), 1)
             ]
         );
+    }
+
+    #[test]
+    fn keys_pick_the_issue_reference() {
+        let t = Tracker::of(&manifest(json!({
+            "key": r"^(?:GH-)?(\d+)$", "hosts": ["github.com", "*gitlab*"]
+        })))
+        .unwrap()
+        .unwrap();
+        assert_eq!(t.issue_ref("GH-12").as_deref(), Some("12"));
+        assert_eq!(t.issue_ref("12").as_deref(), Some("12"));
+        assert_eq!(t.issue_ref("PAY-12"), None);
+        assert!(t.serves("github.com") && t.serves("my-gitlab.example.com") && !t.serves("x.org"));
+        // A tracker without a key reads nothing; a bad key or host is refused.
+        let none = Tracker::of(&manifest(json!({"links": []})))
+            .unwrap()
+            .unwrap();
+        assert_eq!(none.issue_ref("12"), None);
+        for bad in [
+            json!({"key": r"^\d+$"}),
+            json!({"key": "(a)(b)"}),
+            json!({"key": "("}),
+            json!({"hosts": ["bad host"]}),
+        ] {
+            assert!(Tracker::of(&manifest(bad.clone())).is_err(), "{bad}");
+        }
+        // The reference is a plain name, whatever the key lets through.
+        let wide = Tracker::of(&manifest(json!({"key": "^(.*)$"})))
+            .unwrap()
+            .unwrap();
+        assert_eq!(wide.issue_ref("a b; rm"), None);
     }
 }

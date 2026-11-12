@@ -14,6 +14,7 @@ use xherd_core::exec::{Cmd, ExecError, run};
 pub mod git;
 pub mod gitlab;
 pub mod host;
+pub mod issues;
 pub mod manifest;
 pub mod runtime;
 pub mod toolchain;

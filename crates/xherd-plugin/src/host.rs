@@ -412,7 +412,12 @@ impl Host {
     }
 
     /// `gh_raw`, failing on any exit code but 0.
-    async fn gh(&self, gh: &str, dir: &Path, args: &[&str]) -> Result<Vec<u8>, PluginError> {
+    pub(crate) async fn gh(
+        &self,
+        gh: &str,
+        dir: &Path,
+        args: &[&str],
+    ) -> Result<Vec<u8>, PluginError> {
         let out = self.gh_raw(gh, dir, args).await?;
         self.ok(out, args)
     }
