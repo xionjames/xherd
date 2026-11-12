@@ -9,14 +9,19 @@
     { "key": "token", "label": "Token (GITLAB_TOKEN; empty = glab's own login)", "secret": true }
   ],
   "timeoutSeconds": 30,
-  "checks": [
+  "requires": [
     {
       "name": "glab",
-      "argv": [
+      "check": [
         "glab",
         "--version"
       ],
-      "optional": true
+      "optional": true,
+      "instructions": {
+        "macos": "brew install glab",
+        "linux": "See https://gitlab.com/gitlab-org/cli#installation (apt, dnf, or a release download)",
+        "any": "See https://gitlab.com/gitlab-org/cli#installation"
+      }
     }
   ],
   "data": {

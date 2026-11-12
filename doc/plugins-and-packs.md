@@ -71,7 +71,23 @@ A host plugin also declares its git access in `data.git` (the built-in `github`,
 - `login`: the browser login argv; `{host}` is replaced. Without it the host takes a pasted token.
 - `api`: the doctor's API checks: `base` (`{host}` is replaced; https only), `user` (`path`, and optionally `scopesHeader` + `requireScope`), and optionally `repo` (`path` with `{path}`, `ssoHeader`, and the `onSso` / `onNotFound` verdicts: a `detail` and a `fix`, which may use `{url}`).
 
-Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. A plugin's options page (Settings → Plugins) lists the hosts that use it. `install` / `instructions` blocks for a provider's CLI (R-691) are not built yet.
+Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. A plugin's options page (Settings → Plugins) lists the hosts that use it.
+
+### Tools a plugin needs (`requires`)
+
+Any plugin can list the command-line tools it needs:
+
+```json
+"requires": [{
+  "name": "glab",
+  "check": ["glab", "--version"],
+  "optional": true,
+  "install": ["sh", "-c", "…"],
+  "instructions": { "macos": "brew install glab", "linux": "See https://…", "any": "See https://…" }
+}]
+```
+
+Each entry is a check named `requires:<name>` (`check` defaults to `command -v <name>`; `optional` means a missing tool is reported but never blocks). When it fails, the container offers the `install` argv from the UI, run in a terminal into the agents' home (the same session as plugin logins); a native run shows the `instructions` for its OS (`macos`, `linux`, else `any`) and never installs anything on the host (R-653). `install` must name a program on `PATH` (no `./` script), `name` is a plain word, and a control character anywhere is refused. The built-in `github` (`gh`) and `gitlab` (`glab`) use it; the container image already carries both. The review of an external plugin's install argv before it runs belongs to the install-from-GitHub flow (R-542), which is not built.
 
 ### Toolchain plugins
 

@@ -247,6 +247,34 @@ impl ActorSettings {
     }
 }
 
+/// `host` with the token kept for `remote_host` in Settings → Git access,
+/// unless the plugin has a token of its own (read from disk on each use, so a
+/// new token applies at once).
+fn with_git_token(
+    host: Arc<xherd_plugin::host::Host>,
+    remote_host: Option<&str>,
+    secrets: &std::path::Path,
+) -> Arc<xherd_plugin::host::Host> {
+    if host
+        .ctx
+        .secrets
+        .get("token")
+        .is_some_and(|t| !t.is_null() && t != "")
+    {
+        return host;
+    }
+    let Some(t) = remote_host.and_then(|r| {
+        xherd_core::config::Secrets::load(secrets)
+            .ok()
+            .and_then(|s| s.git_token(r))
+    }) else {
+        return host;
+    };
+    let mut h = (*host).clone();
+    h.ctx.secrets.insert("token".into(), t.into());
+    Arc::new(h)
+}
+
 /// The host name of the worktree's `origin` remote.
 async fn origin_host(wd: &std::path::Path) -> Option<String> {
     let out = xherd_core::exec::run(
@@ -342,6 +370,9 @@ pub struct Env {
     /// Host plugins for pull requests (R-302, D24); `pick_host` chooses one
     /// by the host of the agent's remote.
     pub hosts: Vec<Arc<xherd_plugin::host::Host>>,
+    /// `secrets.json`: a host plugin without a token of its own uses the
+    /// one kept for the remote's host in Settings → Git access (R-685).
+    pub secrets: std::path::PathBuf,
     /// Toolchain plugins in registry order (R-652).
     pub toolchains: Arc<Vec<(String, xherd_plugin::toolchain::Toolchain)>>,
     /// Per runtime plugin: the trust writer (the worktree is marked trusted
@@ -544,6 +575,7 @@ impl Actor {
             &settings.disabled_plugins,
             remote_host,
         )
+        .map(|h| with_git_token(h, remote_host, &self.env.secrets))
     }
 
     /// The host plugin for the agent's pull request.
@@ -1009,6 +1041,7 @@ impl Actor {
         );
         let settings = self.env.settings.get();
         let hosts = self.env.hosts.clone();
+        let secrets = self.env.secrets.clone();
         tokio::spawn(async move {
             let remote = origin_host(&wd).await;
             let Some(host) = pick_host(
@@ -1016,7 +1049,8 @@ impl Actor {
                 &settings.git_hosts,
                 &settings.disabled_plugins,
                 remote.as_deref(),
-            ) else {
+            )
+            .map(|h| with_git_token(h, remote.as_deref(), &secrets)) else {
                 return;
             };
             let result = host
@@ -1205,6 +1239,7 @@ impl Actor {
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
         let settings = self.env.settings.get();
         let hosts = self.env.hosts.clone();
+        let secrets = self.env.secrets.clone();
         tokio::spawn(async move {
             let remote = origin_host(&wd).await;
             let Some(host) = pick_host(
@@ -1212,7 +1247,8 @@ impl Actor {
                 &settings.git_hosts,
                 &settings.disabled_plugins,
                 remote.as_deref(),
-            ) else {
+            )
+            .map(|h| with_git_token(h, remote.as_deref(), &secrets)) else {
                 return;
             };
             let result = host.pr_template(&wd).await.map_err(|e| e.to_string());
@@ -3150,6 +3186,33 @@ mod pick_host_tests {
             prefer_https: false,
             prefer_ssh: false,
         }
+    }
+
+    #[test]
+    fn a_host_plugin_without_a_token_uses_the_one_kept_for_the_remote() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("secrets.json");
+        std::fs::write(&f, r#"{"git": {"gitlab.example.com": "glpat-1"}}"#).unwrap();
+        let gl = hosts().remove(1);
+        let tok = |h: &Arc<xherd_plugin::host::Host>| h.ctx.secrets.get("token").cloned();
+        let with = with_git_token(gl.clone(), Some("gitlab.example.com"), &f);
+        assert_eq!(tok(&with), Some("glpat-1".into()));
+        assert_eq!(
+            tok(&with_git_token(gl.clone(), Some("other.example.com"), &f)),
+            None
+        );
+        assert_eq!(tok(&with_git_token(gl.clone(), None, &f)), None);
+        // The plugin's own token wins.
+        let mut own = (*gl).clone();
+        own.ctx.secrets.insert("token".into(), "mine".into());
+        assert_eq!(
+            tok(&with_git_token(
+                Arc::new(own),
+                Some("gitlab.example.com"),
+                &f
+            )),
+            Some("mine".into())
+        );
     }
 
     #[test]

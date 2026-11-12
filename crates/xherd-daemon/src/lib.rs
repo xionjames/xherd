@@ -132,14 +132,7 @@ fn host_plugins(
     plugins
         .of_kind(xherd_plugin::Kind::Host)
         .map(|p| {
-            let mut ctx = plugin_context(p, paths, config, secrets, xherd_bin);
-            // The GitHub plugin reuses the token of Settings → Git access (R-685).
-            if p.name() == xherd_plugin::host::GITHUB
-                && !ctx.secrets.contains_key("token")
-                && let Some(t) = secrets.git_token("github.com")
-            {
-                ctx.secrets.insert("token".into(), t.into());
-            }
+            let ctx = plugin_context(p, paths, config, secrets, xherd_bin);
             Arc::new(xherd_plugin::host::Host {
                 plugin: p.clone(),
                 ctx,
@@ -274,6 +267,7 @@ impl Daemon {
             packs: packs.clone(),
             git: xherd_git::Git::new("git"),
             hosts,
+            secrets: paths.secrets(),
             toolchains: Arc::new(toolchains),
             runtimes,
         };

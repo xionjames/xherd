@@ -19,7 +19,12 @@ pub enum Fix {
     Action { label: String },
     /// `POST /checks/:id/fix` starts a terminal session the user finishes in
     /// the browser (`/ws/setup/:id`); the check re-runs when it ends.
-    Session { label: String, explain: String },
+    /// `terminal` is the setup session the UI attaches to.
+    Session {
+        label: String,
+        explain: String,
+        terminal: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -127,16 +132,7 @@ impl Daemon {
         while let Some(Ok((p, results))) = set.join_next().await {
             for r in results {
                 let runtime = p.manifest.kind == Kind::Runtime && r.plugin == default_rt;
-                let fix = p
-                    .manifest
-                    .checks
-                    .iter()
-                    .find(|c| c.name == r.name)
-                    .and_then(|c| c.fix.as_ref())
-                    .filter(|_| !r.ok)
-                    .map(|argv| Fix::Command {
-                        text: argv.join(" "),
-                    });
+                let fix = (!r.ok).then(|| self.plugin_fix(&p, &r.name)).flatten();
                 plugin_checks.push(Check {
                     id: format!("plugin:{}:{}", r.plugin, r.name),
                     group: "plugins",
@@ -243,12 +239,49 @@ impl Daemon {
         }
     }
 
-    /// `POST /checks/:id/fix`: install the pack.
+    /// What fixes a failed plugin check: a requirement's install in a
+    /// terminal (container) or its instructions for this OS (native, R-653),
+    /// else the check's own `fix` command.
+    fn plugin_fix(&self, p: &xherd_plugin::Plugin, check: &str) -> Option<Fix> {
+        if let Some(name) = check.strip_prefix(xherd_plugin::manifest::REQUIRES_PREFIX) {
+            let r = p.manifest.requires.iter().find(|r| r.name == name)?;
+            if self.sandbox && r.install.is_some() {
+                return Some(Fix::Session {
+                    label: format!("Install {name}"),
+                    explain: format!(
+                        "Runs `{}` in a terminal, into the agents' home.",
+                        r.install.as_ref()?.join(" ")
+                    ),
+                    terminal: crate::git_access::PLUGIN_LOGIN_ID.into(),
+                });
+            }
+            return r
+                .instructions_for(std::env::consts::OS)
+                .map(|t| Fix::Command { text: t.into() });
+        }
+        p.manifest
+            .checks
+            .iter()
+            .find(|c| c.name == check)
+            .and_then(|c| c.fix.as_ref())
+            .map(|argv| Fix::Command {
+                text: argv.join(" "),
+            })
+    }
+
+    /// `POST /checks/:id/fix`: install the pack, or a plugin's required tool.
     pub async fn fix_check(
         &self,
         id: &str,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<(), ActionError> {
+        if let Some((plugin, name)) = id
+            .strip_prefix("plugin:")
+            .and_then(|r| r.split_once(':'))
+            .and_then(|(p, n)| Some((p, n.strip_prefix(xherd_plugin::manifest::REQUIRES_PREFIX)?)))
+        {
+            return self.start_plugin_install(plugin, name).await;
+        }
         let rt = match id.split_once(':') {
             None if id == PACK_CHECK => Some(self.live_config().default_runtime),
             Some((PACK_CHECK, rt)) => Some(rt.to_string()),

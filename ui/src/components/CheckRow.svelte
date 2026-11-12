@@ -44,7 +44,7 @@
 </div>
 {#if session}
   <div style="padding:0 var(--pad) var(--pad)">
-    <TermView path={`/ws/setup/${check.id}`} title={check.label} height="420px" onclose={ended}
+    <TermView path={`/ws/setup/${check.fix?.kind === 'session' ? check.fix.terminal : check.id}`} title={check.label} height="420px" onclose={ended}
       hint="Quit when done; the check runs again." />
   </div>
 {/if}

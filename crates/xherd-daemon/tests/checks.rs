@@ -127,3 +127,56 @@ async fn disabled_plugins_apply_live() {
         assert_eq!(d.save_config(patch).unwrap_err().code, "bad_config");
     }
 }
+
+/// R-691: a tool a plugin requires is a check; natively a missing one shows
+/// the instructions (the host is never installed into), and installing it
+/// from the UI is refused.
+#[tokio::test]
+async fn a_missing_required_tool_shows_its_instructions_natively() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    o.builtin_plugins
+        .retain(|m| ["claude-code", "nvm"].contains(&m.name.as_str()));
+    for m in &mut o.builtin_plugins {
+        m.checks = vec![];
+        if m.name == "nvm" {
+            m.requires = serde_json::from_value(json!([{
+                "name": "xherd-no-such-tool",
+                "optional": true,
+                "install": ["sh", "-c", "echo installing"],
+                "instructions": {"any": "Install it from example.test"}
+            }]))
+            .unwrap();
+        }
+    }
+    let d = Daemon::start(paths, o).await.unwrap();
+    let h = home.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+
+    let cs = d.checks(&env).await;
+    let c = cs
+        .iter()
+        .find(|c| c.id == "plugin:nvm:requires:xherd-no-such-tool")
+        .expect("the requirement is a check");
+    assert!(!c.ok && !c.required);
+    assert_eq!(
+        c.fix,
+        Some(checks::Fix::Command {
+            text: "Install it from example.test".into()
+        })
+    );
+    let e = d
+        .fix_check("plugin:nvm:requires:xherd-no-such-tool", &env)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "not_fixable");
+}

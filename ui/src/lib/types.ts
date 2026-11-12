@@ -197,7 +197,7 @@ export interface Check {
   fix?:
     | { kind: 'command'; text: string }
     | { kind: 'action'; label: string }
-    | { kind: 'session'; label: string; explain: string };
+    | { kind: 'session'; label: string; explain: string; terminal: string };
 }
 
 export interface ConfigView {
