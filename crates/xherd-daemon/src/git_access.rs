@@ -459,6 +459,12 @@ impl Daemon {
                 .map_err(|e| fail("io", e.to_string()))?;
         }
         tracing::info!("git access settings changed");
+        // The actors pick a pull-request host by these rows (D24).
+        self.settings.set(crate::actor::ActorSettings::from_config(
+            &c,
+            (*self.settings.get()).clone(),
+            self.pr_poll_override,
+        ));
         self.write_gitconfig()?;
         Ok(self.git_hosts())
     }

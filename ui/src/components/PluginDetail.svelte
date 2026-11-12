@@ -2,7 +2,8 @@
   // One plugin's options in the Welcome wizard: its settings (saved here), its
   // checks with their fixes, and for a toolchain its tools and versions. The
   // same things Settings → Plugins shows, in the place where the plugin is picked.
-  import { put, post } from '../lib/api';
+  import { get, put, post } from '../lib/api';
+  import { boundProvider } from '../lib/gitProviders';
   import { loadChecks, loadConfig, setup } from '../lib/setup.svelte';
   import { app } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -10,7 +11,7 @@
   import CheckRow from './CheckRow.svelte';
   import Toolchains from './Toolchains.svelte';
   import TermView from './TermView.svelte';
-  import type { PluginInfo } from '../lib/types';
+  import type { PluginInfo, GitHostsView } from '../lib/types';
 
   let { plugin, onclose }: { plugin: PluginInfo; onclose: () => void } = $props();
 
@@ -43,6 +44,15 @@
       busy = false;
     }
   }
+
+  // A git provider (D24): the hosts of Settings → Git access that use it.
+  let gitView = $state<GitHostsView | null>(null);
+  $effect(() => {
+    gitView = null;
+    if (plugin.kind === 'host') get<GitHostsView>('/git/hosts').then((v) => (gitView = v)).catch(() => {});
+  });
+  const provider = $derived(gitView?.providers.find((p) => p.name === plugin.name));
+  const usedBy = $derived(gitView && provider ? gitView.hosts.filter((h) => boundProvider(gitView!.providers, h)?.name === plugin.name) : []);
 </script>
 
 <Panel title={`${plugin.label || plugin.name} options`} hint={plugin.description}>
@@ -56,6 +66,11 @@
     {/if}
   {:else}
     <p class="hint">This plugin has no settings.</p>
+  {/if}
+  {#if provider}
+    <p class="hint">Git provider for {provider.hosts.join(', ')}.
+      {#if usedBy.length}Used by {usedBy.map((h) => h.host).join(', ')}.{:else}No host in Git access uses it yet.{/if}
+      <a href="#/settings?tab=git">Git access</a></p>
   {/if}
   {#if plugin.kind === 'toolchain'}
     {#if app.state?.sandbox}

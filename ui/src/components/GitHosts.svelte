@@ -9,6 +9,7 @@
   import SaveBar from './SaveBar.svelte';
   import Callout from './Callout.svelte';
   import GitconfigNote from './GitconfigNote.svelte';
+  import { claims, boundProvider } from '../lib/gitProviders';
   import type { GitHost, GitHostsView, GitFinding, GitProvider } from '../lib/types';
 
   // `heading` off where the page already has this title (Welcome); `note` off
@@ -30,11 +31,9 @@
 
   // The provider a host is bound to: the one named, else the first claiming
   // its name (as the daemon does).
-  const claims = (p: GitProvider, host: string) =>
-    p.hosts.some((g) => new RegExp('^' + g.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i').test(host));
   const providers = $derived(view?.providers ?? []);
   const claimedBy = (host: string) => providers.find((p) => claims(p, host));
-  const providerOf = (r: Row) => (r.provider ? providers.find((p) => p.name === r.provider) : claimedBy(r.host));
+  const providerOf = (r: Row) => boundProvider(providers, r);
   // A provider with no credential helper cannot be the token's source.
   function bind(r: Row) {
     if (r.credential === 'provider' && !providerOf(r)?.helper) r.credential = 'xherd';
@@ -185,7 +184,8 @@
             <select bind:value={r.provider} onchange={() => bind(r)}>
               <option value="">{claimedBy(r.host) ? `Automatic (${claimedBy(r.host)?.name})` : 'None'}</option>
               {#each providers as p (p.name)}<option value={p.name}>{p.name}</option>{/each}
-            </select></label>
+            </select>
+            {#if providerOf(r)}<a class="hint" href={`#/settings?tab=plugins&plugin=${providerOf(r)?.name}`}>{providerOf(r)?.name} plugin options</a>{/if}</label>
           <label class="f">HTTPS token from
             <select bind:value={r.credential}>
               {#each credOptions(r) as [v, label] (v)}<option value={v}>{label}</option>{/each}

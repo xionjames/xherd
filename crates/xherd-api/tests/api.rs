@@ -588,7 +588,7 @@ async fn git_access_and_credentials() {
     let remote =
         xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 9], 1))));
     let body = json!({
-        "hosts": [{"host": "git.example.test", "credential": "xherd", "protocols": ["https"]}],
+        "hosts": [{"host": "git.example.test", "credential": "xherd", "provider": "gitlab", "protocols": ["https"]}],
         "tokens": {"git.example.test": "tok_SECRET_9"},
     });
     let req = Request::put("/api/v1/git/hosts")
@@ -603,6 +603,9 @@ async fn git_access_and_credentials() {
         !v.to_string().contains("tok_SECRET_9"),
         "token never sent back"
     );
+    // The actors see the provider at once (they pick a PR host by it).
+    let live = d.settings.get();
+    assert_eq!(live.git_hosts[0].provider.as_deref(), Some("gitlab"));
     // Natively the managed config sits in the data root, never in $HOME.
     let gc = std::fs::read_to_string(dir.path().join("gitconfig")).unwrap();
     assert!(gc.contains("[credential \"https://git.example.test\"]"));
