@@ -32,6 +32,7 @@ by theme; update it together with them.
 
 - [x] Image with version managers, `xherd init`, `docker init/doctor/update`, toolchain resolution
 - [x] Open-in (URL schemes, Dev Containers, companion)
+- [x] Settings → Open in (R-706, R-707): hide entries, a built-in terminal entry (shell in the worktree, terminal app chosen), your own commands, run by the companion only after you confirm each argv on your computer
 - [x] Git access setup and doctor
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
 - [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`

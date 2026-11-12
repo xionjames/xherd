@@ -2,9 +2,14 @@
 //! `attach`, `shell` and `companion`, run on the computer where the user
 //! works. Apps come from `~/.config/xherd/open.json`
 //! (`{"apps": {"idea": ["idea", "{dir}"]}}`), else the known editors found on
-//! `PATH`. Only those commands ever run, with `{dir}` replaced.
+//! `PATH`. Only those commands ever run, with `{dir}` replaced, plus two
+//! kinds the companion builds or checks itself: the terminal (R-707), whose
+//! command is `xherd shell <agent>` in a fixed list of terminal apps, and
+//! user commands from Settings (R-706), run only after the user confirmed that
+//! exact argv here, once (hashes in `open-approved.json`).
 
 use std::collections::BTreeMap;
+use std::io::{BufRead, IsTerminal, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::time::Duration;
@@ -60,7 +65,15 @@ fn host_apps() -> BTreeMap<String, Vec<String>> {
 }
 
 fn launch(argv: &[String], dir: &str) -> Result<(), String> {
-    let argv: Vec<String> = argv.iter().map(|a| a.replace("{dir}", dir)).collect();
+    launch_with(argv, dir, "")
+}
+
+/// Run `argv` detached, with `{dir}` and `{agent}` replaced.
+fn launch_with(argv: &[String], dir: &str, agent: &str) -> Result<(), String> {
+    let argv: Vec<String> = argv
+        .iter()
+        .map(|a| a.replace("{dir}", dir).replace("{agent}", agent))
+        .collect();
     std::process::Command::new(&argv[0])
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
@@ -187,40 +200,182 @@ pub fn attach(client: &Client, who: &str, shell: bool) -> i32 {
     1
 }
 
-/// Poll the daemon for Open-in requests from the browser and run the
-/// matching app (R-704). Runs until interrupted.
+/// Agent names reach a terminal's command line: plain characters only.
+fn plain_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// `'…'` for `sh`.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// The argv that opens `app` with a shell in the agent's worktree (R-707):
+/// `<xherd> shell <agent>`, in one of a fixed list of terminal apps. `None`
+/// for an unknown app or a name that is not plain.
+pub fn terminal_argv(app: &str, xherd: &str, agent: &str) -> Option<Vec<String>> {
+    if !plain_name(agent) {
+        return None;
+    }
+    let cmd = format!("{} shell {agent}", sh_quote(xherd));
+    // AppleScript string literal.
+    let lit = format!("\"{}\"", cmd.replace('\\', "\\\\").replace('"', "\\\""));
+    let osa = |app: &str, line: String| {
+        [
+            "osascript".to_string(),
+            "-e".into(),
+            format!("tell application \"{app}\""),
+            "-e".into(),
+            "activate".into(),
+            "-e".into(),
+            line,
+            "-e".into(),
+            "end tell".into(),
+        ]
+        .to_vec()
+    };
+    let direct = |pre: &[&str]| {
+        let mut v: Vec<String> = pre.iter().map(|s| s.to_string()).collect();
+        v.extend([xherd.to_string(), "shell".into(), agent.to_string()]);
+        v
+    };
+    Some(match app {
+        "terminal" => osa("Terminal", format!("do script {lit}")),
+        "iterm" => osa(
+            "iTerm",
+            format!("create window with default profile command {lit}"),
+        ),
+        "ghostty" => direct(&["open", "-na", "Ghostty", "--args", "-e"]),
+        "x-terminal-emulator" => direct(&["x-terminal-emulator", "-e"]),
+        _ => return None,
+    })
+}
+
+fn default_terminal() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "terminal"
+    } else {
+        "x-terminal-emulator"
+    }
+}
+
+/// A user command's fingerprint: the sha256 of its argv as JSON.
+fn argv_hash(argv: &[String]) -> String {
+    xherd_core::hash::content_sha256(serde_json::to_string(argv).unwrap_or_default().as_bytes())
+}
+
+fn approved_file() -> std::path::PathBuf {
+    config_dir().join("open-approved.json")
+}
+
+fn approved() -> Vec<String> {
+    std::fs::read_to_string(approved_file())
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| serde_json::from_value(v["approved"].clone()).ok())
+        .unwrap_or_default()
+}
+
+/// Has the user confirmed this argv on this computer? Asks once on the
+/// companion's terminal (R-706); without one, the answer is no.
+fn confirmed(app: &str, argv: &[String]) -> Result<(), String> {
+    let hash = argv_hash(argv);
+    let mut known = approved();
+    if known.contains(&hash) {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(format!(
+            "refused {app}: a new command from Settings must be confirmed here; run `xherd companion` in a terminal"
+        ));
+    }
+    print!(
+        "Open in → {app} wants to run on this computer:\n  {}\nRun it now and from now on? [y/N] ",
+        argv.iter()
+            .map(|a| sh_quote(a))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    if !matches!(line.trim(), "y" | "Y" | "yes") {
+        return Err(format!("refused {app}: not confirmed"));
+    }
+    known.push(hash);
+    let body = serde_json::json!({ "approved": known });
+    let path = approved_file();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    xherd_core::paths::write_atomic(&path, body.to_string().as_bytes(), Some(0o600))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// One request from the daemon: the terminal, a user command, or an app.
+fn handle(apps: &BTreeMap<String, Vec<String>>, r: &Value) -> Result<String, String> {
+    let (Some(app), Some(dir)) = (r["app"].as_str(), r["dir"].as_str()) else {
+        return Err("ignored a malformed request".into());
+    };
+    let agent = r["agent"].as_str().unwrap_or("");
+    if app == "terminal" {
+        let term = r["terminal"].as_str().unwrap_or(default_terminal());
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let argv = terminal_argv(term, &exe.to_string_lossy(), agent)
+            .ok_or_else(|| format!("ignored a terminal request for {term} / {agent:?}"))?;
+        launch(&argv, dir)?;
+        return Ok(format!("opened a shell for {agent} in {term}"));
+    }
+    if app.starts_with("cmd:") {
+        let argv: Vec<String> = serde_json::from_value(r["argv"].clone())
+            .ok()
+            .filter(|a: &Vec<String>| a.first().is_some_and(|p| !p.is_empty()))
+            .ok_or_else(|| format!("ignored {app}: no command"))?;
+        confirmed(app, &argv)?;
+        launch_with(&argv, dir, agent)?;
+        return Ok(format!("opened {dir} with {app}"));
+    }
+    let argv = apps
+        .get(app)
+        .ok_or_else(|| format!("ignored a request for {app}: not offered here"))?;
+    launch(argv, dir)?;
+    Ok(format!("opened {dir} in {app}"))
+}
+
+/// Poll the daemon for Open-in requests from the browser and run them
+/// (R-704, R-706, R-707). Runs until interrupted.
 pub fn companion(client: &Client) -> i32 {
     let apps = host_apps();
-    if apps.is_empty() {
-        eprintln!(
-            "no apps: none of {} is on PATH; list yours in {}",
+    let names: Vec<&str> = apps.keys().map(String::as_str).collect();
+    println!(
+        "companion connected to {}, offering the terminal{}{}",
+        client.url,
+        if names.is_empty() { "" } else { ", " },
+        names.join(", ")
+    );
+    if names.is_empty() {
+        println!(
+            "(none of {} is on PATH; list your apps in {})",
             KNOWN.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "),
             config_dir().join("open.json").display()
         );
-        return 2;
     }
-    let names: Vec<&str> = apps.keys().map(String::as_str).collect();
-    println!(
-        "companion connected to {}, offering {}",
-        client.url,
-        names.join(", ")
+    let path = format!(
+        "/companion/next?wait=25&features=terminal,commands&apps={}",
+        names.join(",")
     );
-    let path = format!("/companion/next?wait=25&apps={}", names.join(","));
     loop {
         match client.call("GET", &path, None) {
-            Ok(v) => {
-                let r = &v["request"];
-                let (Some(app), Some(dir)) = (r["app"].as_str(), r["dir"].as_str()) else {
-                    continue;
-                };
-                match apps.get(app) {
-                    Some(argv) => match launch(argv, dir) {
-                        Ok(()) => println!("opened {dir} in {app}"),
-                        Err(e) => eprintln!("{e}"),
-                    },
-                    None => eprintln!("ignored a request for {app}: not offered here"),
-                }
-            }
+            Ok(v) if v["request"].is_null() => {}
+            Ok(v) => match handle(&apps, &v["request"]) {
+                Ok(m) => println!("{m}"),
+                Err(e) => eprintln!("{e}"),
+            },
             Err(e) => {
                 eprintln!("{e}; retrying");
                 std::thread::sleep(Duration::from_secs(5));
@@ -244,5 +399,37 @@ mod tests {
         assert_eq!(a.keys().collect::<Vec<_>>(), ["code", "zed"]);
         assert_eq!(a["code"], ["code", "{dir}"]);
         assert!(apps(Some("not json"), |_| false).is_empty());
+    }
+
+    #[test]
+    fn terminal_commands_are_built_in_and_quoted() {
+        let t = terminal_argv("terminal", "/opt/x y/xherd", "SC-1").unwrap();
+        assert_eq!(t[0], "osascript");
+        assert_eq!(t[6], r#"do script "'/opt/x y/xherd' shell SC-1""#);
+        let g = terminal_argv("ghostty", "/b/xherd", "SC-1").unwrap();
+        assert_eq!(
+            g.join(" "),
+            "open -na Ghostty --args -e /b/xherd shell SC-1"
+        );
+        let quote = terminal_argv("iterm", r#"/a"b/xherd"#, "SC-1").unwrap();
+        assert!(
+            quote[6].ends_with(r#""'/a\"b/xherd' shell SC-1""#),
+            "{}",
+            quote[6]
+        );
+        assert!(terminal_argv("xterm", "/b/xherd", "SC-1").is_none());
+        assert!(terminal_argv("terminal", "/b/xherd", "a;rm -rf ~").is_none());
+        assert!(terminal_argv("terminal", "/b/xherd", "").is_none());
+    }
+
+    #[test]
+    fn argv_hash_changes_with_any_argument() {
+        let a = argv_hash(&["idea".into(), "{dir}".into()]);
+        assert_eq!(a, argv_hash(&["idea".into(), "{dir}".into()]));
+        assert_ne!(a, argv_hash(&["idea".into(), "{dir}".into(), "-x".into()]));
+        assert_ne!(
+            argv_hash(&["a b".into()]),
+            argv_hash(&["a".into(), "b".into()])
+        );
     }
 }

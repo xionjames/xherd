@@ -706,7 +706,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Toolchain resolution
   - [x] Open-in (URL schemes, Dev Containers, companion)
   - [x] Git access setup and doctor
-  - [ ] Settings → Open in: hide entries, user commands confirmed on the host, built-in terminal entry (R-706, R-707)
+  - [x] Settings → Open in: hide entries, user commands confirmed on the host, built-in terminal entry (R-706, R-707)
   - [x] Tool-permission mode per agent, changeable live (R-002a)
 - [ ] **M4 → v1.0**
   - [x] Guardrails

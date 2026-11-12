@@ -27,6 +27,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `prPollMinutes` | `5` | How often a watched pull request is polled; `0` = off |
 | `maxReviewLoops` | `3` | Review → fix rounds before the review gate is held for a human; `0` = no limit |
 | `autonomy` | `ask` | Default for new agents: `ask` or `important`. `never` is not available yet |
+| `openIn` | `{}` | Settings → Open in: `hidden` (entry ids left out of the menu: `vscode`, `cursor`, `zed`, `devcontainer`, `terminal`, `companion:<app>`, `cmd:<id>`), `terminal` (`terminal`, `iterm`, `ghostty`, `x-terminal-emulator`; unset = the computer's default) and `commands` (`[{"id", "label", "argv"}]`, `{dir}` and `{agent}` replaced). The companion runs a command only once you confirmed that argv on your computer |
 | `permissionMode` | `edits` | Tool permissions of new agents: `ask` (asks before every tool use that needs permission), `edits` (accepts file edits), `auto` (the runtime's own checks decide), `all` (asks nothing; only accepted in the container) |
 | `maxAutoApprovalsInRow` | `10` | After this many automatic approvals in a row the next gate waits for you; `0` = no limit |
 | `agentTokenBudget` | `0` | Tokens one agent may use; `0` = off. 80 % notifies once, 100 % pauses the agent at its next stop |

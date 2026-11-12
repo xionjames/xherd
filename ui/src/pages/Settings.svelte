@@ -9,6 +9,7 @@
   import GitAccess from '../components/GitAccess.svelte';
   import Backups from '../components/Backups.svelte';
   import Profiles from '../components/Profiles.svelte';
+  import OpenIn from '../components/OpenIn.svelte';
   import Toolchains from '../components/Toolchains.svelte';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
@@ -18,7 +19,7 @@
   import type { ConfigView, PluginInfo } from '../lib/types';
   import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
 
-  const TABS = ['general', 'gates', 'notifications', 'git', 'profiles', 'backups', 'plugins', 'about'];
+  const TABS = ['general', 'gates', 'notifications', 'openin', 'git', 'profiles', 'backups', 'plugins', 'about'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
   const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
@@ -80,7 +81,7 @@
     }
   }
   const initials = (p: PluginInfo) => (p.label || p.name).split(/[\s-]+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-  const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', git: 'Git access', profiles: 'Repo profiles', backups: 'Backups', plugins: 'Plugins', about: 'About' };
+  const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', openin: 'Open in', git: 'Git access', profiles: 'Repo profiles', backups: 'Backups', plugins: 'Plugins', about: 'About' };
   const tabItems = $derived(TABS.map((t) => ({
     id: t, label: TAB_LABEL[t], href: href('/settings', t === 'general' ? {} : { tab: t }),
     badge: t === 'plugins' && broken.length ? { n: `${broken.length} error${broken.length > 1 ? 's' : ''}`, tone: 'h' as const } : undefined,
@@ -97,6 +98,8 @@
   {/if}
   {#if tab === 'git'}
     <GitAccess />
+  {:else if tab === 'openin'}
+    <OpenIn />
   {:else if tab === 'profiles'}
     <Profiles />
   {:else if tab === 'backups'}

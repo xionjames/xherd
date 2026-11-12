@@ -42,6 +42,7 @@ pub struct ConfigPatch {
     pub max_review_loops: Option<u32>,
     pub autonomy: Option<xherd_core::autonomy::Autonomy>,
     pub permission_mode: Option<xherd_core::permission::PermissionMode>,
+    pub open_in: Option<xherd_core::config::OpenIn>,
     pub max_auto_approvals_in_row: Option<u32>,
     pub agent_token_budget: Option<u64>,
     pub daily_token_budget: Option<u64>,
@@ -76,6 +77,45 @@ fn valid_scope(s: &str) -> bool {
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     });
     host_ok && owner_ok
+}
+
+/// Settings → Open in (R-706): command ids are plain and unique, since they
+/// become entry ids (`cmd:<id>`); every argv names a program.
+fn check_open_in(
+    mut o: xherd_core::config::OpenIn,
+) -> Result<xherd_core::config::OpenIn, ActionError> {
+    use xherd_core::config::TERMINAL_APPS;
+    if let Some(t) = &o.terminal
+        && !TERMINAL_APPS.contains(&t.as_str())
+    {
+        return Err(bad(format!(
+            "openIn.terminal must be one of {}",
+            TERMINAL_APPS.join(", ")
+        )));
+    }
+    o.hidden.retain(|h| !h.trim().is_empty());
+    let mut ids = std::collections::BTreeSet::new();
+    for c in &mut o.commands {
+        c.label = c.label.trim().to_string();
+        let plain = !c.id.is_empty()
+            && c.id.len() <= 40
+            && c.id
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-');
+        if !plain || !ids.insert(c.id.clone()) {
+            return Err(bad(format!(
+                "openIn command id {:?}: lower-case letters, digits and -, unique",
+                c.id
+            )));
+        }
+        if c.label.is_empty() || c.argv.first().is_none_or(|a| a.trim().is_empty()) {
+            return Err(bad(format!(
+                "openIn command {}: a label and a program are needed",
+                c.id
+            )));
+        }
+    }
+    Ok(o)
 }
 
 /// Apply a patch with range checks. Pure, so it is tested directly.
@@ -136,6 +176,9 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
     }
     if let Some(m) = p.permission_mode {
         c.permission_mode = m;
+    }
+    if let Some(o) = p.open_in {
+        c.open_in = check_open_in(o)?;
     }
     if let Some(n) = p.max_auto_approvals_in_row {
         c.max_auto_approvals_in_row = n;
@@ -400,6 +443,29 @@ mod tests {
         let p: ConfigPatch =
             serde_json::from_value(json!({"mutedNotifications": ["nope"]})).unwrap();
         assert_eq!(apply(&mut c, p).unwrap_err().code, "bad_config");
+    }
+
+    #[test]
+    fn open_in_is_checked() {
+        let mut c = Config::default();
+        let ok = |v: Value| serde_json::from_value::<ConfigPatch>(json!({"openIn": v})).unwrap();
+        apply(
+            &mut c,
+            ok(json!({"hidden": ["zed", " "], "terminal": "iterm",
+                      "commands": [{"id": "idea", "label": " IDEA ", "argv": ["idea", "{dir}"]}]})),
+        )
+        .unwrap();
+        assert_eq!(c.open_in.hidden, ["zed"]);
+        assert_eq!(c.open_in.commands[0].label, "IDEA");
+        for bad in [
+            json!({"terminal": "xterm"}),
+            json!({"commands": [{"id": "Idea", "label": "x", "argv": ["idea"]}]}),
+            json!({"commands": [{"id": "a", "label": "x", "argv": ["a"]}, {"id": "a", "label": "y", "argv": ["b"]}]}),
+            json!({"commands": [{"id": "a", "label": "x", "argv": []}]}),
+            json!({"commands": [{"id": "a", "label": "", "argv": ["a"]}]}),
+        ] {
+            assert_eq!(apply(&mut c, ok(bad)).unwrap_err().code, "bad_config");
+        }
     }
 
     #[test]
