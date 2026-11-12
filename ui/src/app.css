@@ -208,6 +208,8 @@ label.f.chk.top { align-items: flex-start; }
    white on a filled --gate (an emoji keeps its own colours). */
 .tc.g { background: var(--gate-wash); color: var(--gate); box-shadow: inset 0 0 0 1px var(--gate-line); }
 .tc .ic { width: 12px; height: 12px; vertical-align: -2px; }
+.tc.mark { background: none; box-shadow: none; padding: 0; display: inline-flex; }
+.tc.mark .ic { width: 16px; height: 16px; vertical-align: 0; }
 .st i .ic { width: 14px; height: 14px; }
 .tc.h { background: var(--halt-wash); color: var(--halt); }
 

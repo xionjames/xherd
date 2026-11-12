@@ -181,7 +181,7 @@
       {@const b = badge(t.id)}
       <a class="vtb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
         href={href(`/agent/${agent.name}`, { s: t.id })}>
-        <Icon name={t.icon} />{t.label}{#if b}<span class="tc {b.tone}">{#if b.n === '✋'}<Icon name="hand" size={12} />{:else}{b.n}{/if}</span>{/if}
+        <Icon name={t.icon} />{t.label}{#if b?.n === '✋'}<span class="tc mark {b.tone}" title="Needs you"><Icon name="handSolid" size={16} solid /></span>{:else if b}<span class="tc {b.tone}">{b.n}</span>{/if}
       </a>
     {/each}
   </nav>
