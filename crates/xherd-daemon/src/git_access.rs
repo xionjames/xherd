@@ -56,15 +56,15 @@ fn identity_file_name(n: usize) -> String {
 
 /// The managed git config (`~/.config/xherd/gitconfig`, included from
 /// `~/.gitconfig` in the container). Pure, so it is tested directly.
-/// `helper_for` gives the credential helper of the provider a `gh` / `glab`
-/// credential stands for (D24: it is in the provider's manifest).
+/// `helper_for` gives the credential helper of a host's provider (D24: it is
+/// in the provider's manifest).
 pub fn managed_gitconfig(
     hosts: &[GitHost],
     xherd_bin: &str,
     sandbox: bool,
     identity: Option<(&str, &str)>,
     rules: &[GitIdentity],
-    helper_for: &dyn Fn(Credential) -> Option<String>,
+    helper_for: &dyn Fn(&GitHost) -> Option<String>,
 ) -> String {
     let mut out =
         String::from("# Managed by xherd (Settings → Git access); rewritten on every change.\n");
@@ -99,7 +99,7 @@ pub fn managed_gitconfig(
             Credential::None => None,
             Credential::Xherd => Some(format!("!{} credential", quote(xherd_bin))),
             // gh reads the host from git on stdin; it has no --hostname flag.
-            c @ (Credential::Gh | Credential::Glab) => helper_for(c),
+            Credential::Provider => helper_for(h),
         };
         if helper.is_some() || h.username.is_some() {
             out.push_str(&format!("[credential \"https://{}\"]\n", h.host));
@@ -136,40 +136,26 @@ pub fn managed_gitconfig(
 /// The username git sends with a token for a host no provider claims.
 const DEFAULT_TOKEN_USER: &str = "x-access-token";
 
-/// The user name for a host's token: the first provider claiming it that
-/// names one, else [`DEFAULT_TOKEN_USER`].
-fn token_user_of(providers: &[Git], host: &str) -> String {
-    providers
-        .iter()
-        .filter(|g| g.claims(host))
-        .find_map(|g| g.credential.as_ref().and_then(|c| c.token_user.clone()))
+/// A provider: its plugin name and its `data.git`.
+type Provider = (String, Git);
+
+/// The provider a host is bound to: the one named, else the first claiming
+/// the host name (so a host added before providers existed keeps its API
+/// checks and token user).
+fn bound<'a>(providers: &'a [Provider], named: Option<&str>, host: &str) -> Option<&'a Git> {
+    match named {
+        Some(n) => providers.iter().find(|(p, _)| p == n),
+        None => providers.iter().find(|(_, g)| g.claims(host)),
+    }
+    .map(|(_, g)| g)
+}
+
+/// The user name for a host's token: its provider's, else [`DEFAULT_TOKEN_USER`].
+fn token_user_of(providers: &[Provider], named: Option<&str>, host: &str) -> String {
+    bound(providers, named, host)
+        .and_then(|g| g.credential.as_ref())
+        .and_then(|c| c.token_user.clone())
         .unwrap_or_else(|| DEFAULT_TOKEN_USER.to_string())
-}
-
-/// The provider a `gh` / `glab` credential stands for (until hosts are bound
-/// to a provider directly, D24 step 2).
-fn provider_name(c: Credential) -> Option<&'static str> {
-    match c {
-        Credential::Gh => Some("github"),
-        Credential::Glab => Some("gitlab"),
-        _ => None,
-    }
-}
-
-/// The git data of the provider a credential stands for; a broken one is
-/// logged and skipped.
-fn provider_git(plugins: &xherd_plugin::Registry, c: Credential) -> Option<Git> {
-    let name = provider_name(c)?;
-    let p = plugins
-        .get(name)
-        .filter(|p| p.manifest.kind == Kind::Host)?;
-    match Git::of(&p.manifest) {
-        Ok(g) => g,
-        Err(e) => {
-            tracing::warn!(plugin = name, "{e}");
-            None
-        }
-    }
 }
 
 /// `owner/repo` and host of a remote URL (`https://h/o/r(.git)`,
@@ -252,13 +238,14 @@ pub fn remote_host(url: &str) -> Option<String> {
 }
 
 impl Daemon {
-    /// `data.git` of every host plugin that has one (a broken one is logged
-    /// and skipped).
-    fn providers(&self) -> Vec<Git> {
+    /// `data.git` of every enabled host plugin that has one (a broken one is
+    /// logged and skipped).
+    fn providers(&self) -> Vec<Provider> {
         self.plugins
             .of_kind(Kind::Host)
+            .filter(|p| self.plugin_enabled(p.name()))
             .filter_map(|p| match Git::of(&p.manifest) {
-                Ok(g) => g,
+                Ok(g) => g.map(|g| (p.name().to_string(), g)),
                 Err(e) => {
                     tracing::warn!(plugin = p.name(), "{e}");
                     None
@@ -267,14 +254,20 @@ impl Daemon {
             .collect()
     }
 
-    /// The git data of the provider a credential stands for.
-    fn provider_for(&self, c: Credential) -> Option<Git> {
-        provider_git(&self.plugins, c)
+    /// The git data of the provider a host is bound to.
+    fn provider_of(&self, h: &GitHost) -> Option<Git> {
+        bound(&self.providers(), h.provider.as_deref(), &h.host).cloned()
     }
 
     /// The user name for a host's token.
     fn token_user(&self, host: &str) -> String {
-        token_user_of(&self.providers(), host)
+        let named = self
+            .live_config()
+            .git_hosts
+            .into_iter()
+            .find(|h| h.host == host)
+            .and_then(|h| h.provider);
+        token_user_of(&self.providers(), named.as_deref(), host)
     }
 
     /// R-688: the doctor's answer for the host an agent works against (its
@@ -355,8 +348,8 @@ impl Daemon {
             self.sandbox,
             identity,
             &c.git_identities,
-            &|cred| {
-                self.provider_for(cred)
+            &|h| {
+                self.provider_of(h)
                     .and_then(|g| g.credential)
                     .and_then(|c| c.helper)
             },
@@ -388,8 +381,21 @@ impl Daemon {
                 v
             })
             .collect();
+        let providers: Vec<Value> = self
+            .providers()
+            .into_iter()
+            .map(|(name, g)| {
+                serde_json::json!({
+                    "name": name,
+                    "hosts": g.hosts,
+                    "helper": g.credential.as_ref().is_some_and(|c| c.helper.is_some()),
+                    "login": g.login.is_some(),
+                })
+            })
+            .collect();
         serde_json::json!({
             "hosts": hosts,
+            "providers": providers,
             "sandbox": self.sandbox,
             "gitconfig": self.gitconfig_path(),
         })
@@ -398,6 +404,7 @@ impl Daemon {
     /// `PUT /git/hosts`: save hosts and tokens, rewrite the managed config.
     pub fn set_git_hosts(&self, u: HostsUpdate) -> Result<Value, ActionError> {
         let mut seen = std::collections::BTreeSet::new();
+        let providers = self.providers();
         for h in &u.hosts {
             let ok = !h.host.is_empty()
                 && h.host
@@ -420,6 +427,14 @@ impl Daemon {
             }
             if h.protocols.iter().any(|p| p != "https" && p != "ssh") {
                 return Err(fail("bad_config", "protocols are https and ssh"));
+            }
+            if let Some(p) = &h.provider
+                && !providers.iter().any(|(n, _)| n == p)
+            {
+                return Err(fail(
+                    "bad_config",
+                    format!("{}: {p:?} is not a git provider plugin", h.host),
+                ));
             }
         }
         let mut c = self.live_config();
@@ -539,24 +554,20 @@ impl Daemon {
     /// Start `gh auth login --web` (or glab) in a tmux session the UI shows
     /// (`/ws/setup/git-login`); the code to type appears there (R-686).
     pub async fn start_git_login(&self, host: &str) -> Result<(), ActionError> {
-        let c = self.live_config();
-        let cred = c
+        let configured = self
+            .live_config()
             .git_hosts
-            .iter()
-            .find(|h| h.host == host)
-            .map(|h| h.credential)
-            .unwrap_or(if host.contains("gitlab") {
-                Credential::Glab
-            } else {
-                Credential::Gh
-            });
-        let login = self
-            .provider_for(cred)
+            .into_iter()
+            .find(|h| h.host == host);
+        let login = configured
+            .as_ref()
+            .and_then(|h| self.provider_of(h))
+            .or_else(|| bound(&self.providers(), None, host).cloned())
             .and_then(|g| g.login)
             .ok_or_else(|| {
                 fail(
                     "not_fixable",
-                    format!("{host} does not log in through gh or glab; paste a token instead"),
+                    format!("{host}'s provider has no browser login; paste a token instead"),
                 )
             })?;
         let argv = subst_host(&login, host);
@@ -822,11 +833,14 @@ impl Daemon {
             }),
         });
         let Some(token) = token else { return };
-        let Some(api) = self
-            .providers()
+        let named = self
+            .live_config()
+            .git_hosts
             .into_iter()
-            .filter(|g| g.claims(host))
-            .find_map(|g| g.api)
+            .find(|h| h.host == host)
+            .and_then(|h| h.provider);
+        let Some(api) =
+            bound(&self.providers(), named.as_deref(), host).and_then(|g| g.api.clone())
         else {
             return;
         };
@@ -973,6 +987,7 @@ mod tests {
             host: h.into(),
             protocols: vec!["https".into()],
             credential: c,
+            provider: None,
             username: None,
             ca_file: None,
             prefer_https: false,
@@ -989,15 +1004,12 @@ mod tests {
         let mut bb = host("bitbucket.org", Credential::None);
         bb.prefer_ssh = true;
         let t = managed_gitconfig(
-            &[host("github.com", Credential::Gh), gl, bb],
+            &[host("github.com", Credential::Provider), gl, bb],
             "/usr/local/bin/xherd",
             true,
             Some(("Ada \"A\" L", "ada@example.com")),
             &[],
-            &|c| match c {
-                Credential::Gh => Some("!gh auth git-credential".to_string()),
-                _ => None,
-            },
+            &|h| (h.host == "github.com").then(|| "!gh auth git-credential".to_string()),
         );
         assert!(
             t.contains("[user]\n\tname = \"Ada \\\"A\\\" L\"\n\temail = \"ada@example.com\"\n")
@@ -1029,42 +1041,65 @@ mod tests {
         assert_eq!(parse_remote("nonsense"), None);
     }
 
-    #[test]
-    fn token_users_come_from_the_providers() {
+    fn providers() -> Vec<Provider> {
         let dir = tempfile::tempdir().unwrap();
         let plugins = xherd_plugin::Registry::load(xherd_plugin::builtins(), dir.path());
-        let providers: Vec<Git> = plugins
+        plugins
             .of_kind(Kind::Host)
-            .filter_map(|p| Git::of(&p.manifest).unwrap())
-            .collect();
-        for (host, user) in [
-            ("github.com", "x-access-token"),
-            ("gitlab.com", "oauth2"),
-            ("gitlab.example.com", "oauth2"),
-            ("bitbucket.org", "x-token-auth"),
-            ("git.example.com", "x-access-token"),
+            .filter_map(|p| Some((p.name().to_string(), Git::of(&p.manifest).unwrap()?)))
+            .collect()
+    }
+
+    #[test]
+    fn token_users_come_from_the_providers() {
+        let providers = providers();
+        for (host, named, user) in [
+            ("github.com", None, "x-access-token"),
+            ("gitlab.com", None, "oauth2"),
+            ("gitlab.example.com", None, "oauth2"),
+            ("bitbucket.org", None, "x-token-auth"),
+            ("git.example.com", None, "x-access-token"),
+            // A binding beats the host name.
+            ("git.example.com", Some("gitlab"), "oauth2"),
+            ("gitlab.example.com", Some("github"), "x-access-token"),
         ] {
-            assert_eq!(token_user_of(&providers, host), user, "{host}");
+            assert_eq!(token_user_of(&providers, named, host), user, "{host}");
         }
     }
 
     #[test]
+    fn a_host_is_bound_by_name_or_by_the_names_it_claims() {
+        let providers = providers();
+        let name = |named, host| {
+            providers
+                .iter()
+                .find(|(_, g)| Some(g) == bound(&providers, named, host))
+                .map(|(n, _)| n.as_str())
+        };
+        assert_eq!(name(None, "github.com"), Some("github"));
+        assert_eq!(name(None, "git.example.com"), None);
+        assert_eq!(name(Some("gitlab"), "git.example.com"), Some("gitlab"));
+        assert_eq!(name(Some("nope"), "github.com"), None);
+    }
+
+    #[test]
     fn the_built_in_manifests_give_the_helpers_the_config_always_had() {
-        let dir = tempfile::tempdir().unwrap();
-        let plugins = xherd_plugin::Registry::load(xherd_plugin::builtins(), dir.path());
+        let providers = providers();
+        let mut gh = host("github.com", Credential::Provider);
+        gh.provider = Some("github".into());
+        let mut gl = host("gitlab.example.com", Credential::Provider);
+        gl.provider = Some("gitlab".into());
+        // No provider named: the host name decides.
+        let auto = host("gitlab.com", Credential::Provider);
         let t = managed_gitconfig(
-            &[
-                host("github.com", Credential::Gh),
-                host("gitlab.example.com", Credential::Glab),
-                host("git.example.com", Credential::None),
-            ],
+            &[gh, gl, auto, host("git.example.com", Credential::Provider)],
             "/usr/local/bin/xherd",
             false,
             None,
             &[],
-            &|c| {
-                provider_git(&plugins, c)
-                    .and_then(|g| g.credential)
+            &|h| {
+                bound(&providers, h.provider.as_deref(), &h.host)
+                    .and_then(|g| g.credential.clone())
                     .and_then(|c| c.helper)
             },
         );
@@ -1073,6 +1108,9 @@ mod tests {
         ));
         assert!(t.contains(
             "[credential \"https://gitlab.example.com\"]\n\thelper =\n\thelper = !glab auth git-credential\n"
+        ));
+        assert!(t.contains(
+            "[credential \"https://gitlab.com\"]\n\thelper =\n\thelper = !glab auth git-credential\n"
         ));
         assert!(!t.contains("git.example.com\"]"));
     }

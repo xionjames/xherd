@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::paths::write_atomic;
 
-pub const CONFIG_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_SCHEMA_VERSION: u32 = 2;
 
 /// The runtime of agents created before they named one, and the default
 /// `defaultRuntime`.
@@ -234,10 +234,9 @@ pub enum Credential {
     /// git's own configuration decides.
     #[default]
     None,
-    /// `gh auth git-credential` (its own login).
-    Gh,
-    /// `glab auth git-credential`.
-    Glab,
+    /// The host's git provider supplies the helper (`gh auth git-credential`
+    /// for GitHub, D24); before schema 2 this was `gh` / `glab`.
+    Provider,
     /// `xherd credential`: the token stored in xherd's secrets.
     Xherd,
 }
@@ -252,6 +251,10 @@ pub struct GitHost {
     pub protocols: Vec<String>,
     #[serde(default)]
     pub credential: Credential,
+    /// The `host` plugin that knows this host's API, token user and login
+    /// (D24, R-689). Absent: the first provider claiming the host name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     /// CA bundle for this host's HTTPS (`http.<url>.sslCAInfo`).
@@ -282,7 +285,24 @@ fn both_protocols() -> Vec<String> {
 
 /// Migrations from version N to N+1, applied to the raw JSON. Index 0 = 0 → 1.
 type Migration = fn(&mut Map<String, Value>);
-const MIGRATIONS: &[Migration] = &[|_v0| {}];
+const MIGRATIONS: &[Migration] = &[|_v0| {}, git_hosts_to_providers];
+
+/// 1 → 2 (R-693): a host's `gh` / `glab` credential becomes the provider
+/// credential bound to `github` / `gitlab`; `xherd` and `none` stay.
+fn git_hosts_to_providers(m: &mut Map<String, Value>) {
+    let Some(Value::Array(hosts)) = m.get_mut("gitHosts") else {
+        return;
+    };
+    for h in hosts.iter_mut().filter_map(Value::as_object_mut) {
+        let provider = match h.get("credential").and_then(Value::as_str) {
+            Some("gh") => "github",
+            Some("glab") => "gitlab",
+            _ => continue,
+        };
+        h.insert("credential".into(), "provider".into());
+        h.insert("provider".into(), provider.into());
+    }
+}
 
 /// The kinds of notification (spec §16.3), what `mutedNotifications` may name.
 pub const NOTIFY_KINDS: &[&str] = &[
@@ -479,6 +499,41 @@ mod tests {
         c.save(&f).unwrap();
         let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
         assert_eq!(v["futureThing"]["a"], 1);
+    }
+
+    /// R-693: a config written before providers keeps its meaning.
+    #[test]
+    fn git_hosts_written_before_providers_are_bound() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("config.json");
+        std::fs::write(
+            &f,
+            r#"{"schemaVersion": 1, "gitHosts": [
+                {"host": "github.com", "credential": "gh"},
+                {"host": "gitlab.example.com", "credential": "glab"},
+                {"host": "git.example.com", "credential": "xherd"},
+                {"host": "other.example.com"}]}"#,
+        )
+        .unwrap();
+        let (c, migrated) = Config::load(&f).unwrap();
+        assert!(migrated);
+        let h = &c.git_hosts;
+        assert_eq!(
+            (h[0].credential, h[0].provider.as_deref()),
+            (Credential::Provider, Some("github"))
+        );
+        assert_eq!(
+            (h[1].credential, h[1].provider.as_deref()),
+            (Credential::Provider, Some("gitlab"))
+        );
+        assert_eq!(
+            (h[2].credential, h[2].provider.as_deref()),
+            (Credential::Xherd, None)
+        );
+        assert_eq!(
+            (h[3].credential, h[3].provider.as_deref()),
+            (Credential::None, None)
+        );
     }
 
     #[test]

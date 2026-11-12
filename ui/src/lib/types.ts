@@ -211,7 +211,9 @@ export type CheckFix = NonNullable<Check['fix']>;
 export interface GitHost {
   host: string;
   protocols: ('https' | 'ssh')[];
-  credential: 'none' | 'gh' | 'glab' | 'xherd';
+  credential: 'none' | 'provider' | 'xherd';
+  /** The git provider plugin; absent = the one claiming the host name. */
+  provider?: string;
   username?: string;
   caFile?: string;
   preferHttps: boolean;
@@ -220,8 +222,18 @@ export interface GitHost {
   hasToken?: boolean;
 }
 
+export interface GitProvider {
+  name: string;
+  /** Host name patterns it claims (`*` = any run of characters). */
+  hosts: string[];
+  /** It supplies a git credential helper / a browser login. */
+  helper: boolean;
+  login: boolean;
+}
+
 export interface GitHostsView {
   hosts: GitHost[];
+  providers: GitProvider[];
   sandbox: boolean;
   gitconfig: string | null;
 }

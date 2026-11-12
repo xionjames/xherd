@@ -9,7 +9,7 @@
   import SaveBar from './SaveBar.svelte';
   import Callout from './Callout.svelte';
   import GitconfigNote from './GitconfigNote.svelte';
-  import type { GitHost, GitHostsView, GitFinding } from '../lib/types';
+  import type { GitHost, GitHostsView, GitFinding, GitProvider } from '../lib/types';
 
   // `heading` off where the page already has this title (Welcome); `note` off
   // where the identity above shows the gitconfig note already (Settings).
@@ -28,17 +28,30 @@
   let doctor = $state<Record<string, { repo: string; findings: GitFinding[] | null; running: boolean }>>({});
   let login = $state<string | null>(null);
 
-  const CRED: [GitHost['credential'], string][] = [
-    ['gh', 'GitHub CLI login (gh)'],
-    ['glab', 'GitLab CLI login (glab)'],
-    ['xherd', 'A token kept by xherd'],
-    ['none', 'git decides (your own config)'],
-  ];
+  // The provider a host is bound to: the one named, else the first claiming
+  // its name (as the daemon does).
+  const claims = (p: GitProvider, host: string) =>
+    p.hosts.some((g) => new RegExp('^' + g.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i').test(host));
+  const providers = $derived(view?.providers ?? []);
+  const claimedBy = (host: string) => providers.find((p) => claims(p, host));
+  const providerOf = (r: Row) => (r.provider ? providers.find((p) => p.name === r.provider) : claimedBy(r.host));
+  // A provider with no credential helper cannot be the token's source.
+  function bind(r: Row) {
+    if (r.credential === 'provider' && !providerOf(r)?.helper) r.credential = 'xherd';
+  }
+  const credOptions = (r: Row): [GitHost['credential'], string][] => {
+    const p = providerOf(r);
+    return [
+      ...(p?.helper ? [['provider', `${p.name}'s login`] as [GitHost['credential'], string]] : []),
+      ['xherd', 'A token kept by xherd'],
+      ['none', 'git decides (your own config)'],
+    ];
+  };
   const PRESETS = ['github.com', 'gitlab.com', 'bitbucket.org'];
 
   const strip = (r: Row): GitHost => {
     const { token: _t, hasToken: _h, ...h } = r;
-    return { ...h, username: h.username || undefined, caFile: h.caFile || undefined };
+    return { ...h, provider: h.provider || undefined, username: h.username || undefined, caFile: h.caFile || undefined };
   };
   const snapshot = () => JSON.stringify(rows.map(strip));
   const dirty = $derived(snapshot() !== saved || rows.some((r) => r.token !== ''));
@@ -47,7 +60,7 @@
 
   function fill(v: GitHostsView) {
     view = v;
-    rows = v.hosts.map((h) => ({ ...h, username: h.username ?? '', caFile: h.caFile ?? '', token: '' }));
+    rows = v.hosts.map((h) => ({ ...h, provider: h.provider ?? '', username: h.username ?? '', caFile: h.caFile ?? '', token: '' }));
     saved = snapshot();
   }
   async function load() {
@@ -64,7 +77,8 @@
   function add(host: string) {
     host = host.trim().toLowerCase();
     if (!host || rows.some((r) => r.host === host)) return;
-    const credential: GitHost['credential'] = host === 'github.com' ? 'gh' : host.includes('gitlab') ? 'glab' : 'xherd';
+    const p = providers.find((p) => claims(p, host));
+    const credential: GitHost['credential'] = p?.helper ? 'provider' : 'xherd';
     rows.push({ host, protocols: ['https', 'ssh'], credential, username: '', caFile: '', preferHttps: false, preferSsh: false, token: '' });
     newHost = '';
   }
@@ -167,9 +181,14 @@
       </div>
       {#if r.protocols.includes('https')}
         <div class="g3">
+          <label class="f">Provider
+            <select bind:value={r.provider} onchange={() => bind(r)}>
+              <option value="">{claimedBy(r.host) ? `Automatic (${claimedBy(r.host)?.name})` : 'None'}</option>
+              {#each providers as p (p.name)}<option value={p.name}>{p.name}</option>{/each}
+            </select></label>
           <label class="f">HTTPS token from
             <select bind:value={r.credential}>
-              {#each CRED as [v, label] (v)}<option value={v}>{label}</option>{/each}
+              {#each credOptions(r) as [v, label] (v)}<option value={v}>{label}</option>{/each}
             </select></label>
           {#if r.credential === 'xherd'}
             <label class="f">Token
@@ -181,7 +200,7 @@
         </div>
         <label class="f">CA bundle (optional)
           <input class="mono" bind:value={r.caFile} placeholder="/path/to/ca.pem, for a host with its own certificate authority" /></label>
-        {#if r.credential === 'gh' || r.credential === 'glab'}
+        {#if r.credential === 'provider' && providerOf(r)?.login}
           <div class="row"><button class="btn" onclick={() => startLogin(r.host)}>Log in to {r.host} in the browser</button>
             <span class="hint">Shows a one-time code to enter on {r.host}.</span></div>
         {/if}
