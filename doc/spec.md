@@ -158,8 +158,8 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | waiting-input | parked | Waiting longer than `gateParkMinutes` (default 30; 0 = never) |
 | parked | queued | Approve or message (needs a slot again) |
 | running | paused | User paused (handoff written, session ended) |
-| paused, cancelled, error | queued | Resume |
-| idle | watching | PR open and nothing left to do |
+| paused, cancelled, error, watching | queued | Resume |
+| idle | watching | PR open and nothing left to do (a stop in the ship or a PR stage, or in implement with every task done) |
 | watching | queued | New PR review comments |
 | watching | done | PR merged or closed |
 | running | error | The terminal session disappeared |

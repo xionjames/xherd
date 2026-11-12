@@ -1033,6 +1033,46 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     assert!(events.iter().any(|e| e.kind == "watching"));
 }
 
+/// After the PR opened, an agent sent back to review (a new review, maybe
+/// run by a background reviewer) keeps its session when its turn ends; only
+/// a stop where the work is over (ship, PR stages, implement with every task
+/// done) makes it watch the PR.
+#[tokio::test]
+async fn a_review_after_the_pr_keeps_the_session() {
+    let t = setup().await;
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    let url = "https://github.com/acme/app/pull/42";
+    xap(&t, "c2", "pr.opened", json!({"url": url}))
+        .await
+        .unwrap();
+    xap(&t, "c3", "stage.enter", json!({"stage": "review"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    assert_eq!(
+        (a.status, a.stage.as_deref()),
+        (Status::Idle, Some("review"))
+    );
+    assert!(!t.drv.calls().contains(&"stop SC-1".to_string()));
+
+    // The review leads to shipping again; that stop ends the session.
+    xap(&t, "c4", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 2).await;
+    assert_eq!(get(&t).await.status, Status::Watching);
+
+    // Resume picks a watching agent up again; the PR stays.
+    let a = act(&t, UserAction::Resume).await.unwrap();
+    assert_eq!(
+        (a.status, a.next_prompt.as_deref(), a.pr_url.as_deref()),
+        (Status::Queued, Some("/xherd:resume"), Some(url))
+    );
+}
+
 /// A fake `gh` that records its argv and working directory and answers with
 /// `answer` (exit 1 when it is `fail`).
 fn fake_gh(dir: &Path, answer: &str) -> std::path::PathBuf {

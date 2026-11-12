@@ -15,6 +15,23 @@ describe('steps', () => {
   it('without a record, everything before is done', () => {
     expect(steps(a({ stage: 'tasks', status: 'running' }), f).map((x) => x.state)).toEqual(['ok', 'ok', 'cur', 'todo']);
   });
+
+  const pr: FlowInfo = {
+    pack: 'xherd', flow: 'feature',
+    stages: [['review', 'review'], ['ship', 'ship'], ['pr-review', 'pr'], ['pr', 'pr']].map(([id, role]) => ({ id, role: role as never, class: 'routine', gate: true })),
+  };
+  it('a watching agent is at the last PR stage; a PR review not held yet stays to do', () => {
+    const s = steps(a({ stage: 'ship', status: 'watching', visitedStages: ['review', 'ship'] }), pr);
+    expect(s.map((x) => x.state)).toEqual(['ok', 'ok', 'todo', 'cur']);
+  });
+  it('a watching agent back from an earlier stage keeps the later stages it went through', () => {
+    const s = steps(a({ stage: 'review', status: 'watching', visitedStages: ['review', 'ship', 'pr-review'] }), pr);
+    expect(s.map((x) => x.state)).toEqual(['ok', 'ok', 'ok', 'cur']);
+  });
+  it('a done agent has every stage behind it', () => {
+    const s = steps(a({ stage: 'ship', status: 'done', visitedStages: ['review', 'ship'] }), pr);
+    expect(s.map((x) => x.state)).toEqual(['ok', 'ok', 'skip', 'skip']);
+  });
 });
 
 describe('stageLabel', () => {
