@@ -64,6 +64,15 @@ A host plugin answers these commands; the built-in `github` plugin implements th
 
 Treat the shapes in `host.rs` as the contract; this table is a summary.
 
+A host plugin also declares its git access in `data.git` (the built-in `github`, `gitlab` and `bitbucket` do; the reading code is `crates/xherd-plugin/src/git.rs`). A host in Settings → Git access whose credential is `gh` or `glab` takes these from the provider:
+
+- `hosts`: host names it claims (`github.com`, `*gitlab*`; `*` matches any run of characters). They decide the token user and which provider's API checks the doctor uses for a host.
+- `credential`: `helper` (the git credential helper, e.g. `!gh auth git-credential`; absent for a provider with no CLI, whose token xherd keeps) and `tokenUser` (the name git sends with a token; a host no provider claims gets `x-access-token`).
+- `login`: the browser login argv; `{host}` is replaced. Without it the host takes a pasted token.
+- `api`: the doctor's API checks: `base` (`{host}` is replaced; https only), `user` (`path`, and optionally `scopesHeader` + `requireScope`), and optionally `repo` (`path` with `{path}`, `ssoHeader`, and the `onSso` / `onNotFound` verdicts: a `detail` and a `fix`, which may use `{url}`).
+
+Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. The git part is a proposal's first step (D24): binding hosts to a provider directly, and PR commands for GitLab, come later.
+
 ### Toolchain plugins
 
 A toolchain plugin's `data.toolchain` lists tools. For each: which version files to read (with a format from a fixed set such as `sdkmanrc`), a `resolve` argv that prints the directory to put on `PATH` when the version is installed, an `install` argv, an optional `list` argv (one installable version per line on stdout, best first; fills the version dropdown on the plugin's page in Settings → Plugins, container only), and the environment to set. `{v}` is the version, `{bin}` and `{home}` the directories. Commands are shell snippets that take the version as `"$1"`. The first plugin that claims a tool wins. Installing happens only in the container.

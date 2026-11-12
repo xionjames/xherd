@@ -1,0 +1,17 @@
+{
+  "name": "bitbucket",
+  "kind": "host",
+  "version": "0.1.0",
+  "label": "Bitbucket",
+  "description": "Bitbucket git access with a token kept by xherd (no CLI, no pull requests yet).",
+  "data": {
+    "git": {
+      "hosts": [
+        "*bitbucket*"
+      ],
+      "credential": {
+        "tokenUser": "x-token-auth"
+      }
+    }
+  }
+}

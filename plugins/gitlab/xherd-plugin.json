@@ -1,0 +1,42 @@
+{
+  "name": "gitlab",
+  "kind": "host",
+  "version": "0.1.0",
+  "label": "GitLab",
+  "description": "GitLab access through the glab CLI (git access only so far; merge requests come later).",
+  "timeoutSeconds": 30,
+  "checks": [
+    {
+      "name": "glab",
+      "argv": [
+        "glab",
+        "--version"
+      ],
+      "optional": true
+    }
+  ],
+  "data": {
+    "git": {
+      "hosts": [
+        "*gitlab*"
+      ],
+      "credential": {
+        "helper": "!glab auth git-credential",
+        "tokenUser": "oauth2"
+      },
+      "login": [
+        "glab",
+        "auth",
+        "login",
+        "--hostname",
+        "{host}"
+      ],
+      "api": {
+        "base": "https://{host}/api/v4",
+        "user": {
+          "path": "/user"
+        }
+      }
+    }
+  }
+}
