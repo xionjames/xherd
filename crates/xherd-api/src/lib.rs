@@ -86,6 +86,8 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/git/doctor", post(git_doctor))
         .route("/api/v1/agents/{id}/git-access", get(agent_git_access))
         .route("/api/v1/agents/{id}/ticket", get(agent_ticket))
+        .route("/api/v1/agents/{id}/ticket-summary", get(ticket_summary))
+        .route("/api/v1/agents/{id}/ticket-comment", post(ticket_comment))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
@@ -821,6 +823,30 @@ struct DoctorReq {
 }
 
 /// `GET /agents/:id/git-access` (R-688): the doctor for the agent's host.
+/// The draft summary to post on the ticket; nothing is posted.
+async fn ticket_summary(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.ticket_summary(&id).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct CommentReq {
+    body: String,
+}
+
+/// Post the comment the user accepted on the agent's ticket (R-308).
+async fn ticket_comment(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(r): Json<CommentReq>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.post_ticket_comment(&id, &r.body).await?))
+}
+
 /// The agent's ticket and its comments, read through a tracker plugin.
 async fn agent_ticket(
     _: User,

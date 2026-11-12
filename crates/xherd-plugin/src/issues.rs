@@ -350,7 +350,107 @@ pub fn jira_view(
     })
 }
 
+/// Longest comment xherd posts: a summary, not a document.
+pub const MAX_COMMENT: usize = 10_000;
+
 impl Host {
+    /// `ticket-comment {key, issue, body, worktree}`: add a comment to the
+    /// ticket. Only ever called with text the user has read and accepted
+    /// (R-308). `body` is passed as one argument, never through a shell; the
+    /// GitHub and GitLab comments carry xherd's hidden marker.
+    pub async fn ticket_comment(
+        &self,
+        dir: &Path,
+        key: &str,
+        issue: &str,
+        body: &str,
+    ) -> Result<(), PluginError> {
+        let name = "ticket-comment";
+        if body.trim().is_empty() || body.chars().count() > MAX_COMMENT {
+            return Err(self.shape(name, &format!("a comment is 1 to {MAX_COMMENT} characters")));
+        }
+        if body
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\n' | '\t' | '\r'))
+        {
+            return Err(self.shape(name, "a comment cannot hold control characters"));
+        }
+        if !self.plugin.builtin() {
+            run_command(
+                &self.plugin,
+                name,
+                json!({"key": key, "issue": issue, "body": body, "worktree": dir}),
+                &self.ctx,
+            )
+            .await?;
+            return Ok(());
+        }
+        if issue.is_empty()
+            || !issue
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            return Err(self.shape(name, &format!("{issue:?} is not an issue reference")));
+        }
+        let marked = format!("{body}\n\n{}", xherd_core::pr::MARKER);
+        match self.plugin.name() {
+            GITHUB_ISSUES => {
+                let gh = self
+                    .ctx
+                    .settings
+                    .get("gh")
+                    .and_then(Value::as_str)
+                    .unwrap_or("gh");
+                self.gh(gh, dir, &["issue", "comment", issue, "--body", &marked])
+                    .await?;
+                Ok(())
+            }
+            GITLAB_ISSUES => {
+                let remote = run(Cmd::new([
+                    "git",
+                    "-C",
+                    &dir.display().to_string(),
+                    "config",
+                    "--get",
+                    "remote.origin.url",
+                ])
+                .as_agent())
+                .await?;
+                let (host, project) = remote_project(
+                    String::from_utf8_lossy(&remote.stdout).trim(),
+                )
+                .ok_or_else(|| self.shape(name, "the worktree's origin is not a GitLab project"))?;
+                let path = format!(
+                    "projects/{}/issues/{issue}/notes",
+                    project.replace('/', "%2F")
+                );
+                let field = format!("body={marked}");
+                let args = ["-X", "POST", path.as_str(), "-f", &field];
+                let out = self.glab_api(dir, &host, &args).await?;
+                self.ok(out, &args)?;
+                Ok(())
+            }
+            JIRA => {
+                let acli = self
+                    .ctx
+                    .settings
+                    .get("acli")
+                    .and_then(Value::as_str)
+                    .unwrap_or("acli");
+                self.acli(
+                    dir,
+                    acli,
+                    &[
+                        "jira", "workitem", "comment", "create", "--key", issue, "--body", body,
+                    ],
+                )
+                .await?;
+                Ok(())
+            }
+            other => Err(self.shape(name, &format!("{other} cannot post comments yet"))),
+        }
+    }
+
     /// One `acli` run in `dir`; the CLI keeps its own login.
     async fn acli(&self, dir: &Path, bin: &str, args: &[&str]) -> Result<Vec<u8>, PluginError> {
         let out = self
@@ -891,5 +991,109 @@ esac"#,
                 .is_empty()
         );
         assert!(merge_comment_pages(b"{not json").is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_comment_goes_through_the_cli_as_one_argument() {
+        let d = tempfile::tempdir().unwrap();
+        let body = "Update:\n- done $(rm -rf /) `x` \"q\"";
+
+        let gh = fake(d.path(), "gh", "true");
+        let host = tracker_host(d.path(), "github-issues", "gh", &gh);
+        host.ticket_comment(d.path(), "GH-12", "12", body)
+            .await
+            .unwrap();
+        let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
+        // The text is one argument (the fake echoes them joined) and carries the marker.
+        assert!(
+            calls.starts_with(
+                "issue comment 12 --body Update:\n- done $(rm -rf /) `x` \"q\"\n\n<!-- xherd -->"
+            ),
+            "{calls}"
+        );
+
+        let repo = d.path().join("repo");
+        for args in [
+            vec!["init", "-q", repo.to_str().unwrap()],
+            vec![
+                "-C",
+                repo.to_str().unwrap(),
+                "remote",
+                "add",
+                "origin",
+                "git@gl.test:g/p.git",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let glab = fake(d.path(), "glab", "true");
+        let host = tracker_host(d.path(), "gitlab-issues", "glab", &glab);
+        host.ticket_comment(&repo, "GL-3", "3", "hello")
+            .await
+            .unwrap();
+        let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
+        assert!(calls.contains("api --hostname gl.test -X POST projects/g%2Fp/issues/3/notes -f body=hello\n\n<!-- xherd -->"), "{calls}");
+
+        let acli = fake(d.path(), "acli", "true");
+        let host = tracker_host(d.path(), "jira", "acli", &acli);
+        host.ticket_comment(d.path(), "PAY-1", "PAY-1", "plain text")
+            .await
+            .unwrap();
+        let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
+        assert!(
+            calls.contains("jira workitem comment create --key PAY-1 --body plain text\n"),
+            "{calls}"
+        );
+        assert!(
+            !calls.lines().last().unwrap().contains("xherd"),
+            "no marker on Jira"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_comment_that_is_empty_too_long_odd_or_for_a_bad_reference_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let reg = crate::Registry::load(crate::builtins(), d.path());
+        let host = Host {
+            plugin: reg.get("github-issues").unwrap().clone(),
+            ctx: crate::Context::default(),
+        };
+        for (issue, body) in [
+            ("12", "   "),
+            ("12", "a\u{7}b"),
+            ("12; rm", "ok"),
+            ("", "ok"),
+        ] {
+            assert!(
+                host.ticket_comment(d.path(), "k", issue, body)
+                    .await
+                    .is_err(),
+                "{issue:?} {body:?}"
+            );
+        }
+        let long = "x".repeat(MAX_COMMENT + 1);
+        assert!(
+            host.ticket_comment(d.path(), "k", "12", &long)
+                .await
+                .is_err()
+        );
+        // A tracker that only links says it cannot post.
+        let bb = Host {
+            plugin: reg.get("bitbucket").unwrap().clone(),
+            ctx: crate::Context::default(),
+        };
+        let e = bb
+            .ticket_comment(d.path(), "k", "1", "ok")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("cannot post comments yet"), "{e}");
     }
 }
