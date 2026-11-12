@@ -510,11 +510,16 @@ mod tests {
     fn auto_approved_variant() {
         let ship = feature().stage("ship").unwrap().clone();
         let f = F::default();
+        // The built-in ship stage has no special auto-approved command.
         assert_eq!(ship.next_template(&f, false), Some("{prefix}ship"));
-        assert_eq!(
-            ship.next_template(&f, true),
-            Some("{prefix}ship --no-ticket-update")
-        );
+        assert_eq!(ship.next_template(&f, true), Some("{prefix}ship"));
+        // A pack may declare one; only an auto-approval uses it.
+        let custom: StageDef = yaml_serde::from_str(
+            r#"{ id: ship, role: ship, class: critical, next: [{ run: "{prefix}ship", autoApproved: "{prefix}ship --quiet" }] }"#,
+        )
+        .unwrap();
+        assert_eq!(custom.next_template(&f, false), Some("{prefix}ship"));
+        assert_eq!(custom.next_template(&f, true), Some("{prefix}ship --quiet"));
         assert_eq!(
             feature().stage("pr").unwrap().next_template(&f, false),
             None

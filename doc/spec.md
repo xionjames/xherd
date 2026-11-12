@@ -297,7 +297,7 @@ Design may be skipped only when the change is small and local, has no data/API/c
 | `/xherd:next` | Implement the next ready task, verify, propose a commit; when all are done, start the review | `task start/done`, `commit propose` |
 | `/xherd:commit <Cnn>` | Commit exactly the proposed files, continue | `commit done` |
 | `/xherd:review` | Review the branch in a fresh context; findings become tasks; propose memory updates | `gate open --role review` |
-| `/xherd:ship` | Draft `pr.md` following the repo's PR template; after approval push, open a **draft** PR, apply the approved ticket update | `gate open --role ship`, `pr opened` |
+| `/xherd:ship` | Draft `pr.md` following the repo's PR template; after approval push and open a **draft** PR (the agent does not touch the ticket: xherd offers the user a summary once the PR is open, R-308) | `gate open --role ship`, `pr opened` |
 | `/xherd:pr-review` / `pr-apply` / `pr-fetch` / `pr-post` | PR rounds (fetch/post only for hosts without those plugin commands) | `gate open pr-triage / pr-replies` |
 | `/xherd:handoff` / `resume` / `status` / `rules` | Handoff note; reload and continue; print state; shared rules | `handoff written` |
 
@@ -434,7 +434,7 @@ then stop and wait. If it exits with code 2, fix what it says and run it again.
 | R-305 | CI: notify when checks start failing and when all pass again. Merge conflicts: notify once. |
 | R-306 | PR decisions: the user decides resolve/skip (with a note) per comment; xherd writes the decisions and sends the apply command. Replies: approved replies are posted by the host plugin (with the marker), or by the agent for hosts without a reply command. |
 | R-307 | Merged or closed: follow-up task done, stage `done`, status `done`, `pr.merged` hooks run. |
-| R-308 | Ticket updates (comment, transition) happen only through the agent after the user approves `pr.md`, or through opt-in stage hooks. |
+| R-308 | Ticket updates happen only when the user accepts them. Once the pull request is open, xherd offers a short summary of the work (built from finished tasks, commits and the PR, independent of the pack), the user reads and edits it, and only their click posts it through the tracker plugin. `pr.md` is the pull request's body and holds nothing for the ticket. Status transitions and opt-in stage hooks are not built. |
 
 ## 10. Plugins
 

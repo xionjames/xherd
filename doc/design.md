@@ -289,7 +289,7 @@ flows:
       - { id: tasks,  role: tasks,  class: routine, gate: { docs: [tasks.md] },  next: [{ run: "{prefix}next" }] }
       - { id: implement, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
       - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
-      - { id: ship,   role: ship,   class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship", autoApproved: "{prefix}ship --no-ticket-update" }] }
+      - { id: ship,   role: ship,   class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
       - { id: pr,     role: pr,     class: human-only, rounds: { triage: "{prefix}pr-review", apply: "{prefix}pr-apply", fetch: "{prefix}pr-fetch", post: "{prefix}pr-post" } }
   bug:
     start: "{prefix}bug {key} {prompt}"

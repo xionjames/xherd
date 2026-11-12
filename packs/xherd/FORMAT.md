@@ -211,8 +211,9 @@ template, put the essentials in the fitting sections, and tick checklist
 items only when they are true; anything left over goes in a short
 `## Spec summary` at the end. Without a template use `## Summary`,
 `## Requirements covered`, `## Key decisions`, `## Testing`. Always end with
-`## Assumptions`. An optional `## Ticket update` section holds the comment or
-transition to apply to the ticket once the PR is open.
+`## Assumptions`. The file becomes the pull request's body, so nothing in it
+is meant for anyone but the PR's readers (tickets are updated by xherd, from a
+summary the user reviews).
 
 ## memory.md
 
