@@ -1,6 +1,6 @@
 <script lang="ts">
   // TODOs (spec §16.2): reminders, once or repeating. One that has come due
-  // needs you: complete it, snooze it, edit or delete it. A condition TODO is
+  // needs you: complete it, edit or delete it. A condition TODO is
   // checked at each due time by a short read-only runtime run: met needs you,
   // not met is checked again later.
   import { get, post, put, del } from '../lib/api';
@@ -19,27 +19,32 @@
     return () => clearInterval(t);
   });
 
-  const REPEATS: [string, string][] = [['', 'Once'], ['60', 'Every hour'], ['1440', 'Every day'], ['10080', 'Every week']];
+  // Repeat = a number and a unit (minutes per unit); the daemon stores minutes.
+  const UNITS: [number, string][] = [[1, 'minutes'], [60, 'hours'], [1440, 'days'], [10080, 'weeks']];
+  const split = (m?: number): { every: string; unit: number } => {
+    if (!m) return { every: '', unit: 60 };
+    const [u] = [...UNITS].reverse().find(([u]) => m % u === 0) ?? UNITS[0];
+    return { every: String(m / u), unit: u };
+  };
   // `datetime-local` wants local time without a zone.
   const local = (ms: number) => { const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
   const inAnHour = () => local(Date.now() + 3600000);
-  const CHECKS: [string, string][] = [['15', 'Every 15 minutes'], ['60', 'Every hour'], ['1440', 'Every day']];
-  const blank = () => ({ title: '', note: '', due: inAnHour(), repeat: '', condition: '', model: '' });
+  const blank = () => ({ title: '', due: inAnHour(), every: '', unit: 60, condition: '', model: '' });
   let form = $state(blank());
   // One form: the condition is optional. With one, the TODO is checked at each time and only needs you when it is met, so it needs a check interval.
   const hasCond = $derived(form.condition.trim() !== '');
   $effect(() => {
-    if (hasCond && !CHECKS.some(([v]) => v === form.repeat)) form.repeat = '60';
-    else if (!hasCond && form.repeat === '15') form.repeat = '';
+    if (hasCond && !form.every) { form.every = '1'; form.unit = 60; }
   });
+  const repeatMinutes = $derived(form.every ? Math.round(Number(form.every) * form.unit) : 0);
+  let showForm = $state(false);
   let editing = $state<string | null>(null);
   let busy = $state(false);
 
   const body = () => ({
     title: form.title.trim(),
-    note: form.note.trim() || undefined,
     due: new Date(form.due).getTime(),
-    repeatMinutes: form.repeat ? Number(form.repeat) : undefined,
+    repeatMinutes: repeatMinutes || undefined,
     condition: hasCond ? form.condition.trim() : undefined,
     model: hasCond && form.model.trim() ? form.model.trim() : undefined,
   });
@@ -51,14 +56,21 @@
     if (editing) await put(`/todos/${editing}`, body()); else await post('/todos', body());
     editing = null;
     form = blank();
+    showForm = false;
   }, 'Could not save the TODO');
+  const close = () => { editing = null; form = blank(); showForm = false; };
   function edit(t: Todo) {
     editing = t.id;
-    form = { title: t.title, note: t.note ?? '', due: local(t.due), repeat: t.repeatMinutes ? String(t.repeatMinutes) : '', condition: t.condition ?? '', model: t.model ?? '' };
+    form = { title: t.title, due: local(t.due), ...split(t.repeatMinutes), condition: t.condition ?? '', model: t.model ?? '' };
+    showForm = true;
   }
-  const snooze = (t: Todo, ms: number) => run(() => post(`/todos/${t.id}/reschedule`, { due: Date.now() + ms }), 'Could not reschedule');
   const when = (ms: number) => new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-  const repeatLabel = (m?: number) => (m ? ([...REPEATS, ...CHECKS].find(([v]) => v === String(m))?.[1] ?? `every ${m} min`).toLowerCase() : '');
+  const repeatLabel = (m?: number) => {
+    if (!m) return '';
+    const { every, unit } = split(m);
+    const name = UNITS.find(([u]) => u === unit)![1];
+    return every === '1' ? `every ${name.replace(/s$/, '')}` : `every ${every} ${name}`;
+  };
   const OUTCOME: Record<LastCheck['outcome'], string> = { met: 'met', 'not-met': 'not met', unclear: 'no clear answer', failed: 'failed' };
 
   const due = $derived((todos ?? []).filter((t) => t.status === 'due' || t.status === 'error'));
@@ -66,9 +78,14 @@
   const done = $derived((todos ?? []).filter((t) => t.status === 'done').sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0)).slice(0, 20));
 </script>
 
-<PageHead title="TODOs" sub="Reminders for you, not for agents. When one comes due it needs you and you get a notification. A reminder with a condition only comes due when the condition is met." />
+<PageHead title="TODOs" sub="Reminders for you, not for agents. When one comes due it needs you and you get a notification. A reminder with a condition only comes due when the condition is met.">
+  {#snippet actions()}
+    {#if !showForm}<button class="btn primary" onclick={() => (showForm = true)}>New TODO</button>{/if}
+  {/snippet}
+</PageHead>
 
 <div class="stack mid">
+  {#if showForm}
   <form onsubmit={(e) => { e.preventDefault(); save(); }}>
     <Panel title={editing ? 'Edit the TODO' : 'New TODO'}>
       <label class="f">Title <input bind:value={form.title} maxlength="200" required placeholder="Renew the TLS certificate" /></label>
@@ -77,17 +94,23 @@
       {#if hasCond}
         <label class="f">Model <input class="mono" bind:value={form.model} maxlength="100" placeholder="the runtime's default" /></label>
       {/if}
-      <label class="f">Note <textarea bind:value={form.note} maxlength="2000" rows="2"></textarea></label>
       <div class="g2">
         <label class="f">Due <input type="datetime-local" bind:value={form.due} required /></label>
-        <label class="f">{hasCond ? 'Check again' : 'Repeat'} <select bind:value={form.repeat}>{#each hasCond ? CHECKS : REPEATS as [v, l] (v)}<option value={v}>{l}</option>{/each}</select></label>
+        <div class="f">{hasCond ? 'Check again every' : 'Repeat every (empty = once)'}
+          <div class="row">
+            <input type="number" min="1" step="any" bind:value={form.every} required={hasCond} aria-label="Repeat interval" />
+            <select bind:value={form.unit} aria-label="Repeat unit">{#each UNITS as [u, n] (u)}<option value={u}>{n}</option>{/each}</select>
+          </div>
+          {#if form.every && repeatMinutes < 5}<span class="hint">At least 5 minutes.</span>{/if}
+        </div>
       </div>
       {#snippet foot()}
-        {#if editing}<button class="btn ghost" type="button" onclick={() => { editing = null; form = blank(); }}>Cancel</button>{/if}
-        <button class="btn primary" type="submit" disabled={busy || !form.title.trim()}>{editing ? 'Save TODO' : 'Add TODO'}</button>
+        <button class="btn ghost" type="button" onclick={close}>Cancel</button>
+        <button class="btn primary" type="submit" disabled={busy || !form.title.trim() || (!!form.every && repeatMinutes < 5)}>{editing ? 'Save TODO' : 'Add TODO'}</button>
       {/snippet}
     </Panel>
   </form>
+  {/if}
 
   {#if todos === null}
     <p class="empty">Loading…</p>
@@ -105,8 +128,7 @@
           {#if t.status !== 'done'}
             <button class="btn sm" class:gate={t.status === 'due' || t.status === 'error'} disabled={busy} onclick={() => run(() => post(`/todos/${t.id}/complete`), 'Could not complete')}>Complete</button>
             {#if t.condition}<button class="btn sm" disabled={busy || t.status === 'checking'} onclick={() => run(() => post(`/todos/${t.id}/check`), 'Could not start the check')}>Check now</button>{/if}
-            <button class="btn sm" disabled={busy} onclick={() => snooze(t, 3600000)}>Snooze 1 h</button>
-            <button class="btn sm" disabled={busy} onclick={() => snooze(t, 86400000)}>Tomorrow</button>
+            {#if (t.status === 'due' || t.status === 'error') && t.repeatMinutes}<button class="btn sm" disabled={busy} title="Clear the alert and keep the TODO: it is checked again after one interval" onclick={() => run(() => post(`/todos/${t.id}/reschedule`, { due: Date.now() + t.repeatMinutes! * 60000 }), 'Could not dismiss')}>Ignore</button>{/if}
             <button class="btn ghost sm" onclick={() => edit(t)}>Edit</button>
           {/if}
           <button class="btn ghost danger sm" disabled={busy} onclick={() => run(() => del(`/todos/${t.id}`), 'Could not delete')}>Delete</button>
