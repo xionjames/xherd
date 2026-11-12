@@ -19,7 +19,22 @@
   const fields = $derived(plugin.settings.filter((s) => !s.secret));
   let values = $state<Record<string, string>>({});
   $effect(() => { values = Object.fromEntries(fields.map((s) => [s.key, saved(s.key)])); });
-  const dirty = $derived(fields.some((s) => (values[s.key] ?? '') !== saved(s.key)));
+  // Secret settings are write-only: the daemon says which have a value, never what it is.
+  const secretFields = $derived(plugin.settings.filter((s) => s.secret));
+  let secretSet = $state<Record<string, boolean>>({});
+  let secretNew = $state<Record<string, string>>({});
+  $effect(() => {
+    secretNew = {};
+    secretSet = {};
+    if (secretFields.length) get<Record<string, boolean>>(`/plugins/${plugin.name}/secrets`).then((v) => (secretSet = v)).catch(() => {});
+  });
+  async function forget(key: string) {
+    try { secretSet = await put<Record<string, boolean>>(`/plugins/${plugin.name}/secrets`, { values: { [key]: null } }); await loadChecks(); }
+    catch (e) { showError('Could not remove the secret', e); }
+  }
+  const secretsDirty = $derived(secretFields.some((s) => (secretNew[s.key] ?? '') !== ''));
+  const fieldsDirty = $derived(fields.some((s) => (values[s.key] ?? '') !== saved(s.key)));
+  const dirty = $derived(secretsDirty || fieldsDirty);
   let busy = $state(false);
   const checks = $derived((setup.checks ?? []).filter((c) => c.id.startsWith(`plugin:${plugin.name}:`)));
   const loginFails = $derived(plugin.login && checks.some((c) => c.id.endsWith(':login') && !c.ok));
@@ -35,7 +50,13 @@
     try {
       const mine = Object.fromEntries(fields.map((s) => [s.key, values[s.key] ?? '']).filter(([, v]) => v !== ''));
       // The server replaces this plugin's settings as a whole, so an emptied field is cleared.
-      await put('/config', { pluginSettings: { [plugin.name]: mine } });
+      // Only when a plain setting changed: it needs a daemon restart, a secret does not.
+      if (fieldsDirty) await put('/config', { pluginSettings: { [plugin.name]: mine } });
+      const fresh = Object.fromEntries(Object.entries(secretNew).filter(([, v]) => v !== ''));
+      if (Object.keys(fresh).length) {
+        secretSet = await put<Record<string, boolean>>(`/plugins/${plugin.name}/secrets`, { values: fresh });
+        secretNew = {};
+      }
       await loadConfig();
       await loadChecks();
     } catch (e) {
@@ -56,14 +77,18 @@
 </script>
 
 <Panel title={`${plugin.label || plugin.name} options`} hint={plugin.description}>
-  {#if fields.length || plugin.settings.length}
+  {#if plugin.settings.length}
     {#each fields as s (s.key)}
       <label class="f">{s.label || s.key}{#if s.required} *{/if}
         <input bind:value={values[s.key]} placeholder={s.default != null ? String(s.default) : ''} /></label>
     {/each}
-    {#if plugin.settings.some((s) => s.secret)}
-      <p class="hint">A secret setting is kept in secrets.json and is not edited here yet.</p>
-    {/if}
+    {#each secretFields as s (s.key)}
+      <label class="f">{s.label || s.key}{#if s.required} *{/if}
+        <input type="password" autocomplete="off" bind:value={secretNew[s.key]}
+          placeholder={secretSet[s.key] ? 'stored · type to replace' : 'not set'} />
+        {#if secretSet[s.key]}<button class="btn ghost danger sm" style="align-self:flex-start" onclick={(e) => { e.preventDefault(); forget(s.key); }}>Forget the stored value</button>{/if}</label>
+    {/each}
+    {#if secretFields.length}<p class="hint">Secrets are kept in secrets.json on the daemon's side and never shown again.</p>{/if}
   {:else}
     <p class="hint">This plugin has no settings.</p>
   {/if}
@@ -73,17 +98,13 @@
       <a href="#/settings?tab=git">Git access</a></p>
   {/if}
   {#if plugin.kind === 'toolchain'}
-    {#if app.state?.sandbox}
-      {#key plugin.name}<Toolchains plugin={plugin.name} />{/key}
-    {:else}
-      <p class="hint">xherd runs natively, so it does not install languages on this computer: it uses what it finds. Install the version manager and the versions yourself; the checks below say whether it is found.</p>
-    {/if}
+    {#key plugin.name}<Toolchains plugin={plugin.name} />{/key}
   {/if}
   {#snippet foot()}
     {#if loginFails}<button class="btn" onclick={login}>Log in</button>{/if}
     <span class="grow"></span>
     <button class="btn ghost" onclick={onclose}>Close</button>
-    {#if fields.length}<button class="btn primary" disabled={!dirty || busy} onclick={save}>{busy ? 'Saving…' : 'Save settings'}</button>{/if}
+    {#if fields.length || secretFields.length}<button class="btn primary" disabled={!dirty || busy} onclick={save}>{busy ? 'Saving…' : 'Save settings'}</button>{/if}
   {/snippet}
 </Panel>
 {#if checks.length}

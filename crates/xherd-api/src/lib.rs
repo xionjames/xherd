@@ -88,7 +88,12 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
+        .route(
+            "/api/v1/plugins/{name}/secrets",
+            get(plugin_secrets).put(put_plugin_secrets),
+        )
         .route("/api/v1/toolchains", get(toolchains))
+        .route("/api/v1/toolchains/installed", get(toolchains_installed))
         .route("/api/v1/toolchains/install", post(toolchain_install))
         .route(
             "/api/v1/toolchains/{tool}/versions",
@@ -864,6 +869,31 @@ async fn git_login(
     Ok(Json(json!({"session": xherd_daemon::git_access::LOGIN_ID})))
 }
 
+/// Which of a plugin's secret settings have a value (never the values).
+async fn plugin_secrets(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.plugin_secret_status(&name)?))
+}
+
+#[derive(serde::Deserialize)]
+struct SecretsReq {
+    /// key → new value; `null` or empty clears it.
+    values: std::collections::BTreeMap<String, Option<String>>,
+}
+
+/// Set or clear a plugin's secret settings; the answer is the status again.
+async fn put_plugin_secrets(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+    Json(r): Json<SecretsReq>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.set_plugin_secrets(&name, r.values)?))
+}
+
 /// Start a plugin's login (`/ws/setup/plugin-login` shows it).
 async fn plugin_login(
     _: User,
@@ -874,6 +904,11 @@ async fn plugin_login(
     Ok(Json(
         json!({"session": xherd_daemon::git_access::PLUGIN_LOGIN_ID}),
     ))
+}
+
+/// The versions already installed, per tool (native and container).
+async fn toolchains_installed(_: User, State(d): State<Daemon>) -> Json<Value> {
+    Json(json!({"installed": d.toolchain_installed().await}))
 }
 
 /// Settings → Toolchains: the tools and their default versions.

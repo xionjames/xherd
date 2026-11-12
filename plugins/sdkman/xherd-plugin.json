@@ -43,7 +43,14 @@
           ],
           "env": {
             "JAVA_HOME": "{home}"
-          }
+          },
+          "installed": [
+            "sh",
+            "-c",
+            "ls \"${SDKMAN_DIR:-$HOME/.sdkman}/candidates/$1\" 2>/dev/null | grep -v \"^current$\"",
+            "_",
+            "java"
+          ]
         },
         {
           "name": "maven",
@@ -150,15 +157,18 @@
       ]
     }
   },
-  "checks": [
+  "requires": [
     {
       "name": "sdkman",
-      "argv": [
+      "check": [
         "sh",
         "-c",
         "if test -s \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\"; then exit 0; fi; echo \"SDKMAN not found (install it: https://sdkman.io/install, or set SDKMAN_DIR)\" >&2; exit 1"
       ],
-      "optional": true
+      "optional": true,
+      "instructions": {
+        "any": "curl -s \"https://get.sdkman.io\" | bash   # see https://sdkman.io/install"
+      }
     }
   ]
 }

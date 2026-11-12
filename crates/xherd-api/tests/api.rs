@@ -731,3 +731,46 @@ async fn findings_endpoint_reads_review_md() {
         "{v}"
     );
 }
+
+/// A plugin's secret settings are set from the UI: the value is stored in
+/// secrets.json and never sent back; only declared secrets are accepted.
+#[tokio::test]
+async fn plugin_secrets_are_write_only() {
+    let (dir, d, _a) = setup().await;
+    let local =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let req = |method: &str, body: Option<serde_json::Value>| {
+        Request::builder()
+            .method(method)
+            .uri("/api/v1/plugins/github/secrets")
+            .header("host", "127.0.0.1:4740")
+            .header("content-type", "application/json")
+            .body(Body::from(body.map(|b| b.to_string()).unwrap_or_default()))
+            .unwrap()
+    };
+    let (s, v) = call(local.clone(), req("GET", None)).await;
+    assert_eq!((s, v["token"].as_bool()), (StatusCode::OK, Some(false)));
+
+    let (s, v) = call(
+        local.clone(),
+        req("PUT", Some(json!({"values": {"token": "ghp_SECRET_77"}}))),
+    )
+    .await;
+    assert_eq!((s, v["token"].as_bool()), (StatusCode::OK, Some(true)));
+    assert!(!v.to_string().contains("ghp_SECRET_77"));
+    let file = std::fs::read_to_string(dir.path().join("secrets.json")).unwrap();
+    assert!(file.contains("ghp_SECRET_77"));
+
+    // An undeclared key and an unknown plugin are refused.
+    let (s, _) = call(
+        local.clone(),
+        req("PUT", Some(json!({"values": {"nope": "x"}}))),
+    )
+    .await;
+    assert_ne!(s, StatusCode::OK);
+
+    let (_, v) = call(local, req("PUT", Some(json!({"values": {"token": null}})))).await;
+    assert_eq!(v["token"].as_bool(), Some(false));
+    let file = std::fs::read_to_string(dir.path().join("secrets.json")).unwrap();
+    assert!(!file.contains("ghp_SECRET_77"));
+}

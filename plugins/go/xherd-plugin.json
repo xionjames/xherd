@@ -17,20 +17,29 @@
           ],
           "env": {
             "GOTOOLCHAIN": "auto"
-          }
+          },
+          "installed": [
+            "sh",
+            "-c",
+            "{ go env GOVERSION 2>/dev/null | sed 's/^go//'; ls \"$(go env GOMODCACHE 2>/dev/null)/golang.org/\" 2>/dev/null | sed -n 's/^toolchain@v0\\.0\\.1-go\\([0-9][0-9.]*[0-9]\\)\\..*/\\1/p'; } | sort -ruV | uniq"
+          ]
         }
       ]
     }
   },
-  "checks": [
+  "requires": [
     {
       "name": "go",
-      "argv": [
+      "check": [
         "sh",
         "-c",
         "if command -v go >/dev/null 2>&1; then exit 0; fi; echo \"go not found (install it: https://go.dev/doc/install)\" >&2; exit 1"
       ],
-      "optional": true
+      "optional": true,
+      "instructions": {
+        "macos": "brew install go",
+        "any": "See https://go.dev/doc/install"
+      }
     }
   ]
 }

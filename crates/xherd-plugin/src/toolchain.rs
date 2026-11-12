@@ -43,6 +43,10 @@ pub struct Tool {
     /// container only.
     #[serde(default)]
     pub list: Option<Vec<String>>,
+    /// argv; the versions already installed, one per line. Local only (no
+    /// network), so it runs natively as well as in the container.
+    #[serde(default)]
+    pub installed: Option<Vec<String>>,
     /// Session variables; values may use `{v}`, `{bin}` (the resolved
     /// directory) and `{home}` (its parent).
     #[serde(default)]
