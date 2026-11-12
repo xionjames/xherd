@@ -1,0 +1,17 @@
+{
+  "name": "jira",
+  "kind": "tracker",
+  "version": "0.1.0",
+  "label": "Jira",
+  "description": "Turns Jira ticket keys (PAY-412) in the UI into links to your Jira site.",
+  "settings": [
+    { "key": "baseUrl", "label": "Jira site (https://yourcompany.atlassian.net)", "required": true }
+  ],
+  "data": {
+    "tracker": {
+      "links": [
+        { "pattern": "\\b[A-Z][A-Z0-9]{1,9}-\\d+\\b", "url": "{baseUrl}/browse/{0}" }
+      ]
+    }
+  }
+}

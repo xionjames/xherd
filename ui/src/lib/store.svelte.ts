@@ -1,6 +1,7 @@
 // One global store: loaded from `GET /state`, kept live by `GET /ws`, fully
 // reloaded on every (re)connect (design §13.1).
 import { get } from './api';
+import { setLinkRules } from './links';
 import type { Agent, AppState } from './types';
 import { addNotice } from './notices.svelte';
 
@@ -13,6 +14,7 @@ export const app = $state<{
 export async function reload() {
   try {
     app.state = await get<AppState>('/state');
+    setLinkRules(app.state.trackerLinks ?? []);
     app.error = null;
   } catch (e) {
     app.error = (e as Error).message;

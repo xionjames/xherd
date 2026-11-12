@@ -17,6 +17,7 @@ pub mod host;
 pub mod manifest;
 pub mod runtime;
 pub mod toolchain;
+pub mod tracker;
 
 pub use manifest::{Check, Kind, MANIFEST_FILE, Manifest, Setting};
 
@@ -29,6 +30,9 @@ pub fn builtins() -> Vec<Manifest> {
         include_str!("../../../plugins/github/xherd-plugin.json"),
         include_str!("../../../plugins/gitlab/xherd-plugin.json"),
         include_str!("../../../plugins/bitbucket/xherd-plugin.json"),
+        include_str!("../../../plugins/jira/xherd-plugin.json"),
+        include_str!("../../../plugins/github-issues/xherd-plugin.json"),
+        include_str!("../../../plugins/gitlab-issues/xherd-plugin.json"),
         include_str!("../../../plugins/sdkman/xherd-plugin.json"),
         include_str!("../../../plugins/nvm/xherd-plugin.json"),
         include_str!("../../../plugins/uv/xherd-plugin.json"),

@@ -1,0 +1,14 @@
+{
+  "name": "github-issues",
+  "kind": "tracker",
+  "version": "0.1.0",
+  "label": "GitHub Issues",
+  "description": "Turns owner/repo#12 in the UI into a link to the GitHub issue.",
+  "data": {
+    "tracker": {
+      "links": [
+        { "pattern": "\\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\\d+)\\b", "url": "https://github.com/{1}/issues/{2}" }
+      ]
+    }
+  }
+}

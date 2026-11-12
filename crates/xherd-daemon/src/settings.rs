@@ -363,6 +363,10 @@ impl Daemon {
             .map(|p| format!("{:?}", p.manifest.kind))
             .collect();
         for k in kinds {
+            // Having no issue tracker is fine; every other kind needs one.
+            if k == "Tracker" {
+                continue;
+            }
             let any_on = self
                 .plugins
                 .all()

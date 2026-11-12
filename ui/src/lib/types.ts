@@ -170,6 +170,8 @@ export interface AppState {
   config: Record<string, unknown>;
   agents: Agent[];
   plugins: PluginInfo[];
+  /** Link rules of the enabled tracker plugins. */
+  trackerLinks: { plugin: string; pattern: string; url: string }[];
   brokenPlugins: { name: string; dir: string; error: string }[];
   flows: FlowInfo[];
   /** Running in the xherd container. */

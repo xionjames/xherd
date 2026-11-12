@@ -369,6 +369,7 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "config": config,
         "agents": agents,
         "plugins": plugins,
+        "trackerLinks": d.tracker_links(),
         "brokenPlugins": d.plugins.broken(),
         "flows": flows(&d),
         "sandbox": d.sandbox,

@@ -2,6 +2,7 @@
 // marked and sanitised with DOMPurify before it reaches the page.
 import { marked, type Token, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
+import { linkify } from './links';
 
 export interface Heading { id: string; text: string; level: number }
 
@@ -56,7 +57,7 @@ export function render(md: string, added?: Set<string>): { html: string; heading
     const part = Object.assign([t], { links: tokens.links });
     let html = marked.parser(part, { renderer, gfm: true });
     if (added?.size && t.raw.split('\n').some((l) => l.trim() && added.has(l.trim()))) html = `<div class="chg">${html}</div>`;
-    return { html: clean(html), raw: t.raw.trim() };
+    return { html: linkify(clean(html)), raw: t.raw.trim() };
   });
   const html = blocks.map((b) => b.html).join('');
   return { html, headings, blocks };

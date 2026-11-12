@@ -180,3 +180,44 @@ async fn a_missing_required_tool_shows_its_instructions_natively() {
         .unwrap_err();
     assert_eq!(e.code, "not_fixable");
 }
+
+/// Tracker link rules (D24-style `data.tracker`): `{baseUrl}` comes from the
+/// plugin's setting, a rule that needs one it lacks is left out, and no
+/// tracker at all is allowed.
+#[tokio::test]
+async fn tracker_links_use_the_base_url_and_trackers_may_all_be_off() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        plugin_settings: serde_json::from_value(
+            json!({"jira": {"baseUrl": "https://acme.atlassian.net/"}}),
+        )
+        .unwrap(),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    let d = Daemon::start(paths, o).await.unwrap();
+
+    let links = d.tracker_links();
+    let jira = links.iter().find(|l| l["plugin"] == "jira").unwrap();
+    assert_eq!(jira["url"], "https://acme.atlassian.net/browse/{0}");
+    // GitHub's needs no base URL; GitLab's has its default.
+    assert!(links.iter().any(|l| l["plugin"] == "github-issues"));
+    assert!(
+        links
+            .iter()
+            .any(|l| l["url"] == "https://gitlab.com/{1}/-/issues/{2}")
+    );
+
+    let patch = serde_json::from_value(
+        json!({"disabledPlugins": ["jira", "github-issues", "gitlab-issues"]}),
+    )
+    .unwrap();
+    d.save_config(patch).unwrap();
+    assert!(d.tracker_links().is_empty());
+}
