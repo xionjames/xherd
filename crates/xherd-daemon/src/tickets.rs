@@ -127,11 +127,11 @@ impl Daemon {
     /// ask it every time it opens.
     pub async fn ticket_status(&self, who: &str) -> Result<Value, ActionError> {
         let (a, r) = self.resolve_ticket(who).await?;
+        // Kept past the event retention period (`KEPT_EVENTS`).
         let posted = self
             .store
-            .events_of_kind("ticket-comment")
+            .agent_has_event(&a.id, "ticket-comment")
             .await
-            .map(|es| es.iter().any(|e| e.agent_id == a.id))
             .unwrap_or(false);
         Ok(match r {
             Some(r) => json!({"tracker": r.tracker, "issue": r.issue, "posted": posted}),
