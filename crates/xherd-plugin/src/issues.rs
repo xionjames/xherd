@@ -249,9 +249,9 @@ pub fn adf_to_markdown(v: &Value) -> String {
 
 /// `acli jira workitem view KEY --json` and `comment list --json` as a view.
 /// The output is Jira's REST shape (`fields.summary`, `fields.status.name`,
-/// ADF for `description` and comment bodies); a flat object (`summary`,
-/// `status` at the top) is read too. `base` (the site, https) builds the
-/// ticket's link when the output has no `self` URL.
+/// ADF for `description` and comment bodies, checked against real `acli`
+/// output for `view`); a flat object (`summary`, `status` at the top) is read
+/// too. `base` (the Jira site, https) builds the ticket's link.
 pub fn jira_view(
     key: &str,
     view: &Value,
@@ -274,12 +274,10 @@ pub fn jira_view(
             .unwrap_or_default()
             .to_string()
     };
-    let url = view["self"]
-        .as_str()
-        .and_then(|s| s.strip_prefix("https://"))
-        .and_then(|s| s.split('/').next())
-        .map(|host| format!("https://{host}/browse/{key}"))
-        .or_else(|| base.map(|b| format!("{}/browse/{key}", b.trim_end_matches('/'))))
+    // `self` is the REST URL on an internal Atlassian host, not the site you
+    // browse, so the link comes from the plugin's `baseUrl` setting only.
+    let url = base
+        .map(|b| format!("{}/browse/{key}", b.trim_end_matches('/')))
         .unwrap_or_default();
     let list = match comments {
         Value::Array(a) => a.as_slice(),
@@ -689,7 +687,7 @@ esac"#,
 
     #[test]
     fn a_jira_work_item_and_its_comments() {
-        let view = json!({"key": "PAY-1", "self": "https://acme.atlassian.net/rest/api/3/issue/10001",
+        let view = json!({"key": "PAY-1",
             "fields": {"summary": "Pay twice", "status": {"name": "In Progress"},
                 "reporter": {"displayName": "Ann"},
                 "description": adf(json!([{"type": "paragraph", "content": [{"type": "text", "text": "It charges twice."}]}]))}});
@@ -700,7 +698,13 @@ esac"#,
              "body": adf(json!([{"type": "paragraph", "content": [{"type": "text", "text": "first"}]}]))},
             {"id": "12", "author": {"displayName": "Dee"}, "body": adf(json!([]))}
         ]});
-        let t = jira_view("PAY-1", &view, &comments, None).unwrap();
+        let t = jira_view(
+            "PAY-1",
+            &view,
+            &comments,
+            Some("https://acme.atlassian.net"),
+        )
+        .unwrap();
         assert_eq!(
             (t.title.as_str(), t.state.as_str(), t.author.as_str()),
             ("Pay twice", "in progress", "Ann")
@@ -757,5 +761,50 @@ esac"#,
             "{calls}"
         );
         assert!(host.ticket_get(d.path(), "k", "A B").await.is_err());
+    }
+
+    /// The shape `acli jira workitem view --json` really prints (a sample
+    /// with the same structure and invented values): REST fields, ADF with
+    /// `attrs`, many null extras, and a `self` on an internal host.
+    #[test]
+    fn the_real_acli_view_shape() {
+        let real = json!({
+            "changelog": null, "editmeta": null,
+            "expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
+            "fields": {
+                "description": {"type": "doc", "version": 1, "content": [
+                    {"type": "paragraph", "attrs": {"localId": "aa11"}, "content": [{"type": "text", "text": "First “quoted” line."}]},
+                    {"type": "paragraph", "attrs": {"localId": "bb22"}, "content": [{"type": "text", "text": "Second line."}]}
+                ]},
+                "reporter": {"accountId": "x", "accountType": "atlassian", "active": true,
+                    "avatarUrls": {"16x16": "https://a.test/16"}, "displayName": "Ann Example",
+                    "emailAddress": "ann@example.test", "self": "https://internal.test/rest/api/3/user?accountId=x",
+                    "timeZone": "Europe/Paris"},
+                "status": {"description": "", "id": "10003", "name": "To Do",
+                    "statusCategory": {"colorName": "blue-gray", "id": 2, "key": "new", "name": "To Do"}},
+                "summary": "Store preview image per flow"
+            },
+            "fieldsToInclude": null, "id": "126677", "key": "SC-1",
+            "names": null, "operations": null, "properties": null, "renderedFields": null,
+            "schema": null, "self": "https://internal.test/rest/api/3/issue/126677",
+            "transitions": null, "versionedRepresentations": null
+        });
+        let t = jira_view(
+            "SC-1",
+            &real,
+            &json!([]),
+            Some("https://acme.atlassian.net/"),
+        )
+        .unwrap();
+        assert_eq!(t.title, "Store preview image per flow");
+        assert_eq!(
+            (t.state.as_str(), t.author.as_str()),
+            ("to do", "Ann Example")
+        );
+        assert_eq!(t.body, "First “quoted” line.\n\nSecond line.");
+        // The link is the configured site, never the internal REST host.
+        assert_eq!(t.url, "https://acme.atlassian.net/browse/SC-1");
+        // Without a configured site there is no link rather than a wrong one.
+        assert_eq!(jira_view("SC-1", &real, &json!([]), None).unwrap().url, "");
     }
 }
