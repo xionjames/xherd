@@ -119,7 +119,7 @@
 
 <section class="gband" aria-label="Your call">
   <div class="gtop">
-    <div class="ghand" aria-hidden="true"><Icon name="hand" size={20} /></div>
+    <div class="ghand" aria-hidden="true"><Icon name="handSolid" size={28} solid /></div>
     <div class="gtitle" class:open class:more={true}>
       <h2>Your call: {title}</h2>
       <p class="muted">{line}</p>

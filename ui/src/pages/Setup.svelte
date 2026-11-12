@@ -25,7 +25,7 @@
 {#if failing.length}
   <section class="gband halt" aria-label="Setup blocked">
     <div class="gtop">
-      <div class="ghand" aria-hidden="true"><Icon name="x" size={18} /></div>
+      <div class="ghand" aria-hidden="true"><Icon name="x" size={24} /></div>
       <div class="gtitle more">
         <h2>{failing.length} required {failing.length === 1 ? 'check fails' : 'checks fail'}: fix them to start agents</h2>
         <p>Everything except Setup checks and Settings is locked until they pass.</p>

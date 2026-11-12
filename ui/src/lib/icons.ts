@@ -4,6 +4,8 @@ export const ICONS: Record<string, string> = {
   bell: 'M6 9a6 6 0 0 1 12 0c0 6 2 7 2 7H4s2-1 2-7M10 20a2 2 0 0 0 4 0',
   settings: 'M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4',
   plus: 'M12 5v14M5 12h14',
+  /** Filled (draw with `solid`): the your-call band's mark. */
+  handSolid: 'M7 13V6.25a1.25 1.25 0 0 1 2.5 0V13zM9.9 12V4.25a1.25 1.25 0 0 1 2.5 0V12zM12.8 12V5.25a1.25 1.25 0 0 1 2.5 0V12zM15.7 13V7.75a1.25 1.25 0 0 1 2.5 0V13zM7 11.5H18.2V15A6 6 0 0 1 12.2 21H12A6 6 0 0 1 7.4 18.8L3.9 14.9A1.4 1.4 0 0 1 5.9 12.9L7 14Z',
   hand: 'M8 13V6.5a1.5 1.5 0 0 1 3 0V12M11 11V5a1.5 1.5 0 0 1 3 0v6M14 11V6.5a1.5 1.5 0 0 1 3 0V14a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L3.5 15a1.5 1.5 0 0 1 2.4-1.8L8 15',
   check: 'M5 12.5l4.5 4.5L19 7.5',
   pause: 'M9 6v12M15 6v12',
