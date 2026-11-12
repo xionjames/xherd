@@ -173,6 +173,8 @@ pub struct Daemon {
     /// Held while `secrets.json` is read, changed and saved, so two saves
     /// (Git access tokens, plugin secrets) never drop each other's change.
     pub secrets_write: Arc<std::sync::Mutex<()>>,
+    /// The same for `config.json` (Settings and Git access both save it).
+    pub config_write: Arc<std::sync::Mutex<()>>,
 }
 
 impl Daemon {
@@ -299,6 +301,7 @@ impl Daemon {
             companion: open_in::Companion::default(),
             worklog_flushed: Arc::default(),
             secrets_write: Arc::default(),
+            config_write: Arc::default(),
         };
         d.import_ledgers().await;
         d.repair_restored().await;
@@ -416,9 +419,14 @@ impl Daemon {
                     continue;
                 }
             };
-            let base = self
-                .plugin_context(p)
-                .settings
+            // Settings only: the secrets are not needed to build a link.
+            let global = self
+                .live_config()
+                .plugin_settings
+                .get(p.name())
+                .and_then(serde_json::Value::as_object)
+                .cloned();
+            let base = xherd_plugin::resolve_settings(&p.manifest, global.as_ref(), None)
                 .get("baseUrl")
                 .and_then(serde_json::Value::as_str)
                 .map(|b| b.trim().trim_end_matches('/').to_string())

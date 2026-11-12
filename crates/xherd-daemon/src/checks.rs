@@ -129,7 +129,9 @@ impl Daemon {
             });
         }
         let mut plugin_checks = Vec::new();
-        while let Some(Ok((p, results))) = set.join_next().await {
+        // A task that panicked loses only its own plugin's checks.
+        while let Some(joined) = set.join_next().await {
+            let Ok((p, results)) = joined else { continue };
             for r in results {
                 let runtime = p.manifest.kind == Kind::Runtime && r.plugin == default_rt;
                 let fix = (!r.ok).then(|| self.plugin_fix(&p, &r.name)).flatten();

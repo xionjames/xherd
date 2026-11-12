@@ -91,7 +91,8 @@ impl Daemon {
         let served = remote
             .as_deref()
             .filter(|r| trackers.iter().any(|(n, t)| n == &tracker && t.serves(r)));
-        let host = crate::actor::with_git_token(host, served, &self.paths.secrets());
+        let git_hosts = self.live_config().git_hosts;
+        let host = crate::actor::with_git_token(host, served, &git_hosts, &self.paths.secrets());
         Ok((
             a,
             Some(Resolved {

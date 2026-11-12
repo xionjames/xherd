@@ -25,7 +25,13 @@ function slug(s: string) {
 // Text written by third parties (a ticket and its comments) may not make the
 // browser fetch anything by itself: an image or media URL would tell its owner
 // who read it and when. Links still work, since they need a click.
-const EXTERNAL_FORBID = ['img', 'image', 'picture', 'source', 'video', 'audio', 'track', 'object', 'embed', 'iframe'];
+// An allow-list, not a denylist: DOMPurify keeps `background="https://…"` on a
+// table cell and SVG `feImage`, which fetch by themselves. Only what Markdown
+// produces is kept, with no SVG, no MathML and no presentational attributes
+// that take a URL.
+const EXTERNAL_TAGS = ['p', 'a', 'ul', 'ol', 'li', 'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'em', 'strong', 'b', 'i', 'del', 's', 'sub', 'sup', 'br', 'hr', 'span', 'div'];
+const EXTERNAL_ATTRS = ['href', 'title', 'align', 'start', 'id', 'class', 'target', 'rel'];
 
 /**
  * `added`: line texts that are new since the user last read the document;
@@ -43,8 +49,11 @@ export function render(md: string, added?: Set<string>, external = false): { htm
     return `<h${depth} id="${id}">${marked.parseInline(text)}</h${depth}>`;
   };
   // Top-level blocks, each sanitised on its own: the page can comment on one.
-  const forbid = ['style', 'form', 'input', ...(external ? EXTERNAL_FORBID : [])];
-  const clean = (h: string) => DOMPurify.sanitize(h, { FORBID_TAGS: forbid, FORBID_ATTR: external ? ['style', 'srcset', 'poster', 'ping'] : ['style'] });
+  // `target` is kept for the links `linkify` adds (it runs before this, see below).
+  const clean = (h: string) =>
+    external
+      ? DOMPurify.sanitize(h, { ALLOWED_TAGS: EXTERNAL_TAGS, ALLOWED_ATTR: EXTERNAL_ATTRS, ALLOW_DATA_ATTR: false })
+      : DOMPurify.sanitize(h, { FORBID_TAGS: ['style', 'form', 'input'], FORBID_ATTR: ['style'], ADD_ATTR: ['target'] });
   const tokens = marked.lexer(md, { gfm: true });
   // A list is split into one block per item (a nested list stays in its item),
   // so each item can be commented on; an ordered list keeps its numbers.
@@ -64,7 +73,8 @@ export function render(md: string, added?: Set<string>, external = false): { htm
     const part = Object.assign([t], { links: tokens.links });
     let html = marked.parser(part, { renderer, gfm: true });
     if (added?.size && t.raw.split('\n').some((l) => l.trim() && added.has(l.trim()))) html = `<div class="chg">${html}</div>`;
-    return { html: linkify(clean(html)), raw: t.raw.trim() };
+    // Sanitise last: linkify parses and serialises the HTML again, which DOMPurify must see.
+    return { html: clean(linkify(html)), raw: t.raw.trim() };
   });
   const html = blocks.map((b) => b.html).join('');
   return { html, headings, blocks };
