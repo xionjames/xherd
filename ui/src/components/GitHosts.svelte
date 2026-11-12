@@ -1,14 +1,23 @@
 <script lang="ts">
   // Git access per host (spec R-685, R-686): how HTTPS gets its token (gh or
   // glab login, or a token kept by xherd), SSH, optional URL rewrites, and the
-  // doctor with a fix for the first failure. Used by Settings and Welcome.
+  // doctor with a fix for the first failure. Used by Settings and Welcome (the commit identity is GitIdentity.svelte).
   import { get, put, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import TermView from './TermView.svelte';
   import Panel from './Panel.svelte';
   import SaveBar from './SaveBar.svelte';
   import Callout from './Callout.svelte';
-  import type { GitHost, GitHostsView, GitFinding, ConfigView } from '../lib/types';
+  import GitconfigNote from './GitconfigNote.svelte';
+  import type { GitHost, GitHostsView, GitFinding } from '../lib/types';
+
+  // `heading` off where the page already has this title (Welcome); `note` off
+  // where the identity above shows the gitconfig note already (Settings).
+  // `bar` off in Welcome, whose single button saves through `save()`; `unsaved`
+  // is read back by the page.
+  let { heading = true, note = true, bar = true, unsaved = $bindable(false) }: {
+    heading?: boolean; note?: boolean; bar?: boolean; unsaved?: boolean;
+  } = $props();
 
   type Row = GitHost & { token: string };
   let view = $state<GitHostsView | null>(null);
@@ -33,6 +42,8 @@
   };
   const snapshot = () => JSON.stringify(rows.map(strip));
   const dirty = $derived(snapshot() !== saved || rows.some((r) => r.token !== ''));
+  $effect(() => { unsaved = dirty; });
+  export async function saveAll() { if (dirty) await save(); return !dirty; }
 
   function fill(v: GitHostsView) {
     view = v;
@@ -49,35 +60,6 @@
   function checkAll() { for (const r of rows) runDoctor(r.host); }
   const status = (d?: { findings: GitFinding[] | null; running: boolean }) =>
     d?.running ? 'checking' : !d?.findings ? 'unknown' : d.findings.every((f) => f.ok) ? 'ok' : 'bad';
-
-  // Who agents commit as: git refuses to commit without it, and the container
-  // has no identity of its own.
-  let idName = $state('');
-  let idEmail = $state('');
-  let idRules = $state<{ scope: string; name: string; email: string }[]>([]);
-  let idSaved = $state('');
-  const idSnapshot = () => `${idName}\n${idEmail}\n${JSON.stringify(idRules)}`;
-  let idBusy = $state(false);
-  const idDirty = $derived(idSnapshot() !== idSaved);
-  async function loadIdentity() {
-    try {
-      const c = (await get<ConfigView>('/config')).config;
-      idName = String(c.gitUserName ?? '');
-      idEmail = String(c.gitUserEmail ?? '');
-      idRules = ((c.gitIdentities ?? []) as typeof idRules).map((r) => ({ ...r }));
-      idSaved = idSnapshot();
-    } catch (e) { showError('Could not load the commit identity', e); }
-  }
-  $effect(() => { loadIdentity(); });
-  async function saveIdentity() {
-    idBusy = true;
-    try {
-      await put('/config', { gitUserName: idName, gitUserEmail: idEmail, gitIdentities: idRules });
-      idRules = idRules.map((r) => ({ ...r, scope: r.scope.trim().replace(/\/+$/, ''), name: r.name.trim(), email: r.email.trim() }));
-      idSaved = idSnapshot();
-    } catch (e) { showError('Could not save the commit identity', e); }
-    finally { idBusy = false; }
-  }
 
   function add(host: string) {
     host = host.trim().toLowerCase();
@@ -143,16 +125,6 @@
   async function startLogin(host: string) {
     try { await post('/git/login', { host }); login = host; } catch (e) { showError(`Could not log in to ${host}`, e); }
   }
-  // One save bar for the page: identity and hosts are saved together.
-  const anyDirty = $derived(dirty || idDirty);
-  async function saveAll() {
-    if (idDirty) await saveIdentity();
-    if (dirty) await save();
-  }
-  function discardAll() {
-    if (view) fill(view);
-    loadIdentity();
-  }
   function loginEnded() {
     const h = login;
     login = null;
@@ -163,40 +135,9 @@
 {#if !view}
   <p class="empty">Loading…</p>
 {:else}
-  {#if !view.sandbox && view.gitconfig}
-    <Callout tone="info">xherd runs natively: these settings go to <span class="mono">{view.gitconfig}</span>. Add
-      <span class="mono" style="user-select:all">[include] path = {view.gitconfig}</span> to <span class="mono">~/.gitconfig</span> to use them.</Callout>
-  {/if}
+  {#if note}<GitconfigNote />{/if}
 
-  <div class="sect"><h2>1 · Commit identity</h2></div>
-  {#if !idName || !idEmail}
-    <Callout tone="bad">Not set: git refuses to commit without a name and email.</Callout>
-  {:else if idDirty}
-    <Callout>Unsaved changes to the identity.</Callout>
-  {:else}
-    <Callout tone="ok">Agents commit as <b>{idName}</b> &lt;{idEmail}&gt;</Callout>
-  {/if}
-  <Panel title="Name and email" hint="Agents commit as this name and email. Without it git refuses to commit (“unable to auto-detect email address”).">
-    <div class="g2">
-      <label class="f">Name <input bind:value={idName} placeholder="Your Name" autocomplete="off" /></label>
-      <label class="f">Email <input type="email" bind:value={idEmail} placeholder="you@example.com" autocomplete="off" /></label>
-    </div>
-    <div class="grp">
-      <header><h3>Other identities, by repository owner</h3>
-        <span class="hint">For repositories under an owner or a host, use a different identity (for example work on the same github.com). Matched on the remote URL, HTTPS or SSH.</span></header>
-      {#each idRules as r, i (i)}
-        <div class="idrule">
-          <label class="f">Owner <input class="mono" bind:value={r.scope} placeholder="github.com/my-company" autocomplete="off" /></label>
-          <label class="f">Name <input bind:value={r.name} autocomplete="off" /></label>
-          <label class="f">Email <input type="email" bind:value={r.email} autocomplete="off" /></label>
-          <button class="btn ghost danger sm" onclick={() => idRules.splice(i, 1)}>Remove</button>
-        </div>
-      {/each}
-      <div><button class="btn" onclick={() => idRules.push({ scope: '', name: '', email: '' })}>+ Add an identity</button></div>
-    </div>
-  </Panel>
-
-  <div class="sect"><h2>2 · Git hosts</h2><span class="hint">How agents reach each host to fetch and push; separate from the identity above.</span></div>
+  {#if heading}<div class="sect"><h2>Git hosts</h2><span class="hint">How agents reach each host to fetch and push.</span></div>{/if}
   {#if rows.length}
     {@const bad = rows.filter((r) => status(doctor[r.host]) === 'bad')}
     {@const pending = rows.filter((r) => ['checking', 'unknown'].includes(status(doctor[r.host])))}
@@ -262,7 +203,7 @@
         <div class="row" style="flex-wrap:nowrap">
           <input class="mono" placeholder="repository URL to test (optional)"
             value={d?.repo ?? ''} oninput={(e) => { doctor[r.host] ??= { repo: '', findings: null, running: false }; doctor[r.host].repo = e.currentTarget.value; }} />
-          <button class="btn" disabled={d?.running || anyDirty} title={anyDirty ? 'Save first' : ''} onclick={() => runDoctor(r.host)}>
+          <button class="btn" disabled={d?.running || dirty} title={dirty ? 'Save first' : ''} onclick={() => runDoctor(r.host)}>
             {d?.running ? 'Checking…' : 'Check access'}</button>
         </div>
         {#if d?.findings}
@@ -299,14 +240,9 @@
     </div>
   </Panel>
 
-  <SaveBar dirty={anyDirty} busy={busy || idBusy} onsave={saveAll} ondiscard={discardAll}
-    saveLabel="Save git access" saved="Saved; applies right away" />
+  {#if bar}<SaveBar {dirty} {busy} onsave={save} ondiscard={() => view && fill(view)}
+    saveLabel="Save git access" saved="Saved; applies right away" />{/if}
 {/if}
 
 <style>
-  .idrule { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; }
-  @media (max-width: 760px) {
-    .idrule { grid-template-columns: minmax(0, 1fr); padding-bottom: 12px; border-bottom: 1px solid var(--fence-soft); }
-    .idrule .btn { justify-self: start; }
-  }
 </style>

@@ -532,7 +532,7 @@ Supported: Docker Desktop (reference), and OrbStack, Colima, Podman Desktop, Ran
 | R-683 | Host keys: GitHub, GitLab and Bitbucket keys pre-seeded; other hosts' fingerprints shown in the UI for the user to accept. |
 | R-684 | HTTPS: tokens through a git credential helper (`gh`, `glab`, or `xherd credential`), never in URLs or `.git/config`; optional CA bundle per host. |
 | R-685 | Settings → Git access per host: protocols, credential source, username, CA; optional `preferHttps`/`preferSsh` rewrite (off by default). Host plugins reuse the token. |
-| R-686 | Welcome step "Git access": use the SSH agent, log in with GitHub's device flow (`gh auth login --web`, code shown in the UI), or paste a token; each ends with a live test of git transport and API access. |
+| R-686 | Welcome steps "Commit identity" (name and email agents commit as; required, git refuses to commit without it) and "Git hosts": use the SSH agent, log in with GitHub's device flow (`gh auth login --web`, code shown in the UI), or paste a token; each ends with a live test of git transport and API access. |
 | R-687 | `xherd git doctor [host] [--repo URL]` checks, in order: agent socket readable, key loaded (`ssh-add -l`), host key known, credential helper configured, token valid with the needed permissions, organisation SSO authorised, OAuth app allowed by the organisation, git vs API access separately. It prints the first failure with its fix and never prints secrets. |
 | R-688 | An auth failure during an agent's push or a host command blocks the agent with reason "git access" and shows the doctor result. |
 
@@ -725,7 +725,7 @@ Rewritten on every start, resume and autonomy change: workspace notes (folder ag
 | **Kanban** | Tasks of all agents plus stage cards and TODOs; filters and swimlanes in the URL. |
 | **New agent / New TODO** | Generated form including pack inputs; ticket link preview; repo picker or clone; branch list. |
 | **Settings** | General, Notifications, Open in, Git access, Toolchains, Repo profiles, Plugins (install, settings, ACP badges), Runtime per step, Backups, Remote access. |
-| **Setup checks / Welcome** | First-run wizard: where it runs → tools (runtime, tracker, host) → git access → toolchains → checks → ready. Until required checks pass, other screens are disabled. |
+| **Setup checks / Welcome** | First-run wizard: where it runs → plugins (runtime, tracker, host, toolchain) → commit identity → git hosts → checks → ready. Toolchains are plugins, so they are set up with the others (installs only in the container, R-653). Until required checks pass, other screens are disabled. |
 | **Work log** | Agent time and user time per day and ticket; per-ticket cycle time, review–fix rounds and auto-approval rework (§16.4). |
 
 ### 17.3 Phones
