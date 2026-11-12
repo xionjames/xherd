@@ -261,7 +261,8 @@ install:
     args: "$ARGUMENTS"
   codex:
     prefix: "$xherd-"
-    commands: { from: commands/*.md, to: "~/.codex/skills/xherd-{name}/SKILL.md", format: skill }     # verify path
+    slashEnters: 2               # the first Enter picks the skill in the list
+    commands: { from: commands/*.md, to: "${CODEX_HOME:-~/.codex}/skills/xherd-{name}/SKILL.md", format: skill }
   opencode:
     prefix: "/xherd/"            # opencode names a command by its path under command/
     slashEnters: 2
@@ -739,7 +740,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Repo profiles, first slice (branch `m5-profiles`): `profiles` table, CRUD/import/export API, Settings → Repo profiles; matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-agent token budget, test command tripwire (R-115) and repo instructions, each falling back to the global setting
   - [ ] Profile fields still to build: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, stage hooks, spec folder mode, colour, default flow/pack, ticket prefix, tool permissions, per-profile daily budget and cost estimate
   - [x] opencode runtime (branch `runtime-opencode`; runtime chosen per agent, profile, `defaultRuntime`)
-  - [ ] Codex runtime
+  - [x] Codex runtime (branch `runtime-codex`; skills, hooks, TOML trust; unit tests and hook/skill/resume behaviour checked against Codex 0.167 without model turns, not yet run end to end)
   - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
   - [x] Kanban: the Board with stages and tasks as work units (Pending / In progress / Done), TODOs and swimlanes; the Herd's By stage layout with agents in columns by role (cards declared by packs and profiles, R-1101, come with profiles)
   - [ ] Toolchain plugins and Welcome installer

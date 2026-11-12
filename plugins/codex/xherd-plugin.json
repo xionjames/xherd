@@ -1,0 +1,119 @@
+{
+  "name": "codex",
+  "kind": "runtime",
+  "version": "0.1.0",
+  "label": "Codex",
+  "description": "The OpenAI Codex CLI in a tmux session (terminal driver).",
+  "data": {
+    "terminal": {
+      "launch": [
+        "codex",
+        "--dangerously-bypass-hook-trust"
+      ],
+      "permissionModes": {
+        "ask": [
+          "--sandbox",
+          "read-only",
+          "--ask-for-approval",
+          "on-request"
+        ],
+        "edits": [
+          "--sandbox",
+          "workspace-write",
+          "--ask-for-approval",
+          "on-request",
+          "-c",
+          "sandbox_workspace_write.network_access=true"
+        ],
+        "auto": [
+          "--approve-for-me",
+          "-c",
+          "sandbox_workspace_write.network_access=true"
+        ],
+        "all": [
+          "--dangerously-bypass-approvals-and-sandbox"
+        ]
+      },
+      "hooks": {
+        "file": ".codex/hooks.json",
+        "format": "codex-hooks",
+        "events": {
+          "SessionStart": "session-start",
+          "UserPromptSubmit": "user-prompt-submit",
+          "PostToolUse": "post-tool-use",
+          "PermissionRequest": "notification",
+          "Stop": "stop"
+        }
+      },
+      "trust": {
+        "file": "${CODEX_HOME:-~/.codex}/config.toml",
+        "format": "toml",
+        "projects": "projects",
+        "key": "trust_level",
+        "value": "trusted"
+      },
+      "promptArgs": [
+        "{prompt}"
+      ],
+      "resume": {
+        "args": [
+          "resume",
+          "{session}"
+        ],
+        "promptArgs": [
+          "{prompt}"
+        ],
+        "transcripts": "${CODEX_HOME:-~/.codex}/sessions",
+        "file": "rollout-*-{session}.jsonl",
+        "depth": 3
+      },
+      "check": {
+        "argv": [
+          "codex",
+          "exec",
+          "--sandbox",
+          "read-only",
+          "--ephemeral",
+          "--skip-git-repo-check",
+          "{system}\n\n{prompt}"
+        ],
+        "modelArgs": [
+          "--model",
+          "{model}"
+        ]
+      },
+      "usage": {
+        "records": "/payload/usage",
+        "id": "/payload/response_id",
+        "fields": {
+          "input": "input_tokens",
+          "output": "output_tokens",
+          "cacheWrite": "cache_write_input_tokens",
+          "cacheRead": "cached_input_tokens"
+        }
+      }
+    }
+  },
+  "checks": [
+    {
+      "name": "codex",
+      "argv": [
+        "codex",
+        "--version"
+      ]
+    },
+    {
+      "name": "login",
+      "argv": [
+        "codex",
+        "login",
+        "status"
+      ]
+    }
+  ],
+  "login": [
+    "codex",
+    "login",
+    "--device-auth"
+  ]
+}

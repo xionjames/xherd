@@ -3,7 +3,7 @@ description: xherd — triage the new comments on the pull request
 ---
 # Review the pull request comments
 
-Read the xherd rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{path:rules}}` first and follow them.
 
 1. `xherd stage enter pr-review`
 2. Read `.xherd/spec/pr-comments.json`: the new comments on the pull request.

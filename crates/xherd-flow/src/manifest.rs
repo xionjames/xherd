@@ -541,7 +541,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(c, "/xherd:commit C01");
-        assert!(p.command("codex", "{prefix}next", &[]).is_err());
+        assert!(p.command("aider", "{prefix}next", &[]).is_err());
         let s = p
             .command("opencode", &f.start, &[("key", "SC-1"), ("prompt", "x")])
             .unwrap();
@@ -560,6 +560,50 @@ mod tests {
             next.text
                 .contains("/home/u/.config/opencode/command/xherd/rules.md")
         );
+    }
+
+    #[test]
+    fn codex_skills() {
+        let p = crate::builtin();
+        assert_eq!(
+            p.command("codex", "{prefix}next", &[]).unwrap(),
+            "$xherd-next"
+        );
+        assert_eq!(p.install["codex"].slash_enters, 2);
+        let env = |k: &str| (k == "HOME").then(|| "/home/u".to_string());
+        let plan = p
+            .plan_install("codex", crate::install::BUILTIN_FILES, &env)
+            .unwrap();
+        let next = plan
+            .iter()
+            .find(|f| f.path.ends_with("xherd-next/SKILL.md"))
+            .unwrap();
+        assert!(next.text.starts_with(
+            "---\nname: xherd-next\ndescription: \"xherd — implement the next ready task"
+        ));
+        let fm = crate::frontmatter::parse(&next.text).unwrap().unwrap();
+        assert_eq!(fm.keys().collect::<Vec<_>>(), ["description", "name"]);
+        assert!(
+            next.text
+                .contains("/home/u/.codex/skills/xherd-rules/SKILL.md")
+        );
+        assert!(
+            next.text
+                .contains("/home/u/.codex/skills/xherd-review/SKILL.md")
+        );
+        let commit = plan
+            .iter()
+            .find(|f| f.path.ends_with("xherd-commit/SKILL.md"))
+            .unwrap();
+        assert!(!commit.text.contains("argument-hint"));
+        assert!(commit.text.contains("the text after the skill name"));
+        let policy = plan
+            .iter()
+            .find(|f| f.path.ends_with("xherd-next/agents/openai.yaml"))
+            .unwrap();
+        assert_eq!(policy.text, crate::install::SKILL_POLICY);
+        let skills = plan.iter().filter(|f| f.path.ends_with("SKILL.md")).count();
+        assert_eq!(plan.len(), 2 * skills);
     }
 
     fn with(stages: &str) -> Result<Pack, PackError> {

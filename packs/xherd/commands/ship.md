@@ -6,7 +6,7 @@ argument-hint: "[--no-ticket-update]"
 
 Arguments: `{{args}}`
 
-Read the xherd rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{path:rules}}` first and follow them.
 
 1. `xherd stage enter ship`
 2. If `.xherd/spec/pr.md` exists, try `xherd gate open ship`.

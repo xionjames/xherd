@@ -8,4 +8,4 @@ summary: the stage, which documents exist, tasks by status, commits proposed
 and done, the open gate if any, and open questions. Change nothing and make
 no xherd calls.
 
-The xherd rules are in `{{dir}}/rules.md`.
+The xherd rules are in `{{path:rules}}`.

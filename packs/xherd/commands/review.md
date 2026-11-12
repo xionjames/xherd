@@ -3,7 +3,7 @@ description: xherd — review the whole branch against the spec
 ---
 # Review
 
-Read the xherd rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{path:rules}}` first and follow them.
 
 Review as if you had not written the code: judge the branch by the approved
 documents and the diff, not by what you remember of the work. When you can
@@ -20,7 +20,7 @@ run a sub-agent with a fresh context, give it this review to do.
    and, once it has a task, `- fixed: T05` (the review format in the
    rules). Each finding that must be fixed becomes a new task in
    `tasks.md` with `source: review`; run `xherd tasks sync` and implement them one by
-   one as `{{dir}}/next.md` describes (each with its own commit gate). When
+   one as `{{path:next}}` describes (each with its own commit gate). When
    they are all done, come back to this review and run
    `xherd stage enter review` again: xherd counts each return as a review
    round, and holds the gate for the user after too many.

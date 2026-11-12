@@ -92,7 +92,7 @@ pub struct Config {
     /// Tool-permission mode of new agents (R-002a); a profile or the request
     /// overrides it.
     pub permission_mode: crate::permission::PermissionMode,
-    /// Runtime plugin of new agents (`claude-code`, `opencode`); a profile or
+    /// Runtime plugin of new agents (`claude-code`, `opencode`, `codex`); a profile or
     /// the request overrides it. Also the runtime of TODO condition checks.
     pub default_runtime: String,
     /// Settings → Open in (R-706, R-707).

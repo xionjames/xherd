@@ -1736,17 +1736,17 @@ impl Actor {
                 Some(extra) => {
                     self.resume_unconfirmed = true;
                     // A continued session takes its prompt from `promptEnv`
-                    // when the runtime has one, else it is typed.
-                    let env = self
-                        .agent
-                        .next_prompt
-                        .as_deref()
-                        .and_then(|p| r.0.prompt_env_argv(&id, p));
-                    self.prompt_on_launch = env.is_some();
+                    // or the resume `promptArgs` when the runtime has them,
+                    // else it is typed.
+                    let prompt = self.agent.next_prompt.as_deref();
+                    let env = prompt.and_then(|p| r.0.prompt_env_argv(&id, p));
+                    let args = prompt.and_then(|p| r.0.prompt_argv(p));
+                    self.prompt_on_launch = env.is_some() || args.is_some();
                     env.unwrap_or_default()
                         .into_iter()
                         .chain(argv)
                         .chain(extra)
+                        .chain(args.unwrap_or_default())
                         .collect()
                 }
                 None => self.with_launch_prompt(argv),

@@ -1,6 +1,6 @@
 # Docker
 
-Docker is the recommended way to run xherd. The daemon, the web UI, tmux, Claude Code, opencode, `git`, `gh`, `glab` and the toolchain managers all live in one container. Only your workspace folder is shared with the host, so agents cannot reach the rest of your files.
+Docker is the recommended way to run xherd. The daemon, the web UI, tmux, Claude Code, opencode, Codex, `git`, `gh`, `glab` and the toolchain managers all live in one container. Only your workspace folder is shared with the host, so agents cannot reach the rest of your files.
 
 ## Topology
 
@@ -15,7 +15,7 @@ flowchart LR
         Port[":4740"] --> D["daemon<br/>(user xherd-daemon)"]
         D <-->|unix socket| R["runner<br/>(host-mapped user)"]
         R --> TM[tmux server]
-        TM --> AG[agent sessions<br/>Claude Code or opencode]
+        TM --> AG[agent sessions<br/>Claude Code, opencode or Codex]
         WS2[("~/xherd (same path)")]
         H[(xherd-home volume<br/>logins, toolchains, caches)]
         DD[(xherd-data volume<br/>config, secrets, database)]
@@ -43,7 +43,7 @@ Repositories outside the workspace are refused with a message telling you to clo
 
 `xherd init` (the entrypoint, the only root process) creates two unprivileged users and starts everything under `tini`:
 
-- **Agents' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files agents write are yours. Runs Claude Code or opencode, git and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
+- **Agents' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files agents write are yours. Runs Claude Code, opencode or Codex, git and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
 - **Daemon's user** (`xherd-daemon`): runs the daemon with a system-only `PATH`. It owns the configuration, secrets and database in a volume the agents cannot read, and asks the runner to do anything that must happen as the agents' user (git commands, `verify:` commands, plugin commands).
 
 An agent therefore cannot read your tokens or edit the daemon's configuration. Other consequences:
