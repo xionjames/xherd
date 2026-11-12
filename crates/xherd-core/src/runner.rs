@@ -65,10 +65,13 @@ enum Request {
         path: PathBuf,
         mode: u32,
     },
-    /// The first `<dir>/<any folder>/<name>` that is a file.
+    /// The first file `depth` folders below `dir` whose name matches `name`
+    /// (see [`find_in_subdirs_as_agent`]).
     Find {
         dir: PathBuf,
         name: String,
+        #[serde(default = "one")]
+        depth: u8,
     },
 }
 
@@ -218,23 +221,46 @@ pub async fn exec(socket: &Path, cmd: Cmd) -> Result<Output, ExecError> {
     }
 }
 
-fn find_in_subdirs(dir: &Path, name: &str) -> Option<PathBuf> {
-    std::fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path().join(name))
-        .find(|p| p.is_file())
+fn one() -> u8 {
+    1
 }
 
-/// The first `<dir>/<any folder>/<name>` that is a file, as the agent user
-/// (a runtime keeps its session transcripts in its own home).
-pub async fn find_in_subdirs_as_agent(dir: &Path, name: &str) -> Option<PathBuf> {
+/// Does a file name match `pattern`, which has at most one `*`?
+fn name_matches(pattern: &str, name: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == name,
+        Some((pre, post)) => {
+            name.len() >= pre.len() + post.len() && name.starts_with(pre) && name.ends_with(post)
+        }
+    }
+}
+
+fn find_in_subdirs(dir: &Path, name: &str, depth: u8) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?.flatten();
+    if depth == 0 {
+        return entries.map(|e| e.path()).find(|p| {
+            p.is_file()
+                && p.file_name()
+                    .is_some_and(|n| name_matches(name, &n.to_string_lossy()))
+        });
+    }
+    entries
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .find_map(|d| find_in_subdirs(&d, name, depth - 1))
+}
+
+/// The first file `depth` folders below `dir` (`<dir>/<any folder>/<name>`
+/// for 1) whose name matches `name` (at most one `*`), as the agent user (a
+/// runtime keeps its session transcripts in its own home).
+pub async fn find_in_subdirs_as_agent(dir: &Path, name: &str, depth: u8) -> Option<PathBuf> {
     let Some(sock) = runner_socket() else {
-        return find_in_subdirs(dir, name);
+        return find_in_subdirs(dir, name, depth);
     };
     let req = Request::Find {
         dir: dir.into(),
         name: name.into(),
+        depth,
     };
     match roundtrip(sock, &req, Duration::from_secs(30)).await {
         Ok(Reply::Found { path }) => path,
@@ -352,8 +378,8 @@ async fn handle(req: Request) -> Reply {
                 },
             }
         }
-        Request::Find { dir, name } => Reply::Found {
-            path: find_in_subdirs(&dir, &name),
+        Request::Find { dir, name, depth } => Reply::Found {
+            path: find_in_subdirs(&dir, &name, depth),
         },
         Request::Mkdir { path, mode } => match make_dir(&path, mode) {
             Ok(()) => Reply::Done,
@@ -536,6 +562,27 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         (dir, sock)
+    }
+
+    #[test]
+    fn finds_transcripts_by_depth_and_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::create_dir_all(d.join("proj")).unwrap();
+        std::fs::write(d.join("proj/s-1.jsonl"), "").unwrap();
+        std::fs::create_dir_all(d.join("2026/11/12")).unwrap();
+        let rollout = d.join("2026/11/12/rollout-2026-11-12T11-58-52-s-2.jsonl");
+        std::fs::write(&rollout, "").unwrap();
+        assert_eq!(
+            find_in_subdirs(d, "s-1.jsonl", 1),
+            Some(d.join("proj/s-1.jsonl"))
+        );
+        assert_eq!(find_in_subdirs(d, "rollout-*-s-2.jsonl", 3), Some(rollout));
+        assert_eq!(find_in_subdirs(d, "rollout-*-s-2.jsonl", 1), None);
+        assert_eq!(find_in_subdirs(d, "rollout-*-s-3.jsonl", 3), None);
+        assert!(!name_matches("a*b", "ab_"));
+        assert!(name_matches("a*b", "ab"));
+        assert!(!name_matches("aa*aa", "aaa"));
     }
 
     #[tokio::test]

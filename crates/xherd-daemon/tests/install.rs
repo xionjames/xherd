@@ -56,7 +56,7 @@ async fn installs_keeps_edits_and_upgrades() {
     assert_eq!(action("status.md"), InstallAction::Written);
     assert_ne!(std::fs::read_to_string(dir.join("status.md")).unwrap(), old);
 
-    let e = d.install(Some("codex"), None, &env).await.unwrap_err();
+    let e = d.install(Some("aider"), None, &env).await.unwrap_err();
     assert_eq!(e.code, "unknown_runtime");
     let e = d.install(None, Some("other"), &env).await.unwrap_err();
     assert_eq!(e.code, "unknown_pack");

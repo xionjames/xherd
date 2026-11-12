@@ -276,9 +276,20 @@ pub struct Resume {
     /// Folder holding one subfolder per project; may use `${VAR}` and `~/`.
     #[serde(default)]
     pub transcripts: Option<String>,
-    /// Transcript file name inside a project folder; `{session}` as above.
+    /// Transcript file name inside a project folder; `{session}` as above,
+    /// and at most one `*` for the rest of a name (Codex's
+    /// `rollout-*-{session}.jsonl`).
     #[serde(default)]
     pub file: Option<String>,
+    /// How many folders down from `transcripts` the file is: 1 (default,
+    /// `<project>/<file>`) to 4 (Codex: `<year>/<month>/<day>/<file>`).
+    #[serde(default = "one")]
+    pub depth: u8,
+    /// Launch arguments, after `args`, that give a continued session its
+    /// first prompt (`{prompt}` once): for a runtime that takes one there
+    /// (`codex resume <id> <prompt>`) and starts no session before it.
+    #[serde(default)]
+    pub prompt_args: Vec<String>,
     /// A command writing the session's transcript, `{session}` once; it
     /// fails when the runtime no longer has the session. It prints it on
     /// stdout, or writes it to `{file}` (a path xherd gives) when a pipe is
@@ -290,6 +301,10 @@ pub struct Resume {
     /// when continuing (opencode's plugin submits it from them).
     #[serde(default)]
     pub prompt_env: BTreeMap<String, String>,
+}
+
+fn one() -> u8 {
+    1
 }
 
 /// Session ids come from the runtime's hook payload; only plain ids are used.
@@ -337,6 +352,11 @@ impl Resume {
         })
     }
 
+    /// `promptArgs` with `prompt`; `None` without them.
+    pub fn prompt_argv(&self, prompt: &str) -> Option<Vec<String>> {
+        Terminal::prompt_argv(&self.prompt_args, prompt)
+    }
+
     /// The export writes to `{file}` instead of stdout.
     pub fn exports_to_file(&self) -> bool {
         self.export.iter().any(|a| a.contains("{file}"))
@@ -346,6 +366,30 @@ impl Resume {
         if !self.prompt_env.is_empty() && !self.prompt_env.values().any(|v| v.contains("{prompt}"))
         {
             return Err("resume.promptEnv needs {prompt}".into());
+        }
+        if !self.prompt_args.is_empty() {
+            if !self.prompt_env.is_empty() {
+                return Err("resume takes promptEnv or promptArgs, not both".into());
+            }
+            if self
+                .prompt_args
+                .iter()
+                .filter(|a| a.contains("{prompt}"))
+                .count()
+                != 1
+            {
+                return Err("resume.promptArgs needs {prompt} once".into());
+            }
+        }
+        if !(1..=4).contains(&self.depth) {
+            return Err("resume.depth must be 1 to 4".into());
+        }
+        if self
+            .file
+            .as_deref()
+            .is_some_and(|f| f.matches('*').count() > 1 || f.contains('/'))
+        {
+            return Err("resume.file is a file name with at most one *".into());
         }
         let n = |p: &str| self.export.iter().filter(|a| a.contains(p)).count();
         let placed = n("{session}") == 1 && n("{file}") <= 1;
@@ -360,8 +404,8 @@ impl Resume {
     }
 }
 
-/// Where the runtime records the folders it trusts: a JSON file whose
-/// `projects` map has absolute folder paths as keys and `key: true` once a
+/// Where the runtime records the folders it trusts: a JSON or TOML file whose
+/// `projects` map has absolute folder paths as keys and `key: value` once a
 /// folder is trusted. xherd sets that key for each agent's own worktree, and
 /// only there (design §4.1), so no agent stops at the runtime's trust dialog.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -370,14 +414,89 @@ pub struct Trust {
     pub file: String,
     pub projects: String,
     pub key: String,
+    /// What `key` is set to: `true` (Claude Code), or a string (Codex's
+    /// `trust_level = "trusted"`).
+    #[serde(default = "trust_true")]
+    pub value: Value,
+    #[serde(default)]
+    pub format: TrustFormat,
+}
+
+fn trust_true() -> Value {
+    Value::Bool(true)
+}
+
+/// The trust file's syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrustFormat {
+    #[default]
+    Json,
+    /// Edited in place: the user's comments and layout are kept (Codex's
+    /// `config.toml`).
+    Toml,
 }
 
 impl Trust {
     /// The trust file's new text with `dir` (as given and canonicalised,
     /// `/tmp` vs `/private/tmp`) trusted; every other key kept. `None` when
-    /// nothing changes. Text that is not a JSON object is refused, never
-    /// replaced.
+    /// nothing changes. Text that does not parse is refused, never replaced.
     pub fn with_trusted(&self, text: Option<&str>, dir: &Path) -> Result<Option<String>, String> {
+        let mut forms = vec![dir.to_path_buf()];
+        forms.extend(dir.canonicalize().ok().filter(|c| c != dir));
+        let forms: Vec<String> = forms
+            .iter()
+            .map(|f| f.to_string_lossy().into_owned())
+            .collect();
+        match self.format {
+            TrustFormat::Json => self.json_trusted(text, &forms),
+            TrustFormat::Toml => self.toml_trusted(text, &forms),
+        }
+    }
+
+    fn toml_trusted(&self, text: Option<&str>, forms: &[String]) -> Result<Option<String>, String> {
+        use toml_edit::{DocumentMut, Item, Table, value};
+        let mut doc: DocumentMut = text
+            .unwrap_or("")
+            .parse()
+            .map_err(|_| "not valid TOML; left untouched".to_string())?;
+        let want = match &self.value {
+            Value::Bool(b) => value(*b),
+            Value::String(s) => value(s.as_str()),
+            _ => return Err("trust value must be true or a string".into()),
+        };
+        let projects = doc.entry(&self.projects).or_insert_with(|| {
+            let mut t = Table::new();
+            t.set_implicit(true);
+            Item::Table(t)
+        });
+        let Some(projects) = projects.as_table_like_mut() else {
+            return Err(format!(
+                "{:?} is not a table; left untouched",
+                self.projects
+            ));
+        };
+        let mut changed = false;
+        for f in forms {
+            let entry = projects
+                .entry(f)
+                .or_insert_with(|| Item::Table(Table::new()));
+            let Some(e) = entry.as_table_like_mut() else {
+                return Err(format!("{f} is not a table; left untouched"));
+            };
+            let same = e
+                .get(&self.key)
+                .and_then(Item::as_value)
+                .is_some_and(|v| v.to_string().trim() == want.to_string().trim());
+            if !same {
+                e.insert(&self.key, want.clone());
+                changed = true;
+            }
+        }
+        Ok(changed.then(|| doc.to_string()))
+    }
+
+    fn json_trusted(&self, text: Option<&str>, forms: &[String]) -> Result<Option<String>, String> {
         let mut root: Map<String, Value> = match text.map(str::trim) {
             None | Some("") => Map::new(),
             Some(t) => match serde_json::from_str(t) {
@@ -394,18 +513,16 @@ impl Trust {
                 self.projects
             ));
         };
-        let mut forms = vec![dir.to_path_buf()];
-        forms.extend(dir.canonicalize().ok().filter(|c| c != dir));
         let mut changed = false;
         for f in forms {
             let entry = projects
-                .entry(f.to_string_lossy().into_owned())
+                .entry(f.clone())
                 .or_insert_with(|| Value::Object(Map::new()));
             let Some(e) = entry.as_object_mut() else {
-                return Err(format!("{} is not an object; left untouched", f.display()));
+                return Err(format!("{f} is not an object; left untouched"));
             };
-            if e.get(&self.key) != Some(&Value::Bool(true)) {
-                e.insert(self.key.clone(), Value::Bool(true));
+            if e.get(&self.key) != Some(&self.value) {
+                e.insert(self.key.clone(), self.value.clone());
                 changed = true;
             }
         }
@@ -435,6 +552,10 @@ pub enum HookFormat {
     /// A JavaScript plugin file owned by xherd (opencode loads every file in
     /// `.opencode/plugin/`); events are the triggers in `OPENCODE_TRIGGERS`.
     OpencodePlugin,
+    /// Codex's `.codex/hooks.json`: the same `hooks` map as Claude Code's,
+    /// the user's entries kept, but no `permissions` (Codex has its own
+    /// sandbox and approval policy, set by the permission mode).
+    CodexHooks,
 }
 
 /// What the opencode plugin can report: its own start, then opencode hooks
@@ -584,6 +705,7 @@ pub fn hook_file_text(
     match h.format {
         HookFormat::ClaudeSettings => merge_hooks(existing, h, xherd_bin, allow),
         HookFormat::OpencodePlugin => opencode_plugin(existing, h, xherd_bin, allow),
+        HookFormat::CodexHooks => merge_hooks(existing, h, xherd_bin, &Allow::default()),
     }
 }
 
@@ -1106,5 +1228,149 @@ mod check_tests {
         let argv = t.check.unwrap().command("PROMPT", "SYSTEM", None);
         assert_eq!(argv[..3], ["claude", "-p", "PROMPT"]);
         assert!(argv.contains(&"--disallowedTools".to_string()));
+    }
+
+    fn codex() -> Terminal {
+        let m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "codex")
+            .unwrap();
+        Terminal::of(&m).unwrap()
+    }
+
+    #[test]
+    fn builtin_codex() {
+        let t = codex();
+        let mode = |m: &str| t.argv(m).unwrap()[2..].join(" ");
+        assert_eq!(t.launch, ["codex", "--dangerously-bypass-hook-trust"]);
+        assert_eq!(
+            mode("ask"),
+            "--sandbox read-only --ask-for-approval on-request"
+        );
+        assert!(
+            mode("edits").starts_with("--sandbox workspace-write --ask-for-approval on-request")
+        );
+        assert!(mode("edits").ends_with("sandbox_workspace_write.network_access=true"));
+        assert!(mode("auto").starts_with("--approve-for-me"));
+        assert_eq!(mode("all"), "--dangerously-bypass-approvals-and-sandbox");
+        assert_eq!(
+            Terminal::prompt_argv(&t.prompt_args, "$xherd-feature SC-1 x").unwrap(),
+            ["$xherd-feature SC-1 x"]
+        );
+        let r = t.resume.as_ref().unwrap();
+        assert_eq!(r.argv("s-1").unwrap(), ["resume", "s-1"]);
+        assert_eq!(r.prompt_argv("$xherd-resume").unwrap(), ["$xherd-resume"]);
+        assert_eq!(
+            (r.file.as_deref(), r.depth),
+            (Some("rollout-*-{session}.jsonl"), 3)
+        );
+        let h = t.hooks.as_ref().unwrap();
+        assert_eq!(h.format, HookFormat::CodexHooks);
+        let allow = Allow {
+            commands: vec!["xherd stage enter *".into()],
+            read_dirs: vec!["/x".into()],
+        };
+        let text = hook_file_text(
+            Some(r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}}"#),
+            h,
+            "/bin/xherd",
+            &allow,
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert!(
+            v.get("permissions").is_none(),
+            "Codex has no permissions block"
+        );
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "mine");
+        assert_eq!(
+            v["hooks"]["Stop"][1]["hooks"][0]["command"],
+            "'/bin/xherd' hook stop # xherd"
+        );
+        assert_eq!(
+            v["hooks"]["PermissionRequest"][0]["hooks"][0]["command"],
+            "'/bin/xherd' hook notification # xherd"
+        );
+        let argv = t.check.as_ref().unwrap().command("P", "S", Some("gpt-x"));
+        assert_eq!(argv[..4], ["codex", "exec", "--sandbox", "read-only"]);
+        assert!(argv.contains(&"S\n\nP".to_string()));
+        assert_eq!(argv[argv.len() - 2..], ["--model", "gpt-x"]);
+    }
+
+    #[test]
+    fn codex_usage_from_a_rollout() {
+        let u = codex().usage.unwrap();
+        let line = |id: &str, input: u64| {
+            json!({"type": "token_usage_record", "payload": {"response_id": id,
+                "usage": {"input_tokens": input, "cached_input_tokens": 10,
+                "cache_write_input_tokens": 2, "output_tokens": 6}}})
+            .to_string()
+        };
+        let other = json!({"type": "event_msg", "payload": {"type": "token_count",
+            "info": {"total_token_usage": {"input_tokens": 999}}}});
+        let text = [line("r1", 100), other.to_string(), line("r2", 50)].join("\n");
+        let t = u.totals(&text);
+        assert_eq!(
+            (t.input, t.output, t.cache_write, t.cache_read),
+            (150, 12, 4, 20)
+        );
+    }
+
+    #[test]
+    fn toml_trust_keeps_the_rest() {
+        let t = codex().trust.unwrap();
+        assert_eq!(t.format, TrustFormat::Toml);
+        let dir = Path::new("/no/such/wt/A-1");
+        let old = "# mine\nmodel = \"x\"\n\n[projects.\"/elsewhere\"]\ntrust_level = \"trusted\"\n";
+        let new = t.with_trusted(Some(old), dir).unwrap().unwrap();
+        assert!(new.starts_with("# mine\nmodel = \"x\"\n"), "{new}");
+        assert!(
+            new.contains("[projects.\"/no/such/wt/A-1\"]\ntrust_level = \"trusted\"\n"),
+            "{new}"
+        );
+        let doc: toml_edit::DocumentMut = new.parse().unwrap();
+        assert_eq!(
+            doc["projects"]["/elsewhere"]["trust_level"].as_str(),
+            Some("trusted")
+        );
+        assert_eq!(t.with_trusted(Some(&new), dir).unwrap(), None, "unchanged");
+        let first = t.with_trusted(None, dir).unwrap().unwrap();
+        assert!(first.contains("trust_level = \"trusted\""));
+        // Another level is replaced; broken TOML or a non-table is left alone.
+        let other = new.replace(
+            "[projects.\"/no/such/wt/A-1\"]\ntrust_level = \"trusted\"",
+            "[projects.\"/no/such/wt/A-1\"]\ntrust_level = \"untrusted\"",
+        );
+        assert!(
+            t.with_trusted(Some(&other), dir)
+                .unwrap()
+                .unwrap()
+                .contains("[projects.\"/no/such/wt/A-1\"]\ntrust_level = \"trusted\"")
+        );
+        assert!(t.with_trusted(Some("[projects"), dir).is_err());
+        assert!(t.with_trusted(Some("projects = 3"), dir).is_err());
+    }
+
+    #[test]
+    fn resume_prompt_args_and_depth_are_checked() {
+        let r = |v: Value| -> Result<(), String> {
+            serde_json::from_value::<Resume>(v).unwrap().check()
+        };
+        let base = json!({"args": ["resume", "{session}"], "transcripts": "/t", "file": "{session}.jsonl"});
+        let with = |k: &str, v: Value| {
+            let mut b = base.clone();
+            b[k] = v;
+            b
+        };
+        assert!(r(base.clone()).is_ok());
+        assert!(r(with("depth", json!(0))).is_err());
+        assert!(r(with("depth", json!(5))).is_err());
+        assert!(r(with("file", json!("a*b*{session}"))).is_err());
+        assert!(r(with("file", json!("x/{session}"))).is_err());
+        assert!(r(with("promptArgs", json!(["--p"]))).is_err());
+        let mut both = with("promptArgs", json!(["{prompt}"]));
+        assert!(r(both.clone()).is_ok());
+        both["promptEnv"] = json!({"P": "{prompt}"});
+        assert!(r(both).is_err());
     }
 }

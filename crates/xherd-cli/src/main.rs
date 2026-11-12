@@ -79,7 +79,7 @@ enum Cmd {
         /// Tool permissions: ask, edits, auto or all (container only); default: the profile's, else Settings.
         #[arg(long)]
         mode: Option<xherd_core::permission::PermissionMode>,
-        /// Runtime plugin (claude-code, opencode); default: the profile's, else Settings.
+        /// Runtime plugin (claude-code, opencode, codex); default: the profile's, else Settings.
         #[arg(long)]
         runtime: Option<String>,
         prompt: Option<String>,

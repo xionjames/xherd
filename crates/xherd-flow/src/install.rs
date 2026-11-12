@@ -89,6 +89,31 @@ The calls this flow uses:
 - `xherd pr opened --url https://github.com/acme/app/pull/42`, `xherd handoff written`.
 - `xherd issue add --title "Retry loop ignores the timeout" --severity major` for problems outside the task."#;
 
+/// A skill's `agents/openai.yaml` (Codex): xherd's skills run only when
+/// called by name (`$xherd-next`), never because the model picked one.
+pub const SKILL_POLICY: &str = "policy:\n  allow_implicit_invocation: false\n";
+
+/// A command file as a skill's `SKILL.md`: frontmatter `name` (the skill's
+/// folder) and `description` only, then the body. The command's
+/// `description:` line is read as plain text, as Claude Code and opencode
+/// do (`feature.md`'s has a `: ` that YAML would refuse).
+fn as_skill(text: &str, name: &str) -> Result<String, String> {
+    let (front, body) = text
+        .strip_prefix("---\n")
+        .and_then(|t| t.split_once("\n---\n"))
+        .ok_or("a skill needs frontmatter")?;
+    let description = front
+        .lines()
+        .find_map(|l| l.strip_prefix("description:"))
+        .map(|d| d.trim().trim_matches('"').to_string())
+        .filter(|d| !d.is_empty())
+        .ok_or("a skill needs a description in its frontmatter")?;
+    Ok(format!(
+        "---\nname: {name}\ndescription: {}\n---\n{body}",
+        serde_json::Value::String(description)
+    ))
+}
+
 /// One rendered file and where it goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Planned {
@@ -174,34 +199,59 @@ impl Pack {
             .map_or("", |(_, t)| *t);
         let mut out = Vec::new();
         for set in [&inst.commands, &inst.agents].into_iter().flatten() {
-            if set.format != "command" {
-                return Err(format!(
-                    "install.{runtime}: format {:?} is not supported yet",
-                    set.format
-                ));
+            let skill = match set.format.as_str() {
+                "command" => false,
+                "skill" => true,
+                f => {
+                    return Err(format!(
+                        "install.{runtime}: format {f:?} is not supported yet"
+                    ));
+                }
+            };
+            let dest = |name: &str| -> Result<PathBuf, String> {
+                let to = crate::template::render(&set.to, &[("name", name)])?;
+                Ok(PathBuf::from(expand(&to, env)?))
+            };
+            // `{{path:NAME}}`: where another command of the set is installed.
+            let mut paths = Vec::new();
+            for (path, _) in files {
+                if let Some(name) = glob_name(&set.from, path) {
+                    let to = dest(name)?.to_string_lossy().into_owned();
+                    paths.push((format!("path:{name}"), to));
+                }
             }
             for (path, text) in files {
                 let Some(name) = glob_name(&set.from, path) else {
                     continue;
                 };
-                let to = crate::template::render(&set.to, &[("name", name)])?;
-                let dest = PathBuf::from(expand(&to, env)?);
+                let dest = dest(name)?;
                 let dir = dest
                     .parent()
                     .map(|d| d.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let text = render_file(
-                    text,
-                    &[
-                        ("prefix", &inst.prefix),
-                        ("args", inst.args.as_deref().unwrap_or("")),
-                        ("dir", &dir),
-                        ("xap", XAP_SHELL),
-                        ("format", format),
-                    ],
-                )
-                .map_err(|e| format!("{path}: {e}"))?;
-                out.push(Planned { path: dest, text });
+                let mut vars = vec![
+                    ("prefix", inst.prefix.as_str()),
+                    ("args", inst.args.as_deref().unwrap_or("")),
+                    ("dir", &dir),
+                    ("xap", XAP_SHELL),
+                    ("format", format),
+                ];
+                vars.extend(paths.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+                let text = render_file(text, &vars).map_err(|e| format!("{path}: {e}"))?;
+                if skill {
+                    let folder = dest.parent().and_then(|d| d.file_name());
+                    let name = folder
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .ok_or_else(|| format!("{path}: a skill needs its own folder"))?;
+                    let text = as_skill(&text, &name).map_err(|e| format!("{path}: {e}"))?;
+                    out.push(Planned {
+                        path: dest.with_file_name("agents").join("openai.yaml"),
+                        text: SKILL_POLICY.into(),
+                    });
+                    out.push(Planned { path: dest, text });
+                } else {
+                    out.push(Planned { path: dest, text });
+                }
             }
         }
         Ok(out)
@@ -262,7 +312,7 @@ mod tests {
             .find(|f| f.path.ends_with("feature.md"))
             .unwrap();
         assert!(feature.text.contains("`$ARGUMENTS`"));
-        assert!(p.plan_install("codex", BUILTIN_FILES, &env("/h")).is_err());
+        assert!(p.plan_install("aider", BUILTIN_FILES, &env("/h")).is_err());
     }
 
     /// Every command the manifest can send exists as a command file.

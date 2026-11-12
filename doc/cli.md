@@ -52,7 +52,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `--base` | Base branch (default: the repository's default) |
 | `--autonomy` | `ask` (default) or `important` |
 | `--mode` | Tool permissions: `ask`, `edits`, `auto` or `all` (container only); default: the repo profile's, else the `permissionMode` setting |
-| `--runtime` | Runtime plugin: `claude-code` or `opencode`; default: the repo profile's, else the `defaultRuntime` setting |
+| `--runtime` | Runtime plugin: `claude-code`, `opencode` or `codex`; default: the repo profile's, else the `defaultRuntime` setting |
 
 ## Called by the runtime and by agents
 

@@ -6,7 +6,7 @@ argument-hint: <commit id, e.g. C01>
 
 Arguments: `{{args}}` (the commit id).
 
-Read the xherd rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{path:rules}}` first and follow them.
 
 xherd makes the commit itself when the user approves a proposal: it stages
 exactly the proposed files and commits with the proposal's message (as the
@@ -24,5 +24,5 @@ user left it). You record it, or fix it when git refused.
    `git show --name-only --format= HEAD` lists the proposal's files.
 4. Report it: `xherd commit done C01 --sha 3f2a9c1` (harmless when xherd
    already recorded it).
-5. Continue: follow the command in `{{dir}}/next.md` (next task, or the review
+5. Continue: follow the command in `{{path:next}}` (next task, or the review
    when every task is done).

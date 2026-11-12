@@ -20,6 +20,16 @@ install:
     slashEnters: 2
     commands: { from: commands/*.md, to: "${XDG_CONFIG_HOME:-~/.config}/opencode/command/xherd/{name}.md", format: command }
     args: "$ARGUMENTS"
+  # Codex has skills, not commands: one folder each, called as $xherd-next
+  # (only by name: agents/openai.yaml turns implicit use off). Typing
+  # "$xherd-resume" opens the skill list, whose first Enter only picks it.
+  # Skills get no argument substitution: the arguments are the rest of the
+  # message.
+  codex:
+    prefix: "$xherd-"
+    slashEnters: 2
+    commands: { from: commands/*.md, to: "${CODEX_HOME:-~/.codex}/skills/xherd-{name}/SKILL.md", format: skill }
+    args: "the text after the skill name in the message"
 
 commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review" }
 

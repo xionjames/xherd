@@ -3,7 +3,7 @@ description: xherd — write the design for the approved spec
 ---
 # Feature: design
 
-Read the xherd rules in `{{dir}}/rules.md` first and follow them.
+Read the xherd rules in `{{path:rules}}` first and follow them.
 
 1. `xherd stage enter design`
 2. Read `.xherd/spec/memory.md` and `.xherd/spec/spec.md` (approved). Open the

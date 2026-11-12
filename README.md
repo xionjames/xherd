@@ -23,7 +23,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 - **One ticket, one sandbox.** Each task gets its own git worktree and tmux session, so agents never step on each other or on your checkout.
 - **One screen for the herd.** The browser shows what every agent is doing and which ones are waiting for you.
 - **You approve the important steps.** Agents follow a spec-driven flow (spec, design, tasks, commits, pull request) and stop at gates. You read what they propose, then approve or ask for changes.
-- **Bring your own agent and process.** Claude Code today; the runtime, the flow and the integrations are plugins.
+- **Bring your own agent and process.** Claude Code, opencode or Codex; the runtime, the flow and the integrations are plugins.
 - **Docker or native.** Docker keeps agents and toolchains in a container and shares only your workspace; you can still open the code in your IDE.
 
 > **Status: early, but it runs.** One agent works end to end (worktree, Claude Code in tmux, approval gates, commits, draft PR), with a web UI and a Docker setup. It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
@@ -50,7 +50,7 @@ Working today:
 
 Planned:
 
-- Other runtimes beyond Claude Code (Codex, opencode…), and a runtime, model and effort per step.
+- A runtime, model and effort per step (the runtimes today: Claude Code, opencode, Codex).
 - Secure access from your phone or another device (pairing), beyond notifications.
 - Declarative views: Board cards and views declared by flow packs and profiles.
 

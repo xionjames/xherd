@@ -385,7 +385,7 @@ impl Resumer {
         };
         let dir = xherd_flow::install::expand(dir, env).ok()?;
         let file = file.replace("{session}", session);
-        xherd_core::runner::find_in_subdirs_as_agent(Path::new(&dir), &file).await
+        xherd_core::runner::find_in_subdirs_as_agent(Path::new(&dir), &file, self.0.depth).await
     }
 
     /// The export command's output, run as the agent user (its sessions are
@@ -623,7 +623,7 @@ mod tests {
         let none = permission_rules(None, "claude-code");
         assert_eq!((none.commands, none.read_dirs.len()), (xap.clone(), 0));
         let pack = xherd_flow::builtin();
-        for rt in ["claude-code", "opencode"] {
+        for rt in ["claude-code", "opencode", "codex"] {
             let rules = permission_rules(Some(&pack), rt);
             assert_eq!(rules.commands, xap);
             assert_eq!(rules.read_dirs, command_dirs(&pack, rt));
@@ -646,8 +646,10 @@ mod tests {
             args: vec!["--resume".into(), "{session}".into()],
             transcripts: Some(format!("{}/projects", home.path().display())),
             file: Some("{session}.jsonl".into()),
+            depth: 1,
             export: Vec::new(),
             prompt_env: Default::default(),
+            prompt_args: Vec::new(),
         });
         let env = |_: &str| None;
         assert_eq!(
@@ -666,6 +668,8 @@ mod tests {
             args: vec!["--session".into(), "{session}".into()],
             transcripts: None,
             file: None,
+            depth: 1,
+            prompt_args: Vec::new(),
             export: vec![
                 "sh".into(),
                 "-c".into(),

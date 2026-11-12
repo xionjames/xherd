@@ -29,7 +29,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `autonomy` | `ask` | Default for new agents: `ask` or `important`. `never` is not available yet |
 | `openIn` | `{}` | Settings → Open in: `hidden` (entry ids left out of the menu: `vscode`, `cursor`, `zed`, `devcontainer`, `terminal`, `companion:<app>`, `cmd:<id>`), `terminal` (`terminal`, `iterm`, `ghostty`, `konsole`, `gnome-terminal`, `kitty`, `alacritty`, `wezterm`, `xfce4-terminal`, `foot`, `xterm`, `xdg-terminal-exec`, `x-terminal-emulator`; unset, or one not for the companion's OS = the computer's default; Settings lists the ones the companion found) and `commands` (`[{"id", "label", "argv"}]`, `{dir}` and `{agent}` replaced). The companion runs a command only once you confirmed that argv on your computer |
 | `permissionMode` | `edits` | Tool permissions of new agents: `ask` (asks before every tool use that needs permission), `edits` (accepts file edits), `auto` (the runtime's own checks decide), `all` (asks nothing; only accepted in the container) |
-| `defaultRuntime` | `claude-code` | Runtime plugin of new agents (`claude-code`, `opencode`); also runs TODO condition checks. Must be a runtime plugin that is switched on |
+| `defaultRuntime` | `claude-code` | Runtime plugin of new agents (`claude-code`, `opencode`, `codex`); also runs TODO condition checks. Must be a runtime plugin that is switched on |
 | `maxAutoApprovalsInRow` | `10` | After this many automatic approvals in a row the next gate waits for you; `0` = no limit |
 | `agentTokenBudget` | `0` | Tokens one agent may use; `0` = off. 80 % notifies once, 100 % pauses the agent at its next stop |
 | `dailyTokenBudget` | `0` | Same, over all agents per UTC day |
@@ -55,7 +55,7 @@ Settings → Repo profiles (stored in the database, not `config.json`; `GET/POST
 | `baseBranch` | Where new agents start when the request names no base |
 | `autonomy` | Default autonomy of new agents (the New agent form shows it once the repository is known) |
 | `permissionMode` | Default tool permissions of new agents |
-| `runtime` | Runtime plugin of new agents (`opencode`…) |
+| `runtime` | Runtime plugin of new agents (`opencode`, `codex`…) |
 | `sensitivePaths`, `maxDiffLines` | Replace the global values; an empty list switches the sensitive-path hold off |
 | `agentTokenBudget` | Replaces the global per-agent budget (0 = off); the daily budget stays global |
 | `testCommand` | One shell command (one line) run in the worktree at each commit proposal; if it fails or times out, the commit is held for a human (only the exit status is shown) |
