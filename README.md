@@ -15,8 +15,8 @@ I got overwhelmed running several coding tasks at once: terminals piled up and a
 
 ## What is xherd?
 
-![A tour of xherd: the Herd, an agent's terminal, a spec, a design with diagrams, reviewing a commit, inline comments, the Board, and Needs attention](doc/assets/tour.gif)
-*A short tour, with mocked data. Stills of each screen are [below](#screenshots).*
+![A tour of xherd: the Herd, an agent's terminal, a spec, a design with diagrams, reviewing a commit, inline comments, a pull request, the Board, and Needs attention](doc/assets/tour.gif)
+*A short tour, with mocked data. Stills of each screen and the CLI are [below](#screenshots).*
 
 You hand xherd your tickets. It gives each one to a coding agent in its own sandbox, and shows you all of them on one screen.
 
@@ -70,6 +70,13 @@ All with mocked data.
 | **Review a commit.** xherd commits it when you approve. | **Comment on lines.** Comments go back to the agent as one change request. |
 | ![The Board: stages and tasks of every agent in Pending, In progress and Done, with TODOs](doc/assets/board.jpg) | ![Needs attention: agents waiting for you, a due TODO, and an approval made by xherd](doc/assets/attention.jpg) |
 | **Board.** Every stage and task of every agent, and your TODOs. | **Needs attention.** Everything waiting on you in one place. |
+| ![The pull request of an agent watching it: state, passing checks, no conflicts, and its reviewers](doc/assets/pull-request.jpg) | |
+| **Pull request.** Checks, conflicts and reviewers, polled while the agent watches it. | |
+
+### From the terminal
+
+![The xherd CLI: list agents, start one for a ticket, read a proposed commit's diff, approve it, ask for changes, pause an agent](doc/assets/cli.gif)
+*The everyday actions are also commands: `xherd ls`, `new`, `diff`, `approve`, `changes`, `pause` (the outputs are real, from a throwaway daemon). See the [CLI reference](doc/cli.md).*
 
 ## Documentation
 
