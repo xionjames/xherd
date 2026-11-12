@@ -60,28 +60,52 @@ fn status(v: &str) -> Option<TaskStatus> {
 }
 
 /// `text` without the progress lines of task sections (`- status:` and
-/// `- evidence:` under a task heading), byte for byte otherwise. Recording
-/// progress is not a content change of the tasks document (R-107).
+/// `- evidence:` under a task heading) and without the whole sections of
+/// tasks with `source: review` or `source: pr`, byte for byte otherwise.
+/// Recording progress is not a content change of the tasks document (R-107),
+/// and neither are fix tasks added by a review or a PR round: those are
+/// approved through their own gates (review, pr-review, commits), so adding
+/// them must not re-open the tasks gate.
 pub fn without_progress(text: &str) -> String {
-    let mut in_task = false;
+    fn field(bare: &str) -> Option<(String, &str)> {
+        let item = bare.trim_start();
+        let (k, v) = item
+            .strip_prefix("- ")
+            .or_else(|| item.strip_prefix("* "))?
+            .split_once(':')?;
+        Some((k.trim().to_ascii_lowercase(), v.trim().trim_matches('`')))
+    }
     let mut out = String::with_capacity(text.len());
+    // The task section being read, kept until its end shows whether it is a
+    // fix task (dropped) or not (written out).
+    let mut section: Option<(String, bool)> = None;
+    let flush = |out: &mut String, s: Option<(String, bool)>| {
+        if let Some((body, false)) = s {
+            out.push_str(&body);
+        }
+    };
     for line in text.split_inclusive('\n') {
         let bare = line.trim_end_matches(['\n', '\r']);
         if bare.starts_with('#') {
-            in_task = heading(bare).is_some();
-        } else if in_task {
-            let item = bare.trim_start();
-            let key = item
-                .strip_prefix("- ")
-                .or_else(|| item.strip_prefix("* "))
-                .and_then(|i| i.split_once(':'))
-                .map(|(k, _)| k.trim().to_ascii_lowercase());
-            if matches!(key.as_deref(), Some("status" | "evidence")) {
+            flush(&mut out, section.take());
+            if heading(bare).is_some() {
+                section = Some((line.to_string(), false));
                 continue;
             }
+        } else if let Some((body, fix)) = &mut section {
+            match field(bare) {
+                Some((k, _)) if k == "status" || k == "evidence" => {}
+                Some((k, v)) if k == "source" => {
+                    *fix |= matches!(v.to_ascii_lowercase().as_str(), "review" | "pr");
+                    body.push_str(line);
+                }
+                _ => body.push_str(line),
+            }
+            continue;
         }
         out.push_str(line);
     }
+    flush(&mut out, section);
     out
 }
 
@@ -235,6 +259,22 @@ ticket: SC-1
             without_progress(&SAMPLE.replace("src/api.rs", "src/x.rs")),
             base
         );
+    }
+
+    #[test]
+    fn fix_tasks_are_not_content() {
+        let base = without_progress(SAMPLE);
+        let review =
+            "## T03: Fix the leak\n- status: done\n- source: `review`\n- files: src/api.rs\n\n";
+        let pr = "### T04: Rename per comment\n- source: PR\n- files: src/api.rs\n";
+        let fixed = SAMPLE.replace("## Assumptions", &format!("{review}## Assumptions")) + pr;
+        assert_eq!(without_progress(&fixed), base);
+        // A new task from the spec is still a change.
+        let added = SAMPLE.replace(
+            "## Assumptions",
+            "## T03: More\n- source: spec\n- files: a\n\n## Assumptions",
+        );
+        assert_ne!(without_progress(&added), base);
     }
 
     #[test]
