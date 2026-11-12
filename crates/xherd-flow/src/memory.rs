@@ -40,11 +40,36 @@ pub fn check(text: Option<&str>) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// Shared memory (spec §16.6) lives in `AGENTS.md`; Claude Code reads
+/// `CLAUDE.md`, so that file must import it. The new `CLAUDE.md` text when it
+/// is missing or lacks the `@AGENTS.md` line, else `None` (its content is
+/// kept, the line appended).
+pub fn claude_md(existing: Option<&str>) -> Option<String> {
+    const IMPORT: &str = "@AGENTS.md";
+    match existing {
+        None => Some(format!("{IMPORT}\n")),
+        Some(t) if t.lines().any(|l| l.trim() == IMPORT) => None,
+        Some(t) if t.trim().is_empty() => Some(format!("{IMPORT}\n")),
+        Some(t) => Some(format!("{}\n\n{IMPORT}\n", t.trim_end())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const GOOD: &str = "# Memory\n## State\nx\n## decisions\n## Code map\n## Watch out \n";
+
+    #[test]
+    fn claude_md_imports_agents_md_once() {
+        assert_eq!(claude_md(None).unwrap(), "@AGENTS.md\n");
+        assert_eq!(claude_md(Some(" \n")).unwrap(), "@AGENTS.md\n");
+        assert_eq!(
+            claude_md(Some("# Notes\nkeep\n\n")).unwrap(),
+            "# Notes\nkeep\n\n@AGENTS.md\n"
+        );
+        assert_eq!(claude_md(Some("x\n @AGENTS.md \n")), None);
+    }
 
     #[test]
     fn structure_only() {

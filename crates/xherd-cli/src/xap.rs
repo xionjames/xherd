@@ -140,6 +140,24 @@ pub enum IssueCmd {
     },
 }
 
+#[derive(Subcommand)]
+pub enum MemoryCmd {
+    /// Propose an update of the repo's AGENTS.md (full text in --file).
+    Propose {
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        reason: String,
+    },
+}
+
+impl From<MemoryCmd> for XapCmd {
+    fn from(c: MemoryCmd) -> XapCmd {
+        let MemoryCmd::Propose { file, reason } = c;
+        XapCmd::MemoryPropose { file, reason }
+    }
+}
+
 impl From<StageCmd> for XapCmd {
     fn from(c: StageCmd) -> XapCmd {
         let StageCmd::Enter { stage, role } = c;

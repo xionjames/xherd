@@ -234,6 +234,7 @@ pub fn apply(
             | XapCmd::PrOpened { .. }
             | XapCmd::HandoffWritten { .. }
             | XapCmd::IssueAdd { .. }
+            | XapCmd::MemoryPropose { .. }
     ) {
         flow_of(a, pack)?;
     }
@@ -681,8 +682,45 @@ pub fn apply(
             // The actor appends it to the issue ledger.
             Ok(true)
         }
+
+        XapCmd::MemoryPropose { file, reason } => {
+            let Observed::Text(text) = obs else {
+                return Err(wrong("memory.propose"));
+            };
+            let f = file.as_deref().unwrap_or(MEMORY_PROPOSAL);
+            let Some(text) = text else {
+                return Err(refuse("doc_missing", format!("{f} does not exist")));
+            };
+            if text.trim().is_empty() {
+                return Err(refuse("doc_schema", format!("{f} is empty")));
+            }
+            if text.len() > MEMORY_MAX_BYTES {
+                return Err(refuse(
+                    "doc_schema",
+                    format!(
+                        "{f} is over {} KiB: keep AGENTS.md short",
+                        MEMORY_MAX_BYTES / 1024
+                    ),
+                ));
+            }
+            if reason.trim().is_empty() {
+                return Err(refuse("usage", "a memory proposal needs a --reason"));
+            }
+            a.memory_proposal = Some(xherd_core::agent::MemoryProposal {
+                file: f.to_string(),
+                reason: reason.trim().to_string(),
+                at: now,
+            });
+            Ok(true)
+        }
     }
 }
+
+/// Default proposed shared memory, private like the handoff note (§16.6).
+pub const MEMORY_PROPOSAL: &str = "./.xherd/AGENTS.proposed.md";
+
+/// Largest proposed `AGENTS.md`: shared memory stays short.
+pub const MEMORY_MAX_BYTES: usize = 64 * 1024;
 
 /// Default handoff note, at the root of `.xherd/` (spec §7.5).
 pub const HANDOFF: &str = "./.xherd/HANDOFF.md";

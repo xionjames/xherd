@@ -134,6 +134,11 @@
         </p>
       {/if}
       {#if answering && question}<p class="gwhy">“{question}”</p>{/if}
+      {#if agent.memoryProposal}
+        <p class="gwhy">The agent proposes an update of AGENTS.md (shared memory):
+          {#if tabId === 'memory'}accept or dismiss it below; it never blocks the PR.
+          {:else}<a href={href(`/agent/${agent.name}`, { s: 'memory' })}>review it</a>; it never blocks the PR.{/if}</p>
+      {/if}
       {#if openQuestions}
         <p class="gwhy">{openQuestions} open question{openQuestions === 1 ? '' : 's'}:
           {#if tabId === 'spec'}answer them in the document, then send them with your comments.

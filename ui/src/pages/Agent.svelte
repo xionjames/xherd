@@ -75,6 +75,7 @@
       return blocked ? { n: blocked, tone: 'h' } : { n: `${agent.tasks.filter((t) => t.status === 'done').length}/${agent.tasks.length}`, tone: '' };
     }
     if (id === 'commits' && agent.commits?.length) return { n: agent.commits.length, tone: '' };
+    if (id === 'memory' && agent.memoryProposal) return { n: '✋', tone: 'g' };
     return undefined;
   }
 

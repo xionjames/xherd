@@ -327,6 +327,34 @@ impl Store {
         .await
     }
 
+    /// The user dismissed a starter `path` (`AGENTS.md`) for `repo` (spec
+    /// §16.6): agents stop proposing one there.
+    pub async fn put_memory_declined(&self, repo: &str, path: &str) -> Result<()> {
+        let (r, p) = (repo.to_string(), path.to_string());
+        self.write(move |c| {
+            c.execute(
+                "INSERT OR IGNORE INTO memory_declined (repo, path) VALUES (?1, ?2)",
+                params![r, p],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn memory_declined(&self, repo: &str, path: &str) -> Result<bool> {
+        let (r, p) = (repo.to_string(), path.to_string());
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT 1 FROM memory_declined WHERE repo = ?1 AND path = ?2",
+                params![r, p],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+        })
+        .await
+    }
+
     /// The text the user approved last, for "changed since you reviewed".
     pub async fn put_reviewed(&self, agent_id: &str, file: &str, text: &str) -> Result<()> {
         let (a, f, t) = (agent_id.to_string(), file.to_string(), text.to_string());

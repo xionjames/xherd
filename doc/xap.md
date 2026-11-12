@@ -126,10 +126,10 @@ xherd commit drop <ID> [--reason TEXT]
 xherd pr opened --url URL
 xherd handoff written [--file PATH]
 xherd issue add --title TEXT --severity minor|major|blocker [--about PATH]... [--body TEXT]
-xherd memory propose <repo-path> --file PROPOSED_PATH --reason TEXT
+xherd memory propose --reason TEXT [--file PATH]
 ```
 
-`pr opened` starts PR follow-up (refused with `bad_url` unless http(s)). `handoff written` confirms a pause/ship handoff (the pause waits for it); default file `.xherd/HANDOFF.md`, refused with `doc_missing` when absent. `issue add` appends to the issue ledger (`.xherd/ledger/issues.jsonl`). `memory propose` registers a proposed `CLAUDE.md`/`AGENTS.md` update.
+`pr opened` starts PR follow-up (refused with `bad_url` unless http(s)). `handoff written` confirms a pause/ship handoff (the pause waits for it); default file `.xherd/HANDOFF.md`, refused with `doc_missing` when absent. `issue add` appends to the issue ledger (`.xherd/ledger/issues.jsonl`). `memory propose` registers a proposed update of the repository's shared memory, `AGENTS.md`: `--file` (default `.xherd/AGENTS.proposed.md`) holds the whole proposed file, `--reason` one line on what it adds. One proposal per agent; proposing again replaces it. It never blocks the flow: the user accepts (xherd commits `AGENTS.md`, plus a `CLAUDE.md` with `@AGENTS.md` when that import is missing, on the agent's branch) or dismisses it. Refusals: `doc_missing`, `doc_schema` (empty, or over 64 KiB), `usage` (no reason), `memory_declined` (the repository has no `AGENTS.md` and the user dismissed a starter one before).
 
 ## 7. MCP transport
 

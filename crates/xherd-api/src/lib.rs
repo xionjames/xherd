@@ -40,6 +40,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
         .route("/api/v1/agents/{id}/findings", get(findings))
+        .route("/api/v1/agents/{id}/memory", get(memory))
         .route("/api/v1/agents/{id}/pr-review", get(pr_review))
         .route(
             "/api/v1/agents/{id}/pr-decisions",
@@ -1011,6 +1012,15 @@ async fn findings(
     Ok(Json(d.findings(&id).await?))
 }
 
+/// `GET /agents/:id/memory`: the pending shared-memory proposal (§16.6).
+async fn memory(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.memory(&id).await?))
+}
+
 /// `GET /agents/:id/docs`: the agent's documents, open gate's first.
 async fn docs(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({"docs": d.docs(&id).await?})))
@@ -1121,6 +1131,8 @@ async fn agent_action(
             expect: b.expect.unwrap_or_default(),
             message: b.message,
         },
+        "memory-accept" => UserAction::MemoryAccept { text: b.text },
+        "memory-dismiss" => UserAction::MemoryDismiss,
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
         },

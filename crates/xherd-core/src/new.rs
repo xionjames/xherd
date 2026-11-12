@@ -195,7 +195,8 @@ Call `xherd …` (skip these calls when `XHERD_ENV` is not `1`):
 - `tasks sync`, `task start <ID>`, `task done <ID> --evidence \"…\"`, `task block <ID> --reason \"…\"`.
 - `commit propose <Cnn> --subject \"…\" --files a,b [--tasks T01]`, then stop; after approval
   commit exactly those files and call `commit done <Cnn> --sha <sha>`.
-- `pr opened --url <url>`, `handoff written`, `issue add --title \"…\" --severity minor|major|blocker`.
+- `pr opened --url <url>`, `handoff written`, `issue add --title \"…\" --severity minor|major|blocker`,
+  `memory propose --reason \"…\"` (the whole proposed `AGENTS.md` in `.xherd/AGENTS.proposed.md`).
 
 Exit codes: 0 accepted; 2 refused (read the one-line message, fix, call again);
 3 xherd unreachable (stop and wait, do not retry in a loop).

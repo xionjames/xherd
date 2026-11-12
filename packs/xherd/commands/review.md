@@ -26,5 +26,16 @@ run a sub-agent with a fresh context, give it this review to do.
    round, and holds the gate for the user after too many.
 5. Write `.xherd/spec/review.md` in the review format, and update
    `memory.md`.
-6. `xherd gate open review`
-7. Stop and wait for the user.
+6. Shared memory: `memory.md` dies with this agent, the repository's
+   `AGENTS.md` stays for every future agent. If this work taught something a
+   future agent here would need (a build or test command, a convention, a
+   trap that cost time) that `AGENTS.md` does not say yet, write the **whole**
+   proposed file (today's `AGENTS.md`, or a new one, with your additions:
+   short facts, no task history, no secrets) to `.xherd/AGENTS.proposed.md`
+   and run
+   `xherd memory propose --reason "Adds the integration test command and the fixture rule"`.
+   Nothing worth sharing: skip this step. Never commit `AGENTS.md` or
+   `CLAUDE.md` yourself: the user accepts or dismisses the proposal and xherd
+   commits it. Refused with `memory_declined`: skip this step.
+7. `xherd gate open review`
+8. Stop and wait for the user.
