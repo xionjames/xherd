@@ -37,7 +37,7 @@
           "list": [
             "bash",
             "-c",
-            "export sdkman_auto_answer=true; . \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\" && sdk list \"$1\" </dev/null | sed 's/\\x1b\\[[0-9;]*m//g' | awk -F'|' 'NF>=6 {v=$NF; gsub(/[ \\t]/,\"\",v); if (v!=\"\" && v!=\"Identifier\") print v; next} {n=split($0,a,/[ \\t*>+]+/); for(i=1;i<=n;i++) if (a[i] ~ /^[0-9][A-Za-z0-9._-]*$/) print a[i]}' | awk '!s[$0]++'",
+            "export sdkman_auto_answer=true; . \"${SDKMAN_DIR:-$HOME/.sdkman}/bin/sdkman-init.sh\" && sdk list \"$1\" </dev/null | sed 's/\\x1b\\[[0-9;]*m//g' | awk -F'|' 'NF>=4 {v=$NF; gsub(/[ \\t]/,\"\",v); if (v!=\"\" && v!=\"Identifier\") print v}' | awk '!s[$0]++'",
             "_",
             "java"
           ],
