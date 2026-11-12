@@ -20,6 +20,16 @@ pub fn new_id() -> String {
     ulid::Ulid::generate().to_string()
 }
 
+/// `xherd memory propose` (spec §16.6): the proposed `AGENTS.md` is the
+/// worktree file `file` (`./…`), read again when shown and when accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryProposal {
+    pub file: String,
+    pub reason: String,
+    pub at: Millis,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Agent {
@@ -90,6 +100,10 @@ pub struct Agent {
     /// When the agent last confirmed a handoff note (`handoff written`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff_at: Option<Millis>,
+    /// A pending update of the repo's shared memory, `AGENTS.md` (spec
+    /// §16.6), until the user accepts or dismisses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_proposal: Option<MemoryProposal>,
     /// A pause is waiting for the agent's handoff note (R-026); cleared when
     /// the session ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,6 +195,7 @@ impl Agent {
             commits: Vec::new(),
             pr_url: None,
             handoff_at: None,
+            memory_proposal: None,
             pause_requested_at: None,
             last_message: None,
             screen_blocked: false,

@@ -61,7 +61,7 @@ by theme; update it together with them.
 - [ ] Measure the token savings per step; validate the size and accuracy of the code map
 - [ ] Pack JSON schemas for gate documents (R-204); `views`, `extends`, `parse` for external packs
 - [ ] More flow packs: PR review, research/design; multi-repo tickets
-- [ ] `xherd memory propose` and the memory panel
+- [x] `xherd memory propose` and the Shared memory tab (AGENTS.md, #65)
 
 ## Git, accounts and credentials
 

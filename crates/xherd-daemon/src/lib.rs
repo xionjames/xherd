@@ -414,6 +414,33 @@ impl Daemon {
         Ok(out)
     }
 
+    /// `GET /agents/:id/memory` (spec §16.6): the pending shared-memory
+    /// proposal with the proposed text, the repo's `AGENTS.md` in the
+    /// worktree, and the `CLAUDE.md` an accept would write (`null` = left
+    /// as it is). Read-only, outside the actor.
+    pub async fn memory(&self, who: &str) -> Result<serde_json::Value, ActionError> {
+        let a = self.action(who, UserAction::Get).await?;
+        let Some(p) = a.memory_proposal else {
+            return Ok(serde_json::json!({"proposal": null}));
+        };
+        let wd = std::path::PathBuf::from(a.workdir.unwrap_or_default());
+        let read = |f: &str| std::fs::read_to_string(wd.join(f)).ok();
+        let proposed = xherd_flow::xap::doc_path(&p.file, &wd)
+            .ok()
+            .and_then(|d| actor::inside(&wd, &d))
+            .and_then(|f| std::fs::read_to_string(f).ok());
+        let claude = read("CLAUDE.md");
+        Ok(serde_json::json!({
+            "proposal": p,
+            "proposed": proposed,
+            "current": read("AGENTS.md"),
+            "claude": {
+                "current": claude,
+                "next": xherd_flow::memory::claude_md(claude.as_deref()),
+            },
+        }))
+    }
+
     /// The findings of the agent's `review.md` for the UI, each with whether
     /// its fixing tasks are done. No review yet: an empty list. A malformed
     /// document: `error` says where (the gate refuses it, so this is the

@@ -197,6 +197,9 @@ enum Cmd {
     /// XAP: record an out-of-scope finding.
     #[command(subcommand)]
     Issue(xap::IssueCmd),
+    /// XAP: propose an update of the repo's shared memory (AGENTS.md).
+    #[command(subcommand)]
+    Memory(xap::MemoryCmd),
 }
 
 #[derive(Subcommand)]
@@ -441,6 +444,7 @@ fn main() -> ExitCode {
         Cmd::Pr(c) => xap::run(c.into(), json),
         Cmd::Handoff(c) => xap::run(c.into(), json),
         Cmd::Issue(c) => xap::run(c.into(), json),
+        Cmd::Memory(c) => xap::run(c.into(), json),
     };
     ExitCode::from(code as u8)
 }

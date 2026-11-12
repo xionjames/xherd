@@ -2645,3 +2645,103 @@ async fn cancel_while_a_pause_waits_for_the_note() {
     assert_eq!(a.status, Status::Cancelled);
     assert_eq!(a.pause_requested_at, None);
 }
+
+/// Shared memory (spec §16.6): a proposal waits for the user; accepting
+/// commits AGENTS.md and a CLAUDE.md importing it on the agent's branch.
+#[tokio::test]
+async fn memory_proposal_is_committed_on_accept() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    let refused = xap(&t, "m0", "memory.propose", json!({"reason": "r"}))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "doc_missing");
+    std::fs::write(
+        wt.join(".xherd/AGENTS.proposed.md"),
+        "# Agents\n- run `make t`",
+    )
+    .unwrap();
+    xap(
+        &t,
+        "m1",
+        "memory.propose",
+        json!({"reason": "Adds the test command"}),
+    )
+    .await
+    .unwrap();
+    let p = get(&t).await.memory_proposal.unwrap();
+    assert_eq!(p.reason, "Adds the test command");
+    let view = t.d.memory("SC-1").await.unwrap();
+    assert_eq!(view["proposed"], "# Agents\n- run `make t`");
+    assert!(view["current"].is_null());
+    assert_eq!(view["claude"]["next"], "@AGENTS.md\n");
+
+    // Not while the agent works.
+    let busy = act(&t, UserAction::MemoryAccept { text: None })
+        .await
+        .unwrap_err();
+    assert_eq!(busy.code, "not_allowed");
+    stop(&t, 1).await;
+    let edited = "# Agents\n- run `make test`\n".to_string();
+    let a = act(
+        &t,
+        UserAction::MemoryAccept {
+            text: Some(edited.clone()),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(a.memory_proposal.is_none());
+    assert_eq!(
+        std::fs::read_to_string(wt.join("AGENTS.md")).unwrap(),
+        edited
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt.join("CLAUDE.md")).unwrap(),
+        "@AGENTS.md\n"
+    );
+    let files = git(wt, &["show", "--name-only", "--format=%s", "HEAD"]);
+    assert_eq!(
+        files,
+        "Update AGENTS.md (shared memory)\n\nAGENTS.md\nCLAUDE.md"
+    );
+    assert!(
+        git(
+            wt,
+            &["status", "--porcelain", "--", "AGENTS.md", "CLAUDE.md"]
+        )
+        .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_dismissed_starter_agents_md_is_not_proposed_again() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    // A second agent of the same repository.
+    let mut b = Agent::new("SC-2", "SC-2", 1);
+    b.workdir = t.a.workdir.clone();
+    b.pack = Some("xherd".into());
+    b.flow = Some("feature".into());
+    b.repo = Some(wt.to_string_lossy().into_owned());
+    b.launch = Some(vec!["rt".into()]);
+    let b = t.d.create_agent(b).await.unwrap();
+    for _ in 0..200 {
+        if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    std::fs::write(wt.join(".xherd/AGENTS.proposed.md"), "# Agents\n").unwrap();
+    let propose = |id: &str| {
+        t.d.xap(call(&b, id, "memory.propose", json!({"reason": "r"})))
+    };
+    propose("m1").await.unwrap();
+    let a = t.d.action("SC-2", UserAction::MemoryDismiss).await.unwrap();
+    assert!(a.memory_proposal.is_none());
+    assert!(!wt.join("AGENTS.md").exists());
+    assert_eq!(propose("m2").await.unwrap_err().code, "memory_declined");
+    // Once the repo has an AGENTS.md, updates are welcome again.
+    std::fs::write(wt.join("AGENTS.md"), "# Agents\n").unwrap();
+    propose("m3").await.unwrap();
+}

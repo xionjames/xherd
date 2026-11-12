@@ -700,7 +700,7 @@ Rewritten on every start, resume and autonomy change: workspace notes (folder ag
 
 ### 16.6 Memory proposals
 
-The review step may propose updates to the repo's `CLAUDE.md` / `AGENTS.md` (full proposed text plus a reason; a starter `AGENTS.md` when none exists). The UI lets the user save (optionally editing first; the agent then commits it through a normal commit gate) or dismiss (dismissing a new file is remembered per repo). Pending proposals do not block the PR.
+`memory.md` is one agent's memory and goes with it; the repository's `AGENTS.md` is the memory shared by every future agent there (#65). The review step, once all tasks are done, may propose an update of `AGENTS.md` (the whole proposed text plus a one-line reason; a starter `AGENTS.md` when none exists): short facts a future agent needs (commands, conventions, traps), no task history. `CLAUDE.md` only imports it (`@AGENTS.md`), so every runtime reads the same text. The agent page's Shared memory tab shows the diff (and the `CLAUDE.md` change, if any); the user accepts, optionally editing first, and xherd commits `AGENTS.md` (and `CLAUDE.md` when the import is missing) on the agent's branch as one commit, so it ships with the PR; or dismisses it (dismissing a starter file is remembered per repo, and agents stop proposing one there). Accepting is refused while the agent works or once its PR is open (xherd never pushes). Pending proposals do not block the PR.
 
 ## 17. User interface
 

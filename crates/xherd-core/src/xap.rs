@@ -98,6 +98,14 @@ pub enum XapCmd {
         #[serde(default)]
         body: Option<String>,
     },
+    /// Propose the repo's shared memory, `AGENTS.md` (spec §16.6): `file`
+    /// holds the full proposed text.
+    #[serde(rename = "memory.propose")]
+    MemoryPropose {
+        #[serde(default)]
+        file: Option<String>,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +133,7 @@ impl XapCmd {
             XapCmd::PrOpened { .. } => "pr.opened",
             XapCmd::HandoffWritten { .. } => "handoff.written",
             XapCmd::IssueAdd { .. } => "issue.add",
+            XapCmd::MemoryPropose { .. } => "memory.propose",
         }
     }
 

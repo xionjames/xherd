@@ -100,6 +100,8 @@ export interface Agent {
   tasks?: Task[];
   commits?: Commit[];
   prUrl?: string;
+  /** A pending update of the repo's AGENTS.md (spec §16.6). */
+  memoryProposal?: { file: string; reason: string; at: number };
   /** What the last poll of the pull request found (R-303). */
   prState?: 'open' | 'merged' | 'closed';
   prCi?: 'pending' | 'failing' | 'passing';

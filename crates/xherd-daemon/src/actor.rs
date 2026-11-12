@@ -75,6 +75,12 @@ pub enum UserAction {
         mode: xherd_core::permission::PermissionMode,
         launch: Vec<String>,
     },
+    /// Shared memory (spec §16.6): commit the proposed `AGENTS.md` (`text` =
+    /// the user's edit, else the agent's file) on the agent's branch.
+    MemoryAccept {
+        text: Option<String>,
+    },
+    MemoryDismiss,
     Get,
 }
 
@@ -1386,6 +1392,26 @@ impl Actor {
                     None => Observed::Verify(None),
                 }
             }
+            XapCmd::MemoryPropose { file, .. } => {
+                let wd = self.workdir()?;
+                if !wd.join("AGENTS.md").exists()
+                    && let Some(repo) = &self.agent.repo
+                    && self
+                        .env
+                        .store
+                        .memory_declined(repo, "AGENTS.md")
+                        .await
+                        .unwrap_or(false)
+                {
+                    return Err(refusal(
+                        "memory_declined",
+                        "the user declined a starter AGENTS.md for this repository; do not propose one",
+                    ));
+                }
+                let f = file.as_deref().unwrap_or(xherd_flow::xap::MEMORY_PROPOSAL);
+                let d = doc_path(f, &wd)?;
+                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+            }
             XapCmd::HandoffWritten { file } => {
                 let wd = self.workdir()?;
                 let d = doc_path(file.as_deref().unwrap_or(HANDOFF), &wd)?;
@@ -1635,6 +1661,22 @@ impl Actor {
             UserAction::SetAutonomy { level } => {
                 self.set_autonomy(*level).await?;
                 "user.autonomy"
+            }
+            UserAction::MemoryAccept { text } => {
+                self.memory_accept(text.clone()).await?;
+                "user.memory-accept"
+            }
+            UserAction::MemoryDismiss => {
+                if self.agent.memory_proposal.take().is_none() {
+                    return Ok(());
+                }
+                // A starter AGENTS.md declined: no more proposals for the repo.
+                if let (Ok(wd), Some(repo)) = (self.workdir(), self.agent.repo.clone())
+                    && !wd.join("AGENTS.md").exists()
+                {
+                    let _ = self.env.store.put_memory_declined(&repo, "AGENTS.md").await;
+                }
+                "user.memory-dismiss"
             }
             UserAction::SetMode { mode, launch } => {
                 if self.agent.permission_mode == Some(*mode) {
@@ -2228,6 +2270,78 @@ impl Actor {
     /// is `done` with its sha; on failure git's output goes to
     /// `.xherd/commit-error.txt` and the agent, which gets `/xherd:commit`
     /// next, fixes it. The approval stands either way.
+    /// Accept the shared-memory proposal (spec §16.6): write `AGENTS.md` (and
+    /// a `CLAUDE.md` that imports it) and commit both on the agent's branch,
+    /// so they ship with its PR. The user's accept is the approval of exactly
+    /// these files, as at a commit gate.
+    async fn memory_accept(&mut self, edited: Option<String>) -> Result<(), ActionError> {
+        let name = self.agent.name.clone();
+        let Some(p) = self.agent.memory_proposal.clone() else {
+            return Err(refuse(
+                "no_proposal",
+                format!("{name} has no memory proposal"),
+            ));
+        };
+        if self.agent.status == Status::Running {
+            return Err(refuse(
+                "not_allowed",
+                format!("{name} is working; accept when it stops"),
+            ));
+        }
+        if self.agent.pr_url.is_some() {
+            return Err(refuse(
+                "pr_open",
+                format!(
+                    "{name}'s pull request is already open and xherd never pushes; copy the text into AGENTS.md yourself, or dismiss it"
+                ),
+            ));
+        }
+        let wd = self.workdir()?;
+        let mut text = match edited.filter(|t| !t.trim().is_empty()) {
+            Some(t) => t,
+            None => {
+                let d = xherd_flow::xap::doc_path(&p.file, &wd)?;
+                inside(&wd, &d)
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .ok_or_else(|| refuse("doc_missing", format!("{} is gone", p.file)))?
+            }
+        };
+        if text.len() > xherd_flow::xap::MEMORY_MAX_BYTES {
+            return Err(refuse("doc_schema", "AGENTS.md is over 64 KiB"));
+        }
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        let mut writes = vec![("AGENTS.md", text)];
+        let claude = std::fs::read_to_string(wd.join("CLAUDE.md")).ok();
+        if let Some(c) = xherd_flow::memory::claude_md(claude.as_deref()) {
+            writes.push(("CLAUDE.md", c));
+        }
+        let mut files = Vec::new();
+        for (f, t) in writes {
+            xherd_core::runner::write_file(&wd.join(f), t.as_bytes(), None)
+                .await
+                .map_err(|e| refuse("internal", format!("{f}: {e}")))?;
+            files.push(f.to_string());
+        }
+        let message = format!("Update AGENTS.md (shared memory)\n\n{}", p.reason);
+        let git = self.env.git.clone().with_timeout(Duration::from_secs(300));
+        let sha = git.commit_paths(&wd, &files, &message).await.map_err(|e| {
+            refuse(
+                "commit_failed",
+                format!("git refused the commit ({}): {e}", files.join(", ")),
+            )
+        })?;
+        self.agent.memory_proposal = None;
+        self.log(
+            None,
+            "memory-accepted",
+            Some(json!({"sha": sha, "files": files})),
+        )
+        .await;
+        Ok(())
+    }
+
     async fn commit_for_user(&mut self, wd: &Path, id: &str, edited: Option<String>) {
         let Some(i) = self.agent.commits.iter().position(|c| c.id == id) else {
             return;
@@ -2838,7 +2952,7 @@ impl Actor {
 
 /// The file of a canonical document path, if it exists inside the worktree
 /// (symlinks resolved).
-fn inside(wd: &Path, doc: &str) -> Option<PathBuf> {
+pub(crate) fn inside(wd: &Path, doc: &str) -> Option<PathBuf> {
     let abs = wd
         .join(xherd_flow::xap::worktree_rel(doc))
         .canonicalize()
