@@ -103,14 +103,24 @@
       }
     }
   },
-  "checks": [
+  "requires": [
     {
       "name": "claude",
-      "argv": [
+      "check": [
         "claude",
         "--version"
-      ]
-    },
+      ],
+      "install": [
+        "sh",
+        "-c",
+        "npm install -g --prefix \"$HOME/.local\" @anthropic-ai/claude-code@2.1.319"
+      ],
+      "instructions": {
+        "any": "npm install -g @anthropic-ai/claude-code   # or see https://docs.claude.com/en/docs/claude-code/setup"
+      }
+    }
+  ],
+  "checks": [
     {
       "name": "login",
       "argv": [

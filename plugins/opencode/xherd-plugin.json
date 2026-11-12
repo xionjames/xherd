@@ -91,18 +91,26 @@
       }
     }
   },
-  "checks": [
-    {
-      "name": "opencode",
-      "argv": [
-        "opencode",
-        "--version"
-      ]
-    }
-  ],
   "login": [
     "opencode",
     "auth",
     "login"
+  ],
+  "requires": [
+    {
+      "name": "opencode",
+      "check": [
+        "opencode",
+        "--version"
+      ],
+      "install": [
+        "sh",
+        "-c",
+        "npm install -g --prefix \"$HOME/.local\" opencode-ai@1.19.0"
+      ],
+      "instructions": {
+        "any": "npm install -g opencode-ai   # or see https://opencode.ai/docs/"
+      }
+    }
   ]
 }
