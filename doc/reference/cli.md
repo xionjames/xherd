@@ -1,8 +1,8 @@
 # CLI reference
 
-`xherd` is one binary: the daemon, the user commands, the calls agents make, and a few helpers. Run `xherd <command> --help` for the exact flags of your version. Every command accepts `--json` for machine-readable output.
+`xherd` is one binary: the daemon, the user commands, the calls agents make, and a few helpers. Run `xherd <command> --help` for the exact flags of your version, and `xherd --version` for the version. The global `--json` flag gives machine-readable output for the XAP calls and `xherd diff`.
 
-The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the user token in the data root's `config.json`. With Docker, run it inside the container as the daemon's user: `docker exec -u xherd-daemon xherd xherd <command>` (see [Docker](docker.md#two-users-inside-the-container)).
+The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>` using the user token in the data root's `config.json`. With Docker, run it inside the container as the daemon's user: `docker exec -u xherd-daemon xherd xherd <command>` (see [Docker](../user/docker.md#two-users-inside-the-container)).
 
 ## Daemon and setup
 
@@ -11,7 +11,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `xherd daemon` | Run the daemon in the foreground. Logs are JSON on stderr; `XHERD_LOG=debug` for more |
 | `xherd status` | Is the daemon up? |
 | `xherd install [--runtime R] [--pack P]` | Install the pack's commands (`/xherd:*`) for agent runtimes. Default: the xherd pack, every runtime plugin that is switched on. Runs in the daemon, so commands land where agents run |
-| `xherd docker init` | Write `~/.config/xherd/compose.yaml` and `.env` for the detected engine |
+| `xherd docker init [--workspace DIR] [--image I] [--port N] [--extra-path DIR]… [--force]` | Write `~/.config/xherd/compose.yaml` and `.env` for the detected engine. `--extra-path` mounts another folder with repositories at the same path; `--force` rewrites an existing file |
 | `xherd docker doctor` | Check engine, mounts, ownership, SSH agent and port binding; each finding has a fix |
 | `xherd docker update [--no-pull]` | Pause live agents, take a backup (the last 3 of these are kept; a failed backup stops the update unless `--force`), pull and recreate the container, wait for health, resume |
 | `xherd security check` | Exposure overview: network binding, user split, plugins, limits, autonomy. Informational: warnings do not change the exit code |
@@ -30,7 +30,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | `xherd new <KEY> [PROMPT]` | Create an agent: worktree, branch and `.xherd/` for a ticket |
 | `xherd ls` | List agents, with the open gate or the PR URL (session ids cut to 8 characters) |
 | `xherd diff <agent>` | The open commit proposal's diff; at a ship gate the branch as it will be pushed; otherwise every uncommitted change |
-| `xherd approve <agent>` | Approve the open gate (documents or commit) as they are on disk now |
+| `xherd approve <agent> [--reason TEXT]` | Approve the open gate (documents or commit) as they are on disk now; the reason goes to the ledger |
 | `xherd changes <agent> "<comment>"` | Ask the agent to revise its open gate |
 | `xherd send <agent> "<text>"` | Type into the session; the answer to a question gate |
 | `xherd pause --all` | Kill switch: pause every queued and live agent now, with no handoff note; nothing new starts |
@@ -62,9 +62,9 @@ These are not for daily use; they are what Claude Code and the agents call.
 |---|---|
 | `xherd hook <event>` | Runtime hook; reads the hook JSON on stdin. Silent, always exits 0 |
 | `xherd report …` | Push status for agents or wrappers without hooks |
-| `xherd stage enter`, `gate open`, `ask`, `tasks sync`, `task start\|done\|block`, `commit propose\|done\|drop`, `pr opened`, `handoff written`, `issue add` | The agent protocol, XAP. See the [XAP reference](xap.md) |
+| `xherd stage enter`, `gate open`, `ask`, `tasks sync`, `task start\|done\|block`, `commit propose\|done\|drop`, `pr opened`, `handoff written`, `issue add`, `memory propose` | The agent protocol, XAP. See the [XAP reference](xap.md) |
 | `xherd toolchain exec -- <argv>` | Provide the tools `.xherd/toolchain.json` lists, then run the command with them on `PATH`. The daemon starts agents this way |
-| `xherd guard pre-push` | The check behind the worktree's `pre-push` hook |
+| `xherd guard pre-push --branch B` | The check behind the worktree's `pre-push` hook: only branch `B` may be pushed |
 
 Exit codes of XAP calls: `0` accepted, `2` refused (stderr has a one-line reason), `3` daemon unreachable.
 
@@ -78,6 +78,6 @@ Exit codes of XAP calls: `0` accepted, `2` refused (stderr has a one-line reason
 | `XHERD_LOG` | daemon | Log filter, e.g. `debug` |
 | `XHERD_ENV=1` | agents | Set in agent sessions; SDKs call xherd only when it is `1` |
 | `XHERD_BIN`, `XHERD_AGENT_TOKEN`, `XHERD_PORT_BASE` | agents | The binary path, the agent's token, the first of its 10 reserved ports |
-| `XHERD_SANDBOX=1`, `XHERD_BIND`, `XHERD_LOCAL_PEERS`, `XHERD_QUEUE` | container | See [Docker](docker.md) |
+| `XHERD_SANDBOX=1`, `XHERD_BIND`, `XHERD_LOCAL_PEERS`, `XHERD_QUEUE` | container | See [Docker](../user/docker.md) |
 | `XHERD_UID`, `XHERD_GID`, `XHERD_PORT`, `XHERD_IMAGE`, `XHERD_SSH_SOCK` | compose `.env` | Your ids, published port, image to run, forwarded SSH agent socket (written by `xherd docker init`) |
 | `XHERD_EXTRA_PATHS` | container | Colon-separated extra folders mounted at the same path where repositories may live outside the workspace |

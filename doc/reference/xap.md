@@ -1,8 +1,8 @@
 # XAP — xherd agent protocol (reference)
 
-> Status: **draft, protocol version 1** · 2026-11-06 · Part of [`spec.md`](./spec.md) (§5.4, §6, §8).
+> Status: **draft, protocol version 1** · 2026-11-06 · Part of [`spec.md`](../internal/spec.md) (§5.4, §6, §8).
 >
-> XAP is how an agent, an SDD's commands, or a wrapper tells xherd what is happening: status, gates, tasks, commits, PRs. It is a set of `xherd` subcommands (and the same operations as MCP tools). The daemon validates every call; agents never approve anything.
+> XAP is how an agent, an SDD's commands, or a wrapper tells xherd what is happening: status, gates, tasks, commits, PRs. It is a set of `xherd` subcommands (the same operations as MCP tools are planned, §7). The daemon validates every call; agents never approve anything.
 
 ## 1. Conventions
 
@@ -81,9 +81,9 @@ Declares that the agent stops for approval of the listed documents/artifacts. Th
 
 | Option | Meaning |
 |---|---|
-| `--role` | Step role (`spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`, `explore`, `custom`). Required for dynamic flows; packs already know it. |
+| `--role` | Step role (`spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`, `explore`, `custom`). Required for dynamic flows (planned); packs already know it. |
 | `--doc` / `--artifact` | Files to approve; each is hashed at declaration. |
-| `--next` | Dynamic flows: command to send after approval; must start with an allowed prefix. |
+| `--next` | Dynamic flows (planned): command to send after approval; must start with an allowed prefix. Packs take the next command from the manifest. |
 | `--needs-human` | Forces a human approval (tripwire) with this reason. |
 | `--question` | Extra open questions (repeatable). For packs whose documents have a `## Open questions` section (the xherd pack), the questions are read from the documents and this option is only for a question that has no place in them; one that matches a list item is not repeated. |
 
@@ -133,7 +133,9 @@ xherd memory propose --reason TEXT [--file PATH]
 
 ## 7. MCP transport
 
-`xherd mcp` runs an MCP server over stdio exposing the same operations as tools: `xherd_gate_open`, `xherd_ask`, `xherd_stage_enter`, `xherd_tasks_sync`, `xherd_task_start`, `xherd_task_done`, `xherd_task_block`, `xherd_commit_propose`, `xherd_commit_done`, `xherd_commit_drop`, `xherd_pr_opened`, `xherd_handoff_written`, `xherd_issue_add`, `xherd_memory_propose`. Arguments mirror the CLI flags; refusals are tool errors with the same codes and messages. Status reporting stays on hooks/`report`.
+> Planned: `xherd mcp` is not built yet.
+
+`xherd mcp` will run an MCP server over stdio exposing the same operations as tools: `xherd_gate_open`, `xherd_ask`, `xherd_stage_enter`, `xherd_tasks_sync`, `xherd_task_start`, `xherd_task_done`, `xherd_task_block`, `xherd_commit_propose`, `xherd_commit_done`, `xherd_commit_drop`, `xherd_pr_opened`, `xherd_handoff_written`, `xherd_issue_add`, `xherd_memory_propose`. Arguments will mirror the CLI flags; refusals will be tool errors with the same codes and messages. Status reporting stays on hooks/`report`.
 
 ## 8. HTTP
 

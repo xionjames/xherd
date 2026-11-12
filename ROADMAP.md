@@ -2,7 +2,7 @@
 
 High-level view of the work, done and pending. `[x]` = done, `[ ]` = pending.
 The sources of truth stay where they were: the milestone checklist in
-[`doc/design.md`](doc/design.md) §18, the roadmap in [`doc/spec.md`](doc/spec.md)
+[`doc/internal/design.md`](doc/internal/design.md) §18, the roadmap in [`doc/internal/spec.md`](doc/internal/spec.md)
 §21 and the status notes in [`AGENTS.md`](AGENTS.md). This file groups the work
 by theme; update it together with them.
 
@@ -26,7 +26,8 @@ by theme; update it together with them.
 - [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (agent, repository) and TODO cards; the Herd's By stage layout (agents in columns by role); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
 - [ ] Board cards declared by packs and profiles (R-1101), checks for runtimes other than Claude Code (they need a `check` command in their plugin)
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
-- [ ] Plugin secrets and plugin install from the UI
+- [x] Plugin secrets from the UI (write-only, live)
+- [ ] Plugin install from the UI
 
 ## M3 Docker-first
 
@@ -62,6 +63,7 @@ by theme; update it together with them.
 - [x] Each step starts from `memory.md` (state, decisions, code map) instead of re-exploring the code
 - [ ] Measure the token savings per step; validate the size and accuracy of the code map
 - [ ] Pack JSON schemas for gate documents (R-204); `views`, `extends`, `parse` for external packs
+- [ ] Loading external flow packs (only the built-in pack loads today) and dynamic flows, so an SDD that makes XAP calls gets gates without a pack of its own (`doc/extend/integrate-your-sdd.md`)
 - [ ] More flow packs: PR review, research/design; multi-repo tickets
 - [x] `xherd memory propose` and the Shared memory tab (AGENTS.md, #65)
 

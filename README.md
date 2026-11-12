@@ -7,7 +7,7 @@
 <p align="center"><b>Run a herd of coding agents in parallel. Stay in control.</b></p>
 
 > [!WARNING]
-> **Development version.** xherd is under active development and has no releases yet. Expect breaking changes, missing features and rough edges, and back up anything you care about before trying it.
+> **Early releases (0.x).** xherd is under active development. Expect breaking changes between versions, missing features and rough edges, and back up anything you care about (`xherd backup create`) before updating.
 
 ## Why
 
@@ -26,7 +26,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 - **Bring your own agent and process.** Claude Code, opencode or Codex; the runtime, the flow and the integrations are plugins.
 - **Docker or native.** Docker keeps agents and toolchains in a container and shares only your workspace; you can still open the code in your IDE.
 
-> **Status: early, but it runs.** One agent works end to end (worktree, Claude Code in tmux, approval gates, commits, draft PR), with a web UI and a Docker setup. It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
+> **Status: early, but it runs.** Agents work end to end (worktree, runtime in tmux, approval gates, commits, draft PR, PR follow-up), with a web UI, a Docker image and Linux packages ([releases](https://github.com/xionjames/xherd/releases)). It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
 
 ## Highlights
 
@@ -36,10 +36,11 @@ Working today:
 - A web UI: the herd at a glance, a "your call" band for whatever needs you, a live terminal per agent, diffs, and settings with setup checks.
 - Approval gates for spec, design, tasks and commits; documents render Markdown with Mermaid diagrams, and you can comment on any block or diff line. Approvals are hashed, so you approve exactly what you read, and each step starts a fresh session that carries over a short `memory.md`.
 - xherd runs the approved commit for you, and the agent opens a draft pull request when you approve the ship gate.
-- Pluggable spec-driven development: **xherd** built in, or your own through flow packs or a few `xherd` calls ([guide](doc/integrate-your-sdd.md)).
+- A spec-driven flow built in (**xherd**: spec, design, tasks, implement, review, ship), defined as a flow pack whose prompts you can edit.
 - Docker-first: agents, toolchains (Java, Node, Go, Rust, Python) and Claude Code live in one container and only your workspace is shared. "Open in" your IDE through same-path mounts.
 - Agents survive restarts: they are parked at their gate or resumed, not lost.
-- Git access from the UI (HTTPS tokens, SSH keys, per-owner commit identity) and repositories cloned by URL.
+- Git access from the UI (HTTPS tokens, SSH keys, per-owner commit identity) and repositories cloned by URL. GitHub and GitLab for pull requests; Bitbucket for git access.
+- Issue trackers (Jira, GitHub issues, GitLab issues): ticket keys become links, the ticket and its comments show beside the agent, and you can post a summary of the work when the PR is open.
 - Plugins in any language (the CLI is the plugin API). Single Rust binary, web UI embedded.
 - A Board with every stage and task of every agent (pending, in progress, done), a Needs attention page, time tracking and TODOs.
 - Adjustable autonomy: xherd can approve routine steps itself, held back by tripwires (secrets, sensitive paths, large diffs, failing lint or tests). Guardrails: a pre-push guard, token budgets, a session time limit and a "Pause all" kill switch.
@@ -53,6 +54,7 @@ Planned:
 - A runtime, model and effort per step (the runtimes today: Claude Code, opencode, Codex).
 - Secure access from your phone or another device (pairing), beyond notifications.
 - Declarative views: Board cards and views declared by flow packs and profiles.
+- Your own spec-driven method under xherd, through your own flow pack or a few `xherd` calls ([draft guide](doc/extend/integrate-your-sdd.md)).
 
 ## Screenshots
 
@@ -76,23 +78,18 @@ All with mocked data.
 ### From the terminal
 
 ![The xherd CLI: list agents, start one for a ticket, read a proposed commit's diff, approve it, ask for changes, pause an agent](doc/assets/cli.gif)
-*The everyday actions are also commands: `xherd ls`, `new`, `diff`, `approve`, `changes`, `pause` (the outputs are real, from a throwaway daemon). See the [CLI reference](doc/cli.md).*
+*The everyday actions are also commands: `xherd ls`, `new`, `diff`, `approve`, `changes`, `pause` (the outputs are real, from a throwaway daemon). See the [CLI reference](doc/reference/cli.md).*
 
 ## Documentation
 
-- [Getting started](doc/getting-started.md): install a release (Docker recommended), first agent, everyday commands
-- [Running from source](doc/from-source.md): build the image or the binary from this repository
-- [Docker](doc/docker.md): topology, the two-user container, git access, toolchains, operating
-- [Architecture](doc/architecture.md): crates, actors, gates, sessions, plugins, guardrails
-- [CLI reference](doc/cli.md) and [Configuration](doc/configuration.md)
-- [Security model](doc/security.md)
-- [Plugins and flow packs](doc/plugins-and-packs.md): extending xherd
-- [Development](doc/development.md): build, test, conventions, how to add things
-- [XAP reference](doc/xap.md): the protocol agents and SDDs use to talk to xherd
-- [Add xherd support to your SDD](doc/integrate-your-sdd.md)
-- [Roadmap](ROADMAP.md)
+Start with **[Getting started](doc/user/getting-started.md)** (install with Docker or a Linux package, first agent), then **[Using xherd](doc/user/guide.md)**. Everything else is in the [documentation index](doc/README.md):
 
-Working documents, to be removed when the final documentation is complete: [Product specification](doc/spec.md) and [Design](doc/design.md).
+| | |
+|---|---|
+| Running it | [Getting started](doc/user/getting-started.md) · [Using xherd](doc/user/guide.md) · [Docker](doc/user/docker.md) · [Security model](doc/user/security.md) |
+| Reference | [CLI](doc/reference/cli.md) · [Configuration](doc/reference/configuration.md) · [HTTP API](doc/reference/http-api.md) · [XAP](doc/reference/xap.md) |
+| Extending | [Plugins](doc/extend/plugins.md) · [Flow packs](doc/extend/flow-packs.md) · [Add xherd support to your SDD](doc/extend/integrate-your-sdd.md) |
+| Contributing | [Running from source](doc/dev/from-source.md) · [Development](doc/dev/development.md) · [Architecture](doc/dev/architecture.md) · [Roadmap](ROADMAP.md) |
 
 ## License
 

@@ -1,13 +1,13 @@
 # Running from source
 
-How to build and run xherd from a clone of this repository: the Docker image, or a native binary. Use it to try a branch that is not released, to run on macOS natively (no macOS binaries are published yet), or as the first step before [changing xherd](development.md). To install a published release instead, see [Getting started](getting-started.md).
+How to build and run xherd from a clone of this repository: the Docker image, or a native binary. Use it to try a branch that is not released, to run on macOS natively (no macOS binaries are published yet), or as the first step before [changing xherd](development.md). To install a published release instead, see [Getting started](../user/getting-started.md).
 
 ## Prerequisites
 
 | | Docker build | Native build |
 |---|---|---|
 | Build | A container engine with Compose (Docker Desktop, OrbStack, Colima, Docker on Linux) | Rust (edition 2024, stable), Node and pnpm |
-| Run | Nothing else: everything is in the image | `git`, `tmux` ≥ 3.3, Claude Code logged in, `gh` / `glab` on `PATH` |
+| Run | Nothing else: everything is in the image | `git`, `tmux` ≥ 3.3, a runtime (Claude Code, opencode or Codex) logged in, `gh` / `glab` on `PATH` |
 
 On macOS with Homebrew's keg-only rustup, put it on `PATH` first: `export PATH=/opt/homebrew/opt/rustup/bin:$PATH`.
 
@@ -28,7 +28,7 @@ Open <http://127.0.0.1:4740/>. `.env` is gitignored; `.env.example` lists the va
 - `XHERD_UID` / `XHERD_GID`: your ids; agents write files as you.
 - `XHERD_PORT` (optional, default 4740): the port published on your machine's loopback.
 
-The Dockerfile is multi-stage: the UI (pnpm), the daemon (cargo), and the runtime on Debian trixie with `git`, `tmux`, `gh`, `glab`, `socat`, `tini`, Node and Claude Code, `uv`, Go, and seeds of SDKMAN, nvm and rustup. Version pins are `ARG`s at the top of the runtime stage.
+The Dockerfile is multi-stage: the UI (pnpm), the daemon (cargo), and the runtime on Debian trixie with `git`, `tmux`, `gh`, `glab`, `socat`, `tini`, Node with Claude Code, opencode and Codex, `uv`, Go, and seeds of SDKMAN, nvm and rustup. Version pins are `ARG`s at the top of the runtime stage.
 
 After a change, rebuild and recreate with the same `docker compose up -d --build` (pause the agents first if you care about their running turns). `xherd docker doctor` and `xherd docker update` work only on the compose file in `~/.config/xherd` (`$XDG_CONFIG_HOME/xherd`), not on this one. The image has no `.git`, so it shows the Cargo version unless you pass the build argument:
 
@@ -42,7 +42,7 @@ To build the image alone:
 docker build -f deploy/docker/Dockerfile -t xherd:dev .
 ```
 
-Topology, the two users inside the container, volumes and git access are in [Docker](docker.md).
+Topology, the two users inside the container, volumes and git access are in [Docker](../user/docker.md).
 
 ## Native build
 
@@ -52,7 +52,7 @@ The release binary embeds the web UI at compile time, so build the UI first:
 (cd ui && pnpm install && pnpm build)          # ui/dist
 cargo build --release                          # target/release/xherd
 ./target/release/xherd daemon                  # JSON logs on stderr; XHERD_LOG=debug for more
-./target/release/xherd install                 # once: the /xherd:* commands for Claude Code
+./target/release/xherd install                 # once: the xherd commands for each runtime that is on
 ```
 
 Put `target/release/xherd` on your `PATH` (the agents' hooks call it by its absolute path, so do not move it while agents exist). Open <http://127.0.0.1:4740/>.
@@ -73,6 +73,8 @@ XHERD_HOME=/tmp/xh cargo run -p xherd-cli -- status
 cd ui && pnpm dev            # Vite dev server, proxies /api to XHERD_URL (default 127.0.0.1:4740)
 ```
 
+Agents' sessions get the daemon's `PATH` (tmux takes it from the client that creates the session), and the prompts call plain `xherd …`: to run real agents from a debug build, put `target/debug` on `PATH` before starting the daemon (`PATH=$PWD/target/debug:$PATH`), or their calls fail with "command not found".
+
 `scripts/demo.sh` runs a throwaway daemon on port 4741 with fake agents, for screenshots ([Development](development.md#demo-data-for-screenshots)).
 
 ## Release builds like CI
@@ -88,6 +90,6 @@ How to cut a release is in [Development](development.md#releases).
 
 ## Next
 
-- [Getting started](getting-started.md#first-run): the first run and a first agent, the same from source
+- [Getting started](../user/getting-started.md#first-run): the first run and a first agent, the same from source, then [Using xherd](../user/guide.md)
 - [Development](development.md): tests, conventions, how to add things
 - [Architecture](architecture.md)

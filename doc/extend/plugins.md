@@ -1,8 +1,6 @@
-# Plugins and flow packs
+# Plugins
 
-xherd has two extension points. A **plugin** teaches xherd about a tool: an agent runtime, a git host, a language toolchain. A **flow pack** defines the steps agents follow and the prompts that drive them. Both are data plus, where needed, commands in any language. If you only want your own spec-driven method to run under xherd with gates and approvals, you do not need a pack: see [Add xherd support to your SDD](integrate-your-sdd.md).
-
-## Plugins
+xherd has two extension points. A **plugin** teaches xherd about a tool: an agent runtime, a git host, an issue tracker, a language toolchain. A **[flow pack](flow-packs.md)** defines the steps agents follow and the prompts that drive them. Both are data plus, where needed, commands in any language. Running your own spec-driven method under xherd, with or without a pack, is planned: see [Add xherd support to your SDD](integrate-your-sdd.md).
 
 A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in plugins first, then every `<data root>/plugins/*/xherd-plugin.json`; an external plugin overrides a built-in with the same name. A manifest that fails to parse is listed as *broken* in Settings → Plugins with its error, and does not stop xherd.
 
@@ -11,12 +9,17 @@ A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in 
 | `claude-code` | runtime | Launch argv, permission modes, hook file and event map, trust file, transcript lookup, token usage, read-only check command |
 | `opencode` | runtime | The same for opencode: permission modes through `OPENCODE_PERMISSION`, a JavaScript plugin file as its hook file, the first prompt on the launch line, transcripts through `opencode export` |
 | `codex` | runtime | The same for the OpenAI Codex CLI: permission modes as Codex sandbox and approval flags, `.codex/hooks.json`, trust in `~/.codex/config.toml`, the first prompt on the launch line (also when resuming), transcripts under `~/.codex/sessions` |
-| `github` | host | Pull request lookup, status, checks, comments, replies and templates through the `gh` CLI |
+| `github` | host | Git access for GitHub, and pull request lookup, status, checks, comments, replies and templates through the `gh` CLI |
+| `gitlab` | host | The same for GitLab merge requests through `glab api` |
+| `bitbucket` | host | Git access only (a token kept by xherd); no pull request support yet |
+| `jira`, `github-issues`, `gitlab-issues` | tracker | Ticket keys as links, the Ticket tab (reading the ticket and its comments), posting a summary you accepted |
 | `sdkman`, `nvm`, `uv`, `go`, `rustup` | toolchain | Which version files they read and how to find or install a tool |
 
-Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host and toolchain plugins; the others are accepted by the manifest but nothing consumes them yet.
+Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host, tracker and toolchain plugins; the others are accepted by the manifest but nothing consumes them yet.
 
-### Manifest
+Every plugin can be switched off in Settings → Plugins (or the Welcome screen), as long as one plugin of each kind stays on (trackers excepted: having none is fine). Its card there opens its options: settings, secrets, checks with their fixes, its login, and for a toolchain the versions.
+
+## Manifest
 
 ```json
 {
@@ -39,16 +42,17 @@ Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `flow`, `notifie
 |---|---|
 | `name` | Lowercase letters, digits and `-`, at most 64 characters |
 | `min_xherd_version` | Refuse to load on older xherd |
-| `settings` | Shown in Settings. `secret: true` values live in `secrets.json`, are not editable in the UI yet, and are passed to commands separately from plain settings |
+| `settings` | Shown in the plugin's options. `secret: true` values are write-only in the UI (it shows whether one is set, never the value), live in `secrets.json`, apply at once, and are passed to commands separately from plain settings. Plain settings apply at the next daemon start |
 | `commands` | Command name → argv |
 | `hooks` | Event name → argv; the output is ignored |
 | `checks` | Each runs an argv; pass = exit 0 within 10 s. They appear in Setup checks. `fix` is a command offered to the user; `optional` checks do not block |
+| `requires` | Command-line tools the plugin needs, with a check, a container install and native instructions ([below](#tools-a-plugin-needs-requires)) |
 | `login` | Argv of an interactive login, run in a terminal the UI shows. Whether it is logged in is the check named `login` |
 | `build` | Install-time build argv |
 | `timeoutSeconds` | Per-command timeout (default 60) |
 | `data`, `instructions` | Kind-specific data and prompt fragments |
 
-### Command protocol
+## Command protocol
 
 xherd runs a command's argv in the agent's worktree (as the agents' user in the container), writes one JSON object to its stdin — `{command, input, settings, secrets, agent}` — and reads one JSON value from stdout. stderr goes to the log with secrets redacted. A non-zero exit or output of the wrong shape is a failure of that call; xherd logs it and carries on (a failed PR poll never blocks an agent).
 
@@ -73,9 +77,9 @@ A host plugin also declares its git access in `data.git` (the built-in `github`,
 
 Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. A plugin's options page (Settings → Plugins) lists the hosts that use it.
 
-### Issue trackers (`data.tracker`)
+## Issue trackers (`data.tracker`)
 
-A `tracker` plugin says how text in the UI becomes a link to the ticket. xherd's core never calls a tracker (spec N1); the links only point you at it.
+A `tracker` plugin says how text in the UI becomes a link to the ticket, how to read a ticket, and how to post a comment you wrote. Agents never call a tracker, and xherd posts nothing by itself.
 
 ```json
 "settings": [{ "key": "baseUrl", "label": "Jira site", "required": true }],
@@ -86,13 +90,13 @@ A `tracker` plugin says how text in the UI becomes a link to the ticket. xherd's
 
 `pattern` is a regular expression run in the browser over agent-written text and the ticket key on the agent page (outside code and existing links). `url` is `https://…` or starts with `{baseUrl}` (the plugin's `baseUrl` setting, https only; a rule whose base URL is missing is left out); `{0}` is the match and `{1}`…`{9}` its groups, percent-encoded. A manifest is refused when a pattern does not compile with the linear-time `regex` crate (no backreferences or lookaround), is over 200 characters, or repeats a repeated group (`(a+)+`), and when a URL uses a group the pattern lacks. The built-in `jira` (`PAY-412`), `github-issues` (`owner/repo#12`) and `gitlab-issues` (`group/project#12`, `baseUrl` default `https://gitlab.com`) use it. Having no tracker is allowed.
 
-A tracker can also read the agent's ticket, shown in the agent page's **Ticket** tab (title, state, description and comments, oldest first; read-only, nothing is posted back, R-308). Two more fields in `data.tracker` say which tickets it reads: `key`, a regular expression with exactly one group whose match is the issue reference (`^(?:GH-)?(\\d+)$` turns `GH-12` or `12` into `12`; the reference must be a plain name, since it ends up in a command line), and `hosts`, the git host names it serves (`github.com`, `*gitlab*`). For an agent, xherd takes the host of the worktree's `origin`, asks the enabled tracker that serves it and reads the key, and then one that serves any host. The built-in `github-issues` runs `gh issue view <n> --json title,body,state,url,author,comments`; `gitlab-issues` runs `glab api` on `projects/<path>/issues/<n>` and its notes (system notes left out). Both use the plugin's `gh` / `glab` and `token` settings or, without a token, the one kept for the remote's host in Settings → Git access. `jira` reads through Atlassian's CLI: `acli jira workitem view <KEY> --json --fields summary,status,description,reporter` and `acli jira workitem comment list --key <KEY> --json --paginate`, using `acli`'s own login (`acli jira auth login --web`, status `acli jira auth status`; the plugin has the usual Log in button and an optional `login` check) and the plugin's `acli` setting. Its description and comments are Atlassian Document Format, which xherd turns into Markdown (headings, lists, links, code, quotes, tables, mentions; an unknown node keeps its text). The ticket's link is `<baseUrl>/browse/<KEY>` from the plugin's `baseUrl` setting (the `self` URL in the output is an internal Atlassian host). The container install of `acli` downloads Atlassian's binary into `~/.local/bin`; natively the instructions are shown (Homebrew on macOS).
+A tracker can also read the agent's ticket, shown in the agent page's **Ticket** tab (title, state, description and comments, oldest first; reading never posts anything). Two more fields in `data.tracker` say which tickets it reads: `key`, a regular expression with exactly one group whose match is the issue reference (`^(?:GH-)?(\\d+)$` turns `GH-12` or `12` into `12`; the reference must be a plain name, since it ends up in a command line), and `hosts`, the git host names it serves (`github.com`, `*gitlab*`). For an agent, xherd takes the host of the worktree's `origin`, asks the enabled tracker that serves it and reads the key, and then one that serves any host. The built-in `github-issues` runs `gh issue view <n> --json title,body,state,url,author,comments`; `gitlab-issues` runs `glab api` on `projects/<path>/issues/<n>` and its notes (system notes left out). Both use the plugin's `gh` / `glab` and `token` settings or, without a token, the one kept for the remote's host in Settings → Git access. `jira` reads through Atlassian's CLI: `acli jira workitem view <KEY> --json --fields summary,status,description,reporter` and `acli jira workitem comment list --key <KEY> --json --paginate`, using `acli`'s own login (`acli jira auth login --web`, status `acli jira auth status`; the plugin has the usual Log in button and an optional `login` check) and the plugin's `acli` setting. Its description and comments are Atlassian Document Format, which xherd turns into Markdown (headings, lists, links, code, quotes, tables, mentions; an unknown node keeps its text). The ticket's link is `<baseUrl>/browse/<KEY>` from the plugin's `baseUrl` setting (the `self` URL in the output is an internal Atlassian host). The container install of `acli` downloads Atlassian's binary into `~/.local/bin`; natively the instructions are shown (Homebrew on macOS).
 
 **Posting a summary.** When a pull request is open, the agent page offers to post a summary on the ticket (only if an enabled tracker reads it and nothing was posted; "Not now" is remembered in the browser), and the packs do not touch tickets at all: the built-in ship prompt only writes `pr.md`, which becomes the PR body. The Ticket tab can post a short summary of what the agent did as a comment (R-308: only the user's accept posts anything). *Draft a summary* asks xherd for a draft built from the agent's finished tasks, commits and pull request (`xherd_core::ticket::summary`, no model, no ticket text in it); the user reads and edits it, and *Post to the ticket* sends exactly that text (`POST /agents/{id}/ticket-comment`, at most 10 000 characters, no control characters). The built-in trackers run `gh issue comment <n> --body <text>`, `glab api -X POST projects/<path>/issues/<n>/notes -f body=<text>` (both add xherd's hidden marker `<!-- xherd -->`) and `acli jira workitem comment create --key <KEY> --body <text>`; the text is one argument, never through a shell. An external tracker answers `ticket-comment` (stdin `{command, input: {key, issue, body, worktree}}`, no output needed). The post is logged as the event `ticket-comment` with its length, not its text. Jira takes plain text here: how it handles newlines in `--body` is unchecked.
 
 An external tracker answers the command `ticket-get` (stdin `{command, input: {key, issue, worktree}}`, stdout `{title, body?, state?, url?, author?, comments?: [{id, kind, author, body, url?, createdAt?}]}`). Ticket and comment text is written by other people: the UI renders it through the sanitiser, and anything that hands it to an agent must wrap it as untrusted (R-1201).
 
-### Tools a plugin needs (`requires`)
+## Tools a plugin needs (`requires`)
 
 Any plugin can list the command-line tools it needs:
 
@@ -106,13 +110,13 @@ Any plugin can list the command-line tools it needs:
 }]
 ```
 
-Each entry is a check named `requires:<name>` (`check` defaults to `command -v <name>`; `optional` means a missing tool is reported but never blocks). When it fails, the container offers the `install` argv from the UI, run in a terminal into the agents' home (the same session as plugin logins); a native run shows the `instructions` for its OS (`macos`, `linux`, else `any`) and never installs anything on the host (R-653). `install` must name a program on `PATH` (no `./` script), `name` is a plain word, and a control character anywhere is refused. The built-in `github` (`gh`) and `gitlab` (`glab`) use it, as do the version managers and the three runtimes (`claude`, `opencode`, `codex`). The container image already carries all of these; a runtime's container install is `npm install -g --prefix "$HOME/.local" <package>@<version>` (the agents' `PATH` starts with `~/.local/bin`, and `/usr/local` is not theirs to write), pinned to the version the image is built with and xherd was checked against (a test keeps it equal to the Dockerfile's `ARG`). Natively xherd shows the instructions and installs nothing. The review of an external plugin's install argv before it runs belongs to the install-from-GitHub flow (R-542), which is not built.
+Each entry is a check named `requires:<name>` (`check` defaults to `command -v <name>`; `optional` means a missing tool is reported but never blocks). When it fails, the container offers the `install` argv from the UI, run in a terminal into the agents' home (the same session as plugin logins); a native run shows the `instructions` for its OS (`macos`, `linux`, else `any`) and never installs anything on the host (R-653). `install` must name a program on `PATH` (no `./` script), `name` is a plain word, and a control character anywhere is refused. The built-in `github` (`gh`) and `gitlab` (`glab`) use it, as do `jira` (`acli`), the version managers and the three runtimes (`claude`, `opencode`, `codex`). The container image already carries all of these; a runtime's container install is `npm install -g --prefix "$HOME/.local" <package>@<version>` (the agents' `PATH` starts with `~/.local/bin`, and `/usr/local` is not theirs to write), pinned to the version the image is built with and xherd was checked against (a test keeps it equal to the Dockerfile's `ARG`). Natively xherd shows the instructions and installs nothing. The review of an external plugin's install argv before it runs belongs to the install-from-GitHub flow (R-542), which is not built.
 
-### Toolchain plugins
+## Toolchain plugins
 
-A toolchain plugin's `data.toolchain` lists tools. For each: which version files to read (with a format from a fixed set such as `sdkmanrc`), a `resolve` argv that prints the directory to put on `PATH` when the version is installed, an `install` argv, an optional `list` argv (one installable version per line on stdout, best first; fills the version dropdown on the plugin's page in Settings → Plugins, container only), and the environment to set. `{v}` is the version, `{bin}` and `{home}` the directories. Commands are shell snippets that take the version as `"$1"`. The first plugin that claims a tool wins. Installing happens only in the container. An optional `installed` argv lists the versions already there, one per line (local commands only, so it runs natively too): the plugin's options page and the Welcome card show them. The version managers also declare themselves with `requires` (see below), so a missing manager shows install instructions.
+A toolchain plugin's `data.toolchain` lists tools. For each: which version files to read (with a format from a fixed set such as `sdkmanrc`), a `resolve` argv that prints the directory to put on `PATH` when the version is installed, an `install` argv, an optional `list` argv (one installable version per line on stdout, best first; fills the version dropdown on the plugin's page in Settings → Plugins, container only), and the environment to set. `{v}` is the version, `{bin}` and `{home}` the directories. Commands are shell snippets that take the version as `"$1"`. The first plugin that claims a tool wins. Installing happens only in the container. An optional `installed` argv lists the versions already there, one per line (local commands only, so it runs natively too): the plugin's options page and the Welcome card show them. The version managers also declare themselves with `requires` (above), so a missing manager shows install instructions.
 
-### Runtime plugins
+## Runtime plugins
 
 A runtime plugin's `data.terminal` says how to run an agent CLI in tmux:
 
@@ -126,51 +130,6 @@ A runtime plugin's `data.terminal` says how to run an agent CLI in tmux:
 
 Claude Code, opencode and Codex are built in. An agent's runtime is chosen when it is created (`xherd new --runtime`, the New agent form, a repo profile's `runtime`, else the `defaultRuntime` setting) and stays the same for its whole life. The pack must have commands for it (`install.<runtime>` in `xherd-flow.yaml`).
 
-## Flow packs
+## External plugins
 
-A pack is a folder with `xherd-flow.yaml`, command prompts and a format description. The built-in `xherd` pack is in `packs/xherd/` and is embedded in the binary.
-
-```yaml
-name: xherd
-version: 0.1.0
-protocol: 1
-install:
-  claude-code:
-    prefix: "/xherd:"
-    commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xherd/{name}.md", format: command }
-    args: "$ARGUMENTS"
-commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review" }
-flows:
-  feature:
-    start: "{prefix}feature {key} {prompt}"
-    stages:
-      - { id: design, role: design, class: routine, gate: { docs: [design.md] }, next: [{ run: "{prefix}tasks" }] }
-      # …
-```
-
-### Stages
-
-Each stage has an `id`, a `role` (`explore`, `spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`), a `class`, an optional `gate`, and `next` rules:
-
-- **`gate`**: `{docs: [file, …]}` for a document gate, or `{kind: commit}` for commit proposals. A stage without a gate (the built-in `pr` stage) declares none: the agent is not stopped for approval there.
-- **`class`**: `routine`, `critical`, `code` or `human-only`. Autonomy decides from it: `ask` approves nothing; `important` approves `routine` and `code` gates when no tripwire holds them; `critical` and `human-only` always wait. A stage with role `pr` is human-only whatever the manifest says.
-- **`next`**: the command typed after approval, from a fixed vocabulary of conditions. `{prefix}`, `{key}`, `{prompt}`, `{commit}` and similar placeholders are filled in; `${…}` is left for the shell.
-- **`loopUntil` / `then`**: repeat a stage until a condition (for example all tasks done), then move on.
-
-### Command prompts
-
-Each file in `commands/` becomes a runtime command (`/xherd:design`, …). Conventions that matter:
-
-- Teach XAP as plain `xherd <call>` on one line in backticks, with concrete example values, never through a variable: Claude Code cannot check a command that uses a variable and asks every time. The worktree's `permissions.allow` lists the XAP subcommands.
-- Every step starts a new session with no history. Each command reads `.xherd/spec/memory.md` first and rewrites it before its gate; the daemon refuses a gate or commit proposal without a valid one.
-- Wrap nothing the daemon owns: it writes the `status:`/`evidence:`/`sha:` progress lines of `tasks.md` and `commits.md`, and makes approved commits itself.
-
-`packs/xherd/FORMAT.md` documents the document formats (`tasks.md`, `commits.md`, `review.md`, `pr-review.md`, `memory.md`) that the daemon's parsers read.
-
-### Installing
-
-`xherd install` renders the pack's commands for each runtime (`{{prefix}}`, `{{args}}`, `{{dir}}`, `{{path:NAME}}` = where command NAME is installed for that runtime, `{{xap}}`, `{{format}}`) and writes them where the runtime reads commands. Format `command` writes each file as it is; `skill` (Codex) writes `<folder>/SKILL.md` with only `name` (the folder) and `description` in its frontmatter, plus `agents/openai.yaml` that keeps the skill from being used unless it is called by name. Hashes of what was written are kept, so a file you edited is left alone and the new version is written beside it with a `.xherd-new` suffix. In the container this runs at every daemon start. After an update, look for `.xherd-new` files next to commands you edited: until you merge them, your agents keep running your old prompt (for example, an edited `ship.md` from before the ticket summary existed still tells the agent to update the ticket itself, which xherd now offers from the agent page instead).
-
-### Limits today
-
-Only the built-in `xherd` pack and its `feature` flow ship. Fields not implemented yet (`views`, `extends`, `parse`, …) are rejected by the manifest parser instead of being silently ignored. A new file in `packs/xherd/` must also be added to `xherd_flow::install::BUILTIN_FILES`.
+Put the plugin's folder in `<data root>/plugins/<name>/` and restart the daemon. In the container the daemon copies that folder at start to one the agents' user can read, and runs the plugin's commands, checks and hooks as that user (see [Security](../user/security.md#plugins)); its own config and state folders are `~/.local/share/xherd-plugins/{config,state}/<name>` in the agents' home. The name `git` is reserved. Installing from the UI or from GitHub is not built yet.

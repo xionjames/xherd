@@ -1,24 +1,25 @@
 # Add xherd support to your SDD
 
-> Draft · protocol version 1 · See [`spec.md`](./spec.md) §8.6 and [`xap.md`](./xap.md).
+> [!NOTE]
+> **Partly planned.** Today only level 0 works: your SDD runs under xherd as flow `none` (a plain session with your prompt). The calls below are the stable [XAP](../reference/xap.md) protocol, but xherd refuses stage, gate, task and commit calls from a flow `none` agent (`no_flow`) until **dynamic flows** exist, and only the built-in pack can be loaded. Adding the calls now is safe: outside xherd they are skipped, and under xherd they will start working when dynamic flows land ([roadmap](../../ROADMAP.md)).
 
 xherd runs coding agents in parallel and stops them at approval gates. If you maintain a spec-driven development (SDD) method (slash commands, skills or scripts), a few calls let it run under xherd with gates, approvals, autonomy and per-step models. You don't need to write an xherd pack. Outside xherd the calls are skipped, so your SDD keeps working as before.
 
 ## Levels
 
-| Level | You do | Users get |
-|---|---|---|
-| 0 | Nothing | xherd runs your commands as plain prompts: status, terminal, PR follow-up |
-| **1** | Add `xherd` calls at the end of each step (this guide) | Gates, approvals, autonomy, a model/runtime per step; stages appear as your commands declare them |
-| 2 | Also ship `xherd-flow.yaml` | Stage list up front, document validation, task panels, custom views |
-| 3 | Let xherd install your prompts | `xherd install` sets your SDD up in every runtime |
+| Level | You do | Users get | Today |
+|---|---|---|---|
+| 0 | Nothing | xherd runs your commands as plain prompts (flow `none`): status, terminal, pause and resume | Works |
+| **1** | Add `xherd` calls at the end of each step (this guide) | Gates, approvals, autonomy; stages appear as your commands declare them | Planned (dynamic flows) |
+| 2 | Also ship `xherd-flow.yaml` ([flow packs](flow-packs.md)) | Stage list up front, document validation, task panels | Planned (external packs) |
+| 3 | Let xherd install your prompts | `xherd install` sets your SDD up in every runtime | Built-in pack only |
 
 ## The rules
 
 1. **Only under xherd.** Call xherd only when `XHERD_ENV` is `1`. Run plain `xherd …` (xherd puts its folder on the session `PATH`; a command that goes through a variable such as `$XHERD_BIN` makes some runtimes ask for permission every time). `XHERD_BIN` is still set, for scripts.
 2. **Declare, then stop.** When a step's document is ready for a human, call `gate open` and stop. xherd shows it, and after approval it sends the next command.
 3. **Say what comes next.** Pass `--next "<your next command>"`. It must start with one of the prefixes the user registered for your SDD (e.g. `/sdd-`).
-4. **Say what kind of step it is.** Pass `--role` with one of `explore`, `spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`. Users configure models, runtimes and autonomy per role, so this is what makes their settings apply to your SDD.
+4. **Say what kind of step it is.** Pass `--role` with one of `explore`, `spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`. Autonomy decides by role today, and models and runtimes per role are planned, so this is what makes users' settings apply to your SDD.
 5. **Handle refusals.** Exit code 2 means xherd refused the call, and stderr says why in one line (e.g. a missing frontmatter field). Fix it and call again. Exit code 3 means the daemon is unreachable: stop and wait.
 6. **Never approve.** Agents cannot approve; only the user (or xherd's autonomy rules) can.
 
@@ -50,7 +51,7 @@ Optional additions:
 ### Script-based SDD (shell)
 
 ```bash
-xherd() { [ "${XHERD_ENV:-}" = 1 ] && xherd "$@"; }
+xherd() { [ "${XHERD_ENV:-}" = 1 ] || return 0; command xherd "$@"; }
 
 xherd stage enter sdd-spec --role spec
 # … write the spec …
@@ -79,7 +80,11 @@ User approves in xherd (or autonomy allows it)
   → xherd sends "/sdd-task sdd/specs/login-passkeys.spec.md" (in a fresh session if configured)
 ```
 
-## Registering your SDD in xherd
+## Planned: registering and checking
+
+Not built yet. The intended shape:
+
+### Registering your SDD in xherd
 
 Users add a dynamic flow in Settings → Flows with:
 
@@ -88,7 +93,7 @@ Users add a dynamic flow in Settings → Flows with:
 - **Allowed prefixes**, e.g. `/sdd-`.
 - Whether your SDD needs its files **committed** (if it keeps state in the repo).
 
-## Checking your integration
+### Checking your integration
 
 ```
 xherd sdd check ./path/to/your-sdd     # which level you reach, missing roles or --next
