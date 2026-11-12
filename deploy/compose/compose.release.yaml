@@ -1,5 +1,5 @@
 # xherd with the published image. Attached to every GitHub release as
-# compose.yaml (.github/workflows/release.yml); doc/getting-started.md uses it:
+# compose.yaml (.github/workflows/release.yml); doc/user/getting-started.md uses it:
 #
 #   curl -fLO https://github.com/xionjames/xherd/releases/latest/download/compose.yaml
 #   printf 'XHERD_WORKSPACE=%s/xherd\nXHERD_UID=%s\nXHERD_GID=%s\n' "$HOME" "$(id -u)" "$(id -g)" > .env

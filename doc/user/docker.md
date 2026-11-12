@@ -56,7 +56,7 @@ Native installs have a single user; `xherd security check` says so.
 
 ## Setup
 
-See [Getting started](getting-started.md#run-with-docker) for the first start with a published image, and [Running from source](from-source.md#docker-built-from-the-repository) to build it from this repository (`deploy/compose/compose.yaml`). The image is built from `deploy/docker/Dockerfile` (multi-stage: UI, daemon, runtime on Debian trixie). Version pins are `ARG`s at the top of the runtime stage.
+See [Getting started](getting-started.md#run-with-docker) for the first start with a published image, and [Running from source](../dev/from-source.md#docker-built-from-the-repository) to build it from this repository (`deploy/compose/compose.yaml`). The image is built from `deploy/docker/Dockerfile` (multi-stage: UI, daemon, runtime on Debian trixie). Version pins are `ARG`s at the top of the runtime stage.
 
 `xherd docker init` writes an equivalent `compose.yaml` and `.env` to `~/.config/xherd/` for a published image, detecting the container engine.
 

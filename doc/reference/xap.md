@@ -1,6 +1,6 @@
 # XAP — xherd agent protocol (reference)
 
-> Status: **draft, protocol version 1** · 2026-11-06 · Part of [`spec.md`](./spec.md) (§5.4, §6, §8).
+> Status: **draft, protocol version 1** · 2026-11-06 · Part of [`spec.md`](../internal/spec.md) (§5.4, §6, §8).
 >
 > XAP is how an agent, an SDD's commands, or a wrapper tells xherd what is happening: status, gates, tasks, commits, PRs. It is a set of `xherd` subcommands (and the same operations as MCP tools). The daemon validates every call; agents never approve anything.
 

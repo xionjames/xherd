@@ -69,7 +69,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 ## Common changes
 
-**Add a XAP command** — add the wire type in `xherd-core::xap`, validation in `xherd_flow::xap::apply`, observation in `Actor::on_xap`, the CLI subcommand in `xherd-cli/src/xap.rs`, the prompt text where agents learn it, and document it in [xap.md](xap.md). Calls are de-duplicated by call id.
+**Add a XAP command** — add the wire type in `xherd-core::xap`, validation in `xherd_flow::xap::apply`, observation in `Actor::on_xap`, the CLI subcommand in `xherd-cli/src/xap.rs`, the prompt text where agents learn it, and document it in [xap.md](../reference/xap.md). Calls are de-duplicated by call id.
 
 **Change a flow or prompt** — edit `packs/xherd/`. A new file must be added to `xherd_flow::install::BUILTIN_FILES` (a test compares the folder to the list). Prompts teach plain `xherd <call>` on one line inside backticks, never through a variable.
 
@@ -100,7 +100,7 @@ One commit per working piece, on a branch per piece of work; tests and clippy pa
 
 ## Further reading
 
-- [XAP reference](xap.md): the agent protocol
-- [Add xherd support to your SDD](integrate-your-sdd.md)
+- [XAP reference](../reference/xap.md): the agent protocol
+- [Add xherd support to your SDD](../extend/integrate-your-sdd.md)
 - `packs/xherd/FORMAT.md`: formats of the documents agents write
 - `ROADMAP.md`: what is left, by theme

@@ -2,7 +2,7 @@
 
 How to install xherd from a published release, start it, and run a first agent. We recommend **Docker**: agents, toolchains and Claude Code stay in a container and only your workspace folder is shared with the host. See [Docker](docker.md) for details and troubleshooting.
 
-To build xherd yourself (an unreleased branch, or to change it), see [Running from source](from-source.md).
+To build xherd yourself (an unreleased branch, or to change it), see [Running from source](../dev/from-source.md).
 
 ## Choose how to run it
 
@@ -13,7 +13,7 @@ To build xherd yourself (an unreleased branch, or to change it), see [Running fr
 | Isolation | Agents see only the workspace folder | None: agents run as you |
 | Platforms | macOS and Linux (amd64, arm64) | Linux (x86_64, arm64) |
 
-macOS binaries are not published yet ([roadmap](../ROADMAP.md)): on a Mac, use Docker.
+macOS binaries are not published yet ([roadmap](../../ROADMAP.md)): on a Mac, use Docker.
 
 xherd is a single-user tool: one person, one daemon, one workspace folder.
 
@@ -186,7 +186,7 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | `xherd backup create` | Archive of the agents and their work |
 | `xherd security check` | Exposure overview: binding, plugins, limits |
 
-The UI shows the same, plus the terminal, documents, findings and settings. The full list is in the [CLI reference](cli.md).
+The UI shows the same, plus the terminal, documents, findings and settings. The full list is in the [CLI reference](../reference/cli.md).
 
 ## Autonomy
 
@@ -195,7 +195,7 @@ By default every gate waits for you (`ask`). `xherd new --autonomy`, the agent p
 ## Next
 
 - [Docker setup](docker.md): topology, the two users in the container, git access, toolchains
-- [Configuration](configuration.md) and [CLI reference](cli.md)
+- [Configuration](../reference/configuration.md) and [CLI reference](../reference/cli.md)
 - [Security model](security.md)
-- [Add xherd support to your SDD](integrate-your-sdd.md)
-- [Running from source](from-source.md) and [Development](development.md), to build or change xherd
+- [Add xherd support to your SDD](../extend/integrate-your-sdd.md)
+- [Running from source](../dev/from-source.md) and [Development](../dev/development.md), to build or change xherd

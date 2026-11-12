@@ -1,6 +1,6 @@
 # Architecture
 
-xherd is one Rust daemon with an embedded web UI. It keeps one **actor** per agent, runs each agent's coding runtime inside a **tmux** session in its own **git worktree**, and stops it at **approval gates**. This page explains the pieces and how they talk. For the agent-side protocol see [XAP](xap.md).
+xherd is one Rust daemon with an embedded web UI. It keeps one **actor** per agent, runs each agent's coding runtime inside a **tmux** session in its own **git worktree**, and stops it at **approval gates**. This page explains the pieces and how they talk. For the agent-side protocol see [XAP](../reference/xap.md).
 
 ## Big picture
 
@@ -134,7 +134,7 @@ flowchart LR
     Engine --> Gates["Gates, stages, tasks, findings"]
 ```
 
-- A **flow pack** is data: the stage graph (role, class, gate documents, next command), command prompts, and document formats. The daemon needs only the graph and the gate files; prose belongs to the agent. xherd ships its own pack; your own SDD can run under xherd with a few XAP calls ([guide](integrate-your-sdd.md)) or its own pack.
+- A **flow pack** is data: the stage graph (role, class, gate documents, next command), command prompts, and document formats. The daemon needs only the graph and the gate files; prose belongs to the agent. xherd ships its own pack; your own SDD can run under xherd with a few XAP calls ([guide](../extend/integrate-your-sdd.md)) or its own pack.
 - **Plugins** have a manifest (`xherd-plugin.json`) and run commands through a small protocol, so they can be written in any language. Kinds: *runtime* (how to launch and read the agent CLI), *host* (GitHub: PR lookup, status, comments, replies, templates), *toolchain* (SDKMAN, nvm, uv, Go, rustup: version files to installed tools). Built-ins are embedded; external plugins override them.
 
 ## Git and security guardrails
@@ -144,7 +144,7 @@ flowchart LR
 - **Tripwires** on commit proposals: secret patterns, sensitive path globs, diff size, and the scope fence (`files:` of the listed tasks). A hit sets *needs human* on the gate.
 - **Untrusted text**: PR comments reach the agent wrapped in `<<<xherd-untrusted TOKEN …>>>` blocks with a random per-message token. Replies built from them are posted only after a human-only approval.
 - **Budgets and limits**: per-agent and per-day token budgets, a session length limit, a review loop limit, a run limit of consecutive auto-approvals.
-- **Authentication**: tokens with scopes (`hooks`, `xap`, `credential` for agents; a user token for the CLI). Local browsers get full rights by address and a local `Origin`; requests from another site are refused. See [Docker](docker.md) for the container's two-user split.
+- **Authentication**: tokens with scopes (`hooks`, `xap`, `credential` for agents; a user token for the CLI). Local browsers get full rights by address and a local `Origin`; requests from another site are refused. See [Docker](../user/docker.md) for the container's two-user split.
 
 ## Storage
 

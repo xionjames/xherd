@@ -1,6 +1,6 @@
 # xherd — Design
 
-> Status: **draft v1.0** · 2026-11-06 · Companion to [`spec.md`](./spec.md) (what) and [`xap.md`](./xap.md) (agent protocol).
+> Status: **draft v1.0** · 2026-11-06 · Companion to [`spec.md`](spec.md) (what) and [`xap.md`](../reference/xap.md) (agent protocol).
 > This document says **how**: language and libraries, daemon architecture, the pluggable SDD, Docker-first deployment, guardrails, updates and backups, views, UI and desktop, testing, milestones and decisions. Unverified claims are marked **(verify)**; estimates are guesses.
 
 ---

@@ -1,6 +1,6 @@
 # Add xherd support to your SDD
 
-> Draft · protocol version 1 · See [`spec.md`](./spec.md) §8.6 and [`xap.md`](./xap.md).
+> Draft · protocol version 1 · See [`spec.md`](../internal/spec.md) §8.6 and [`xap.md`](../reference/xap.md).
 
 xherd runs coding agents in parallel and stops them at approval gates. If you maintain a spec-driven development (SDD) method (slash commands, skills or scripts), a few calls let it run under xherd with gates, approvals, autonomy and per-step models. You don't need to write an xherd pack. Outside xherd the calls are skipped, so your SDD keeps working as before.
 

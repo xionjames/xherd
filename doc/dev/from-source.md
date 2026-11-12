@@ -1,6 +1,6 @@
 # Running from source
 
-How to build and run xherd from a clone of this repository: the Docker image, or a native binary. Use it to try a branch that is not released, to run on macOS natively (no macOS binaries are published yet), or as the first step before [changing xherd](development.md). To install a published release instead, see [Getting started](getting-started.md).
+How to build and run xherd from a clone of this repository: the Docker image, or a native binary. Use it to try a branch that is not released, to run on macOS natively (no macOS binaries are published yet), or as the first step before [changing xherd](development.md). To install a published release instead, see [Getting started](../user/getting-started.md).
 
 ## Prerequisites
 
@@ -42,7 +42,7 @@ To build the image alone:
 docker build -f deploy/docker/Dockerfile -t xherd:dev .
 ```
 
-Topology, the two users inside the container, volumes and git access are in [Docker](docker.md).
+Topology, the two users inside the container, volumes and git access are in [Docker](../user/docker.md).
 
 ## Native build
 
@@ -88,6 +88,6 @@ How to cut a release is in [Development](development.md#releases).
 
 ## Next
 
-- [Getting started](getting-started.md#first-run): the first run and a first agent, the same from source
+- [Getting started](../user/getting-started.md#first-run): the first run and a first agent, the same from source
 - [Development](development.md): tests, conventions, how to add things
 - [Architecture](architecture.md)

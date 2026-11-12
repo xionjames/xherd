@@ -1,7 +1,7 @@
 # xherd — Product Specification
 
 > Status: **draft v1.0** · 2026-11-06
-> Companions: [`design.md`](./design.md) (architecture and implementation), [`xap.md`](./xap.md) (agent protocol reference).
+> Companions: [`design.md`](design.md) (architecture and implementation), [`xap.md`](../reference/xap.md) (agent protocol reference).
 > Requirement IDs (`R-xxx`) are stable and referenced from the other documents. Claims not yet verified against the tools they depend on are marked **(verify)**.
 
 ---
@@ -106,7 +106,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 | **Fresh session** | After an approved gate, the runtime session is replaced by a new one started with the next command (saves context and tokens). |
 | **Parking** | Ending the session of an agent that waits at a gate too long, to free a slot. |
 | **Watching** | The agent's session has ended; xherd polls its open PR. |
-| **XAP** | xherd agent protocol: `xherd` subcommands an agent or SDD calls to declare gates, tasks, commits, PRs and status ([`xap.md`](./xap.md)). |
+| **XAP** | xherd agent protocol: `xherd` subcommands an agent or SDD calls to declare gates, tasks, commits, PRs and status ([`xap.md`](../reference/xap.md)). |
 | **Workspace** | Where an agent works: a git worktree (default) or a plain folder. In Docker mode the workspace root is mounted at the **same absolute path** on the host and in the container. |
 | **Private folder** | `.xherd/` in the worktree, excluded from git: agent metadata, instructions, SDD documents (by default), ledgers. |
 | **Ledger** | Append-only JSONL files: approvals (with document hashes) and discovered issues. |

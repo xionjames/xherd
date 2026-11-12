@@ -2,7 +2,7 @@
 
 `xherd` is one binary: the daemon, the user commands, the calls agents make, and a few helpers. Run `xherd <command> --help` for the exact flags of your version. Every command accepts `--json` for machine-readable output.
 
-The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the user token in the data root's `config.json`. With Docker, run it inside the container as the daemon's user: `docker exec -u xherd-daemon xherd xherd <command>` (see [Docker](docker.md#two-users-inside-the-container)).
+The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the user token in the data root's `config.json`. With Docker, run it inside the container as the daemon's user: `docker exec -u xherd-daemon xherd xherd <command>` (see [Docker](../user/docker.md#two-users-inside-the-container)).
 
 ## Daemon and setup
 
@@ -78,6 +78,6 @@ Exit codes of XAP calls: `0` accepted, `2` refused (stderr has a one-line reason
 | `XHERD_LOG` | daemon | Log filter, e.g. `debug` |
 | `XHERD_ENV=1` | agents | Set in agent sessions; SDKs call xherd only when it is `1` |
 | `XHERD_BIN`, `XHERD_AGENT_TOKEN`, `XHERD_PORT_BASE` | agents | The binary path, the agent's token, the first of its 10 reserved ports |
-| `XHERD_SANDBOX=1`, `XHERD_BIND`, `XHERD_LOCAL_PEERS`, `XHERD_QUEUE` | container | See [Docker](docker.md) |
+| `XHERD_SANDBOX=1`, `XHERD_BIND`, `XHERD_LOCAL_PEERS`, `XHERD_QUEUE` | container | See [Docker](../user/docker.md) |
 | `XHERD_UID`, `XHERD_GID`, `XHERD_PORT`, `XHERD_IMAGE`, `XHERD_SSH_SOCK` | compose `.env` | Your ids, published port, image to run, forwarded SSH agent socket (written by `xherd docker init`) |
 | `XHERD_EXTRA_PATHS` | container | Colon-separated extra folders mounted at the same path where repositories may live outside the workspace |

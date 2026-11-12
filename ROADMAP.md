@@ -2,7 +2,7 @@
 
 High-level view of the work, done and pending. `[x]` = done, `[ ]` = pending.
 The sources of truth stay where they were: the milestone checklist in
-[`doc/design.md`](doc/design.md) §18, the roadmap in [`doc/spec.md`](doc/spec.md)
+[`doc/internal/design.md`](doc/internal/design.md) §18, the roadmap in [`doc/internal/spec.md`](doc/internal/spec.md)
 §21 and the status notes in [`AGENTS.md`](AGENTS.md). This file groups the work
 by theme; update it together with them.
 
