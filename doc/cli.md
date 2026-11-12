@@ -28,7 +28,7 @@ The CLI talks to the daemon over HTTP at `http://127.0.0.1:<port>` using the use
 | Command | Does |
 |---|---|
 | `xherd new <KEY> [PROMPT]` | Create an agent: worktree, branch and `.xherd/` for a ticket |
-| `xherd ls` | List agents, with the open gate or the PR URL |
+| `xherd ls` | List agents, with the open gate or the PR URL (session ids cut to 8 characters) |
 | `xherd diff <agent>` | The open commit proposal's diff; at a ship gate the branch as it will be pushed; otherwise every uncommitted change |
 | `xherd approve <agent>` | Approve the open gate (documents or commit) as they are on disk now |
 | `xherd changes <agent> "<comment>"` | Ask the agent to revise its open gate |
