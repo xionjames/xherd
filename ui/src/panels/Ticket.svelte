@@ -91,7 +91,7 @@
         {answer.tracker} · #{answer.issue}{#if t.author} · by {t.author}{/if}
         {#if https(t.url)} · <a href={https(t.url)} target="_blank" rel="noopener noreferrer">open</a>{/if}
       </p>
-      {#if t.body.trim()}<div class="md">{@html render(t.body).html}</div>{:else}<p class="empty">No description.</p>{/if}
+      {#if t.body.trim()}<div class="md">{@html render(t.body, undefined, true).html}</div>{:else}<p class="empty">No description.</p>{/if}
     {/if}
   </Panel>
 
@@ -118,7 +118,7 @@
           <p class="row"><b>{c.author}</b>
             {#if when(c.createdAt)}<span class="hint">{when(c.createdAt)}</span>{/if}
             {#if https(c.url)}<a class="hint" href={https(c.url)} target="_blank" rel="noopener noreferrer">link</a>{/if}</p>
-          <div class="md">{@html render(c.body).html}</div>
+          <div class="md">{@html render(c.body, undefined, true).html}</div>
         </div>
       {/each}
     </Panel>

@@ -22,11 +22,17 @@ function slug(s: string) {
   return s.toLowerCase().replace(/[^\w]+/g, '-').replace(/^-|-$/g, '');
 }
 
+// Text written by third parties (a ticket and its comments) may not make the
+// browser fetch anything by itself: an image or media URL would tell its owner
+// who read it and when. Links still work, since they need a click.
+const EXTERNAL_FORBID = ['img', 'image', 'picture', 'source', 'video', 'audio', 'track', 'object', 'embed', 'iframe'];
+
 /**
  * `added`: line texts that are new since the user last read the document;
  * every top-level block holding one of them is wrapped in `.chg`.
+ * `external`: the text comes from outside (a tracker), so nothing in it loads.
  */
-export function render(md: string, added?: Set<string>): { html: string; headings: Heading[]; blocks: { html: string; raw: string }[] } {
+export function render(md: string, added?: Set<string>, external = false): { html: string; headings: Heading[]; blocks: { html: string; raw: string }[] } {
   const headings: Heading[] = [];
   const renderer = new marked.Renderer();
   renderer.heading = ({ tokens, depth }) => {
@@ -37,7 +43,8 @@ export function render(md: string, added?: Set<string>): { html: string; heading
     return `<h${depth} id="${id}">${marked.parseInline(text)}</h${depth}>`;
   };
   // Top-level blocks, each sanitised on its own: the page can comment on one.
-  const clean = (h: string) => DOMPurify.sanitize(h, { FORBID_TAGS: ['style', 'form', 'input'], FORBID_ATTR: ['style'] });
+  const forbid = ['style', 'form', 'input', ...(external ? EXTERNAL_FORBID : [])];
+  const clean = (h: string) => DOMPurify.sanitize(h, { FORBID_TAGS: forbid, FORBID_ATTR: external ? ['style', 'srcset', 'poster', 'ping'] : ['style'] });
   const tokens = marked.lexer(md, { gfm: true });
   // A list is split into one block per item (a nested list stays in its item),
   // so each item can be commented on; an ordered list keeps its numbers.
