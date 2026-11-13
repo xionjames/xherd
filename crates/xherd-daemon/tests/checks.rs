@@ -164,7 +164,8 @@ async fn git_providers_may_all_be_off() {
 }
 
 /// R7, R8: a Git provider that is on gives its host an implicit Git access
-/// row (in the managed gitconfig and `GET /git/hosts`, never saved); a saved
+/// row (in `GET /git/hosts`, and the managed gitconfig in the container only;
+/// never saved); a saved
 /// row for that host replaces it, and switching the provider off removes it.
 #[tokio::test]
 async fn providers_that_are_on_give_implicit_git_access_rows() {
@@ -185,9 +186,10 @@ async fn providers_that_are_on_give_implicit_git_access_rows() {
     let gitconfig = || std::fs::read_to_string(d.gitconfig_path().unwrap()).unwrap();
     let rows = || d.git_hosts()["hosts"].as_array().unwrap().clone();
 
-    // GitHub on: its helper is written and the row is listed from the plugin.
-    assert!(gitconfig().contains("[credential \"https://github.com\"]"));
-    assert!(gitconfig().contains("gh auth git-credential"));
+    // GitHub on: the row is listed from the plugin. Natively the gitconfig is
+    // included from the user's own, so an implicit row writes no helper there
+    // (it would replace theirs); the container's gets it (not testable here).
+    assert!(!gitconfig().contains("github.com"));
     let r = rows();
     assert_eq!(r.len(), 1, "{r:?}");
     assert_eq!(
@@ -197,16 +199,17 @@ async fn providers_that_are_on_give_implicit_git_access_rows() {
     let saved = std::fs::read_to_string(home.path().join("data/config.json")).unwrap();
     assert!(!saved.contains("github.com"), "never saved: {saved}");
 
-    // A saved row for the host takes its place.
+    // A saved row for the host takes its place, whatever its case, and a
+    // saved row is what writes the provider's helper natively.
     let u = serde_json::from_value(json!({"hosts": [{
-        "host": "github.com", "protocols": ["https"], "credential": "none"
+        "host": "GitHub.com", "protocols": ["https"], "credential": "provider"
     }]}))
     .unwrap();
     d.set_git_hosts(u).unwrap();
     let r = rows();
     assert_eq!(r.len(), 1, "{r:?}");
     assert!(r[0].get("from").is_none());
-    assert!(!gitconfig().contains("gh auth git-credential"));
+    assert!(gitconfig().contains("gh auth git-credential"));
 
     // Off: no implicit row, no helper.
     d.set_git_hosts(serde_json::from_value(json!({"hosts": []})).unwrap())
