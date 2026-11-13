@@ -16,7 +16,6 @@
     if (!g) return 'terminal';
     if (g.kind === 'commit') return 'changes';
     if (g.kind === 'question') return 'terminal';
-    if (g.kind === 'docs' && g.role === 'ship') return 'changes';
     if (g.kind === 'docs') return 'spec';
     return 'pr';
   }
