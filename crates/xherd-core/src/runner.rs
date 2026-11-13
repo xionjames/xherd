@@ -463,8 +463,14 @@ async fn serve_one(mut s: UnixStream) {
 /// let `allow` (the daemon's user) use it: tmux (>= 3.3) `server-access` for
 /// the commands, and the socket opened to the group. The agents' sessions
 /// live in this server, so they are this user's processes (R-1203). Never
-/// returns; a server that exits is started again.
-pub async fn supervise_tmux(socket: PathBuf, allow: Option<String>) {
+/// returns; a server that exits is started again. `ready` is sent once the
+/// first server is open to `allow` (or giving access failed).
+pub async fn supervise_tmux(
+    socket: PathBuf,
+    allow: Option<String>,
+    ready: tokio::sync::oneshot::Sender<()>,
+) {
+    let mut ready = Some(ready);
     use std::process::Stdio;
     let conf = socket.with_extension("conf");
     // `-D` already turns exit-empty off; say it anyway. The access rule is
@@ -487,7 +493,13 @@ pub async fn supervise_tmux(socket: PathBuf, allow: Option<String>) {
             .spawn()
         {
             Ok(mut child) => {
-                tokio::spawn(open_to_group(socket.clone(), allow.clone()));
+                let (socket, allow, ready) = (socket.clone(), allow.clone(), ready.take());
+                tokio::spawn(async move {
+                    open_to_group(socket, allow).await;
+                    if let Some(r) = ready {
+                        let _ = r.send(());
+                    }
+                });
                 let _ = child.wait().await;
                 eprintln!("xherd runner: the tmux server exited; starting it again");
             }
