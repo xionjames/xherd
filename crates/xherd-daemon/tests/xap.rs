@@ -1073,6 +1073,54 @@ async fn a_review_after_the_pr_keeps_the_session() {
     );
 }
 
+/// A stop while a background task still runs (a reviewer subagent, R-024)
+/// ends a turn, not the work: the session stays, nothing is approved, and
+/// the stop after the task's result decides.
+#[tokio::test]
+async fn a_stop_with_a_background_task_running_keeps_the_session() {
+    let t = setup().await;
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "c2",
+        "pr.opened",
+        json!({"url": "https://github.com/acme/app/pull/42"}),
+    )
+    .await
+    .unwrap();
+    let busy = Report {
+        id: "busy".into(),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::Stop,
+        payload: json!({"background_tasks": [
+            {"agent_type": "reviewer", "id": "a39", "status": "running", "type": "subagent"}
+        ]}),
+        seq: 1,
+        at: 0,
+    };
+    t.d.report(busy).await;
+    assert_eq!(get(&t).await.status, Status::Idle);
+    assert!(!t.drv.calls().contains(&"stop SC-1".to_string()));
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "background-running"));
+
+    // The reviewer is done: this stop ends the session.
+    let done = Report {
+        id: "done".into(),
+        agent_id: t.a.id.clone(),
+        event: ReportEvent::Stop,
+        payload: json!({"background_tasks": [
+            {"agent_type": "reviewer", "id": "a39", "status": "completed", "type": "subagent"}
+        ]}),
+        seq: 2,
+        at: 0,
+    };
+    t.d.report(done).await;
+    assert_eq!(get(&t).await.status, Status::Watching);
+}
+
 /// A fake `gh` that records its argv and working directory and answers with
 /// `answer` (exit 1 when it is `fail`).
 fn fake_gh(dir: &Path, answer: &str) -> std::path::PathBuf {

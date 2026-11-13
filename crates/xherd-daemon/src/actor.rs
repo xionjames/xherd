@@ -741,6 +741,15 @@ impl Actor {
                         }
                         continue;
                     }
+                    // R-024: a background task (a subagent, say) still runs,
+                    // and a fresh session or the move to watching would kill
+                    // it. Its result starts another turn; that stop decides.
+                    let running = xherd_core::report::background_running(&r.payload);
+                    if running > 0 {
+                        self.log(None, "background-running", Some(json!({"tasks": running})))
+                            .await;
+                        continue;
+                    }
                     self.try_auto_approve().await;
                     self.after_ship().await;
                 }
