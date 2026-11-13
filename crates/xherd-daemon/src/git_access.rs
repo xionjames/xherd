@@ -158,6 +158,40 @@ fn token_user_of(providers: &[Provider], named: Option<&str>, host: &str) -> Str
         .unwrap_or_else(|| DEFAULT_TOKEN_USER.to_string())
 }
 
+/// R7: Git access rows a provider that is on gives without being saved: each
+/// fixed host (no `*`) of a provider with a credential helper, HTTPS only,
+/// unless a saved row has that host (case-insensitive) or an earlier provider
+/// took it. Returns (plugin name, row).
+pub fn implicit_hosts(saved: &[GitHost], providers: &[(String, Git)]) -> Vec<(String, GitHost)> {
+    let mut out: Vec<(String, GitHost)> = Vec::new();
+    for (name, g) in providers {
+        if !g.credential.as_ref().is_some_and(|c| c.helper.is_some()) {
+            continue;
+        }
+        for host in g.hosts.iter().filter(|h| !h.contains('*')) {
+            let taken = saved.iter().any(|s| s.host.eq_ignore_ascii_case(host))
+                || out.iter().any(|(_, r)| r.host.eq_ignore_ascii_case(host));
+            if taken {
+                continue;
+            }
+            out.push((
+                name.clone(),
+                GitHost {
+                    host: host.clone(),
+                    protocols: vec!["https".into()],
+                    credential: Credential::Provider,
+                    provider: Some(name.clone()),
+                    username: None,
+                    ca_file: None,
+                    prefer_https: false,
+                    prefer_ssh: false,
+                },
+            ));
+        }
+    }
+    out
+}
+
 /// `owner/repo` and host of a remote URL (`https://h/o/r(.git)`,
 /// `git@h:o/r(.git)`, `ssh://git@h/o/r`).
 pub fn parse_remote(url: &str) -> Option<(String, String)> {
@@ -1229,5 +1263,42 @@ mod tests {
             "[credential \"https://gitlab.com\"]\n\thelper =\n\thelper = !glab auth git-credential\n"
         ));
         assert!(!t.contains("git.example.com\"]"));
+    }
+
+    #[test]
+    fn providers_that_are_on_give_implicit_rows() {
+        let providers = providers();
+        let rows = implicit_hosts(&[], &providers);
+        // Only GitHub has a fixed host and a helper: `*gitlab*` is a pattern,
+        // bitbucket has no helper.
+        let names: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|(p, h)| (p.as_str(), h.host.as_str()))
+            .collect();
+        assert_eq!(names, [("github", "github.com")]);
+        let (_, gh) = &rows[0];
+        assert_eq!(gh.protocols, ["https"]);
+        assert_eq!(gh.credential, Credential::Provider);
+        assert_eq!(gh.provider.as_deref(), Some("github"));
+
+        // A saved row wins, whatever its case.
+        assert!(implicit_hosts(&[host("GitHub.com", Credential::None)], &providers).is_empty());
+        // A provider that is off is not in the list.
+        let on: Vec<_> = providers
+            .iter()
+            .filter(|(n, _)| n != "github")
+            .cloned()
+            .collect();
+        assert!(implicit_hosts(&[], &on).is_empty());
+
+        let all: Vec<GitHost> = rows.into_iter().map(|(_, h)| h).collect();
+        let t = managed_gitconfig(&all, "x", false, None, &[], &|h| {
+            bound(&providers, h.provider.as_deref(), &h.host)
+                .and_then(|g| g.credential.clone())
+                .and_then(|c| c.helper)
+        });
+        assert!(t.contains(
+            "[credential \"https://github.com\"]\n\thelper =\n\thelper = !gh auth git-credential\n"
+        ));
     }
 }
