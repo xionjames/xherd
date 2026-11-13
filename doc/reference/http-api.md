@@ -80,7 +80,7 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 
 | Method and path | Does |
 |---|---|
-| `GET /git/hosts`, `PUT /git/hosts` | Hosts, their provider and credential source (`providers` lists the host plugins) |
+| `GET /git/hosts`, `PUT /git/hosts` | Hosts, their provider and credential source (`providers` lists the host plugins). `GET` also lists the implicit rows of the Git providers that are on, each with `from` = the plugin's name; they are never saved, and `PUT` takes only the user's rows (a row carrying `from` is refused) |
 | `POST /git/doctor`, `POST /git/known-hosts`, `POST /git/login` | Check access to a host, accept a host key (re-scanned, same fingerprint required), start a browser login in a terminal |
 | `POST /git/credential` | The git credential helper's endpoint (local user or an agent token with `credential`) |
 | `POST /plugins/{name}/login` | Start a plugin's login in the setup terminal |

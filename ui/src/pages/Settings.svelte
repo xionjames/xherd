@@ -11,20 +11,19 @@
   import Backups from '../components/Backups.svelte';
   import Profiles from '../components/Profiles.svelte';
   import OpenIn from '../components/OpenIn.svelte';
-  import PluginDetail from '../components/PluginDetail.svelte';
+  import PluginList from '../components/PluginList.svelte';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
   import Tabs from '../components/Tabs.svelte';
   import SaveBar from '../components/SaveBar.svelte';
   import Callout from '../components/Callout.svelte';
-  import type { ConfigView, PluginInfo } from '../lib/types';
+  import type { ConfigView } from '../lib/types';
   import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
   import { runtimes, runtimeLabel } from '../lib/runtimes';
 
   const TABS = ['general', 'gates', 'notifications', 'openin', 'git', 'profiles', 'backups', 'plugins', 'about'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
-  const open = $derived((app.state?.plugins ?? []).find((p) => p.name === route.query.get('plugin')));
 
   type Form = Record<string, string | boolean>;
   const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
@@ -68,7 +67,6 @@
       saving = false;
     }
   }
-  const initials = (p: PluginInfo) => (p.label || p.name).split(/[\s-]+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
   const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', openin: 'Open in', git: 'Git access', profiles: 'Repo profiles', backups: 'Backups', plugins: 'Plugins', about: 'About' };
   const tabItems = $derived(TABS.map((t) => ({
     id: t, label: TAB_LABEL[t], href: href('/settings', t === 'general' ? {} : { tab: t }),
@@ -183,48 +181,8 @@
           <span class="hint">Letters, digits, - and _.</span></label>
       </Panel>
     </div>
-  {:else if tab === 'plugins' && open}
-    <a href={href('/settings', { tab: 'plugins' })}>← All plugins</a>
-    {#key open.name}<PluginDetail plugin={open} onclose={() => go('/settings', { tab: 'plugins' })} />{/key}
-  {:else}
-    {#snippet pcard(p: PluginInfo)}
-      <a class="pcard" href={href('/settings', { tab: 'plugins', plugin: p.name })}>
-        <div class="h">
-          <span class="mi {p.kind}" aria-hidden="true">{initials(p)}</span>
-          <div class="wrap-any">
-            <h3>{p.label || p.name}</h3>
-            <div class="hint">{p.kind} · {p.version}{p.builtin ? ' · built in' : ''}</div>
-          </div>
-        </div>
-        <div class="b">
-          {#if p.description}<p class="muted">{p.description}</p>{/if}
-          <span class="hint">{p.settings.length ? `${p.settings.length} setting${p.settings.length > 1 ? 's' : ''}` : 'No settings'}{p.kind === 'toolchain' ? ' · tools and versions' : ''}</span>
-        </div>
-        <div class="ft">{#if p.enabled}<span class="pill live">● on</span>{:else}<span class="pill">○ off</span>{/if}</div>
-      </a>
-    {/snippet}
-    {@const plugs = app.state?.plugins ?? []}
-    {#if broken.length}
-      <div class="cards">
-        {#each broken as b (b.dir)}
-          <article class="pcard err">
-            <div class="h"><span class="mi bad" aria-hidden="true">!</span>
-              <div class="wrap-any"><h3>{b.name}</h3><div class="hint mono">{b.dir}</div></div></div>
-            <div class="b"><p class="err">{b.error}</p></div>
-          </article>
-        {/each}
-      </div>
-    {/if}
-    <div class="sect"><h2>Enabled</h2></div>
-    <div class="cards">
-      {#each plugs.filter((p) => p.enabled) as p (p.name)}{@render pcard(p)}{/each}
-    </div>
-    {#if plugs.some((p) => !p.enabled)}
-      <div class="sect"><h2>Available</h2><span class="hint">Installed but switched off. Switch them on in the Welcome page tools step.</span></div>
-      <div class="cards">
-        {#each plugs.filter((p) => !p.enabled) as p (p.name)}{@render pcard(p)}{/each}
-      </div>
-    {/if}
+  {:else if tab === 'plugins'}
+    <PluginList selected={route.query.get('plugin')} onselect={(n) => go('/settings', n ? { tab: 'plugins', plugin: n } : { tab: 'plugins' })} />
   {/if}
   {#if setup.config && ready && ['general', 'gates', 'notifications'].includes(tab)}
     <SaveBar {dirty} busy={saving} onsave={save} ondiscard={() => setup.config && fill(setup.config)} />

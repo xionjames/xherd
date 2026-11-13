@@ -158,6 +158,48 @@ fn token_user_of(providers: &[Provider], named: Option<&str>, host: &str) -> Str
         .unwrap_or_else(|| DEFAULT_TOKEN_USER.to_string())
 }
 
+/// R7: Git access rows a provider that is on gives without being saved: each
+/// fixed host (no `*`) of a provider with a credential helper, HTTPS and SSH
+/// (the default for a host without a row),
+/// unless a saved row has that host (case-insensitive) or an earlier provider
+/// took it. Returns (plugin name, row).
+pub fn implicit_hosts(saved: &[GitHost], providers: &[(String, Git)]) -> Vec<(String, GitHost)> {
+    let mut out: Vec<(String, GitHost)> = Vec::new();
+    for (name, g) in providers {
+        if !g.credential.as_ref().is_some_and(|c| c.helper.is_some()) {
+            continue;
+        }
+        for host in g.hosts.iter().filter(|h| !h.contains('*')) {
+            let taken = saved.iter().any(|s| s.host.eq_ignore_ascii_case(host))
+                || out.iter().any(|(_, r)| r.host.eq_ignore_ascii_case(host));
+            if taken {
+                continue;
+            }
+            out.push((
+                name.clone(),
+                GitHost {
+                    host: host.clone(),
+                    protocols: vec!["https".into(), "ssh".into()],
+                    credential: Credential::Provider,
+                    provider: Some(name.clone()),
+                    username: None,
+                    ca_file: None,
+                    prefer_https: false,
+                    prefer_ssh: false,
+                },
+            ));
+        }
+    }
+    out
+}
+
+/// The Git access row for a host; host names ignore case, as git and DNS do.
+fn row_for(hosts: Vec<GitHost>, host: &str) -> Option<GitHost> {
+    hosts
+        .into_iter()
+        .find(|h| h.host.eq_ignore_ascii_case(host))
+}
+
 /// `owner/repo` and host of a remote URL (`https://h/o/r(.git)`,
 /// `git@h:o/r(.git)`, `ssh://git@h/o/r`).
 pub fn parse_remote(url: &str) -> Option<(String, String)> {
@@ -259,14 +301,22 @@ impl Daemon {
         bound(&self.providers(), h.provider.as_deref(), &h.host).cloned()
     }
 
+    /// R7: the saved Git access rows, then the implicit rows of the
+    /// providers that are on (never saved).
+    pub fn effective_git_hosts(&self, c: &Config) -> Vec<GitHost> {
+        let mut hosts = c.git_hosts.clone();
+        hosts.extend(
+            implicit_hosts(&c.git_hosts, &self.providers())
+                .into_iter()
+                .map(|(_, h)| h),
+        );
+        hosts
+    }
+
     /// The user name for a host's token.
     fn token_user(&self, host: &str) -> String {
-        let named = self
-            .live_config()
-            .git_hosts
-            .into_iter()
-            .find(|h| h.host == host)
-            .and_then(|h| h.provider);
+        let named =
+            row_for(self.effective_git_hosts(&self.live_config()), host).and_then(|h| h.provider);
         token_user_of(&self.providers(), named.as_deref(), host)
     }
 
@@ -342,8 +392,16 @@ impl Daemon {
             (Some(n), Some(e)) => Some((n.as_str(), e.as_str())),
             _ => None,
         };
+        // Natively the user includes this file from their own ~/.gitconfig:
+        // only rows they saved may replace their credential helper, so the
+        // implicit rows (R7) stay out of it there.
+        let hosts = if self.sandbox {
+            self.effective_git_hosts(&c)
+        } else {
+            c.git_hosts.clone()
+        };
         let text = managed_gitconfig(
-            &c.git_hosts,
+            &hosts,
             &self.xherd_bin,
             self.sandbox,
             identity,
@@ -368,11 +426,13 @@ impl Daemon {
             .map_err(|e| fail("io", format!("{}: {e}", p.display())))
     }
 
-    /// `GET /git/hosts`: hosts with whether a token is stored (never the token).
+    /// `GET /git/hosts`: hosts with whether a token is stored (never the
+    /// token), then the implicit rows of the providers that are on, with
+    /// `from` naming the plugin (R7).
     pub fn git_hosts(&self) -> Value {
         let s = self.live_secrets();
-        let hosts: Vec<Value> = self
-            .live_config()
+        let c = self.live_config();
+        let mut hosts: Vec<Value> = c
             .git_hosts
             .iter()
             .map(|h| {
@@ -381,6 +441,16 @@ impl Daemon {
                 v
             })
             .collect();
+        hosts.extend(
+            implicit_hosts(&c.git_hosts, &self.providers())
+                .into_iter()
+                .map(|(from, h)| {
+                    let mut v = serde_json::to_value(h).expect("json");
+                    v["hasToken"] = false.into();
+                    v["from"] = from.into();
+                    v
+                }),
+        );
         let providers: Vec<Value> = self
             .providers()
             .into_iter()
@@ -488,11 +558,9 @@ impl Daemon {
             return None;
         }
         let c = self.live_config();
-        let h = c
-            .git_hosts
-            .iter()
-            .find(|h| h.host == host && h.credential == Credential::Xherd)?;
-        let token = self.live_secrets().git_token(host)?;
+        let h = row_for(c.git_hosts, host).filter(|h| h.credential == Credential::Xherd)?;
+        // The token is kept under the host as the row spells it.
+        let token = self.live_secrets().git_token(&h.host)?;
         tracing::info!(host, "git credential handed out");
         Some((
             h.username.clone().unwrap_or_else(|| self.token_user(host)),
@@ -572,11 +640,7 @@ impl Daemon {
     /// Start `gh auth login --web` (or glab) in a tmux session the UI shows
     /// (`/ws/setup/git-login`); the code to type appears there (R-686).
     pub async fn start_git_login(&self, host: &str) -> Result<(), ActionError> {
-        let configured = self
-            .live_config()
-            .git_hosts
-            .into_iter()
-            .find(|h| h.host == host);
+        let configured = row_for(self.live_config().git_hosts, host);
         let login = configured
             .as_ref()
             .and_then(|h| self.provider_of(h))
@@ -724,8 +788,7 @@ impl Daemon {
     /// the first failure; with a repository, its API and git transport too.
     /// Secrets never appear in the findings.
     pub async fn git_doctor(&self, host: &str, repo: Option<&str>) -> Vec<Finding> {
-        let c = self.live_config();
-        let cfg = c.git_hosts.iter().find(|h| h.host == host).cloned();
+        let cfg = row_for(self.effective_git_hosts(&self.live_config()), host);
         let protocols = cfg
             .as_ref()
             .map(|h| h.protocols.clone())
@@ -949,12 +1012,8 @@ impl Daemon {
             }),
         });
         let Some(token) = token else { return };
-        let named = self
-            .live_config()
-            .git_hosts
-            .into_iter()
-            .find(|h| h.host == host)
-            .and_then(|h| h.provider);
+        let named =
+            row_for(self.effective_git_hosts(&self.live_config()), host).and_then(|h| h.provider);
         let Some(api) =
             bound(&self.providers(), named.as_deref(), host).and_then(|g| g.api.clone())
         else {
@@ -1229,5 +1288,54 @@ mod tests {
             "[credential \"https://gitlab.com\"]\n\thelper =\n\thelper = !glab auth git-credential\n"
         ));
         assert!(!t.contains("git.example.com\"]"));
+    }
+
+    #[test]
+    fn a_row_is_found_whatever_the_case_of_its_host() {
+        let saved = vec![
+            host("gitlab.com", Credential::None),
+            host("GitHub.com", Credential::Xherd),
+        ];
+        let r = row_for(saved.clone(), "github.com").expect("row");
+        assert_eq!(r.host, "GitHub.com");
+        assert_eq!(r.credential, Credential::Xherd);
+        assert!(row_for(saved, "github.example.com").is_none());
+    }
+
+    #[test]
+    fn providers_that_are_on_give_implicit_rows() {
+        let providers = providers();
+        let rows = implicit_hosts(&[], &providers);
+        // Only GitHub has a fixed host and a helper: `*gitlab*` is a pattern,
+        // bitbucket has no helper.
+        let names: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|(p, h)| (p.as_str(), h.host.as_str()))
+            .collect();
+        assert_eq!(names, [("github", "github.com")]);
+        let (_, gh) = &rows[0];
+        assert_eq!(gh.protocols, ["https", "ssh"]);
+        assert_eq!(gh.credential, Credential::Provider);
+        assert_eq!(gh.provider.as_deref(), Some("github"));
+
+        // A saved row wins, whatever its case.
+        assert!(implicit_hosts(&[host("GitHub.com", Credential::None)], &providers).is_empty());
+        // A provider that is off is not in the list.
+        let on: Vec<_> = providers
+            .iter()
+            .filter(|(n, _)| n != "github")
+            .cloned()
+            .collect();
+        assert!(implicit_hosts(&[], &on).is_empty());
+
+        let all: Vec<GitHost> = rows.into_iter().map(|(_, h)| h).collect();
+        let t = managed_gitconfig(&all, "x", false, None, &[], &|h| {
+            bound(&providers, h.provider.as_deref(), &h.host)
+                .and_then(|g| g.credential.clone())
+                .and_then(|c| c.helper)
+        });
+        assert!(t.contains(
+            "[credential \"https://github.com\"]\n\thelper =\n\thelper = !gh auth git-credential\n"
+        ));
     }
 }

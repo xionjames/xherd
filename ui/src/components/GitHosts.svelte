@@ -2,7 +2,10 @@
   // Git access per host (spec R-685, R-686): how HTTPS gets its token (gh or
   // glab login, or a token kept by xherd), SSH, optional URL rewrites, and the
   // doctor with a fix for the first failure. Used by Settings and Welcome (the commit identity is GitIdentity.svelte).
+  // Rows with `from` are implicit: a Git provider plugin that is on covers that
+  // host; they are never saved, and Edit turns one into an ordinary row.
   import { get, put, post } from '../lib/api';
+  import { app } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
   import TermView from './TermView.svelte';
   import Panel from './Panel.svelte';
@@ -15,9 +18,13 @@
   // `heading` off where the page already has this title (Welcome); `note` off
   // where the identity above shows the gitconfig note already (Settings).
   // `bar` off in Welcome, whose single button saves through `save()`; `unsaved`
-  // is read back by the page.
-  let { heading = true, note = true, bar = true, unsaved = $bindable(false) }: {
+  // is read back by the page. `pluginsHref` is where Git provider plugins are
+  // switched on; `onlogin` runs after a browser login ends (Welcome reloads
+  // its checks).
+  let { heading = true, note = true, bar = true, unsaved = $bindable(false),
+    pluginsHref = '#/settings?tab=plugins', onlogin }: {
     heading?: boolean; note?: boolean; bar?: boolean; unsaved?: boolean;
+    pluginsHref?: string; onlogin?: () => void;
   } = $props();
 
   type Row = GitHost & { token: string };
@@ -49,10 +56,13 @@
   const PRESETS = ['github.com', 'gitlab.com', 'bitbucket.org'];
 
   const strip = (r: Row): GitHost => {
-    const { token: _t, hasToken: _h, ...h } = r;
+    const { token: _t, hasToken: _h, from: _f, ...h } = r;
     return { ...h, provider: h.provider || undefined, username: h.username || undefined, caFile: h.caFile || undefined };
   };
-  const snapshot = () => JSON.stringify(rows.map(strip));
+  // What is saved: the user's rows, never the implicit ones.
+  const own = () => rows.filter((r) => !r.from).map(strip);
+  const snapshot = () => JSON.stringify(own());
+  const pluginLabel = (name: string) => app.state?.plugins.find((p) => p.name === name)?.label ?? name;
   const dirty = $derived(snapshot() !== saved || rows.some((r) => r.token !== ''));
   $effect(() => { unsaved = dirty; });
   export async function saveAll() { if (dirty) await save(); return !dirty; }
@@ -86,7 +96,7 @@
     busy = true;
     const tokens = Object.fromEntries(rows.filter((r) => r.token !== '').map((r) => [r.host, r.token]));
     try {
-      fill(await put<GitHostsView>('/git/hosts', { hosts: rows.map(strip), tokens }));
+      fill(await put<GitHostsView>('/git/hosts', { hosts: own(), tokens }));
       checkAll();
     } catch (e) {
       showError('Could not save git access', e);
@@ -95,7 +105,7 @@
     }
   }
   async function forget(r: Row) {
-    try { fill(await put<GitHostsView>('/git/hosts', { hosts: rows.map(strip), tokens: { [r.host]: null } })); } catch (e) { showError('Could not remove the token', e); }
+    try { fill(await put<GitHostsView>('/git/hosts', { hosts: own(), tokens: { [r.host]: null } })); } catch (e) { showError('Could not remove the token', e); }
   }
 
   function toggle(r: Row, p: 'https' | 'ssh') {
@@ -142,6 +152,7 @@
     const h = login;
     login = null;
     if (h) runDoctor(h);
+    onlogin?.();
   }
 </script>
 
@@ -157,6 +168,9 @@
     {#if bad.length}<Callout tone="bad">Access fails for {bad.map((r) => r.host).join(', ')}.</Callout>
     {:else if pending.length}<Callout glyph="…">Checking access…</Callout>
     {:else}<Callout tone="ok">Access works for {rows.map((r) => r.host).join(', ')}.</Callout>{/if}
+  {:else if !providers.length}
+    <Callout>Configure access by hand below (SSH key, token), or
+      <a href={pluginsHref}>switch on a Git provider plugin</a> to do it for you.</Callout>
   {:else}
     <Callout tone="bad">No host yet: add the hosts your repositories live on.</Callout>
   {/if}
@@ -166,13 +180,25 @@
     <Panel label={r.host}>
       {#snippet head()}
         <h2 class="mono">{r.host}</h2>
+        {#if r.from}<span class="pill">From the {pluginLabel(r.from)} plugin</span>{/if}
         <span class="pill">{r.protocols.length ? r.protocols.join(' + ').toUpperCase() : 'no protocol'}</span>
         {#if status(d) === 'checking'}<span class="pill">Checking…</span>
         {:else if status(d) === 'ok'}<span class="pill live">✓ Access works</span>
         {:else if status(d) === 'bad'}<span class="pill halt">✕ {d?.findings?.find((f) => !f.ok)?.label}</span>{/if}
         <span class="grow"></span>
-        <button class="btn ghost danger sm" onclick={() => (rows = rows.filter((x) => x !== r))}>Remove</button>
+        {#if r.from}
+          <button class="btn ghost sm" title="Make this host your own row, to change it" onclick={() => (r.from = undefined)}>Edit</button>
+        {:else}
+          <button class="btn ghost danger sm" onclick={() => (rows = rows.filter((x) => x !== r))}>Remove</button>
+        {/if}
       {/snippet}
+      {#if r.from}
+        <p class="hint">The {pluginLabel(r.from)} plugin gives git its login for {r.host} over HTTPS while it is on. Edit to change how this host is reached.</p>
+        {#if providerOf(r)?.login}
+          <div class="row"><button class="btn" onclick={() => startLogin(r.host)}>Log in to {r.host} in the browser</button>
+            <span class="hint">Shows a one-time code to enter on {r.host}.</span></div>
+        {/if}
+      {:else}
       <div class="row" style="gap:18px">
         {#each ['https', 'ssh'] as const as p (p)}
           <label class="f chk"><input type="checkbox" checked={r.protocols.includes(p)} onchange={() => toggle(r, p)} />{p.toUpperCase()}</label>
@@ -211,6 +237,7 @@
           <option value="https">SSH remotes over HTTPS</option>
           <option value="ssh">HTTPS remotes over SSH</option>
         </select></label>
+      {/if}
 
       {#if login === r.host}
         <TermView path="/ws/setup/git-login" title={`Log in to ${r.host}`} height="360px" onclose={loginEnded}

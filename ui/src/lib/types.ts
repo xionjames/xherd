@@ -222,6 +222,8 @@ export interface GitHost {
   preferSsh: boolean;
   /** A token is stored in secrets.json (never sent). */
   hasToken?: boolean;
+  /** The plugin this implicit row comes from; never saved. */
+  from?: string;
 }
 
 export interface GitProvider {
