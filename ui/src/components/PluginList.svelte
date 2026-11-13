@@ -113,7 +113,7 @@
           <div class="tf">
             <span class="ckst {st.tone === 'off' ? '' : st.tone}" aria-hidden="true">{st.tone === 'ok' ? '✓' : st.tone === 'bad' ? '✕' : st.tone === 'opt' ? '–' : '○'}</span>
             <span class="grow wrap-any" class:muted={st.tone === 'off'}>{st.text}</span>
-            {#if st.text === 'Not logged in' && p.login}<button class="btn primary sm" onclick={() => options(p, true)}>Log in</button>{/if}
+            {#if st.text === 'Not logged in' && p.login}<button class="btn sm" onclick={() => options(p, true)}>Log in</button>{/if}
             <button class="btn sm" onclick={() => options(p)}>Options</button>
           </div>
         </div>

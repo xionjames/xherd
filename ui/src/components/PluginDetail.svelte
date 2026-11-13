@@ -47,7 +47,12 @@
   }
   function loginEnded() { loggingIn = false; loadChecks(); }
   // Log in on a card opens this dialog and starts the login here.
-  onMount(() => { if (autologin) login(); });
+  // Closing the dialog during a login drops the terminal before it reports the end,
+  // so the checks run again here.
+  onMount(() => {
+    if (autologin) login();
+    return () => { if (loggingIn) loadChecks(); };
+  });
 
   async function save() {
     busy = true;
