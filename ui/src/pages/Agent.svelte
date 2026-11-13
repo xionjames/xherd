@@ -227,5 +227,5 @@
 <style>
   .anchor { position: relative; }
   .mpad { padding: 6px 10px; }
-  .model :global(input) { width: 16ch; }
+  .model :global(select), .model :global(input) { width: 18ch; }
 </style>

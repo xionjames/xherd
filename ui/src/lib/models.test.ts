@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canChooseModel, validModel } from './models';
+import { canChooseModel, modelText, validModel } from './models';
 import type { PluginInfo } from './types';
 
 describe('models', () => {
@@ -15,5 +15,10 @@ describe('models', () => {
     expect(canChooseModel(plugins, 'old')).toBe(false);
     expect(canChooseModel(plugins, 'github')).toBe(false);
     expect(canChooseModel(plugins, 'missing')).toBe(false);
+  });
+  it('shows the label, else the id, with the tier', () => {
+    expect(modelText({ id: 'opus', label: 'Opus (latest)', tier: 'strong' })).toBe('Opus (latest) · strong');
+    expect(modelText({ id: 'opencode/big-pickle' })).toBe('opencode/big-pickle');
+    expect(modelText({ id: 'x', tier: 'fast' })).toBe('x · fast');
   });
 });

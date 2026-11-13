@@ -148,7 +148,7 @@
       <label class="f">Model (optional)
         <ModelInput {runtime} bind:value={f.model} placeholder={profileModel ? `${profileModel} (profile)` : 'Default (Settings, else the runtime’s)'} />
         {#if !modelOk}<span class="hint err">Letters, digits and . _ : / @ - [ ] only.</span>
-        {:else}<span class="hint">Pick a suggestion or type any model {runtime} knows. Set a default per runtime in Settings → Plugins → Options. Each agent can change it later.</span>{/if}</label>
+        {:else}<span class="hint">Pick one, or Other… for any model {runtime} knows. Set a default per runtime in Settings → Plugins → Options. Each agent can change it later.</span>{/if}</label>
     {/if}
     <label class="f">Tool permissions
       <select bind:value={f.mode}>

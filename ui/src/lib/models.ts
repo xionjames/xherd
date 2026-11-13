@@ -13,8 +13,9 @@ export const validModel = (m: string): boolean => {
   return t === '' || (t.length <= 100 && !t.startsWith('-') && /^[A-Za-z0-9._:/@\-[\]]+$/.test(t));
 };
 
+/** What an option shows: the label (else the id) and the tier. */
 export const modelText = (s: ModelSuggestion): string =>
-  [s.label, s.tier].filter(Boolean).join(' · ');
+  [s.label || s.id, s.tier].filter(Boolean).join(' · ');
 
 export type ModelList = { choose: boolean; models: ModelSuggestion[]; error?: string };
 
