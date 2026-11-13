@@ -34,6 +34,13 @@
           "--dangerously-bypass-approvals-and-sandbox"
         ]
       },
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "command": "codex debug models | jq -r '.models[] | select(.visibility != \"hide\") | [.slug, .display_name] | @tsv'"
+      },
       "hooks": {
         "file": ".codex/hooks.json",
         "format": "codex-hooks",

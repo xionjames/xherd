@@ -12,6 +12,8 @@
   import CheckRow from './CheckRow.svelte';
   import Toolchains from './Toolchains.svelte';
   import TermView from './TermView.svelte';
+  import ModelInput from './ModelInput.svelte';
+  import { validModel } from '../lib/models';
   import type { PluginInfo, GitHostsView } from '../lib/types';
 
   let { plugin, onclose, autologin = false }: { plugin: PluginInfo; onclose: () => void; autologin?: boolean } = $props();
@@ -36,7 +38,14 @@
   }
   const secretsDirty = $derived(secretFields.some((s) => (secretNew[s.key] ?? '') !== ''));
   const fieldsDirty = $derived(fields.some((s) => (values[s.key] ?? '') !== saved(s.key)));
-  const dirty = $derived(secretsDirty || fieldsDirty);
+  // A runtime that can choose a model: its default model (config `runtimeModels`, live).
+  const canModel = $derived(plugin.kind === 'runtime' && !!plugin.chooseModel);
+  const savedModels = $derived((setup.config?.config.runtimeModels ?? {}) as Record<string, string>);
+  let model = $state('');
+  $effect(() => { model = savedModels[plugin.name] ?? ''; });
+  const modelDirty = $derived(canModel && model.trim() !== (savedModels[plugin.name] ?? ''));
+  const modelOk = $derived(validModel(model));
+  const dirty = $derived(secretsDirty || fieldsDirty || modelDirty);
   let busy = $state(false);
   const checks = $derived((setup.checks ?? []).filter((c) => c.id.startsWith(`plugin:${plugin.name}:`)));
   const loginFails = $derived(plugin.enabled && plugin.login && checks.some((c) => c.id.endsWith(':login') && !c.ok));
@@ -61,6 +70,8 @@
       // The server replaces this plugin's settings as a whole, so an emptied field is cleared.
       // Only when a plain setting changed: it needs a daemon restart, a secret does not.
       if (fieldsDirty) await put('/config', { pluginSettings: { [plugin.name]: mine } });
+      // The map is replaced as a whole; an empty model removes the entry.
+      if (modelDirty) await put('/config', { runtimeModels: { ...savedModels, [plugin.name]: model.trim() } });
       const fresh = Object.fromEntries(Object.entries(secretNew).filter(([, v]) => v !== ''));
       if (Object.keys(fresh).length) {
         secretSet = await put<Record<string, boolean>>(`/plugins/${plugin.name}/secrets`, { values: fresh });
@@ -104,8 +115,14 @@
         {#if secretSet[s.key]}<button class="btn ghost danger sm" style="align-self:flex-start" onclick={(e) => { e.preventDefault(); forget(s.key); }}>Forget the stored value</button>{/if}</label>
     {/each}
     {#if secretFields.length}<p class="hint">Secrets are kept in secrets.json on the daemon's side and never shown again.</p>{/if}
-  {:else}
+  {:else if !canModel}
     <p class="hint">This plugin has no settings.</p>
+  {/if}
+  {#if canModel}
+    <label class="f">Default model
+      <ModelInput runtime={plugin.name} bind:value={model} />
+      {#if !modelOk}<span class="hint err">Letters, digits and . _ : / @ - [ ] only.</span>
+      {:else}<span class="hint">New agents of this runtime start with it; empty = the runtime's own default. A repo profile or the New agent form can choose another, and each agent can change it. Applies at once.</span>{/if}</label>
   {/if}
   {#if provider}
     <p class="hint">Git provider for {provider.hosts.join(', ')}.
@@ -127,6 +144,6 @@
     {#if loginFails && !loggingIn}<button class="btn" onclick={login}>Log in</button>{/if}
     <span class="grow"></span>
     <button class="btn ghost" onclick={onclose}>Close</button>
-    {#if fields.length || secretFields.length}<button class="btn primary" disabled={!dirty || busy} onclick={save}>{busy ? 'Saving…' : 'Save settings'}</button>{/if}
+    {#if fields.length || secretFields.length || canModel}<button class="btn primary" disabled={!dirty || busy || !modelOk} onclick={save}>{busy ? 'Saving…' : 'Save settings'}</button>{/if}
   {/snippet}
 </Dialog>

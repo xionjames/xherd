@@ -30,6 +30,10 @@ fn git(dir: &Path, args: &[&str]) -> std::process::Output {
 }
 
 async fn setup() -> T {
+    setup_with(|_| {}).await
+}
+
+async fn setup_with(f: impl FnOnce(&mut Options)) -> T {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -64,6 +68,7 @@ async fn setup() -> T {
         .find(|m| m.name == "claude-code")
         .unwrap();
     rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    f(&mut o);
     let d = Daemon::start(paths, o).await.unwrap();
     T {
         home,
@@ -90,6 +95,7 @@ fn req(t: &T, key: &str) -> NewAgent {
         autonomy: None,
         permission_mode: None,
         runtime: None,
+        model: None,
     }
 }
 
@@ -310,6 +316,125 @@ async fn permission_mode_from_the_request_and_changed_later() {
     assert_eq!(e.code, "mode_unavailable");
 }
 
+/// The model (issue #112): request, then the profile's entry for the
+/// runtime, then Settings' `runtimeModels`; it goes on the launch line and
+/// can be changed (or cleared) later, keeping the permission mode.
+#[tokio::test]
+async fn the_model_comes_from_the_request_then_the_profile_then_settings() {
+    let t = setup().await;
+    let line = |a: &Agent| a.launch.as_deref().map(|l| l.join(" ")).unwrap();
+    let a = t.d.new_agent(req(&t, "SC-31")).await.unwrap();
+    assert_eq!(a.model, None);
+    assert_eq!(line(&a), "claude --permission-mode acceptEdits");
+
+    let saved = t.d.save_config(
+        serde_json::from_value(
+            serde_json::json!({"runtimeModels": {"claude-code": "haiku", "opencode": ""}}),
+        )
+        .unwrap(),
+    );
+    assert!(saved.is_ok(), "{:?}", saved.err().map(|e| e.message));
+    let a = t.d.new_agent(req(&t, "SC-32")).await.unwrap();
+    assert_eq!(a.model.as_deref(), Some("haiku"), "setting");
+    assert_eq!(
+        line(&a),
+        "claude --permission-mode acceptEdits --model haiku"
+    );
+
+    let p: xherd_core::profile::Profile = serde_json::from_value(serde_json::json!({
+        "name": "app",
+        "match": [t.repo.path().canonicalize().unwrap().to_string_lossy()],
+        "models": {"claude-code": "sonnet", "opencode": "opencode/x"}
+    }))
+    .unwrap();
+    t.d.create_profile(p).await.unwrap();
+    let a = t.d.new_agent(req(&t, "SC-33")).await.unwrap();
+    assert_eq!(a.model.as_deref(), Some("sonnet"), "profile");
+
+    let mut r = req(&t, "SC-34");
+    r.model = Some(" opus ".into());
+    let a = t.d.new_agent(r).await.unwrap();
+    assert_eq!(a.model.as_deref(), Some("opus"), "request");
+
+    let mut r = req(&t, "SC-35");
+    r.model = Some("--evil".into());
+    assert_eq!(t.d.new_agent(r).await.unwrap_err().code, "bad_model");
+
+    use xherd_core::permission::PermissionMode;
+    t.d.set_permission_mode("SC-34", PermissionMode::Ask)
+        .await
+        .unwrap();
+    let a = t.d.set_model("SC-34", Some("haiku")).await.unwrap();
+    assert_eq!(a.model.as_deref(), Some("haiku"));
+    assert_eq!(
+        line(&a),
+        "claude --permission-mode manual --model haiku",
+        "mode kept"
+    );
+    let a =
+        t.d.set_permission_mode("SC-34", PermissionMode::Auto)
+            .await
+            .unwrap();
+    assert_eq!(
+        line(&a),
+        "claude --permission-mode auto --model haiku",
+        "model kept"
+    );
+    let a = t.d.set_model("SC-34", Some("")).await.unwrap();
+    assert_eq!(a.model, None);
+    assert_eq!(line(&a), "claude --permission-mode auto");
+    assert_eq!(
+        t.d.set_model("SC-34", Some("a b")).await.unwrap_err().code,
+        "bad_model"
+    );
+
+    let bad = t.d.save_config(
+        serde_json::from_value(serde_json::json!({"runtimeModels": {"github": "x"}})).unwrap(),
+    );
+    assert!(bad.unwrap_err().message.contains("runtimeModels"));
+}
+
+/// Model suggestions (issue #112): a runtime's fixed list, or what its list
+/// command prints; a failing command gives none and says why.
+#[tokio::test]
+async fn model_suggestions_come_from_the_list_or_the_command() {
+    let t = setup_with(|o| {
+        let set = |o: &mut Options, name: &str, v: serde_json::Value| {
+            let m = o
+                .builtin_plugins
+                .iter_mut()
+                .find(|m| m.name == name)
+                .unwrap();
+            m.data.get_mut("terminal").unwrap()["models"] = v;
+        };
+        set(
+            o,
+            "opencode",
+            serde_json::json!({"command": "printf 'a/b\\tA B\\n-x\\nc/d\\n' | grep /"}),
+        );
+        set(
+            o,
+            "codex",
+            serde_json::json!({"command": "echo nope >&2; exit 3"}),
+        );
+    })
+    .await;
+    let fixed = t.d.runtime_models("claude-code").await.unwrap();
+    assert!(fixed.choose && fixed.models.iter().any(|m| m.id == "sonnet"));
+    let listed = t.d.runtime_models("opencode").await.unwrap();
+    let ids: Vec<&str> = listed.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["a/b", "c/d"]);
+    assert_eq!(listed.models[0].label.as_deref(), Some("A B"));
+    assert_eq!(listed.error, None);
+    let failed = t.d.runtime_models("codex").await.unwrap();
+    assert!(failed.choose && failed.models.is_empty());
+    assert!(failed.error.unwrap().contains("nope"));
+    assert_eq!(
+        t.d.runtime_models("github").await.unwrap_err().code,
+        "unknown_runtime"
+    );
+}
+
 /// A worktree with version files starts through `xherd toolchain exec`, with
 /// the plan written for it (R-652); one without starts the runtime directly.
 #[tokio::test]
@@ -424,6 +549,7 @@ async fn refuses_without_a_runtime_plugin() {
         autonomy: None,
         permission_mode: None,
         runtime: None,
+        model: None,
     };
     assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
 }

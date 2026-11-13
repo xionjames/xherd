@@ -95,6 +95,11 @@ pub struct Config {
     /// Runtime plugin of new agents (`claude-code`, `opencode`, `codex`); a profile or
     /// the request overrides it. Also the runtime of TODO condition checks.
     pub default_runtime: String,
+    /// Runtime plugin → model of new agents (issue #112); a profile's
+    /// `models` or the request overrides it. No entry = the runtime's own
+    /// default. Live.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub runtime_models: std::collections::BTreeMap<String, String>,
     /// Settings → Open in (R-706, R-707).
     pub open_in: OpenIn,
     /// Consecutive automatic approvals after which the next gate waits for a
@@ -172,6 +177,7 @@ impl Default for Config {
             autonomy: crate::autonomy::Autonomy::Ask,
             permission_mode: Default::default(),
             default_runtime: DEFAULT_RUNTIME.into(),
+            runtime_models: Default::default(),
             open_in: OpenIn::default(),
             max_auto_approvals_in_row: 10,
             agent_token_budget: 0,
@@ -342,6 +348,7 @@ impl Config {
         self.autonomy = s.autonomy;
         self.permission_mode = s.permission_mode;
         self.default_runtime = s.default_runtime;
+        self.runtime_models = s.runtime_models;
         self.open_in = s.open_in;
         self.max_auto_approvals_in_row = s.max_auto_approvals_in_row;
         self.agent_token_budget = s.agent_token_budget;

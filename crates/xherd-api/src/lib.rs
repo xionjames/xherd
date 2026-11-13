@@ -99,6 +99,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/toolchains", get(toolchains))
         .route("/api/v1/toolchains/installed", get(toolchains_installed))
         .route("/api/v1/toolchains/install", post(toolchain_install))
+        .route("/api/v1/runtimes/{name}/models", get(runtime_models))
         .route(
             "/api/v1/toolchains/{tool}/versions",
             get(toolchain_versions),
@@ -156,7 +157,9 @@ impl From<ActionError> for ApiError {
             "usage" => StatusCode::BAD_REQUEST,
             "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
             | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
-            | "unknown_pack" | "unknown_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
+            | "unknown_pack" | "unknown_runtime" | "bad_model" | "model_unavailable" => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "not_fixable" | "no_companion" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
@@ -360,10 +363,15 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
                            "secret": s.secret, "required": s.required})
                 })
                 .collect();
+            // A runtime that takes a model (issue #112); the models it
+            // suggests come from `GET /runtimes/{name}/models`.
+            let models = xherd_plugin::runtime::Terminal::of(&p.manifest)
+                .is_ok_and(|t| !t.model_args.is_empty());
             json!({"name": p.name(), "kind": p.manifest.kind, "version": p.manifest.version,
                    "label": p.manifest.label, "description": p.manifest.description,
                    "builtin": p.builtin(), "settings": settings,
-                   "enabled": d.plugin_enabled(p.name()), "login": p.manifest.login.is_some()})
+                   "enabled": d.plugin_enabled(p.name()), "login": p.manifest.login.is_some(),
+                   "chooseModel": models})
         })
         .collect();
     Ok(Json(json!({
@@ -964,6 +972,14 @@ async fn toolchains(_: User, State(d): State<Daemon>) -> Json<Value> {
 }
 
 /// The versions a tool can install, each marked installed or not.
+async fn runtime_models(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<xherd_daemon::RuntimeModels>> {
+    Ok(Json(d.runtime_models(&name).await?))
+}
+
 async fn toolchain_versions(
     _: User,
     State(d): State<Daemon>,
@@ -1172,6 +1188,8 @@ struct ActionBody {
     level: Option<xherd_core::autonomy::Autonomy>,
     /// Mode: `ask`, `edits`, `auto` or `all` (R-002a).
     mode: Option<xherd_core::permission::PermissionMode>,
+    /// Model: a name, or null/empty for the runtime's default (issue #112).
+    model: Option<String>,
 }
 
 async fn agent_action(
@@ -1199,6 +1217,10 @@ async fn agent_action(
             )
         })?;
         let agent = d.set_permission_mode(&id, mode).await?;
+        return Ok(Json(json!({"agent": agent})));
+    }
+    if action == "model" {
+        let agent = d.set_model(&id, b.model.as_deref()).await?;
         return Ok(Json(json!({"agent": agent})));
     }
     let a = match action.as_str() {

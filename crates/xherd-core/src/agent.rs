@@ -166,6 +166,10 @@ pub struct Agent {
     /// existed, which keep their stored `launch`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<crate::permission::PermissionMode>,
+    /// Model the runtime is launched with (issue #112); `None` = the
+    /// runtime's own default. `launch` already carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Gates approved automatically since a human last approved one (R-120).
     #[serde(default)]
     pub auto_in_row: u32,
@@ -215,6 +219,7 @@ impl Agent {
             budget_warned: false,
             autonomy: Autonomy::Ask,
             permission_mode: None,
+            model: None,
             auto_in_row: 0,
             review_rounds: 0,
             pr_state: None,

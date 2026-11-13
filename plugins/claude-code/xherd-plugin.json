@@ -27,6 +27,27 @@
           "bypassPermissions"
         ]
       },
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": [
+        {
+          "id": "opus",
+          "label": "Opus (latest)",
+          "tier": "strong"
+        },
+        {
+          "id": "sonnet",
+          "label": "Sonnet (latest)",
+          "tier": "balanced"
+        },
+        {
+          "id": "haiku",
+          "label": "Haiku (latest)",
+          "tier": "fast"
+        }
+      ],
       "hooks": {
         "file": ".claude/settings.local.json",
         "events": {

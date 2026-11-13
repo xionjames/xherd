@@ -27,11 +27,13 @@ impl From<Refusal> for ActionError {
     }
 }
 
-/// The runtime's launch argv for a tool-permission mode (R-002a): the
-/// runtime must offer it, and `all` only runs in the container (T4).
+/// The runtime's launch argv for a tool-permission mode (R-002a) and a
+/// model (issue #112, already checked): the runtime must offer both, and
+/// `all` only runs in the container (T4).
 pub(crate) fn mode_launch(
     rt: &Terminal,
     mode: PermissionMode,
+    model: Option<&str>,
     sandbox: bool,
 ) -> Result<Vec<String>, ActionError> {
     if !mode.allowed(sandbox) {
@@ -40,8 +42,21 @@ pub(crate) fn mode_launch(
             "permission mode all asks nothing, so it is only offered in the container",
         ));
     }
-    rt.argv(mode.as_str())
-        .map_err(|e| refuse("mode_unavailable", e))
+    let mut argv = rt
+        .argv(mode.as_str())
+        .map_err(|e| refuse("mode_unavailable", e))?;
+    if let Some(m) = model {
+        argv.extend(
+            rt.model_argv(m)
+                .map_err(|e| refuse("model_unavailable", e))?,
+        );
+    }
+    Ok(argv)
+}
+
+/// A model name from a request, checked (`None` = empty).
+pub(crate) fn clean_model(m: Option<&str>) -> Result<Option<String>, ActionError> {
+    xherd_core::model::clean(m.unwrap_or_default()).map_err(|e| refuse("bad_model", e))
 }
 
 /// Last path component, for `worktrees/<repo>/<agent>`.
@@ -100,7 +115,15 @@ impl Daemon {
             .permission_mode
             .or(profile.as_ref().and_then(|p| p.permission_mode))
             .unwrap_or(self.live_config().permission_mode);
-        let launch = mode_launch(&rt, mode, self.sandbox)?;
+        // Request, then the profile's model for this runtime, then Settings.
+        let model = match clean_model(req.model.as_deref())? {
+            Some(m) => Some(m),
+            None => profile
+                .as_ref()
+                .and_then(|p| p.models.get(rt_name).cloned())
+                .or_else(|| self.live_config().runtime_models.get(rt_name).cloned()),
+        };
+        let launch = mode_launch(&rt, mode, model.as_deref(), self.sandbox)?;
         let agents = self
             .store
             .list_agents()
@@ -148,6 +171,7 @@ impl Daemon {
         let mut a = Agent::new(&c.name, &c.ticket_key, self.clock.now());
         a.autonomy = autonomy;
         a.permission_mode = Some(mode);
+        a.model = model;
         a.profile = profile.as_ref().map(|p| p.id.clone());
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
