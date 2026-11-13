@@ -1,9 +1,12 @@
 <script lang="ts">
   // The comments of the current PR round and what to do about each (R-306):
-  // the agent proposes in pr-review.md, the user decides here, then approves
-  // the pr-review gate. Comment text is untrusted: it is shown as plain text.
+  // the agent proposes in its plan, the user decides here and sends the
+  // decisions (approves the PR gate). Comment text is untrusted: plain text.
   import type { Agent, Decision, PrComment, Verdict } from '../lib/types';
-  import { get, put } from '../lib/api';
+  import { get, post, put } from '../lib/api';
+  import { upsertAgent } from '../lib/store.svelte';
+  import { showError } from '../lib/errors.svelte';
+  import { prGate } from '../lib/flow';
   import Seg from './Seg.svelte';
 
   let { agent }: { agent: Agent } = $props();
@@ -58,6 +61,28 @@
     void save();
   }
   const open = $derived((round?.comments ?? []).length);
+
+  // Sending = approving the PR gate: replies are posted, fixes go to the agent.
+  const deciding = $derived(prGate(agent.gate));
+  const missing = $derived(
+    (round?.comments ?? []).filter((c) => {
+      const v = effective(c);
+      return !v || (v.decision === 'reply' && !v.reply?.trim());
+    }).length,
+  );
+  const count = (d: Decision) => (round?.comments ?? []).filter((c) => effective(c)?.decision === d).length;
+  let sending = $state(false);
+  async function send() {
+    sending = true;
+    try {
+      const r = await post<{ agent: Agent }>(`/agents/${id}/approve`, { expect: {} });
+      upsertAgent(r.agent);
+    } catch (e) {
+      showError('Could not send the decisions', e);
+    } finally {
+      sending = false;
+    }
+  }
 </script>
 
 {#if error}
@@ -67,13 +92,13 @@
   <section class="card" aria-label="Pull request comments">
     <div class="ch">
       <h2>Comments to decide</h2>
-      <span class="muted">{open} in this round: choose what to do, then approve the plan</span>
+      <span class="muted">{open} in this round{#if deciding}: check what to do with each, then send the decisions{/if}</span>
     </div>
     {#if round.error}<div class="cb"><p class="err">pr-review.md: {round.error}</p></div>{/if}
     <ul class="list">
       {#each round.comments as c (c.id)}
         {@const v = effective(c)}
-        <li>
+        <li class="dec {v?.decision ?? 'none'}">
           <div class="row">
             <b>{c.author}</b>
             <span class="mono muted wrap-any">{location(c)}</span>
@@ -84,7 +109,7 @@
           <p class="pre wrap-any">{c.body}</p>
           <div class="row">
             <Seg label="Decision for this comment" value={v?.decision ?? ('' as Decision)} onchange={(d) => edit(c, { decision: d })}
-              options={DECISIONS.map((d) => ({ value: d, label: `${GLYPH[d]} ${d}` }))} />
+              options={DECISIONS.map((d) => ({ value: d, label: `${GLYPH[d]} ${d}`, tone: TONE[d] }))} />
             {#if v && !overrides[c.id]}<span class="muted">proposed by the agent</span>{/if}
             {#if !v}<span class="pill gate">no decision yet</span>{/if}
           </div>
@@ -101,6 +126,22 @@
         </li>
       {/each}
     </ul>
+    {#if deciding}
+      <div class="cf">
+        <span class="muted">{count('fix')} to fix · {count('reply')} to reply · {count('skip')} to skip{#if missing} · <span class="gtext">{missing} still need{missing === 1 ? 's' : ''} a decision or reply text</span>{/if}</span>
+        <span class="grow"></span>
+        <button class="btn gate" disabled={sending || missing > 0 || agent.status === 'blocked'} onclick={send}>Send decisions to the agent</button>
+      </div>
+    {/if}
   </section>
 {/if}
 
+
+<style>
+  /* The decision shows on the comment's edge too: fix cobalt, reply green. */
+  .dec { border-left: 3px solid transparent; }
+  .dec.fix { border-left-color: var(--accent); }
+  .dec.reply { border-left-color: var(--live); }
+  .dec.none { border-left-color: var(--gate); }
+  .gtext { color: var(--gate); }
+</style>

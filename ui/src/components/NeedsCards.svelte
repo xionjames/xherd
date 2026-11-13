@@ -7,6 +7,7 @@
   import { href, go } from '../lib/router.svelte';
   import { ago, repoName, waitText } from '../lib/format';
   import type { Agent } from '../lib/types';
+  import { prGate } from '../lib/flow';
 
   let { agents }: { agents: Agent[] } = $props();
 
@@ -16,6 +17,7 @@
     if (!g) return 'terminal';
     if (g.kind === 'commit') return 'changes';
     if (g.kind === 'question') return 'terminal';
+    if (prGate(g)) return 'pr';
     if (g.kind === 'docs') return 'spec';
     return 'pr';
   }
@@ -23,6 +25,7 @@
     const g = a.gate;
     if (!g || g.kind === 'question') return 'Answer';
     if (g.kind === 'commit') return 'Review changes';
+    if (prGate(g)) return 'Decide';
     if (g.kind === 'docs') return 'Review';
     return 'Decide';
   }

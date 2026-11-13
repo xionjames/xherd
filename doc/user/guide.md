@@ -120,7 +120,7 @@ Held gates are never auto-approved, nor is a gate xherd inferred because the age
 Approving the ship gate tells the agent to push its branch and open a draft PR; xherd itself never pushes. The agent then goes to *watching*:
 
 - Every `prPollMinutes` (default 5) xherd reads the PR's state, checks, mergeability and reviewers. You are notified when checks start failing, pass again, or the branch conflicts with its base. A merged or closed PR finishes the agent (*done*).
-- New review comments start a **PR round**: the agent reads them (as untrusted text), decides per comment (fix, reply, skip) and stops at the `pr-review` gate. In the *Pull request* tab you can change any decision. Approving posts the replies, then the agent makes the fixes as tasks, pushes and goes back to watching.
+- New review comments start a **PR round**: the agent reads them (as untrusted text), decides per comment (fix, reply, skip) and stops at the `pr-review` gate. Its *Your call* band and ✋ point at the *Pull request* tab (the plan file is not listed under Spec while you decide): each comment shows the agent's choice, coloured on its edge (fix, reply, skip), and you can change any of them. **Send decisions to the agent** (at the bottom of the comments, or in the band) approves the round: it posts the replies, then the agent makes the fixes as tasks, pushes and goes back to watching.
 
 GitHub works through `gh`, GitLab through `glab`. Bitbucket has git access only, no pull request support yet.
 

@@ -14,6 +14,7 @@
   import DiffLines from '../components/DiffLines.svelte';
   import Findings from '../components/Findings.svelte';
   import Seg from '../components/Seg.svelte';
+  import { prGate } from '../lib/flow';
 
   let { agent }: { agent: Agent } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -30,11 +31,15 @@
   const gateFiles = $derived(agent.gate?.kind === 'docs' ? agent.gate.files.map((f) => f.path) : []);
   const selected = $derived(route.query.get('doc') ?? docs[0]);
   // Reload when the gate's hashes change (the agent rewrote a document).
+  // The PR-comment plan is decided in the Pull request tab, not read here
+  // (a string, so the effect below does not rerun on every agent update).
+  const hidden = $derived(prGate(agent.gate) ? gateFiles.join('\n') : '');
   const gateKey = $derived(agent.gate?.kind === 'docs' ? agent.gate.files.map((f) => f.sha256).join() : '');
 
   $effect(() => {
     void gateKey;
-    get<{ docs: string[] }>(`/agents/${id}/docs`).then((r) => (docs = r.docs), (e) => (error = e.message));
+    const hide = hidden.split('\n');
+    get<{ docs: string[] }>(`/agents/${id}/docs`).then((r) => (docs = r.docs.filter((d) => !hide.includes(d))), (e) => (error = e.message));
   });
   $effect(() => {
     void gateKey;

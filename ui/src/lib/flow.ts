@@ -7,6 +7,12 @@ export const STAGE_LABEL: Record<string, string> = {
   review: 'Review', ship: 'Ship', pr: 'PR',
 };
 
+/** A docs gate of a PR stage: the agent's plan for a round of PR comments.
+ *  It is decided comment by comment in the Pull request tab, not read in Spec. */
+export function prGate(g: Agent['gate']): boolean {
+  return g?.kind === 'docs' && g.role === 'pr';
+}
+
 export function flowOf(a: Agent, flows: FlowInfo[]): FlowInfo | undefined {
   if (!a.flow) return undefined;
   return flows.find((f) => f.flow === a.flow && (!a.pack || f.pack === a.pack));
