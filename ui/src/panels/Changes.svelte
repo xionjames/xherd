@@ -9,6 +9,7 @@
   import { parseUnified } from '../lib/diff';
   import DiffLines, { lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
+  import FilePath from '../components/FilePath.svelte';
   import Seg from '../components/Seg.svelte';
 
   let { agent }: { agent: Agent } = $props();
@@ -154,7 +155,7 @@
             <button class="btn ghost sm icon" aria-label={collapsed[f.path] ? 'Expand' : 'Collapse'} aria-expanded={!collapsed[f.path]} onclick={() => (collapsed[f.path] = !collapsed[f.path])}>
               {collapsed[f.path] ? '▸' : '▾'}
             </button>
-            <span class="mono fpath">{f.path}</span>
+            <span class="fpath"><FilePath path={f.path} /></span>
             {#if f.status !== 'modified'}<span class="pill">{f.status}</span>{/if}
             <span class="grow"></span>
             {#if canPreview && previewKind(f.path) && f.status !== 'deleted' && !f.note}
@@ -187,13 +188,13 @@
       {#if d.files.length}
         <section class="card cb">
           <span class="lbl">{d.commit ? 'In this commit' : 'Files'} · {d.files.length}</span>
-          <ul class="mono">{#each d.files as f (f)}<li class="wrap-any">{f}</li>{/each}</ul>
+          <ul class="mono">{#each d.files as f (f)}<li><FilePath path={f} /></li>{/each}</ul>
         </section>
       {/if}
       {#if d.others.length && (d.commit || d.branch)}
         <section class="card cb">
           <span class="lbl">{d.branch ? 'Uncommitted, not pushed' : 'Left out of this commit'} · {d.others.length}</span>
-          <ul class="mono muted">{#each d.others as f (f)}<li class="wrap-any">{f}</li>{/each}</ul>
+          <ul class="mono muted">{#each d.others as f (f)}<li><FilePath path={f} /></li>{/each}</ul>
         </section>
       {/if}
     </aside>
@@ -202,7 +203,7 @@
 
 <style>
   .csel { width: auto; max-width: 100%; }
-  .fpath { overflow-wrap: anywhere; min-width: 0; flex: 1 1 200px; }
+  .fpath { min-width: 0; flex: 1 1 200px; }
   .adds { color: var(--live); font-weight: 600; }
   .dels { color: var(--halt); font-weight: 600; }
   .msg { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; }
