@@ -52,13 +52,13 @@
   const approvable = $derived(g?.kind === 'docs' || g?.kind === 'commit');
   // The user approves what they read: the controls show on the tab that
   // holds it; elsewhere the band offers a button that goes there.
-  const reviewTab = $derived(g?.kind === 'docs' && g.role !== 'ship' ? 'spec' : g?.kind === 'docs' || g?.kind === 'commit' ? 'changes' : undefined);
+  const reviewTab = $derived(g?.kind === 'docs' ? 'spec' : g?.kind === 'commit' ? 'changes' : undefined);
   const reviewing = $derived(!approvable || tabId === reviewTab);
   const openLabel = $derived(
-    g?.kind === 'docs' && g.role !== 'ship' ? `Open ${g.files[0]?.path.split('/').pop() ?? 'the document'}` : 'Review the changes',
+    g?.kind === 'docs' ? `Open ${g.files[0]?.path.split('/').pop() ?? 'the document'}` : 'Review the changes',
   );
   const reviewHref = $derived(
-    href(`/agent/${agent.name}`, g?.kind === 'docs' && g.role !== 'ship' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
+    href(`/agent/${agent.name}`, g?.kind === 'docs' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
   );
 
   const title = $derived.by(() => {
