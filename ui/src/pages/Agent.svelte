@@ -59,7 +59,7 @@
   const tabs = $derived(agentTabs(agent));
   const fallback = $derived.by(() => {
     const g = agent.gate;
-    if (g?.kind === 'commit' || (g?.kind === 'docs' && g.role === 'ship')) return 'changes';
+    if (g?.kind === 'commit') return 'changes';
     if (g?.kind === 'docs') return 'spec';
     return 'terminal';
   });
@@ -70,8 +70,8 @@
 
   function badge(id: string): { n: string | number; tone: string } | undefined {
     const g = agent.gate;
-    if (id === 'spec' && g?.kind === 'docs' && g.role !== 'ship') return { n: '✋', tone: 'g' };
-    if (id === 'changes' && (g?.kind === 'commit' || (g?.kind === 'docs' && g.role === 'ship'))) return { n: '✋', tone: 'g' };
+    if (id === 'spec' && g?.kind === 'docs') return { n: '✋', tone: 'g' };
+    if (id === 'changes' && g?.kind === 'commit') return { n: '✋', tone: 'g' };
     if (id === 'tasks' && agent.tasks?.length) {
       const blocked = agent.tasks.filter((t) => t.status === 'blocked').length;
       return blocked ? { n: blocked, tone: 'h' } : { n: `${agent.tasks.filter((t) => t.status === 'done').length}/${agent.tasks.length}`, tone: '' };
