@@ -128,6 +128,41 @@ async fn disabled_plugins_apply_live() {
     }
 }
 
+/// Git providers are optional, like trackers: all of them may be off, while
+/// the last runtime still may not.
+#[tokio::test]
+async fn git_providers_may_all_be_off() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    o.builtin_plugins.retain(|m| {
+        ["claude-code", "opencode", "github", "gitlab", "bitbucket"].contains(&m.name.as_str())
+    });
+    let d = Daemon::start(paths, o).await.unwrap();
+
+    let patch =
+        serde_json::from_value(json!({"disabledPlugins": ["github", "gitlab", "bitbucket"]}))
+            .unwrap();
+    d.save_config(patch).unwrap();
+    assert!(!d.plugin_enabled("github") && !d.plugin_enabled("bitbucket"));
+
+    let patch = serde_json::from_value(
+        json!({"disabledPlugins": ["github", "gitlab", "bitbucket", "claude-code", "opencode"]}),
+    )
+    .unwrap();
+    let e = d.save_config(patch).unwrap_err();
+    assert_eq!(e.code, "bad_config");
+    assert!(e.message.contains("runtime"), "{}", e.message);
+}
+
 /// R-691: a tool a plugin requires is a check; natively a missing one shows
 /// the instructions (the host is never installed into), and installing it
 /// from the UI is refused.
