@@ -1381,6 +1381,12 @@ impl Actor {
                 Ok(diff) => {
                     hits.extend(tw::summary(&tw::scan_diff(&diff)));
                     hits.extend(tw::size_summary(&diff, max_lines));
+                    // A file too large to read was not scanned: a human looks.
+                    hits.extend(
+                        diff.lines()
+                            .filter_map(|l| l.strip_prefix(xherd_git::TOO_LARGE))
+                            .map(|t| format!("not checked for secrets: {t}")),
+                    );
                 }
                 Err(e) => {
                     tracing::debug!(agent = %self.agent.name, %e, "commit tripwires: no diff");

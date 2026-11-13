@@ -189,6 +189,33 @@ async fn diff_proposed_covers_new_deleted_and_leaves_the_index_alone() {
 }
 
 #[tokio::test]
+async fn diff_proposed_leaves_out_files_over_the_limit() {
+    let d = tempfile::tempdir().unwrap();
+    let g = init_repo(d.path()).await;
+    let dir = d.path();
+    std::fs::write(dir.join("small.txt"), "shown\n").unwrap();
+    // A heap dump: sparse, so it takes no disk, but reading it would be slow.
+    std::fs::File::create(dir.join("java.hprof"))
+        .unwrap()
+        .set_len(6 << 30)
+        .unwrap();
+    let files: Vec<String> = ["java.hprof", "small.txt"].map(String::from).to_vec();
+    let diff = g.diff_proposed(dir, &files).await.unwrap();
+    assert!(diff.contains("+shown"), "{diff}");
+    assert!(
+        diff.ends_with(
+            "diff --git a/java.hprof b/java.hprof\n\
+             Not shown: java.hprof is 6.0 GiB, over the 8.0 MiB limit\n"
+        ),
+        "{diff}"
+    );
+    assert!(diff.contains(xherd_git::TOO_LARGE));
+    // Only the large file: no git call stages anything.
+    let only = g.diff_proposed(dir, &files[..1]).await.unwrap();
+    assert!(only.starts_with("diff --git a/java.hprof"), "{only}");
+}
+
+#[tokio::test]
 async fn clone_and_branches() {
     let d = tempfile::tempdir().unwrap();
     let src = d.path().join("src");

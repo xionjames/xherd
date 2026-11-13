@@ -157,7 +157,7 @@
             <span class="mono fpath">{f.path}</span>
             {#if f.status !== 'modified'}<span class="pill">{f.status}</span>{/if}
             <span class="grow"></span>
-            {#if canPreview && previewKind(f.path) && f.status !== 'deleted'}
+            {#if canPreview && previewKind(f.path) && f.status !== 'deleted' && !f.note}
               <button class="btn sm" aria-pressed={!!previewing[f.path]} onclick={() => (previewing[f.path] = !previewing[f.path])}>
                 {previewing[f.path] ? 'Diff' : 'Preview'}
               </button>
@@ -167,7 +167,8 @@
           </div>
           {#if !collapsed[f.path]}
             {@const k = previewKind(f.path)}
-            {#if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} notes={mdNotes[f.path]} onnote={setMd(f.path)} />{:else}<DiffLines lines={f.lines} notes={notes[f.path]} onnote={setNote(f.path)} />{/if}
+            {#if f.note}<p class="empty cb">{f.note}</p>
+            {:else if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} notes={mdNotes[f.path]} onnote={setMd(f.path)} />{:else}<DiffLines lines={f.lines} notes={notes[f.path]} onnote={setNote(f.path)} />{/if}
           {/if}
         </section>
       {/each}

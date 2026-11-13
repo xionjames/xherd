@@ -25,6 +25,14 @@ describe('parseUnified', () => {
     expect(f[0].lines[1]).toEqual({ kind: 'c', old: 3, new: 3, text: 'keep' });
     expect(f[0].lines[3]).toEqual({ kind: 'a', new: 4, text: 'new' });
   });
+
+  it('reads a file the daemon left out as too large', () => {
+    const f = parseUnified('diff --git a/heap.hprof b/heap.hprof\nNot shown: heap.hprof is 6.0 GiB, over the 8.0 MiB limit\n');
+    expect(f).toEqual([{
+      path: 'heap.hprof', status: 'too large', adds: 0, dels: 0, lines: [],
+      note: 'Not shown: heap.hprof is 6.0 GiB, over the 8.0 MiB limit',
+    }]);
+  });
 });
 
 describe('lineDiff', () => {
