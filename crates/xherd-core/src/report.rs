@@ -119,6 +119,22 @@ pub fn asks_question(message: &str) -> bool {
     message.trim_end().ends_with('?')
 }
 
+/// Background tasks still running at a stop (R-024): Claude Code lists them
+/// as `background_tasks` (`[{"status": "running", …}]`) in its `Stop`
+/// payload. Such a stop ends a turn, not the work: the task's result starts
+/// another turn. Runtimes that send no such list never have any.
+pub fn background_running(payload: &Value) -> usize {
+    payload
+        .get("background_tasks")
+        .and_then(Value::as_array)
+        .map_or(0, |tasks| {
+            tasks
+                .iter()
+                .filter(|t| t.get("status").and_then(Value::as_str) == Some("running"))
+                .count()
+        })
+}
+
 /// Apply one report to the agent. Pure: the caller persists and runs effects.
 pub fn apply_report(agent: &mut Agent, r: &Report, origin: Origin, now: Millis) -> Outcome {
     match origin {
@@ -225,6 +241,18 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
     use serde_json::json;
+
+    #[test]
+    fn background_tasks_running_at_a_stop() {
+        let p = json!({"background_tasks": [
+            {"agent_type": "general-purpose", "id": "a1", "status": "running", "type": "subagent"},
+            {"command": "sleep 9", "id": "b2", "status": "completed", "type": "shell"},
+        ]});
+        assert_eq!(background_running(&p), 1);
+        assert_eq!(background_running(&json!({"background_tasks": []})), 0);
+        assert_eq!(background_running(&json!({})), 0);
+        assert_eq!(background_running(&json!({"background_tasks": "odd"})), 0);
+    }
 
     fn running() -> Agent {
         let mut a = Agent::new("SC-1", "SC-1", 0);
