@@ -2,7 +2,15 @@
 // "changed since you approved".
 
 export interface Line { kind: 'a' | 'd' | 'c' | 'h'; old?: number; new?: number; text: string }
-export interface FileDiff { path: string; status: 'added' | 'deleted' | 'modified' | 'renamed' | 'binary'; adds: number; dels: number; lines: Line[] }
+export interface FileDiff {
+  path: string;
+  status: 'added' | 'deleted' | 'modified' | 'renamed' | 'binary' | 'too large';
+  adds: number;
+  dels: number;
+  lines: Line[];
+  /** Why there is no diff: the daemon's `Not shown: …` line for a file over its size limit. */
+  note?: string;
+}
 
 export function parseUnified(diff: string): FileDiff[] {
   const files: FileDiff[] = [];
@@ -20,6 +28,7 @@ export function parseUnified(diff: string): FileDiff[] {
     else if (raw.startsWith('deleted file mode')) f.status = 'deleted';
     else if (raw.startsWith('rename to ')) { f.status = 'renamed'; f.path = raw.slice(10); }
     else if (raw.startsWith('Binary files')) f.status = 'binary';
+    else if (raw.startsWith('Not shown: ')) { f.status = 'too large'; f.note = raw; }
     else if (raw.startsWith('@@')) {
       const m = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       o = m ? +m[1] : 0;

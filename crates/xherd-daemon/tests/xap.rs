@@ -1790,6 +1790,20 @@ async fn a_very_large_commit_is_held() {
 }
 
 #[tokio::test]
+async fn a_file_too_large_to_scan_holds_a_commit() {
+    let t = setup().await;
+    std::fs::File::create(t.wt.path().join("heap.hprof"))
+        .unwrap()
+        .set_len(6 << 30)
+        .unwrap();
+    let why = propose_reason(&t, "h1", &["heap.hprof"]).await;
+    assert!(
+        why.contains("not checked for secrets: heap.hprof is 6.0 GiB, over the 8.0 MiB limit"),
+        "{why}"
+    );
+}
+
+#[tokio::test]
 async fn configured_limit_and_sensitive_paths_hold_a_commit() {
     let t = setup_config(json!({
         "freshSessions": true, "maxDiffLines": 3, "sensitivePaths": ["infra/**", "*.pem"]

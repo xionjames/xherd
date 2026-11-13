@@ -52,12 +52,12 @@ Every stage starts a **fresh session** of the runtime. What carries over is `.xh
 When an agent stops at a gate, the **your-call band** on its page says what it waits for, with **Approve** and **Request changes** on the tab that holds what you approve.
 
 - **Documents** (the *Spec* tab) render Markdown, with Mermaid diagrams drawn. Click any block, or a list item, to comment on it. Questions the agent lists under `## Open questions` get an answer box each. After a change request, the blocks that changed since you read them are marked.
-- **Changes** shows diffs. Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*.
+- **Changes** shows diffs. Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*. A new or changed file over 8 MiB that is not committed yet (a heap dump, a build artefact) is listed with its size but not read.
 - **Send N comments** sends every comment, from documents and diffs, as one change request.
 - **Approve** covers exactly what you read: the UI sends the hash of what it showed, and if a file changed since, the approval is refused. Editing an approved document re-opens its gate.
 - At a commit gate you can edit the commit message before approving. If git refuses the commit (a hook fails), the agent is asked to fix it.
 
-A gate can be **held** for you whatever the autonomy level: a secret in the diff, a sensitive path, a diff over `maxDiffLines`, a failing lint or test command of the repo profile, open questions, or open review findings. The band says why.
+A gate can be **held** for you whatever the autonomy level: a secret in the diff, a file too large to scan for secrets (over 8 MiB), a sensitive path, a diff over `maxDiffLines`, a failing lint or test command of the repo profile, open questions, or open review findings. The band says why.
 
 If the agent asks a question (`xherd ask`), the band shows it with an answer box; your answer is typed into its session.
 

@@ -36,6 +36,33 @@ pub struct Worktree {
     pub branch: Option<String>,
 }
 
+/// Working-tree files larger than this are left out of [`Git::diff_proposed`]
+/// (hashing them is slow, and their diff would pass `exec::run`'s 4 MiB
+/// output cap anyway).
+pub const DIFF_FILE_LIMIT: u64 = 8 * 1024 * 1024;
+
+/// Starts the line [`Git::diff_proposed`] writes for a file it left out:
+/// `Not shown: <path> is <size>, over the <limit> limit`.
+pub const TOO_LARGE: &str = "Not shown: ";
+
+/// `6.0 GiB`, `512 B`.
+fn human_size(n: u64) -> String {
+    let mut v = n as f64;
+    let mut unit = "B";
+    for u in ["KiB", "MiB", "GiB", "TiB"] {
+        if v < 1024.0 {
+            break;
+        }
+        v /= 1024.0;
+        unit = u;
+    }
+    if unit == "B" {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {unit}")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Git {
     bin: String,
@@ -312,7 +339,8 @@ impl Git {
     /// as if exactly these files were staged: new (even untracked or ignored)
     /// and deleted files included, paths taken literally. A temporary index is
     /// used, so the worktree's own index is never touched. Paths in neither
-    /// HEAD nor the working tree are skipped.
+    /// HEAD nor the working tree are skipped. A file over [`DIFF_FILE_LIMIT`]
+    /// is not read: it gets a `diff --git` header and a [`TOO_LARGE`] line.
     pub async fn diff_proposed(&self, dir: &Path, paths: &[String]) -> Result<String> {
         if paths.is_empty() {
             return Ok(String::new());
@@ -332,23 +360,48 @@ impl Git {
                 .map(String::as_str)
                 .filter(|p| tracked.contains(p) || dir.join(p).symlink_metadata().is_ok())
                 .collect();
-            if present.is_empty() {
-                return Ok(String::new());
+            // Staging a file hashes all of it (and stores it in the
+            // repository): a heap dump of several GB took minutes.
+            let (mut big, mut small) = (Vec::new(), Vec::new());
+            for p in present {
+                let len = dir
+                    .join(p)
+                    .symlink_metadata()
+                    .ok()
+                    .filter(|m| m.is_file())
+                    .map_or(0, |m| m.len());
+                if len > DIFF_FILE_LIMIT {
+                    big.push((p, len));
+                } else {
+                    small.push(p);
+                }
             }
-            let mut args = vec![lit, "add", "--all", "--force", "--"];
-            args.extend(&present);
-            self.run_env(dir, &env, &args).await?;
-            let mut args = vec![
-                lit,
-                "diff",
-                "--cached",
-                "--no-color",
-                "--no-ext-diff",
-                "HEAD",
-                "--",
-            ];
-            args.extend(&present);
-            self.run_env(dir, &env, &args).await
+            let present = small;
+            let mut out = String::new();
+            if !present.is_empty() {
+                let mut args = vec![lit, "add", "--all", "--force", "--"];
+                args.extend(&present);
+                self.run_env(dir, &env, &args).await?;
+                let mut args = vec![
+                    lit,
+                    "diff",
+                    "--cached",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "HEAD",
+                    "--",
+                ];
+                args.extend(&present);
+                out = self.run_env(dir, &env, &args).await?;
+            }
+            for (p, len) in big {
+                out.push_str(&format!(
+                    "diff --git a/{p} b/{p}\n{TOO_LARGE}{p} is {}, over the {} limit\n",
+                    human_size(len),
+                    human_size(DIFF_FILE_LIMIT)
+                ));
+            }
+            Ok(out)
         }
         .await;
         // The index file belongs to whoever ran git (the agent user, through
