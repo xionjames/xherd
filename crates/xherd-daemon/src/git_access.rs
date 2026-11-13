@@ -293,11 +293,22 @@ impl Daemon {
         bound(&self.providers(), h.provider.as_deref(), &h.host).cloned()
     }
 
+    /// R7: the saved Git access rows, then the implicit rows of the
+    /// providers that are on (never saved).
+    pub fn effective_git_hosts(&self, c: &Config) -> Vec<GitHost> {
+        let mut hosts = c.git_hosts.clone();
+        hosts.extend(
+            implicit_hosts(&c.git_hosts, &self.providers())
+                .into_iter()
+                .map(|(_, h)| h),
+        );
+        hosts
+    }
+
     /// The user name for a host's token.
     fn token_user(&self, host: &str) -> String {
         let named = self
-            .live_config()
-            .git_hosts
+            .effective_git_hosts(&self.live_config())
             .into_iter()
             .find(|h| h.host == host)
             .and_then(|h| h.provider);
@@ -377,7 +388,7 @@ impl Daemon {
             _ => None,
         };
         let text = managed_gitconfig(
-            &c.git_hosts,
+            &self.effective_git_hosts(&c),
             &self.xherd_bin,
             self.sandbox,
             identity,
@@ -402,11 +413,13 @@ impl Daemon {
             .map_err(|e| fail("io", format!("{}: {e}", p.display())))
     }
 
-    /// `GET /git/hosts`: hosts with whether a token is stored (never the token).
+    /// `GET /git/hosts`: hosts with whether a token is stored (never the
+    /// token), then the implicit rows of the providers that are on, with
+    /// `from` naming the plugin (R7).
     pub fn git_hosts(&self) -> Value {
         let s = self.live_secrets();
-        let hosts: Vec<Value> = self
-            .live_config()
+        let c = self.live_config();
+        let mut hosts: Vec<Value> = c
             .git_hosts
             .iter()
             .map(|h| {
@@ -415,6 +428,16 @@ impl Daemon {
                 v
             })
             .collect();
+        hosts.extend(
+            implicit_hosts(&c.git_hosts, &self.providers())
+                .into_iter()
+                .map(|(from, h)| {
+                    let mut v = serde_json::to_value(h).expect("json");
+                    v["hasToken"] = false.into();
+                    v["from"] = from.into();
+                    v
+                }),
+        );
         let providers: Vec<Value> = self
             .providers()
             .into_iter()
@@ -758,8 +781,10 @@ impl Daemon {
     /// the first failure; with a repository, its API and git transport too.
     /// Secrets never appear in the findings.
     pub async fn git_doctor(&self, host: &str, repo: Option<&str>) -> Vec<Finding> {
-        let c = self.live_config();
-        let cfg = c.git_hosts.iter().find(|h| h.host == host).cloned();
+        let cfg = self
+            .effective_git_hosts(&self.live_config())
+            .into_iter()
+            .find(|h| h.host == host);
         let protocols = cfg
             .as_ref()
             .map(|h| h.protocols.clone())
@@ -984,8 +1009,7 @@ impl Daemon {
         });
         let Some(token) = token else { return };
         let named = self
-            .live_config()
-            .git_hosts
+            .effective_git_hosts(&self.live_config())
             .into_iter()
             .find(|h| h.host == host)
             .and_then(|h| h.provider);
