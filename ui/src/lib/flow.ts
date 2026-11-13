@@ -44,3 +44,19 @@ export function steps(a: Agent, f: FlowInfo): { stage: StageInfo; state: StepSta
     return { stage, state };
   });
 }
+
+/** The agent's current stage as the Herd shows it: its name ("Ship") and,
+ *  while its gate is open, what waits there ("pr.md", "C05"). */
+export function stageNow(a: Agent, flows: FlowInfo[]): { name: string; waits?: string } | undefined {
+  if (!a.stage) return undefined;
+  const s = flowOf(a, flows)?.stages.find((x) => x.id === a.stage);
+  const name = s ? stageLabel(s) : a.stage;
+  const g = a.gate;
+  const waits = !g ? undefined
+    : g.kind === 'docs' ? g.files.map((f) => f.path.split('/').pop()).join(', ') || undefined
+    : g.kind === 'commit' ? g.id
+    : g.kind === 'pr-triage' ? `${g.count} comments`
+    : g.kind === 'pr-replies' ? `${g.count} replies`
+    : 'a question';
+  return { name, waits };
+}

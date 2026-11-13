@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stageLabel, steps } from './flow';
+import { stageLabel, stageNow, steps } from './flow';
 import type { Agent, FlowInfo } from './types';
 
 describe('steps', () => {
@@ -43,5 +43,28 @@ describe('stageLabel', () => {
   it('names a stage by its id otherwise, so two stages of one role differ', () => {
     expect(stageLabel(st('pr-review', 'pr'))).toBe('PR Review');
     expect(stageLabel(st('security_scan', 'review'))).toBe('Security Scan');
+  });
+});
+
+describe('stageNow', () => {
+  const f: FlowInfo = {
+    pack: 'xherd', flow: 'feature',
+    stages: [
+      { id: 'implement', role: 'implement', class: 'code', gate: true },
+      { id: 'ship', role: 'ship', class: 'critical', gate: true },
+      { id: 'pr-review', role: 'pr', class: 'human-only', gate: true },
+    ],
+  };
+  const a = (over: Partial<Agent>): Agent =>
+    ({ id: 'x', name: 'x', ticketKey: 'X', status: 'idle', createdAt: 0, statusSince: 0, lastActivity: 0, pack: 'xherd', flow: 'feature', ...over });
+  it('names the stage and what waits at its gate', () => {
+    expect(stageNow(a({ stage: 'ship', gate: { kind: 'docs', stage: 'ship', role: 'ship', files: [{ path: '.xherd/spec/pr.md', sha256: 's' }] } }), [f]))
+      .toEqual({ name: 'Ship', waits: 'pr.md' });
+    expect(stageNow(a({ stage: 'implement', gate: { kind: 'commit', id: 'C05' } as never }), [f])).toEqual({ name: 'Build', waits: 'C05' });
+    expect(stageNow(a({ stage: 'pr-review', status: 'running' }), [f])).toEqual({ name: 'PR Review', waits: undefined });
+  });
+  it('has nothing to say without a stage, and falls back to the id', () => {
+    expect(stageNow(a({}), [f])).toBeUndefined();
+    expect(stageNow(a({ stage: 'odd' }), [f])).toEqual({ name: 'odd', waits: undefined });
   });
 });
