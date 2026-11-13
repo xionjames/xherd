@@ -155,7 +155,7 @@
             <button class="btn ghost sm icon" aria-label={collapsed[f.path] ? 'Expand' : 'Collapse'} aria-expanded={!collapsed[f.path]} onclick={() => (collapsed[f.path] = !collapsed[f.path])}>
               {collapsed[f.path] ? '▸' : '▾'}
             </button>
-            <span class="fpath"><FilePath path={f.path} root={agent.workdir} /></span>
+            <span class="fpath"><FilePath path={f.path} /></span>
             {#if f.status !== 'modified'}<span class="pill">{f.status}</span>{/if}
             <span class="grow"></span>
             {#if canPreview && previewKind(f.path) && f.status !== 'deleted'}
@@ -187,13 +187,13 @@
       {#if d.files.length}
         <section class="card cb">
           <span class="lbl">{d.commit ? 'In this commit' : 'Files'} · {d.files.length}</span>
-          <ul class="mono">{#each d.files as f (f)}<li><FilePath path={f} root={agent.workdir} /></li>{/each}</ul>
+          <ul class="mono">{#each d.files as f (f)}<li><FilePath path={f} /></li>{/each}</ul>
         </section>
       {/if}
       {#if d.others.length && (d.commit || d.branch)}
         <section class="card cb">
           <span class="lbl">{d.branch ? 'Uncommitted, not pushed' : 'Left out of this commit'} · {d.others.length}</span>
-          <ul class="mono muted">{#each d.others as f (f)}<li><FilePath path={f} root={agent.workdir} /></li>{/each}</ul>
+          <ul class="mono muted">{#each d.others as f (f)}<li><FilePath path={f} /></li>{/each}</ul>
         </section>
       {/if}
     </aside>
