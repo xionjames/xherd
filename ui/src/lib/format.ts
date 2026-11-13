@@ -41,23 +41,6 @@ export function needsYou(a: Agent): boolean {
   return a.status === 'waiting-input' || a.status === 'blocked' || !!a.gate;
 }
 
-/** Short "what waits" label: "spec", "C03", "your answer"… */
-export function waitLabel(a: Agent): string {
-  const g = a.gate;
-  if (g) {
-    switch (g.kind) {
-      case 'docs': return g.stage;
-      case 'commit': return g.id;
-      case 'pr-triage': return `${g.count} comments`;
-      case 'pr-replies': return `${g.count} replies`;
-      case 'question': return 'your answer';
-    }
-  }
-  if (a.status === 'waiting-input') return 'your answer';
-  if (a.status === 'blocked') return 'blocked';
-  return STATUS_LABEL[a.status];
-}
-
 /** One-line description of what waits on the human. */
 export function waitText(a: Agent): string {
   const g = a.gate;

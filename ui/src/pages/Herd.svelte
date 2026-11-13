@@ -14,11 +14,13 @@
   import { app } from '../lib/store.svelte';
   import { href, route, go } from '../lib/router.svelte';
   import { ago, needsYou, repoName, shortBase } from '../lib/format';
+  import { stageNow } from '../lib/flow';
   import { post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import type { Agent } from '../lib/types';
 
   const agents = $derived(app.state?.agents ?? []);
+  const flows = $derived(app.state?.flows ?? []);
   const waiting = $derived(agents.filter(needsYou).sort((a, b) => a.statusSince - b.statusSince));
   const count = (f: (a: Agent) => boolean) => agents.filter(f).length;
   const slots = $derived(Number(app.state?.config.maxConcurrentAgents ?? 0));
@@ -87,7 +89,7 @@
     {:else if shown.length}
       <div class="tscroll">
         <table class="tbl">
-          <thead><tr><th>Agent</th><th>Status</th><th class="hide-sm">Progress</th><th class="hide-sm">Tasks</th><th class="hide-sm">Branch</th><th class="r">Active</th></tr></thead>
+          <thead><tr><th>Agent</th><th>Status</th><th>Stage</th><th class="hide-sm">Progress</th><th class="hide-sm">Tasks</th><th class="hide-sm">Branch</th><th class="r">Active</th></tr></thead>
           <tbody>
             {#each shown as a (a.id)}
               <tr class="hov" onclick={() => go(`/agent/${a.name}`)}>
@@ -101,6 +103,12 @@
                   </div>
                 </td>
                 <td><StatusPill agent={a} /></td>
+                <td>
+                  {#if stageNow(a, flows)}
+                    {@const st = stageNow(a, flows)!}
+                    {st.name}{#if st.waits}<span class="muted">{' · '}<span class="mono">{st.waits}</span></span>{/if}
+                  {:else}<span class="muted">–</span>{/if}
+                </td>
                 <td class="hide-sm"><Mini agent={a} /></td>
                 <td class="hide-sm"><TaskBar agent={a} /></td>
                 <td class="hide-sm mono muted">{a.workdir ? `← ${shortBase(a)}` : 'not created'}</td>
