@@ -1,5 +1,6 @@
 <script lang="ts">
-  // First-run wizard: welcome → plugins → commit identity → git hosts → checks → ready.
+  // First-run wizard: welcome → plugins → commit identity → git access → checks → ready.
+  import { untrack } from 'svelte';
   import Logo from '../components/Logo.svelte';
   import CheckRow from '../components/CheckRow.svelte';
   import { app } from '../lib/store.svelte';
@@ -14,7 +15,7 @@
   import Panel from '../components/Panel.svelte';
   import type { ConfigView } from '../lib/types';
 
-  const STEPS = ['Welcome', 'Plugins', 'Commit identity', 'Git hosts', 'Connect & check', 'Ready'];
+  const STEPS = ['Welcome', 'Plugins', 'Commit identity', 'Git access', 'Connect & check', 'Ready'];
   const step = $derived(Math.min(Math.max(Number(route.query.get('step') ?? 1), 1), STEPS.length));
   const to = (n: number) => go('/welcome', { step: String(n) });
   const blocked = $derived(failingRequired().length > 0);
@@ -22,6 +23,9 @@
 
   // The checks decide whether setup can be skipped, so load them on every step.
   $effect(() => { if (!setup.checks && !setup.running) loadChecks(); });
+  // Step 5 shows fresh results (a login on an earlier step may have changed
+  // them); the previous ones stay while the checks run.
+  $effect(() => { if (step === 5) untrack(() => loadChecks()); });
 
   // Steps 3 and 4 have one button: it saves what was edited, then goes on.
   let idStep = $state<GitIdentity>();
@@ -101,9 +105,10 @@
       <p class="muted">Who agents commit as. Git refuses to commit without a name and email.</p>
       <GitIdentity heading={false} bar={false} bind:this={idStep} bind:unsaved={idUnsaved} bind:ready={idReady} />
     {:else if step === 4}
-      <h1>Git hosts</h1>
-      <p class="muted">How agents fetch and push: your SSH agent, a browser login to GitHub or GitLab, or a token. Check each host before you go on; without access agents cannot reach private repositories or push, and the same page is in Settings later.</p>
-      <GitHosts heading={false} bar={false} bind:this={hostsStep} bind:unsaved={hostsUnsaved} />
+      <h1>Git access</h1>
+      <p class="muted">How agents fetch and push: your SSH agent, a browser login to GitHub or GitLab, or a token. A Git provider plugin that is on already covers its host (marked "From the … plugin"); without a provider, configure access by hand. Check each host before you go on; without access agents cannot reach private repositories or push, and the same page is in Settings later.</p>
+      <GitHosts heading={false} bar={false} pluginsHref="#/welcome?step=2" onlogin={loadChecks}
+        bind:this={hostsStep} bind:unsaved={hostsUnsaved} />
     {:else if step === 5}
       <h1>Connect &amp; check</h1>
       <p class="muted">Required checks must pass before agents can start.</p>
