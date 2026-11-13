@@ -24,8 +24,9 @@
   // The checks decide whether setup can be skipped, so load them on every step.
   $effect(() => { if (!setup.checks && !setup.running) loadChecks(); });
   // Step 5 shows fresh results (a login on an earlier step may have changed
-  // them); the previous ones stay while the checks run.
-  $effect(() => { if (step === 5) untrack(() => loadChecks()); });
+  // them); the previous ones stay while the checks run. A load already
+  // running (the one above, when the page opens on step 5) is not doubled.
+  $effect(() => { if (step === 5) untrack(() => { if (!setup.running) loadChecks(); }); });
 
   // Steps 3 and 4 have one button: it saves what was edited, then goes on.
   let idStep = $state<GitIdentity>();
