@@ -468,6 +468,23 @@ async fn git_auth_failure_on_screen_blocks_with_reason() {
 }
 
 #[tokio::test]
+async fn a_stopped_agents_screen_is_not_scanned_for_git_failures() {
+    let t = daemon(4).await;
+    let a = t.d.create_agent(agent("GA-2", 1)).await.unwrap();
+    wait_status(&t.d, "GA-2", Status::Running).await;
+    let r = rep(&a, "s1", ReportEvent::Stop, 1, Value::Null);
+    assert_eq!(t.d.report(r).await, Some(ReportResult::Applied));
+    wait_status(&t.d, "GA-2", Status::Idle).await;
+
+    // The agent's own summary, after it stopped, quoting an auth failure.
+    *t.drv.screen.lock().unwrap() =
+        "● Point 4: git said \"fatal: Authentication failed\" before the fix.".into();
+    t.d.sup.tick(TickKind::ScreenScan);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_status(&t.d, "GA-2", Status::Idle).await;
+}
+
+#[tokio::test]
 async fn worklog_books_running_time_and_user_time() {
     let t = daemon(4).await;
     t.d.create_agent(agent("WL-1", 1)).await.unwrap();
