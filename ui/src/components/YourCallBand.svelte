@@ -8,7 +8,7 @@
   import { reads } from '../lib/reads.svelte';
   import { showError } from '../lib/errors.svelte';
   import { ago } from '../lib/format';
-  import { stageLabel } from '../lib/flow';
+  import { prGate, stageLabel } from '../lib/flow';
   import { href } from '../lib/router.svelte';
 
   let { agent, flow, tabId }: { agent: Agent; flow?: FlowInfo; tabId?: string } = $props();
@@ -52,19 +52,22 @@
   const approvable = $derived(g?.kind === 'docs' || g?.kind === 'commit');
   // The user approves what they read: the controls show on the tab that
   // holds it; elsewhere the band offers a button that goes there.
-  const reviewTab = $derived(g?.kind === 'docs' ? 'spec' : g?.kind === 'commit' ? 'changes' : undefined);
+  // A PR round's plan is decided comment by comment in the Pull request tab.
+  const prRound = $derived(prGate(g));
+  const reviewTab = $derived(prRound ? 'pr' : g?.kind === 'docs' ? 'spec' : g?.kind === 'commit' ? 'changes' : undefined);
   const reviewing = $derived(!approvable || tabId === reviewTab);
   const openLabel = $derived(
-    g?.kind === 'docs' ? `Open ${g.files[0]?.path.split('/').pop() ?? 'the document'}` : 'Review the changes',
+    prRound ? 'Decide the PR comments' : g?.kind === 'docs' ? `Open ${g.files[0]?.path.split('/').pop() ?? 'the document'}` : 'Review the changes',
   );
   const reviewHref = $derived(
-    href(`/agent/${agent.name}`, g?.kind === 'docs' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
+    href(`/agent/${agent.name}`, !prRound && g?.kind === 'docs' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
   );
 
   const title = $derived.by(() => {
     if (!g) return agent.status === 'blocked' ? (agent.blockReason ? `the agent is blocked: ${agent.blockReason}` : 'the agent is blocked') : 'the agent asks you';
     switch (g.kind) {
-      case 'docs': return `${g.files.map((f) => f.path).join(', ') || g.stage} ${g.files.length > 1 ? 'are' : 'is'} ready for review`;
+      case 'docs': if (prRound) return 'the agent\'s plan for the PR comments is ready';
+        return `${g.files.map((f) => f.path).join(', ') || g.stage} ${g.files.length > 1 ? 'are' : 'is'} ready for review`;
       case 'commit': return `commit ${g.id} is ready`;
       case 'question': return 'the agent asks you';
       case 'pr-triage': return `${g.count} new PR review comments`;
@@ -76,6 +79,7 @@
     if (!g) return wait;
     if (g.kind === 'docs') {
       const how = fresh ? ' in a fresh session' : '';
+      if (prRound) return `Check fix, reply or skip on each comment, then send the decisions: replies are posted on the PR, fixes go to the agent${how}. ${wait}`;
       if (g.role === 'ship') return `Approve to push the branch and open the draft PR${how}. ${wait}`;
       return nextStage ? `Approve to start the ${stageLabel(nextStage).toLowerCase()} step${how}. ${wait}` : `${wait}`;
     }
@@ -85,7 +89,7 @@
   const held = $derived(g && 'needsHuman' in g ? g.needsHuman : undefined);
   const question = $derived(g?.kind === 'question' ? g.text : agent.lastMessage);
   const approveLabel = $derived(
-    g?.kind === 'commit' ? `Approve ${g.id}` : g?.kind === 'docs' ? (g.role === 'ship' ? 'Approve and ship' : `Approve ${g.stage}`) : 'Approve',
+    g?.kind === 'commit' ? `Approve ${g.id}` : g?.kind === 'docs' ? (g.role === 'ship' ? 'Approve and ship' : prRound ? 'Send decisions to the agent' : `Approve ${g.stage}`) : 'Approve',
   );
 
   async function run(action: string, body: Record<string, unknown>, label: string): Promise<boolean> {
@@ -105,7 +109,9 @@
 
   function approve() {
     const expect: Record<string, string> = {};
-    if (g?.kind === 'docs') {
+    // A PR round is approved from the comments as shown (reloaded on every
+    // change of the plan), not from a read of the plan's file.
+    if (g?.kind === 'docs' && !prRound) {
       for (const f of g.files) {
         const sha = reads[agent.id]?.[f.path];
         if (sha) expect[f.path] = sha;
@@ -155,7 +161,7 @@
         <a class="btn gate lg" href={href(`/agent/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
       {/if}
       {#if approvable && !reviewing}
-        <a class="btn gate lg" href={reviewHref}><Icon name={reviewTab === 'spec' ? 'doc' : 'diff'} />{openLabel}</a>
+        <a class="btn gate lg" href={reviewHref}><Icon name={reviewTab === 'spec' ? 'doc' : reviewTab === 'pr' ? 'pr' : 'diff'} />{openLabel}</a>
       {:else if approvable}
         <textarea bind:value={text} placeholder="Or tell the agent what to change…" aria-label="What to change"></textarea>
         <button class="btn lg" disabled={busy || !text.trim()}

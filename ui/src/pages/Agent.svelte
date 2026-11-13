@@ -14,7 +14,7 @@
   import { app, upsertAgent } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
-  import { flowOf } from '../lib/flow';
+  import { flowOf, prGate } from '../lib/flow';
   import { agoText, needsYou, repoName, shortBase } from '../lib/format';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
@@ -60,6 +60,7 @@
   const fallback = $derived.by(() => {
     const g = agent.gate;
     if (g?.kind === 'commit') return 'changes';
+    if (prGate(g)) return 'pr';
     if (g?.kind === 'docs') return 'spec';
     return 'terminal';
   });
@@ -70,7 +71,8 @@
 
   function badge(id: string): { n: string | number; tone: string } | undefined {
     const g = agent.gate;
-    if (id === 'spec' && g?.kind === 'docs') return { n: '✋', tone: 'g' };
+    if (id === 'spec' && g?.kind === 'docs' && !prGate(g)) return { n: '✋', tone: 'g' };
+    if (id === 'pr' && prGate(g)) return { n: '✋', tone: 'g' };
     if (id === 'changes' && g?.kind === 'commit') return { n: '✋', tone: 'g' };
     if (id === 'tasks' && agent.tasks?.length) {
       const blocked = agent.tasks.filter((t) => t.status === 'blocked').length;

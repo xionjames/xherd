@@ -472,8 +472,13 @@ fn run_runner(
         }
     };
     let served = rt.block_on(async {
+        // The daemon waits for this socket to answer, then starts sessions
+        // at once: serve it only once the daemon may use the tmux server
+        // (a resume at start failed with "Permission denied" otherwise).
         if let Some(t) = tmux {
-            tokio::spawn(xherd_core::runner::supervise_tmux(t, tmux_allow));
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(xherd_core::runner::supervise_tmux(t, tmux_allow, tx));
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(20), rx).await;
         }
         xherd_core::runner::serve(socket, mode).await
     });

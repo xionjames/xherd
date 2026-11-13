@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stageLabel, stageNow, steps } from './flow';
+import { prGate, stageLabel, stageNow, steps } from './flow';
 import type { Agent, FlowInfo } from './types';
 
 describe('steps', () => {
@@ -66,5 +66,15 @@ describe('stageNow', () => {
   it('has nothing to say without a stage, and falls back to the id', () => {
     expect(stageNow(a({}), [f])).toBeUndefined();
     expect(stageNow(a({ stage: 'odd' }), [f])).toEqual({ name: 'odd', waits: undefined });
+  });
+});
+
+describe('prGate', () => {
+  it('is the docs gate of a PR stage only', () => {
+    const docs = (role: string) => ({ kind: 'docs' as const, stage: 's', role: role as never, files: [] });
+    expect(prGate(docs('pr'))).toBe(true);
+    expect(prGate(docs('ship'))).toBe(false);
+    expect(prGate({ kind: 'question', text: '?' })).toBe(false);
+    expect(prGate(undefined)).toBe(false);
   });
 });

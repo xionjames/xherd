@@ -426,12 +426,19 @@ pub type AgentTx = mpsc::UnboundedSender<Msg>;
 
 pub fn spawn(agent: Agent, env: Env) -> AgentTx {
     let (tx, rx) = mpsc::unbounded_channel();
+    // Earlier builds also scanned a stopped agent's screen and could block
+    // one waiting at a gate on its own words; the scan clears such a block
+    // once no failure is shown.
+    let auth_screen_block = agent.status == Status::Blocked
+        && agent.gate.is_some()
+        && agent.block_reason.as_deref() == Some("git access");
     let actor = Actor {
         agent,
         env,
         tx: tx.clone(),
         delivery: None,
         auth_screen_line: None,
+        auth_screen_block,
         next_delivery: 0,
         first_unacked: false,
         prompt_on_launch: false,
@@ -453,6 +460,9 @@ struct Actor {
     /// The auth-failure line last seen on the screen (R-688), so a failure
     /// that stays visible blocks once.
     auth_screen_line: Option<String>,
+    /// A git-access block at a gate kept from an earlier build: it ends when
+    /// no failure is on the screen.
+    auth_screen_block: bool,
     next_delivery: u64,
     /// The first command was typed but no prompt was accepted yet. Claude Code
     /// can start a second session right after the first `session-start` and
@@ -589,11 +599,19 @@ impl Actor {
         true
     }
 
-    /// Clears a git-access block once a host command works again.
+    /// Clears a git-access block once a host command works again, or the
+    /// failure has left the screen. An agent waiting at a gate goes back to
+    /// waiting, not to running.
     async fn git_access_ok(&mut self) {
+        self.auth_screen_block = false;
         if self.agent.block_reason.as_deref() == Some("git access") {
             let before = self.agent.status;
-            self.agent.fire(Trigger::Working, self.now());
+            let t = if self.agent.gate.is_some() {
+                Trigger::StoppedAtGate
+            } else {
+                Trigger::Working
+            };
+            self.agent.fire(t, self.now());
             self.commit(before).await;
         }
     }
@@ -3047,11 +3065,22 @@ impl Actor {
     async fn on_work(&mut self, w: WorkResult) {
         match w {
             WorkResult::Screen(screen) => {
-                match xherd_core::git_auth::failing_line(&screen) {
-                    None => self.auth_screen_line = None,
+                // Only a running agent can be stuck on a failing command; a
+                // stopped one's screen is its own text about the work.
+                let scan = self.agent.status == Status::Running || self.auth_screen_block;
+                let line = scan
+                    .then(|| xherd_core::git_auth::failing_screen_line(&screen))
+                    .flatten();
+                match line {
+                    None => {
+                        self.auth_screen_line = None;
+                        if self.auth_screen_block {
+                            self.git_access_ok().await;
+                        }
+                    }
                     Some(l) if self.auth_screen_line.as_deref() != Some(&l) => {
-                        self.auth_screen_line = Some(l);
-                        if self.git_access_failed("screen", &screen).await {
+                        self.auth_screen_line = Some(l.clone());
+                        if self.git_access_failed("screen", &l).await {
                             return;
                         }
                     }

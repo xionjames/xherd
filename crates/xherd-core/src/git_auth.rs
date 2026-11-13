@@ -16,17 +16,30 @@ const MARKERS: &[&str] = &[
     "saml enforcement",
     "authorize your token",
     "you are not logged into any github hosts",
-    "gh auth login",
-    "glab auth login",
+    "to get started with github cli",
 ];
+
+/// Fix hints the CLIs print with a failure. Fine in a command's error
+/// output, but on a terminal screen they are as likely to be the agent
+/// writing about a login, so the screen scan leaves them out.
+const HINTS: &[&str] = &["gh auth login", "glab auth login"];
 
 /// The first line of `text` that looks like an authentication failure,
 /// trimmed and capped at 200 characters.
 pub fn failing_line(text: &str) -> Option<String> {
+    find(text, &[MARKERS, HINTS])
+}
+
+/// [`failing_line`] for a terminal screen: error messages only, no hints.
+pub fn failing_screen_line(text: &str) -> Option<String> {
+    find(text, &[MARKERS])
+}
+
+fn find(text: &str, sets: &[&[&str]]) -> Option<String> {
     text.lines().find_map(|l| {
         let low = l.to_lowercase();
-        MARKERS
-            .iter()
+        sets.iter()
+            .flat_map(|s| s.iter())
             .any(|m| low.contains(m))
             .then(|| l.trim().chars().take(200).collect())
     })
@@ -62,6 +75,15 @@ mod tests {
         ] {
             assert!(!is_auth_failure(s), "{s}");
         }
+    }
+
+    #[test]
+    fn the_screen_ignores_login_hints_in_prose() {
+        let prose = "5. Two GitHub login paths. Both run the same gh auth login for github.com.";
+        assert!(failing_screen_line(prose).is_none());
+        assert!(is_auth_failure(prose));
+        let gh = "To get started with GitHub CLI, please run:  gh auth login";
+        assert!(failing_screen_line(gh).is_some());
     }
 
     #[test]
