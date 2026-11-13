@@ -41,6 +41,7 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 
 | Method and path | Does |
 |---|---|
+| `GET /runtimes/{name}/models` | A runtime's model suggestions: `{choose, models: [{id, label?, tier?}], error?}`; `choose` is false when the runtime takes no model, `error` says why its list command gave nothing |
 | `GET /agents`, `POST /agents` | List, create (body: `ticketKey` and `repo` (a path or URL), optional `slug`, `flow`, `base`, `autonomy`, `permissionMode`, `runtime`, `model`, `prompt`; the same as `xherd new`) |
 | `GET /agents/{id}` | One agent |
 | `POST /agents/{id}/{action}` | `pause`, `resume`, `cancel`, `send {text}`, `approve {reason?, expect?, message?}`, `request-changes {comment}`, `autonomy {level}`, `mode {mode}`, `model {model}` (empty or null = the runtime's default; refused with `bad_model` for an odd name, `model_unavailable` when the runtime takes no model), `memory-accept {text?}`, `memory-dismiss`. `expect` maps each document to the hash the client showed (from `GET /file`); a mismatch is refused with `changed_since_read`. `message` replaces a commit's message |

@@ -20,7 +20,7 @@
   import { showError } from '../lib/errors.svelte';
   import { MODE_HINT, modes } from '../lib/modes';
   import ModelInput from '../components/ModelInput.svelte';
-  import { runtimeModels, validModel } from '../lib/models';
+  import { canChooseModel, validModel } from '../lib/models';
 
   let { agent }: { agent: Agent } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -98,7 +98,7 @@
     catch (err) { showError('Could not change the tool permissions', err); }
   }
 
-  const canModel = $derived(runtimeModels(app.state?.plugins, agent.runtime ?? 'claude-code') !== null);
+  const canModel = $derived(canChooseModel(app.state?.plugins, agent.runtime ?? 'claude-code'));
   async function setModel(model: string) {
     if (!validModel(model)) { showError('Could not change the model', new Error('Letters, digits and . _ : / @ - [ ] only')); return; }
     if (model.trim() === (agent.model ?? '')) return;

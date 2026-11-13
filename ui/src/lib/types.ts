@@ -151,8 +151,8 @@ export interface PluginInfo {
   enabled: boolean;
   /** Has an interactive login; its status is the check `plugin:<name>:login`. */
   login: boolean;
-  /** Runtime plugins that can choose a model: the models they suggest (any other name may be typed); `null` otherwise. */
-  models?: ModelSuggestion[] | null;
+  /** A runtime plugin that takes a model; its suggestions come from `GET /runtimes/{name}/models`. */
+  chooseModel?: boolean;
 }
 
 export interface ModelSuggestion { id: string; label?: string; tier?: string }

@@ -177,6 +177,17 @@ pub struct Daemon {
     pub config_write: Arc<std::sync::Mutex<()>>,
 }
 
+/// `GET /runtimes/{name}/models`.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct RuntimeModels {
+    /// The runtime takes a model (`modelArgs`).
+    pub choose: bool,
+    pub models: Vec<xherd_plugin::runtime::ModelSuggestion>,
+    /// Why the list command gave nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 impl Daemon {
     /// Prepare the data root, migrate config and database, load plugins and
     /// agents, replay queued reports, reconcile sessions, start the scheduler.
@@ -368,6 +379,68 @@ impl Daemon {
         let launch = self.agent_launch(&a, mode, model.as_deref())?;
         self.action(who, UserAction::SetModel { model, launch })
             .await
+    }
+
+    /// The models a runtime suggests (issue #112): its fixed list, or what
+    /// its list command prints, run with `sh -c` as the agents' user. A
+    /// command that fails gives no models and the reason; the model field
+    /// stays free text either way. `None` = the runtime cannot choose one.
+    pub async fn runtime_models(&self, name: &str) -> Result<RuntimeModels, ActionError> {
+        use xherd_plugin::runtime::{Models, Terminal, parse_model_list};
+        self.check_runtime(name, &[]).map_err(|e| ActionError {
+            code: "unknown_runtime",
+            message: e,
+        })?;
+        let t = Terminal::of(&self.plugins.get(name).expect("checked").manifest).map_err(|e| {
+            ActionError {
+                code: "runtime_unusable",
+                message: e,
+            }
+        })?;
+        if t.model_args.is_empty() {
+            return Ok(RuntimeModels::default());
+        }
+        let command = match t.models {
+            Models::Fixed(models) => {
+                return Ok(RuntimeModels {
+                    choose: true,
+                    models,
+                    error: None,
+                });
+            }
+            Models::Command(c) => c.command,
+        };
+        let mut cmd = xherd_core::exec::Cmd::new(["sh", "-c", command.as_str()])
+            .as_agent()
+            .timeout(std::time::Duration::from_secs(30));
+        for k in ["HOME", "PATH"] {
+            if let Some(v) = xherd_core::runner::agent_env(k) {
+                if k == "HOME" {
+                    cmd = cmd.cwd(&v);
+                }
+                cmd = cmd.env(k, v);
+            }
+        }
+        let error = match xherd_core::exec::run(cmd).await {
+            Ok(o) if o.success() => {
+                return Ok(RuntimeModels {
+                    choose: true,
+                    models: parse_model_list(&o.stdout_str()),
+                    error: None,
+                });
+            }
+            Ok(o) if o.timed_out => "the model list timed out".to_string(),
+            Ok(o) => format!(
+                "the model list failed: {}",
+                o.stderr.lines().last().unwrap_or("").trim()
+            ),
+            Err(e) => format!("the model list failed: {e}"),
+        };
+        Ok(RuntimeModels {
+            choose: true,
+            models: Vec::new(),
+            error: Some(error),
+        })
     }
 
     /// An agent's launch argv rebuilt for a mode and model.

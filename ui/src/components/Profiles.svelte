@@ -35,7 +35,7 @@
   let imported = $state('');
 
   // Runtimes that can choose a model get a model field each.
-  const modelRuntimes = $derived(runtimes(app.state?.plugins).filter((r) => r.models != null));
+  const modelRuntimes = $derived(runtimes(app.state?.plugins).filter((r) => r.chooseModel));
 
   const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', hotfixBase: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runtimeModels, validModel } from './models';
+import { canChooseModel, validModel } from './models';
 import type { PluginInfo } from './types';
 
 describe('models', () => {
@@ -8,11 +8,12 @@ describe('models', () => {
     for (const bad of ['--x', 'a b', 'x;y', '$(x)', 'm'.repeat(101)]) expect(validModel(bad)).toBe(false);
   });
   it('knows which runtimes can choose a model', () => {
-    const p = (name: string, kind: string, models?: PluginInfo['models']) =>
-      ({ name, kind, models, version: '1', builtin: true, settings: [], enabled: true, login: false }) as PluginInfo;
-    const plugins = [p('claude-code', 'runtime', [{ id: 'opus' }]), p('old', 'runtime', null), p('github', 'host')];
-    expect(runtimeModels(plugins, 'claude-code')).toEqual([{ id: 'opus' }]);
-    expect(runtimeModels(plugins, 'old')).toBeNull();
-    expect(runtimeModels(plugins, 'github')).toBeNull();
+    const p = (name: string, kind: string, chooseModel?: boolean) =>
+      ({ name, kind, chooseModel, version: '1', builtin: true, settings: [], enabled: true, login: false }) as PluginInfo;
+    const plugins = [p('claude-code', 'runtime', true), p('old', 'runtime', false), p('github', 'host', true)];
+    expect(canChooseModel(plugins, 'claude-code')).toBe(true);
+    expect(canChooseModel(plugins, 'old')).toBe(false);
+    expect(canChooseModel(plugins, 'github')).toBe(false);
+    expect(canChooseModel(plugins, 'missing')).toBe(false);
   });
 });

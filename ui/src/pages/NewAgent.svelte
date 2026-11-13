@@ -12,7 +12,7 @@
   import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
   import { runtimes, runtimeLabel } from '../lib/runtimes';
   import ModelInput from '../components/ModelInput.svelte';
-  import { runtimeModels, validModel } from '../lib/models';
+  import { canChooseModel, validModel } from '../lib/models';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
   let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
@@ -65,7 +65,7 @@
   // The runtime the agent will get, for its model suggestions and the
   // profile's default model (Settings' own default is applied by the daemon).
   const runtime = $derived(f.runtime || repo.data?.profile?.runtime || String(app.state?.config.defaultRuntime ?? 'claude-code'));
-  const canModel = $derived(runtimeModels(app.state?.plugins, runtime) !== null);
+  const canModel = $derived(canChooseModel(app.state?.plugins, runtime));
   const profileModel = $derived(repo.data?.profile?.models?.[runtime]);
   const modelOk = $derived(validModel(f.model));
 

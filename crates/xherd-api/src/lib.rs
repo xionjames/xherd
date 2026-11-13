@@ -99,6 +99,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/toolchains", get(toolchains))
         .route("/api/v1/toolchains/installed", get(toolchains_installed))
         .route("/api/v1/toolchains/install", post(toolchain_install))
+        .route("/api/v1/runtimes/{name}/models", get(runtime_models))
         .route(
             "/api/v1/toolchains/{tool}/versions",
             get(toolchain_versions),
@@ -362,17 +363,15 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
                            "secret": s.secret, "required": s.required})
                 })
                 .collect();
-            // A runtime that can choose a model: the models it suggests
-            // (issue #112); `null` when it cannot choose one.
+            // A runtime that takes a model (issue #112); the models it
+            // suggests come from `GET /runtimes/{name}/models`.
             let models = xherd_plugin::runtime::Terminal::of(&p.manifest)
-                .ok()
-                .filter(|t| !t.model_args.is_empty())
-                .map(|t| t.models);
+                .is_ok_and(|t| !t.model_args.is_empty());
             json!({"name": p.name(), "kind": p.manifest.kind, "version": p.manifest.version,
                    "label": p.manifest.label, "description": p.manifest.description,
                    "builtin": p.builtin(), "settings": settings,
                    "enabled": d.plugin_enabled(p.name()), "login": p.manifest.login.is_some(),
-                   "models": models})
+                   "chooseModel": models})
         })
         .collect();
     Ok(Json(json!({
@@ -973,6 +972,14 @@ async fn toolchains(_: User, State(d): State<Daemon>) -> Json<Value> {
 }
 
 /// The versions a tool can install, each marked installed or not.
+async fn runtime_models(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<xherd_daemon::RuntimeModels>> {
+    Ok(Json(d.runtime_models(&name).await?))
+}
+
 async fn toolchain_versions(
     _: User,
     State(d): State<Daemon>,

@@ -30,6 +30,10 @@ fn git(dir: &Path, args: &[&str]) -> std::process::Output {
 }
 
 async fn setup() -> T {
+    setup_with(|_| {}).await
+}
+
+async fn setup_with(f: impl FnOnce(&mut Options)) -> T {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
@@ -64,6 +68,7 @@ async fn setup() -> T {
         .find(|m| m.name == "claude-code")
         .unwrap();
     rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    f(&mut o);
     let d = Daemon::start(paths, o).await.unwrap();
     T {
         home,
@@ -387,6 +392,47 @@ async fn the_model_comes_from_the_request_then_the_profile_then_settings() {
         serde_json::from_value(serde_json::json!({"runtimeModels": {"github": "x"}})).unwrap(),
     );
     assert!(bad.unwrap_err().message.contains("runtimeModels"));
+}
+
+/// Model suggestions (issue #112): a runtime's fixed list, or what its list
+/// command prints; a failing command gives none and says why.
+#[tokio::test]
+async fn model_suggestions_come_from_the_list_or_the_command() {
+    let t = setup_with(|o| {
+        let set = |o: &mut Options, name: &str, v: serde_json::Value| {
+            let m = o
+                .builtin_plugins
+                .iter_mut()
+                .find(|m| m.name == name)
+                .unwrap();
+            m.data.get_mut("terminal").unwrap()["models"] = v;
+        };
+        set(
+            o,
+            "opencode",
+            serde_json::json!({"command": "printf 'a/b\\tA B\\n-x\\nc/d\\n' | grep /"}),
+        );
+        set(
+            o,
+            "codex",
+            serde_json::json!({"command": "echo nope >&2; exit 3"}),
+        );
+    })
+    .await;
+    let fixed = t.d.runtime_models("claude-code").await.unwrap();
+    assert!(fixed.choose && fixed.models.iter().any(|m| m.id == "sonnet"));
+    let listed = t.d.runtime_models("opencode").await.unwrap();
+    let ids: Vec<&str> = listed.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["a/b", "c/d"]);
+    assert_eq!(listed.models[0].label.as_deref(), Some("A B"));
+    assert_eq!(listed.error, None);
+    let failed = t.d.runtime_models("codex").await.unwrap();
+    assert!(failed.choose && failed.models.is_empty());
+    assert!(failed.error.unwrap().contains("nope"));
+    assert_eq!(
+        t.d.runtime_models("github").await.unwrap_err().code,
+        "unknown_runtime"
+    );
 }
 
 /// A worktree with version files starts through `xherd toolchain exec`, with

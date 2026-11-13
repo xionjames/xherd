@@ -39,7 +39,7 @@
   const secretsDirty = $derived(secretFields.some((s) => (secretNew[s.key] ?? '') !== ''));
   const fieldsDirty = $derived(fields.some((s) => (values[s.key] ?? '') !== saved(s.key)));
   // A runtime that can choose a model: its default model (config `runtimeModels`, live).
-  const canModel = $derived(plugin.kind === 'runtime' && plugin.models != null);
+  const canModel = $derived(plugin.kind === 'runtime' && !!plugin.chooseModel);
   const savedModels = $derived((setup.config?.config.runtimeModels ?? {}) as Record<string, string>);
   let model = $state('');
   $effect(() => { model = savedModels[plugin.name] ?? ''; });
