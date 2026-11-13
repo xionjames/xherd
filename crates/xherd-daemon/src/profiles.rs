@@ -38,12 +38,15 @@ impl Daemon {
     /// A profile's runtime must be an installed runtime plugin (switched off
     /// is allowed: creating an agent then says so).
     fn check_profile_runtime(&self, p: &Profile) -> Result<(), ActionError> {
-        match &p.runtime {
-            Some(r) => self
-                .check_runtime(r, &[])
-                .map_err(|m| err("bad_profile", format!("{}: runtime: {m}", p.name))),
-            None => Ok(()),
+        if let Some(r) = &p.runtime {
+            self.check_runtime(r, &[])
+                .map_err(|m| err("bad_profile", format!("{}: runtime: {m}", p.name)))?;
         }
+        for rt in p.models.keys() {
+            self.check_model_runtime(rt)
+                .map_err(|m| err("bad_profile", format!("{}: models: {m}", p.name)))?;
+        }
+        Ok(())
     }
 
     pub async fn create_profile(&self, mut p: Profile) -> Result<Profile, ActionError> {

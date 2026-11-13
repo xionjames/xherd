@@ -75,6 +75,12 @@ pub enum UserAction {
         mode: xherd_core::permission::PermissionMode,
         launch: Vec<String>,
     },
+    /// Change the model (issue #112), with the launch argv rebuilt by
+    /// `Daemon::set_model`; used from the next start.
+    SetModel {
+        model: Option<String>,
+        launch: Vec<String>,
+    },
     /// Shared memory (spec §16.6): commit the proposed `AGENTS.md` (`text` =
     /// the user's edit, else the agent's file) on the agent's branch.
     MemoryAccept {
@@ -1898,6 +1904,14 @@ impl Actor {
                 self.agent.permission_mode = Some(*mode);
                 self.agent.launch = Some(launch.clone());
                 "user.mode"
+            }
+            UserAction::SetModel { model, launch } => {
+                if self.agent.model == *model {
+                    return Ok(());
+                }
+                self.agent.model = model.clone();
+                self.agent.launch = Some(launch.clone());
+                "user.model"
             }
         };
         self.log(None, kind, None).await;

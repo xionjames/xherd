@@ -37,6 +37,10 @@ pub struct NewAgent {
     /// Runtime plugin; default: the profile's, else the setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
+    /// Model for the runtime; default: the profile's for that runtime, else
+    /// the setting's (`runtimeModels`), else the runtime's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 pub const FLOW_NONE: &str = "none";
@@ -236,6 +240,7 @@ mod tests {
             autonomy: None,
             permission_mode: None,
             runtime: None,
+            model: None,
         }
     }
 

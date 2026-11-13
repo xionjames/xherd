@@ -82,6 +82,9 @@ enum Cmd {
         /// Runtime plugin (claude-code, opencode, codex); default: the profile's, else Settings.
         #[arg(long)]
         runtime: Option<String>,
+        /// Model for the runtime (opus, sonnet…); default: the profile's, else Settings, else the runtime's own.
+        #[arg(long)]
+        model: Option<String>,
         prompt: Option<String>,
     },
     /// List agents.
@@ -103,6 +106,8 @@ enum Cmd {
         agent: String,
         mode: xherd_core::permission::PermissionMode,
     },
+    /// Change an agent's model ("" = the runtime's default); used from its next session start.
+    Model { agent: String, model: String },
     /// Pause an agent (it writes a handoff note first), or with --all every live agent at once, with no note (kill switch).
     Pause {
         agent: Option<String>,
@@ -355,6 +360,7 @@ fn main() -> ExitCode {
             autonomy,
             mode,
             runtime,
+            model,
             prompt,
         } => new_agent(
             repo,
@@ -368,8 +374,12 @@ fn main() -> ExitCode {
                 autonomy,
                 permission_mode: mode,
                 runtime,
+                model,
             },
         ),
+        Cmd::Model { agent, model } => {
+            action(&agent, "model", Some(serde_json::json!({"model": model})))
+        }
         Cmd::Mode { agent, mode } => {
             action(&agent, "mode", Some(serde_json::json!({"mode": mode})))
         }

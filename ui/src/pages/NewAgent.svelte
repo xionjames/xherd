@@ -11,9 +11,11 @@
   import Seg from '../components/Seg.svelte';
   import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
   import { runtimes, runtimeLabel } from '../lib/runtimes';
+  import ModelInput from '../components/ModelInput.svelte';
+  import { runtimeModels, validModel } from '../lib/models';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
-  let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '' });
+  let f = $state({ ticketKey: '', slug: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
   let busy = $state(false);
   let autonomyTouched = false; // a profile's autonomy fills the selector until the user picks one
   const keyOk = $derived(/^[A-Z0-9][A-Z0-9_-]*$/.test(f.ticketKey));
@@ -22,7 +24,7 @@
 
   // Repository: a local path or a remote URL, which the daemon clones into
   // the workspace once and fetches later (POST /repos/resolve).
-  type Resolved = { path: string; cloned: boolean; warning: string | null; branches: string[]; base: string | null; profile: { id: string; name: string; autonomy?: string; permissionMode?: PermissionMode; runtime?: string } | null; suggestedMatch: string };
+  type Resolved = { path: string; cloned: boolean; warning: string | null; branches: string[]; base: string | null; profile: { id: string; name: string; autonomy?: string; permissionMode?: PermissionMode; runtime?: string; models?: Record<string, string> } | null; suggestedMatch: string };
   let known = $state<{ path: string }[]>([]);
   let repo = $state<{ input: string; busy: boolean; data: Resolved | null; error: string | null }>(
     { input: '', busy: false, data: null, error: null });
@@ -60,7 +62,14 @@
     }
   }
 
-  const ready = $derived(keyOk && slugOk && input !== '' && !repoBad && (f.flow !== 'none' || f.prompt.trim() !== ''));
+  // The runtime the agent will get, for its model suggestions and the
+  // profile's default model (Settings' own default is applied by the daemon).
+  const runtime = $derived(f.runtime || repo.data?.profile?.runtime || String(app.state?.config.defaultRuntime ?? 'claude-code'));
+  const canModel = $derived(runtimeModels(app.state?.plugins, runtime) !== null);
+  const profileModel = $derived(repo.data?.profile?.models?.[runtime]);
+  const modelOk = $derived(validModel(f.model));
+
+  const ready = $derived(keyOk && slugOk && modelOk && input !== '' && !repoBad && (f.flow !== 'none' || f.prompt.trim() !== ''));
 
   async function create(e: SubmitEvent) {
     e.preventDefault();
@@ -74,6 +83,7 @@
     body.autonomy = f.autonomy;
     if (f.mode) body.permissionMode = f.mode;
     if (f.runtime) body.runtime = f.runtime;
+    if (canModel && f.model.trim()) body.model = f.model.trim();
     try {
       const r = await post<{ agent: Agent }>('/agents', body);
       upsertAgent(r.agent);
@@ -134,6 +144,12 @@
         {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
       </select>
       <span class="hint">The coding agent that runs in the terminal. Set the default in Settings → Gates &amp; autonomy.</span></label>
+    {#if canModel}
+      <label class="f">Model (optional)
+        <ModelInput {runtime} bind:value={f.model} placeholder={profileModel ? `${profileModel} (profile)` : 'Default (Settings, else the runtime’s)'} />
+        {#if !modelOk}<span class="hint err">Letters, digits and . _ : / @ - [ ] only.</span>
+        {:else}<span class="hint">Pick a suggestion or type any model {runtime} knows. Set a default per runtime in Settings → Plugins → Options. Each agent can change it later.</span>{/if}</label>
+    {/if}
     <label class="f">Tool permissions
       <select bind:value={f.mode}>
         <option value="">{repo.data?.profile?.permissionMode ? `${repo.data.profile.permissionMode} (profile)` : 'Default (Settings)'}</option>

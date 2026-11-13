@@ -37,7 +37,7 @@ The **Welcome** screen opens by itself the first time, in six steps: Welcome, Pl
 
 - the **ticket key** (`PROJ-123`) and what to do (the prompt);
 - the **repository**: a path inside the workspace, or a URL, cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use;
-- optionally the **base branch**, the **flow** (`feature`, or `none` for a plain session with your prompt and no gates), the **autonomy**, the **tool permissions** and the **runtime**.
+- optionally the **base branch**, the **flow** (`feature`, or `none` for a plain session with your prompt and no gates), the **autonomy**, the **tool permissions**, the **runtime** and its **model**.
 
 A [repo profile](#repo-profiles) that matches the repository fills in its defaults. If more agents are live than `maxConcurrentAgents`, the new one waits in *queued*.
 
@@ -125,6 +125,8 @@ Held gates are never auto-approved, nor is a gate xherd inferred because the age
 
 **Tool permissions** are separate: they say what the runtime may do without asking. `ask` asks before each tool that needs permission, `edits` (default) accepts file edits, `auto` lets the runtime's own checks decide, `all` asks nothing (only in the container). A change applies from the agent's next session.
 
+The **model** is the runtime's: leave it empty for the runtime's own default, pick a suggestion (Claude Code offers `opus`, `sonnet`, `haiku`) or type any name the runtime knows (opencode takes `provider/model`). The default per runtime is in Settings → Plugins → the runtime's Options, a repo profile can set its own, and the agent page changes it for the agent's next session.
+
 ## Pull requests
 
 Approving the ship gate tells the agent to push its branch and open a draft PR; xherd itself never pushes. The agent then goes to *watching*:
@@ -144,7 +146,7 @@ During review, an agent may propose an update of the repository's `AGENTS.md` (w
 
 ## Repo profiles
 
-Settings → Repo profiles holds per-repository settings, matched by the `origin` URL (`github.com/acme/*`) or by folder: the base branch, autonomy, tool permissions, runtime, tripwires (`sensitivePaths`, `maxDiffLines`), a per-agent token budget, a **lint command** and a **test command** run at every commit proposal (a failure holds the commit for you), and instructions added to every agent's `instructions.md`. Profiles can be exported and imported as JSON. Field by field: [Configuration](../reference/configuration.md#repo-profiles).
+Settings → Repo profiles holds per-repository settings, matched by the `origin` URL (`github.com/acme/*`) or by folder: the base branch, autonomy, tool permissions, runtime, a model per runtime, tripwires (`sensitivePaths`, `maxDiffLines`), a per-agent token budget, a **lint command** and a **test command** run at every commit proposal (a failure holds the commit for you), and instructions added to every agent's `instructions.md`. Profiles can be exported and imported as JSON. Field by field: [Configuration](../reference/configuration.md#repo-profiles).
 
 ## Limits and budgets
 
@@ -186,7 +188,7 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | `xherd approve <agent>` / `xherd changes <agent> "<comment>"` | Approve, or ask for revisions |
 | `xherd send <agent> "<text>"` | Type into the agent's session (also answers a question) |
 | `xherd pause\|resume\|cancel <agent>` | Lifecycle; `xherd pause --all` stops every agent at once |
-| `xherd autonomy <agent> <level>`, `xherd mode <agent> <mode>` | Autonomy and tool permissions |
+| `xherd autonomy <agent> <level>`, `xherd mode <agent> <mode>`, `xherd model <agent> <model>` | Autonomy, tool permissions and model |
 | `xherd backup create` | Archive of the agents and their work |
 | `xherd security check` | Exposure overview: binding, user split, plugins, limits |
 

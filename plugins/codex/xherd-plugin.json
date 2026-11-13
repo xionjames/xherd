@@ -34,6 +34,10 @@
           "--dangerously-bypass-approvals-and-sandbox"
         ]
       },
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
       "hooks": {
         "file": ".codex/hooks.json",
         "format": "codex-hooks",

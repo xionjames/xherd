@@ -65,9 +65,41 @@ pub struct Terminal {
     /// like opencode's, would lose the text).
     #[serde(default)]
     pub prompt_args: Vec<String>,
+    /// Launch arguments that choose the model, `{model}` once (issue #112);
+    /// without them agents of this runtime cannot choose one.
+    #[serde(default)]
+    pub model_args: Vec<String>,
+    /// Models to suggest in the UI; any other name may still be typed.
+    #[serde(default)]
+    pub models: Vec<ModelSuggestion>,
+}
+
+/// A model the UI offers for a runtime (`data.terminal.models`).
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelSuggestion {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// A rough cost/strength class (`fast`, `balanced`, `strong`…), shown as is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 impl Terminal {
+    /// `model_args` with the model; refused when the runtime takes none.
+    /// The name must already be checked (`xherd_core::model::clean`).
+    pub fn model_argv(&self, model: &str) -> Result<Vec<String>, String> {
+        if self.model_args.is_empty() {
+            return Err("this runtime cannot choose a model (no modelArgs)".into());
+        }
+        Ok(self
+            .model_args
+            .iter()
+            .map(|a| a.replace("{model}", model))
+            .collect())
+    }
+
     /// `prompt_args` with the prompt; `None` when the runtime has none.
     pub fn prompt_argv(args: &[String], prompt: &str) -> Option<Vec<String>> {
         (!args.is_empty()).then(|| args.iter().map(|a| a.replace("{prompt}", prompt)).collect())
@@ -644,6 +676,28 @@ impl Terminal {
                 m.name
             ));
         }
+        if !t.model_args.is_empty()
+            && t.model_args
+                .iter()
+                .filter(|a| a.contains("{model}"))
+                .count()
+                != 1
+        {
+            return Err(format!(
+                "runtime {}: modelArgs needs {{model}} once",
+                m.name
+            ));
+        }
+        if let Some(x) = t
+            .models
+            .iter()
+            .find(|x| xherd_core::model::clean(&x.id).ok().flatten().as_deref() != Some(&x.id))
+        {
+            return Err(format!(
+                "runtime {}: models: {:?} is not a plain model name",
+                m.name, x.id
+            ));
+        }
         if let Some(c) = &t.check {
             let n = |p: &str| c.argv.iter().filter(|a| a.contains(p)).count();
             if c.argv.is_empty() || n("{prompt}") != 1 || n("{system}") != 1 {
@@ -1206,6 +1260,39 @@ mod check_tests {
                 .map(String::from)
                 .to_vec(),
             model_args: ["--model", "{model}"].map(String::from).to_vec(),
+        }
+    }
+
+    #[test]
+    fn model_args_take_the_model_once() {
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "claude-code")
+            .unwrap();
+        let t = Terminal::of(&m).unwrap();
+        assert_eq!(t.model_argv("opus").unwrap(), ["--model", "opus"]);
+        assert!(t.models.iter().any(|x| x.id == "sonnet"));
+        let term = m.data.get_mut("terminal").unwrap();
+        term["modelArgs"] = json!(["--model"]);
+        assert!(Terminal::of(&m).unwrap_err().contains("modelArgs"));
+        let term = m.data.get_mut("terminal").unwrap();
+        term["modelArgs"] = json!([]);
+        term["models"] = json!([]);
+        let t = Terminal::of(&m).unwrap();
+        assert!(t.model_argv("opus").is_err(), "no modelArgs, no model");
+        let term = m.data.get_mut("terminal").unwrap();
+        term["models"] = json!([{"id": "-x"}]);
+        assert!(Terminal::of(&m).unwrap_err().contains("models"));
+    }
+
+    #[test]
+    fn every_builtin_runtime_can_choose_a_model() {
+        for m in crate::builtins()
+            .iter()
+            .filter(|m| m.kind == crate::Kind::Runtime)
+        {
+            let t = Terminal::of(m).unwrap();
+            assert!(!t.model_args.is_empty(), "{}", m.name);
         }
     }
 

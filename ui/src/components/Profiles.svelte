@@ -11,16 +11,18 @@
   import { modes } from '../lib/modes';
   import { runtimes, runtimeLabel } from '../lib/runtimes';
   import { app } from '../lib/store.svelte';
+  import ModelInput from './ModelInput.svelte';
+  import { validModel } from '../lib/models';
 
   type Profile = {
     id: string; name: string; match: string[];
     baseBranch?: string; stagingBranch?: string; hotfixBase?: string;
-    autonomy?: string; permissionMode?: string; runtime?: string; sensitivePaths?: string[]; maxDiffLines?: number;
+    autonomy?: string; permissionMode?: string; runtime?: string; models?: Record<string, string>; sensitivePaths?: string[]; maxDiffLines?: number;
     agentTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
   };
   type Form = {
     id: string; name: string; match: string; baseBranch: string; stagingBranch: string; hotfixBase: string;
-    autonomy: string; permissionMode: string; runtime: string; sensitivePaths: string; maxDiffLines: string; agentTokenBudget: string;
+    autonomy: string; permissionMode: string; runtime: string; models: Record<string, string>; sensitivePaths: string; maxDiffLines: string; agentTokenBudget: string;
     testCommand: string; lintCommand: string; instructions: string;
   };
 
@@ -32,7 +34,10 @@
   let importing = $state(false);
   let imported = $state('');
 
-  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', hotfixBase: '', autonomy: '', permissionMode: '', runtime: '', sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
+  // Runtimes that can choose a model get a model field each.
+  const modelRuntimes = $derived(runtimes(app.state?.plugins).filter((r) => r.models != null));
+
+  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', hotfixBase: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
   const opt = (s: string) => (s.trim() ? s.trim() : undefined);
   const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
@@ -40,7 +45,7 @@
   function toForm(p: Profile): Form {
     return {
       id: p.id, name: p.name, match: p.match.join('\n'), baseBranch: p.baseBranch ?? '', stagingBranch: p.stagingBranch ?? '',
-      hotfixBase: p.hotfixBase ?? '', autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '',
+      hotfixBase: p.hotfixBase ?? '', autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '', models: { ...(p.models ?? {}) },
       sensitivePaths: p.sensitivePaths ? p.sensitivePaths.join('\n') : '', maxDiffLines: p.maxDiffLines?.toString() ?? '',
       agentTokenBudget: p.agentTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
     };
@@ -59,6 +64,8 @@
       autonomy: opt(f.autonomy),
       permissionMode: opt(f.permissionMode),
       runtime: opt(f.runtime),
+      // Entries of runtimes not shown (switched off) are kept; empty ones are dropped by the daemon.
+      models: f.models,
       sensitivePaths: noSensitive ? [] : lines(f.sensitivePaths).length ? lines(f.sensitivePaths) : undefined,
       maxDiffLines: num(f.maxDiffLines), agentTokenBudget: num(f.agentTokenBudget),
       testCommand: opt(f.testCommand), lintCommand: opt(f.lintCommand), instructions: opt(f.instructions),
@@ -198,6 +205,11 @@
             {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
             {#if form.runtime && !runtimes(app.state?.plugins).some((r) => r.name === form?.runtime)}<option value={form.runtime}>{form.runtime} (switched off)</option>{/if}
           </select></label>
+        {#each modelRuntimes as r (r.name)}
+          <label class="f">Model of new {runtimeLabel(r)} agents
+            <ModelInput runtime={r.name} bind:value={form.models[r.name]} placeholder="global setting" />
+            {#if !validModel(form.models[r.name] ?? '')}<span class="hint err">Letters, digits and . _ : / @ - [ ] only.</span>{/if}</label>
+        {/each}
         <label class="f">Largest commit
           <span class="unit"><input type="number" min="1" bind:value={form.maxDiffLines} placeholder="global" /><span>changed lines</span></span></label>
         <label class="f">Token budget per agent

@@ -89,6 +89,7 @@ fn req(t: &T, key: &str) -> NewAgent {
         autonomy: None,
         permission_mode: None,
         runtime: None,
+        model: None,
     }
 }
 

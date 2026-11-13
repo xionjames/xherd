@@ -10,6 +10,7 @@ pub mod exec;
 pub mod git_auth;
 pub mod guard;
 pub mod hash;
+pub mod model;
 pub mod new;
 pub mod paths;
 pub mod permission;

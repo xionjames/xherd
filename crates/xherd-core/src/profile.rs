@@ -43,6 +43,10 @@ pub struct Profile {
     /// Runtime plugin of new agents (`opencode`, `codex`…).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<String>,
+    /// Runtime plugin → model of new agents (issue #112); replaces the
+    /// global `runtimeModels` entry of that runtime.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub models: std::collections::BTreeMap<String, String>,
     /// Replace the global `sensitivePaths` (an empty list switches it off).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensitive_paths: Option<Vec<String>>,
@@ -204,6 +208,8 @@ pub fn check(p: &mut Profile, others: &[&str]) -> Result<(), String> {
         .take()
         .map(|r| r.trim().to_string())
         .filter(|r| !r.is_empty());
+    p.models = crate::model::clean_map(std::mem::take(&mut p.models))
+        .map_err(|e| format!("models: {e}"))?;
     if !plain(&p.name) || p.name.chars().count() > MAX_NAME {
         return Err(format!("name: 1 to {MAX_NAME} characters"));
     }

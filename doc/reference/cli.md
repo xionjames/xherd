@@ -37,6 +37,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `xherd pause\|resume\|cancel <agent>` | Lifecycle. Pause asks the agent for a handoff note first (up to `pauseTimeoutSec`), then ends the session; cancel ends it at once. Both keep the worktree |
 | `xherd autonomy <agent> <ask\|important>` | Change what xherd may approve by itself (rewrites the agent's instructions and tries an auto-approval at once) |
 | `xherd mode <agent> <ask\|edits\|auto\|all>` | Change the agent's tool permissions; the running session keeps its mode, the next session start uses the new one. `all` only in the container |
+| `xherd model <agent> <model>` | Change the agent's model (`""` = the runtime's default); like `mode`, it applies from the next session start |
 | `xherd attach <agent>` | Attach this terminal to the agent's tmux session (in the container when using Docker) |
 | `xherd shell <agent>` | A shell in the agent's worktree |
 | `xherd open <agent> [--app A]` | Open the worktree in an app on this computer: apps from `~/.config/xherd/open.json`, else editors found on `PATH` |
@@ -53,6 +54,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `--autonomy` | `ask` (default) or `important` |
 | `--mode` | Tool permissions: `ask`, `edits`, `auto` or `all` (container only); default: the repo profile's, else the `permissionMode` setting |
 | `--runtime` | Runtime plugin: `claude-code`, `opencode` or `codex`; default: the repo profile's, else the `defaultRuntime` setting |
+| `--model` | Model for the runtime (`opus`, `sonnet`, `opencode/…`); default: the repo profile's `models` entry for the runtime, else the `runtimeModels` setting, else the runtime's own |
 
 ## Called by the runtime and by agents
 

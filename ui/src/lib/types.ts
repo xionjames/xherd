@@ -132,6 +132,8 @@ export interface Agent {
   autonomy?: 'ask' | 'important' | 'never';
   /** Tool permissions (R-002a); missing on agents created before it existed. */
   permissionMode?: import('./modes').PermissionMode;
+  /** Model the runtime is launched with; missing = the runtime's own default. */
+  model?: string;
 }
 
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean }
@@ -149,7 +151,11 @@ export interface PluginInfo {
   enabled: boolean;
   /** Has an interactive login; its status is the check `plugin:<name>:login`. */
   login: boolean;
+  /** Runtime plugins that can choose a model: the models they suggest (any other name may be typed); `null` otherwise. */
+  models?: ModelSuggestion[] | null;
 }
+
+export interface ModelSuggestion { id: string; label?: string; tier?: string }
 
 export interface PluginSetting {
   key: string;
