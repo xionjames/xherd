@@ -3,6 +3,7 @@
 // (permission is asked on the click, never on load).
 import { go } from './router.svelte';
 import { agentByName } from './store.svelte';
+import type { Agent } from './types';
 
 export interface Notice { key: string; agentId: string; kind: string; text: string; at: number; read: boolean }
 
@@ -36,6 +37,20 @@ export function open(n: Notice) {
   if (n.agentId.startsWith('todo:')) return go('/todos');
   const a = agentByName(n.agentId);
   if (a) go(`/agent/${a.name}`);
+}
+
+// A notice that the agent waits for you is read once it no longer waits:
+// the gate was approved or changes were requested (it runs again), the
+// dialog was answered, the idle agent got work.
+const over: Record<string, (a: Agent) => boolean> = {
+  gate: (a) => !a.gate || a.status === 'running',
+  blocked: (a) => a.status !== 'blocked',
+  idle: (a) => a.status !== 'idle',
+};
+
+/** Marks read the agent's notices that its new state has settled. */
+export function settle(a: Agent) {
+  for (const n of notices.list) if (!n.read && n.agentId === a.id && over[n.kind]?.(a)) n.read = true;
 }
 
 export const markAllRead = () => { for (const n of notices.list) n.read = true; };

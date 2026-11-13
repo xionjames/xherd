@@ -3,7 +3,7 @@
 import { get } from './api';
 import { setLinkRules } from './links';
 import type { Agent, AppState } from './types';
-import { addNotice } from './notices.svelte';
+import { addNotice, settle } from './notices.svelte';
 
 export const app = $state<{
   state: AppState | null;
@@ -15,6 +15,7 @@ export async function reload() {
   try {
     app.state = await get<AppState>('/state');
     setLinkRules(app.state.trackerLinks ?? []);
+    for (const a of app.state.agents) settle(a);
     app.error = null;
   } catch (e) {
     app.error = (e as Error).message;
@@ -27,6 +28,7 @@ export function upsertAgent(a: Agent) {
   const i = s.agents.findIndex((x) => x.id === a.id);
   if (i >= 0) s.agents[i] = a;
   else s.agents.push(a);
+  settle(a);
 }
 
 export function agentByName(idOrName: string): Agent | undefined {
