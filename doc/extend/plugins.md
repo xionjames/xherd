@@ -17,7 +17,7 @@ A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in 
 
 Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host, tracker and toolchain plugins; the others are accepted by the manifest but nothing consumes them yet.
 
-Every plugin can be switched off in Settings → Plugins (or the Welcome screen), as long as one plugin of each kind stays on (trackers excepted: having none is fine). Its card there opens its options: settings, secrets, checks with their fixes, its login, and for a toolchain the versions.
+Every plugin can be switched on or off in Settings → Plugins (or the Welcome screen), as long as one plugin of each kind stays on; host plugins (shown as **Git providers**) and trackers are optional, so having none is fine (with no Git provider on, no agent gets pull request lookup, polling, comments or templates). Its card there opens its options in a dialog: settings, secrets, checks with their fixes, its login, and for a toolchain the versions.
 
 ## Manifest
 
@@ -47,7 +47,7 @@ Every plugin can be switched off in Settings → Plugins (or the Welcome screen)
 | `hooks` | Event name → argv; the output is ignored |
 | `checks` | Each runs an argv; pass = exit 0 within 10 s. They appear in Setup checks. `fix` is a command offered to the user; `optional` checks do not block |
 | `requires` | Command-line tools the plugin needs, with a check, a container install and native instructions ([below](#tools-a-plugin-needs-requires)) |
-| `login` | Argv of an interactive login, run in a terminal the UI shows. Whether it is logged in is the check named `login` |
+| `login` | Argv of an interactive login, run in a terminal the UI shows (*Log in* on the plugin's card and in its options). Whether it is logged in is the check named `login`; an enabled plugin whose `login` check fails holds the Welcome Plugins step. The built-in `github` has one (`gh auth login --hostname github.com --git-protocol https --web`, check `gh auth status`) |
 | `build` | Install-time build argv |
 | `timeoutSeconds` | Per-command timeout (default 60) |
 | `data`, `instructions` | Kind-specific data and prompt fragments |
@@ -74,6 +74,8 @@ A host plugin also declares its git access in `data.git` (the built-in `github`,
 - `credential`: `helper` (the git credential helper, e.g. `!gh auth git-credential`; absent for a provider with no CLI, whose token xherd keeps) and `tokenUser` (the name git sends with a token; a host no provider claims gets `x-access-token`).
 - `login`: the browser login argv; `{host}` is replaced. Without it the host takes a pasted token.
 - `api`: the doctor's API checks: `base` (`{host}` is replaced; https only), `user` (`path`, and optionally `scopesHeader` + `requireScope`), and optionally `repo` (`path` with `{path}`, `ssoHeader`, and the `onSso` / `onNotFound` verdicts: a `detail` and a `fix`, which may use `{url}`).
+
+**Implicit rows.** A host plugin that is on and has a credential `helper` gives Git access a row for each name in its `hosts` without a `*` (the built-in `github`: `github.com`), credential `provider`, HTTPS. The managed gitconfig and the doctor use it like a saved row, but it is never written to `config.json`; `GET /git/hosts` lists it with `from` set to the plugin's name. A row the user saved for the same host replaces it, and switching the plugin off removes it. A pattern such as `*gitlab*` gives none.
 
 Values end up in a git config file and on command lines, so a control character anywhere is refused when the manifest is read. Transport (SSH, known hosts, token storage, the managed gitconfig) stays in xherd. A plugin's options page (Settings → Plugins) lists the hosts that use it.
 

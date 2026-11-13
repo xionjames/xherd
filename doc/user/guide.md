@@ -21,6 +21,16 @@ You give xherd a ticket. It creates an **agent**: a git worktree and a branch fo
 
 ⌘K (Ctrl+K) jumps to an agent by name. The bell in the bar keeps the latest notifications.
 
+## Welcome, plugins and git access
+
+The **Welcome** screen opens by itself the first time, in six steps: Welcome, Plugins, Commit identity, Git access, Connect & check, Ready. Everything it sets is in Settings later.
+
+**Plugins** (Welcome step 2 and Settings → Plugins show the same view) lists the plugins that are on under *Enabled* and the others under *Available*, each grouped by kind: coding agents, Git providers, issue trackers, languages. A search box filters them by name, description or kind. Each card has a switch, its state (Off, Ready, Not ready with the first failing check, Not logged in), *Log in* when the plugin has a login, and *Options*, which opens the plugin's settings, checks, login terminal and, for a language, its versions in a dialog; the cards do not move. In Settings the open dialog is in the URL (`#/settings?tab=plugins&plugin=github`). One coding agent must stay on; Git providers and issue trackers may all be off. In Welcome an enabled plugin that is not logged in (Claude Code, GitHub) holds the step until you log in or switch it off. When a login ends, the checks run again.
+
+**Git** has two parts. *Commit identity* and *Git access* are how git commits, fetches and pushes, for any host. A **Git provider** plugin (GitHub through `gh`, GitLab through `glab`) is the optional, host-specific part: pull requests, comments, logins. A provider that is on and logged in also gives git access for its own host with nothing more to set: GitHub, logged in, covers `github.com` through `gh`. Git access shows such a row marked *From the GitHub plugin*, with its check result; it is never saved, *Edit* turns it into an ordinary row you change, and a row you save for the same host replaces it. Switching the provider off removes it. With no provider on and no hosts, configure access by hand (an SSH key or a token per host) or switch a provider on.
+
+**Connect & check** runs the setup checks again each time you enter it, so a login done in an earlier step shows at once.
+
 ## Creating an agent
 
 **New agent** (or `xherd new`) asks for:
@@ -122,7 +132,7 @@ Approving the ship gate tells the agent to push its branch and open a draft PR; 
 - Every `prPollMinutes` (default 5) xherd reads the PR's state, checks, mergeability and reviewers. You are notified when checks start failing, pass again, or the branch conflicts with its base. A merged or closed PR finishes the agent (*done*).
 - New review comments start a **PR round**: the agent reads them (as untrusted text), decides per comment (fix, reply, skip) and stops at the `pr-review` gate. In the *Pull request* tab you can change any decision. Approving posts the replies, then the agent makes the fixes as tasks, pushes and goes back to watching.
 
-GitHub works through `gh`, GitLab through `glab`. Bitbucket has git access only, no pull request support yet.
+GitHub works through `gh`, GitLab through `glab`. Bitbucket has git access only, no pull request support yet. With no Git provider on, xherd neither looks up nor follows pull requests.
 
 ## Tickets
 
