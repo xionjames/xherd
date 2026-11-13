@@ -5,7 +5,7 @@
   import { FitAddon } from '@xterm/addon-fit';
   import { WebglAddon } from '@xterm/addon-webgl';
   import { Unicode11Addon } from '@xterm/addon-unicode11';
-  import { WebLinksAddon } from '@xterm/addon-web-links';
+  import { urlLinks } from '../lib/termLinks';
 
   // Links (typed URLs and OSC 8 hyperlinks) open in a new tab, http(s) only.
   const open = (_e: MouseEvent, uri: string) => {
@@ -44,7 +44,7 @@
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon(open));
+    const linked = term.registerLinkProvider(urlLinks(term, open));
     term.loadAddon(new Unicode11Addon());
     term.unicode.activeVersion = '11'; // widths of newer glyphs (the runtime's logo)
     term.open(host);
@@ -79,6 +79,7 @@
       ro.disconnect();
       input.dispose();
       picked.dispose();
+      linked.dispose();
       resized.dispose();
       ws.onclose = null;
       ws.close();
