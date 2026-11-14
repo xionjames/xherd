@@ -107,11 +107,18 @@
     catch (err) { showError('Could not change the model', err); }
   }
 
-  async function act(action: string, label: string) {
+  async function act(action: string, label: string, body?: unknown) {
     menu = false;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`)).agent); }
+    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`, body)).agent); }
     catch (e) { showError(label, e); }
   }
+
+  // Worktree removal (R12–R14): by hand only, the branch and record stay.
+  let removeWithCancel = $state(false);
+  let confirmRemove = $state(false);
+  const removed = $derived(agent.worktreeRemovedAt != null);
+  const canRemove = $derived(finished && !removed && !!agent.workdir);
+  function openCancel() { menu = false; removeWithCancel = false; confirmCancel = true; }
 </script>
 
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
@@ -161,7 +168,7 @@
       {:else if live}
         <button class="btn" onclick={() => act('pause', 'Could not pause')}><Icon name="pause" />Pause</button>
       {/if}
-      {#if agent.workdir}
+      {#if agent.workdir && !removed}
         <div class="anchor">
           <button class="btn" aria-haspopup="menu" aria-expanded={openMenu} onclick={toggleOpen}>Open in…</button>
           {#if openMenu}
@@ -186,8 +193,10 @@
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>
         {#if menu}
           <div class="pop" role="menu">
-            <button role="menuitem" class="btn ghost danger" disabled={agent.status === 'cancelled' || agent.status === 'done'}
-              onclick={() => { menu = false; confirmCancel = true; }}>Cancel agent…</button>
+            <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel agent…</button>
+            {#if canRemove}
+              <button role="menuitem" class="btn ghost danger" onclick={() => { menu = false; confirmRemove = true; }}>Remove worktree…</button>
+            {/if}
           </div>
         {/if}
       </div>
@@ -211,18 +220,38 @@
     {/each}
   </nav>
   <div class="apanel">
-    {#if Panel}
+    {#if removed && tab?.worktree}
+      <Callout tone="plain">The worktree was removed {agoText(agent.worktreeRemovedAt ?? 0)}. The branch <span class="mono">{agent.branch}</span> is kept.</Callout>
+    {:else if Panel}
       {#key agent.id}<Panel {agent} />{/key}
     {/if}
   </div>
 </div>
 
+{#snippet removeWarning()}
+  Uncommitted changes and the spec documents in <span class="mono">.xherd/</span> are deleted. The branch <span class="mono">{agent.branch}</span> and the agent's record are kept.
+{/snippet}
+
 {#if confirmCancel}
   <Dialog title="Cancel {agent.name}?" onclose={() => (confirmCancel = false)}>
-    <p>The agent's session ends and it will not run again. Its worktree and branch stay.</p>
+    <p>The agent's session ends and it will not run again. Its branch stays{removeWithCancel ? '' : ', and so does its worktree'}.</p>
+    {#if agent.workdir && !removed}
+      <label class="f chk"><input type="checkbox" bind:checked={removeWithCancel} /> Also remove the worktree</label>
+      {#if removeWithCancel}<p class="hint">{@render removeWarning()}</p>{/if}
+    {/if}
     {#snippet actions()}
       <button class="btn ghost" onclick={() => (confirmCancel = false)}>Keep it</button>
-      <button class="btn danger" onclick={() => { confirmCancel = false; act('cancel', 'Could not cancel'); }}>Cancel agent</button>
+      <button class="btn danger" onclick={() => { confirmCancel = false; act('cancel', 'Could not cancel', removeWithCancel ? { removeWorktree: true } : undefined); }}>Cancel agent</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if confirmRemove}
+  <Dialog title="Remove the worktree of {agent.name}?" onclose={() => (confirmRemove = false)}>
+    <p>{@render removeWarning()}</p>
+    {#snippet actions()}
+      <button class="btn ghost" onclick={() => (confirmRemove = false)}>Keep it</button>
+      <button class="btn danger" onclick={() => { confirmRemove = false; act('remove-worktree', 'Could not remove the worktree'); }}>Remove worktree</button>
     {/snippet}
   </Dialog>
 {/if}
