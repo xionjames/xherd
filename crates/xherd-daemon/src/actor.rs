@@ -87,6 +87,9 @@ pub enum UserAction {
         text: Option<String>,
     },
     MemoryDismiss,
+    /// Check the agent's pull request now (issue #131): the automatic poll
+    /// without its guards, refused `no_pr` without a PR URL.
+    CheckPr,
     Get,
 }
 
@@ -852,6 +855,38 @@ impl Actor {
         };
         // Set here so a slow host is not asked again by the next tick.
         self.agent.pr_polled_at = Some(now);
+        self.spawn_pr_poll(host, wd, url);
+    }
+
+    /// The user's check-now button (issue #131): the same snapshot, local
+    /// mergeability, comments and `on_pr_poll` handling as the automatic
+    /// poll (R2), with only `pr_url`, a workdir and a host required (R3).
+    fn check_pr(&mut self) -> Result<(), ActionError> {
+        let Some(url) = self.agent.pr_url.clone() else {
+            return Err(refuse(
+                "no_pr",
+                format!("{} has no pull request to check", self.agent.name),
+            ));
+        };
+        let (Some(host), Ok(wd)) = (self.host(), self.workdir()) else {
+            return Err(refuse(
+                "no_pr",
+                format!(
+                    "no host plugin to check the pull request of {}",
+                    self.agent.name
+                ),
+            ));
+        };
+        // Set here so a slow host is not asked twice and the next scheduled
+        // poll waits a full interval from it.
+        self.agent.pr_polled_at = Some(self.now());
+        self.spawn_pr_poll(host, wd, url);
+        Ok(())
+    }
+
+    /// Ask the host for the PR snapshot and comments (slow: spawned, back as
+    /// `WorkResult::PrPoll`, which `on_pr_poll` applies).
+    fn spawn_pr_poll(&mut self, host: Arc<xherd_plugin::host::Host>, wd: PathBuf, url: String) {
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
         let (git, agent_base) = (self.env.git.clone(), self.agent.base.clone());
         tokio::spawn(async move {
@@ -1912,6 +1947,10 @@ impl Actor {
                     let _ = self.env.store.put_memory_declined(&repo, "AGENTS.md").await;
                 }
                 "user.memory-dismiss"
+            }
+            UserAction::CheckPr => {
+                self.check_pr()?;
+                "user.pr-check"
             }
             UserAction::SetMode { mode, launch } => {
                 if self.agent.permission_mode == Some(*mode) {
