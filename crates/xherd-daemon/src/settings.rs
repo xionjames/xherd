@@ -359,7 +359,7 @@ impl Daemon {
     }
 
     /// Names must exist, and every kind that has plugins keeps one on, except
-    /// the optional ones (trackers, Git providers).
+    /// the optional ones (trackers, Git providers, Herd views).
     fn check_disabled(&self, off: &[String]) -> Result<(), ActionError> {
         if let Some(n) = off.iter().find(|n| self.plugins.get(n).is_none()) {
             return Err(bad(format!("no plugin named {n}")));
@@ -370,9 +370,10 @@ impl Daemon {
             .map(|p| format!("{:?}", p.manifest.kind))
             .collect();
         for k in kinds {
-            // Having no issue tracker or Git provider is fine (Git access
-            // works without one); every other kind needs one.
-            if k == "Tracker" || k == "Host" {
+            // Having no issue tracker, Git provider or view plugin is fine
+            // (Git access works without a provider, the Herd has its own
+            // views); every other kind needs one.
+            if k == "Tracker" || k == "Host" || k == "View" {
                 continue;
             }
             let any_on = self

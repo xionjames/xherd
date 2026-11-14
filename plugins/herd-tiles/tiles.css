@@ -1,0 +1,12 @@
+/* Herd view "Tiles": only what the kit's classes (.card, .pill, .dot…) lack. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+
+/* A tile is a button (it opens the agent), drawn as a card. */
+.x button.tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 12px; color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.x button.tile:hover { border-color: var(--fence-strong); }
+
+.name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tile .row { flex-wrap: nowrap; max-width: 100%; }

@@ -37,6 +37,7 @@ describe('plugin search', () => {
     expect(names('languages')).toEqual(['uv']);
     expect(names('toolchain')).toEqual(['uv']);
     expect(names('git provider')).toEqual(['github', 'gitlab', 'bitbucket']);
+    expect(matches(plugin('herd-tiles', 'view'), 'herd view')).toBe(true);
   });
 
   it('an empty query matches everything, nonsense nothing', () => {
@@ -55,6 +56,11 @@ describe('last plugin on', () => {
   it('Git providers and issue trackers are optional', () => {
     expect(lastOn(all[2], all)).toBe(false);
     expect(lastOn(all[5], all)).toBe(false);
+  });
+
+  it('Herd views are optional: a lone view plugin can be switched off', () => {
+    const tiles = plugin('herd-tiles', 'view', { label: 'Tiles' });
+    expect(lastOn(tiles, [...all, tiles])).toBe(false);
   });
 
   it('a plugin that is off is never the last one on', () => {

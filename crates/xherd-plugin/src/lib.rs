@@ -19,6 +19,7 @@ pub mod manifest;
 pub mod runtime;
 pub mod toolchain;
 pub mod tracker;
+pub mod view;
 
 pub use manifest::{Check, Kind, MANIFEST_FILE, Manifest, Setting};
 
@@ -39,6 +40,7 @@ pub fn builtins() -> Vec<Manifest> {
         include_str!("../../../plugins/uv/xherd-plugin.json"),
         include_str!("../../../plugins/go/xherd-plugin.json"),
         include_str!("../../../plugins/rustup/xherd-plugin.json"),
+        include_str!("../../../plugins/herd-tiles/xherd-plugin.json"),
     ]
     .into_iter()
     .map(|json| Manifest::parse(json).expect("built-in plugin manifest is valid (tested)"))

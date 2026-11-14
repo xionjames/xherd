@@ -1,0 +1,10 @@
+{
+  "name": "herd-tiles",
+  "kind": "view",
+  "version": "0.1.0",
+  "label": "Tiles",
+  "description": "A Herd view: one tile per active agent, grouped by repository. A small example of a view plugin.",
+  "data": {
+    "view": { "entry": "index.html" }
+  }
+}

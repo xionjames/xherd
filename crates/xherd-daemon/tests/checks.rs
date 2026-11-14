@@ -163,6 +163,41 @@ async fn git_providers_may_all_be_off() {
     assert!(e.message.contains("runtime"), "{}", e.message);
 }
 
+/// R7: view plugins are optional too: the only one may be switched off.
+#[tokio::test]
+async fn view_plugins_may_all_be_off() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let dir = paths.plugins().join("my-view");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        r#"{"name": "my-view", "kind": "view", "version": "0.1.0",
+            "data": {"view": {"entry": "index.html"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("index.html"), "<p>view</p>").unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    o.builtin_plugins.retain(|m| m.name == "claude-code");
+    let d = Daemon::start(paths, o).await.unwrap();
+    assert!(
+        d.plugin_enabled("my-view"),
+        "the external view plugin loaded"
+    );
+
+    let patch = serde_json::from_value(json!({"disabledPlugins": ["my-view"]})).unwrap();
+    d.save_config(patch).unwrap();
+    assert!(!d.plugin_enabled("my-view"));
+}
+
 /// R7, R8: a Git provider that is on gives its host an implicit Git access
 /// row (in `GET /git/hosts`, and the managed gitconfig in the container only;
 /// never saved); a saved
