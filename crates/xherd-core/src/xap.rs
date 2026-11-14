@@ -148,6 +148,28 @@ impl XapCmd {
                 | XapCmd::IssueAdd { .. }
         )
     }
+
+    /// Moves the flow on (stage, gate, tasks, commits, PR): ends a session
+    /// held open by Ask (#121). Questions, handoffs, issues and memory
+    /// proposals are what an agent does while only answering.
+    pub fn is_flow_work(&self) -> bool {
+        match self {
+            XapCmd::StageEnter { .. }
+            | XapCmd::GateOpen { .. }
+            | XapCmd::TasksSync { .. }
+            | XapCmd::TaskStart { .. }
+            | XapCmd::TaskDone { .. }
+            | XapCmd::TaskBlock { .. }
+            | XapCmd::CommitPropose { .. }
+            | XapCmd::CommitDone { .. }
+            | XapCmd::CommitDrop { .. }
+            | XapCmd::PrOpened { .. } => true,
+            XapCmd::Ask { .. }
+            | XapCmd::HandoffWritten { .. }
+            | XapCmd::IssueAdd { .. }
+            | XapCmd::MemoryPropose { .. } => false,
+        }
+    }
 }
 
 /// A refused call: a stable code and a one-line message (xap.md §1.2).
@@ -197,6 +219,33 @@ mod tests {
         }))
         .unwrap();
         assert!(t.cmd.is_report_only());
+    }
+
+    #[test]
+    fn flow_work() {
+        let cmd = |v: serde_json::Value| -> XapCmd { serde_json::from_value(v).unwrap() };
+        for c in [
+            json!({"cmd": "stage.enter", "args": {"stage": "implement"}}),
+            json!({"cmd": "gate.open", "args": {"stage": "spec"}}),
+            json!({"cmd": "tasks.sync", "args": {}}),
+            json!({"cmd": "task.start", "args": {"id": "T01"}}),
+            json!({"cmd": "task.done", "args": {"id": "T01", "evidence": "ok"}}),
+            json!({"cmd": "task.block", "args": {"id": "T01", "reason": "x"}}),
+            json!({"cmd": "commit.propose", "args": {"id": "C01", "subject": "s", "files": ["a"]}}),
+            json!({"cmd": "commit.done", "args": {"id": "C01", "sha": "abc"}}),
+            json!({"cmd": "commit.drop", "args": {"id": "C01"}}),
+            json!({"cmd": "pr.opened", "args": {"url": "https://x/pull/1"}}),
+        ] {
+            assert!(cmd(c.clone()).is_flow_work(), "{c}");
+        }
+        for c in [
+            json!({"cmd": "ask", "args": {"text": "why?"}}),
+            json!({"cmd": "handoff.written", "args": {}}),
+            json!({"cmd": "issue.add", "args": {"title": "x", "severity": "minor"}}),
+            json!({"cmd": "memory.propose", "args": {"reason": "r"}}),
+        ] {
+            assert!(!cmd(c.clone()).is_flow_work(), "{c}");
+        }
     }
 
     #[test]
