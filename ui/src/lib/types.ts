@@ -263,3 +263,28 @@ export interface GitFinding {
   detail: string;
   fix?: CheckFix;
 }
+
+/** Settings → Open in, as saved in `config.json` (schema 3). */
+export interface OpenInConfig {
+  hidden?: string[];
+  terminal?: string;
+  links?: { id: string; label: string; url: string }[];
+  droppedCommands?: string[];
+}
+
+/** What the terminal handler's installer reported (`<data>/terminal-handler.json`). */
+export interface HandlerRecord {
+  version: number;
+  xherd: string;
+  os: string;
+  terminals: string[];
+  root: string;
+  at: number;
+}
+
+/** `GET /open-in`. */
+export interface OpenInView {
+  links: { id: string; label: string }[];
+  native: boolean;
+  handler: { shipped: number; installed: HandlerRecord | null; updateAvailable: boolean; rootChanged: boolean };
+}

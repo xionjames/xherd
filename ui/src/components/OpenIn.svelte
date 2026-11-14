@@ -1,66 +1,66 @@
 <script lang="ts">
-  // Settings → Open in (R-706, R-707): which entries the agent's Open in menu
-  // shows, the terminal app, and your own commands. Your commands run on this
-  // computer through `xherd companion`, which asks you there before running
-  // one it has not seen (or one you changed), so this page alone can never
-  // make your computer run something new.
-  import { get, put } from '../lib/api';
+  // Settings → Open in (R-706, R-707): the terminal on this computer (an
+  // `xherd-term://` link handler installed once), your own app links, and
+  // which entries the agent's Open in menu shows. Every entry is a link the
+  // browser opens: this page can never make your computer run a command.
+  import { get, post, put } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { setup, loadConfig } from '../lib/setup.svelte';
-  import { line, words } from '../lib/argv';
-  import type { ConfigView } from '../lib/types';
+  import { agoText } from '../lib/format';
+  import { badLinkUrl, handlerState, installText, linkId } from '../lib/openIn';
+  import type { ConfigView, OpenInConfig, OpenInView } from '../lib/types';
   import Panel from './Panel.svelte';
   import Callout from './Callout.svelte';
   import SaveBar from './SaveBar.svelte';
 
-  type Command = { id: string; label: string; argv: string[] };
-  type OpenIn = { hidden?: string[]; terminal?: string; commands?: Command[] };
+  type Link = { id: string; label: string; url: string };
   // A new row's id follows its name; a saved one keeps its id (hidden marks use it).
-  type Row = { id: string; label: string; cmd: string; fresh?: boolean };
-  type View = { links: { id: string; label: string }[]; companion: { apps: string[]; features: string[]; terminals?: string[] } | null };
+  type Row = Link & { fresh?: boolean };
 
-  // Every terminal the companion knows (config::TERMINAL_APPS). The list shows
-  // the ones the companion found on its computer, or all of them without one.
+  // Every terminal the handler knows (config::TERMINAL_APPS). The list shows
+  // the ones the handler found on its computer, or all of them before that.
   const TERMINALS: Record<string, string> = {
     terminal: 'Terminal (macOS)', iterm: 'iTerm (macOS)', ghostty: 'Ghostty', konsole: 'Konsole', 'gnome-terminal': 'GNOME Terminal',
     kitty: 'kitty', alacritty: 'Alacritty', wezterm: 'WezTerm', 'xfce4-terminal': 'Xfce Terminal', foot: 'foot', xterm: 'xterm',
     'xdg-terminal-exec': 'xdg-terminal-exec (Linux)', 'x-terminal-emulator': 'x-terminal-emulator (Debian alternatives)',
   };
 
-  let view = $state<View | null>(null);
+  let view = $state<OpenInView | null>(null);
   let hidden = $state<string[]>([]);
   let terminal = $state('');
   let rows = $state<Row[]>([]);
   let saving = $state(false);
+  let installing = $state(false);
+  let output = $state<{ ok: boolean; text: string } | null>(null);
+  let copied = $state('');
 
-  const saved = $derived(((setup.config?.config.openIn ?? {}) as OpenIn));
+  const saved = $derived((setup.config?.config.openIn ?? {}) as OpenInConfig);
+  const dropped = $derived(saved.droppedCommands ?? []);
   function fill() {
     hidden = [...(saved.hidden ?? [])];
     terminal = saved.terminal ?? '';
-    rows = (saved.commands ?? []).map((c) => ({ id: c.id, label: c.label, cmd: line(c.argv) }));
+    rows = (saved.links ?? []).map((l) => ({ ...l }));
   }
   let filled = false;
   $effect(() => { if (setup.config && !filled) { filled = true; fill(); } });
   $effect(() => { if (!setup.config) loadConfig().catch((e) => showError('Could not load settings', e)); });
   async function refresh() {
-    try { view = await get<View>('/open-in'); } catch (e) { showError('Could not read the Open-in entries', e); }
+    try { view = await get<OpenInView>('/open-in'); } catch (e) { showError('Could not read the Open-in entries', e); }
   }
   $effect(() => { refresh(); });
 
-  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'command';
-  function idFor(label: string, self: Row) {
-    const base = slug(label);
-    let id = base;
-    for (let n = 2; rows.some((r) => r !== self && r.id === id); n++) id = `${base}-${n}`;
-    return id;
-  }
-  const commands = $derived<Command[]>(rows.map((r) => ({ id: r.id, label: r.label.trim(), argv: words(r.cmd) })));
-  const bad = $derived(commands.some((c) => !c.label || !c.argv[0]));
-  const body = $derived<OpenIn>({ hidden, ...(terminal ? { terminal } : {}), commands });
-  const norm = (o: OpenIn) => JSON.stringify({ h: [...(o.hidden ?? [])].sort(), t: o.terminal ?? '', c: o.commands ?? [] });
+  const links = $derived<Link[]>(rows.map((r) => ({ id: r.id, label: r.label.trim(), url: r.url.trim() })));
+  const urlError = (u: string) => (u.trim() ? badLinkUrl(u) : null);
+  const bad = $derived(links.some((l) => !l.label || !l.url || badLinkUrl(l.url)));
+  // droppedCommands goes back as saved: the daemon lets it only shrink, and Dismiss clears it.
+  const body = $derived<OpenInConfig>({ hidden, ...(terminal ? { terminal } : {}), links, droppedCommands: dropped });
+  const norm = (o: OpenInConfig) => JSON.stringify({ h: [...(o.hidden ?? [])].sort(), t: o.terminal ?? '', l: o.links ?? [] });
   const dirty = $derived(norm(body) !== norm(saved));
 
-  const found = $derived((view?.companion?.terminals ?? []).filter((t) => t in TERMINALS));
+  const record = $derived(view?.handler.installed ?? null);
+  const hstate = $derived(view ? handlerState(view) : null);
+  const how = $derived(view ? installText(location.origin, view.native) : null);
+  const found = $derived((record?.terminals ?? []).filter((t) => t in TERMINALS));
   const termOptions = $derived.by(() => {
     const ids = found.length ? [...found] : Object.keys(TERMINALS);
     if (terminal && !ids.includes(terminal)) ids.push(terminal);
@@ -68,19 +68,26 @@
   });
 
   const entries = $derived([
-    ...(view?.links ?? []).map((l) => ({ id: l.id, label: l.label, where: 'link' })),
-    { id: 'terminal', label: 'Terminal (shell in the worktree)', where: 'companion' },
-    ...(view?.companion?.apps ?? []).map((a) => ({ id: `companion:${a}`, label: a, where: 'companion app' })),
-    ...commands.filter((c) => c.label).map((c) => ({ id: `cmd:${c.id}`, label: c.label, where: 'your command' })),
+    ...(view?.links ?? []).map((l) => ({ id: l.id, label: l.label, where: 'editor link' })),
+    { id: 'terminal', label: 'Terminal', where: hstate === 'missing' || !hstate ? 'shown once the terminal is set up on this computer' : 'your terminal app' },
+    ...links.filter((l) => l.label).map((l) => ({ id: `link:${l.id}`, label: l.label, where: 'your link' })),
   ]);
   function toggle(id: string) {
     hidden = hidden.includes(id) ? hidden.filter((h) => h !== id) : [...hidden, id];
   }
+  function addLink() {
+    const r: Row = { id: '', label: '', url: '', fresh: true };
+    r.id = linkId('link', rows.map((x) => x.id));
+    rows = [...rows, r];
+  }
 
+  async function saveOpenIn(o: OpenInConfig) {
+    setup.config = await put<ConfigView>('/config', { openIn: o });
+  }
   async function save() {
     saving = true;
     try {
-      setup.config = await put<ConfigView>('/config', { openIn: body });
+      await saveOpenIn(body);
       fill();
     } catch (e) {
       showError('Could not save the Open-in settings', e);
@@ -88,52 +95,109 @@
       saving = false;
     }
   }
+  // Dismiss saves at once, with what is saved: edits on the page stay unsaved.
+  async function dismiss() {
+    try { await saveOpenIn({ ...saved, droppedCommands: [] }); } catch (e) { showError('Could not dismiss the notice', e); }
+  }
+
+  async function install(uninstall: boolean) {
+    installing = true;
+    output = null;
+    try {
+      const r = await post<{ ok: boolean; output: string }>('/open-in/terminal-handler/install', uninstall ? { uninstall: true } : {});
+      output = { ok: r.ok, text: r.output };
+    } catch (e) {
+      showError(uninstall ? 'Could not remove the terminal handler' : 'Could not install the terminal handler', e);
+    } finally {
+      installing = false;
+      refresh();
+    }
+  }
+  async function copy(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = text;
+      setTimeout(() => { if (copied === text) copied = ''; }, 2000);
+    } catch (e) {
+      showError('Could not copy (select the command and copy it by hand)', e);
+    }
+  }
 </script>
 
 <div class="secs">
-  <Panel title="Companion" hint="Opens the terminal and runs commands on this computer.">
+  <Panel title="Terminal on this computer" hint="Open in → Terminal opens your own terminal app in the agent's worktree. It needs a one-time setup on this computer and keeps nothing running.">
     {#if !view}
       <p class="muted">Loading…</p>
-    {:else if view.companion}
-      <Callout tone="ok">Connected{view.companion.apps.length ? `, offering ${view.companion.apps.join(', ')}` : ''}.</Callout>
-      {#if !view.companion.features.includes('terminal')}
-        <Callout tone="info">This companion is older than the terminal and your commands: update xherd on this computer and start it again.</Callout>
-      {/if}
     {:else}
-      <Callout tone="info">Not running. In a terminal on this computer, run <span class="mono">xherd companion</span> and leave it open.</Callout>
+      {#if hstate === 'missing'}
+        <Callout tone="info">Not set up on this computer yet.</Callout>
+      {:else if record && view.handler.rootChanged}
+        <Callout tone="need">Set up for another worktrees folder (<span class="mono">{record.root}</span>): install again.</Callout>
+      {:else if record && hstate === 'update'}
+        <Callout tone="need">A newer version of the handler is available: install again.</Callout>
+      {:else if record}
+        <Callout tone="ok">Set up ({record.os === 'mac' ? 'macOS' : 'Linux'}, {agoText(record.at)}).</Callout>
+      {/if}
+
+      {#if how?.native}
+        <div class="row">
+          <button class="btn" disabled={installing} onclick={() => install(false)}>{installing ? 'Working…' : hstate === 'missing' ? 'Install' : hstate === 'update' ? 'Update' : 'Install again'}</button>
+          {#if hstate !== 'missing'}<button class="btn ghost" disabled={installing} onclick={() => install(true)}>Remove</button>{/if}
+        </div>
+        <p class="hint">xherd runs the installer as you, on this computer. It adds a small script and registers the <span class="mono">xherd-term://</span> link type.</p>
+        {#if output}
+          {#if !output.ok}<p class="err">The installer failed:</p>{/if}
+          {#if output.text}<pre class="out mono">{output.text}</pre>{/if}
+        {/if}
+      {:else if how}
+        <p class="hint">Run this in a terminal on this computer (not in the container), then Check again:</p>
+        <div class="cmdline">
+          <code class="mono">{how.install}</code>
+          <button class="btn sm" onclick={() => copy(how.install)}>{copied === how.install ? 'Copied' : 'Copy'}</button>
+        </div>
+        <p class="hint">To remove it:</p>
+        <div class="cmdline">
+          <code class="mono">{how.uninstall}</code>
+          <button class="btn sm" onclick={() => copy(how.uninstall)}>{copied === how.uninstall ? 'Copied' : 'Copy'}</button>
+        </div>
+        <button class="btn sm" onclick={refresh}>Check again</button>
+      {/if}
+
+      <label class="f">Terminal app
+        <select bind:value={terminal}>
+          <option value="">Default for this computer{found.length ? ` (${TERMINALS[found[0]]})` : ''}</option>
+          {#each termOptions as [v, l] (v)}<option value={v}>{l}{found.length && !found.includes(v) ? ' (not found)' : ''}</option>{/each}
+        </select>
+        <span class="hint">{found.length ? 'Found on this computer by the installer.' : 'Set up the terminal to list the ones installed here.'} One that is not installed falls back to the default.</span></label>
+      <p class="hint">Your browser asks before each launch. In Chrome, "Always allow" removes the question for this site.</p>
     {/if}
-    <p class="hint">Links (VS Code, Cursor, Zed) need no companion. Your own commands do, and the first time each one runs, or after you change it, the companion asks you in its window before running it. Apps listed in <span class="mono">~/.config/xherd/open.json</span> on this computer run without asking.</p>
-    <button class="btn sm" onclick={refresh}>Check again</button>
   </Panel>
 
-  <Panel title="Terminal" hint="Open in → Terminal opens a shell in the agent's worktree (inside the container in Docker mode).">
-    <label class="f">Terminal app
-      <select bind:value={terminal}>
-        <option value="">Default for this computer{found.length ? ` (${TERMINALS[found[0]]})` : ''}</option>
-        {#each termOptions as [v, l] (v)}<option value={v}>{l}{found.length && !found.includes(v) ? ' (not found)' : ''}</option>{/each}
-      </select>
-      <span class="hint">{found.length ? 'Found on the companion\'s computer.' : view?.companion ? 'This companion does not list its terminals: update xherd there.' : 'Start the companion to list the terminals installed on this computer.'}
-        The command is built into xherd (<span class="mono">xherd shell &lt;agent&gt;</span>), so it never needs confirming.</span></label>
-  </Panel>
+  {#if dropped.length}
+    <Callout tone="info">Your commands ({dropped.join(', ')}) were removed: xherd no longer runs commands on your computer. If the app has a link type (like <span class="mono">idea://</span>), add it under Your links.
+      <button class="btn sm" onclick={dismiss}>Dismiss</button></Callout>
+  {/if}
 
-  <Panel title="Your commands" hint="Programs to open the worktree with. {'{dir}'} is the worktree, {'{agent}'} the agent's name.">
+  <Panel title="Your links" hint="Apps on your computer that open by a link, like idea://open?file={'{dir}'}. {'{dir}'} is the worktree, {'{agent}'} the agent's name.">
     {#each rows as r, i (i)}
-      <div class="cmd">
+      {@const err = urlError(r.url)}
+      <div class="lnk">
         <label class="f">Name
-          <input bind:value={r.label} oninput={() => { if (r.fresh) r.id = idFor(r.label, r); }} placeholder="IntelliJ IDEA" /></label>
-        <label class="f">Command
-          <input class="mono" bind:value={r.cmd} placeholder={'idea {dir}'} /></label>
-        <button class="btn ghost sm" aria-label={`Remove ${r.label || 'command'}`} onclick={() => (rows = rows.filter((x) => x !== r))}>Remove</button>
+          <input bind:value={r.label} oninput={() => { if (r.fresh) r.id = linkId(r.label, rows.filter((x) => x !== r).map((x) => x.id)); }} placeholder="IntelliJ IDEA" /></label>
+        <label class="f">URL
+          <input class="mono" bind:value={r.url} placeholder={'idea://open?file={dir}'} aria-invalid={!!err} /></label>
+        <button class="btn ghost sm" aria-label={`Remove ${r.label || 'link'}`} onclick={() => (rows = rows.filter((x) => x !== r))}>Remove</button>
+        {#if err}<p class="err">The URL {err}.</p>{/if}
       </div>
     {/each}
-    {#if bad}<p class="err">Each command needs a name and a program.</p>{/if}
-    <p class="hint">No shell: quotes keep spaces, nothing else is interpreted. Use <span class="mono">open -a "App Name" {'{dir}'}</span> for a Mac app.</p>
+    {#if bad}<p class="err">Each link needs a name and an app URL.</p>{/if}
+    <p class="hint">Only links to apps: web pages, files and browser links are refused.</p>
     {#snippet foot()}
-      <button class="btn" onclick={() => { const r: Row = { id: '', label: '', cmd: '', fresh: true }; r.id = idFor('command', r); rows = [...rows, r]; }}>Add a command</button>
+      <button class="btn" onclick={addLink}>Add a link</button>
     {/snippet}
   </Panel>
 
-  <Panel title="In the menu" hint="What the agent page's Open in… shows. Companion entries also need the companion running." flush>
+  <Panel title="In the menu" hint="What the agent page's Open worktree in… shows." flush>
     <ul class="list">
       {#each entries as e (e.id)}
         <li>
@@ -150,6 +214,11 @@
 <SaveBar dirty={dirty && !bad} busy={saving} onsave={save} ondiscard={fill} />
 
 <style>
-  .cmd { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; align-items: end; margin-bottom: 10px; }
-  @media (max-width: 760px) { .cmd { grid-template-columns: 1fr; } }
+  .row { display: flex; gap: 8px; margin: 10px 0 4px; }
+  .cmdline { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .cmdline code { flex: 1; min-width: 0; padding: 6px 8px; background: var(--well); border: 1px solid var(--fence-soft); border-radius: var(--r-ctl); overflow-x: auto; white-space: nowrap; }
+  .out { max-height: 220px; overflow: auto; padding: 8px; background: var(--well); border: 1px solid var(--fence-soft); border-radius: var(--r-ctl); white-space: pre-wrap; }
+  .lnk { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; align-items: end; margin-bottom: 10px; }
+  .lnk .err { grid-column: 1 / -1; margin: 0; }
+  @media (max-width: 760px) { .lnk { grid-template-columns: 1fr; } }
 </style>
