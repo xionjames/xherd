@@ -55,6 +55,18 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
         .route("/api/v1/open-in", get(open_in_view))
+        .route(
+            "/api/v1/open-in/terminal-handler.sh",
+            get(terminal_handler_script),
+        )
+        .route(
+            "/api/v1/open-in/terminal-handler",
+            post(terminal_handler_report),
+        )
+        .route(
+            "/api/v1/open-in/terminal-handler/install",
+            post(terminal_handler_install),
+        )
         .route("/api/v1/repos", get(repos))
         .route("/api/v1/repos/resolve", post(resolve_repo))
         .route("/api/v1/tickets/resolve", post(resolve_ticket))
@@ -780,9 +792,74 @@ async fn open_targets(
     Ok(Json(json!({"targets": d.open_targets(&id).await?})))
 }
 
-/// Settings → Open in (R-706): the link entries.
+/// Settings → Open in (R-706): the link entries and the handler's state.
 async fn open_in_view(_: User, State(d): State<Daemon>) -> Json<Value> {
     Json(d.open_in_view())
+}
+
+/// The handler's installer (R-707), for `curl … | sh` on the user's
+/// computer; it reports back to the address the request came to.
+async fn terminal_handler_script(
+    _: User,
+    State(d): State<Daemon>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if host.is_empty()
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '[' | ']' | '-'))
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_host",
+            "the Host header is not a plain host name",
+        ));
+    }
+    let script =
+        xherd_daemon::open_in::handler_script(&d.worktrees_root(), &format!("http://{host}"))
+            .map_err(|m| ApiError::new(StatusCode::BAD_REQUEST, "bad_config", m))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        script,
+    )
+        .into_response())
+}
+
+/// The installer's report: what it installed, or `{"installed": false}`.
+async fn terminal_handler_report(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<xherd_daemon::open_in::HandlerReport>,
+) -> ApiResult<Json<Value>> {
+    let rec = r
+        .into_record(d.clock.now())
+        .map_err(|m| ApiError::new(StatusCode::BAD_REQUEST, "bad_report", m))?;
+    d.record_handler(rec.as_ref()).map_err(ApiError::internal)?;
+    Ok(Json(json!({"ok": true})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HandlerInstall {
+    #[serde(default)]
+    uninstall: bool,
+}
+
+/// Native only: the daemon installs (or removes) the handler itself.
+async fn terminal_handler_install(
+    _: User,
+    State(d): State<Daemon>,
+    Json(b): Json<HandlerInstall>,
+) -> ApiResult<Json<Value>> {
+    let (ok, output) = d.install_terminal_handler(b.uninstall).await?;
+    Ok(Json(json!({"ok": ok, "output": output})))
 }
 
 // ---- git access ----------------------------------------------------------------

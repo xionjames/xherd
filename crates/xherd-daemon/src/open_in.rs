@@ -41,6 +41,74 @@ pub struct HandlerRecord {
     pub at: i64,
 }
 
+/// What the installer reports (`POST /open-in/terminal-handler`): a record,
+/// or `{"installed": false}` after an uninstall.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum HandlerReport {
+    Removed {
+        installed: bool,
+    },
+    Installed {
+        version: u32,
+        xherd: String,
+        os: String,
+        terminals: Vec<String>,
+        root: String,
+    },
+}
+
+impl HandlerReport {
+    /// Checks the report and turns it into the record to keep (`None`:
+    /// remove it). `at` is now.
+    pub fn into_record(self, at: i64) -> Result<Option<HandlerRecord>, String> {
+        match self {
+            HandlerReport::Removed { installed: false } => Ok(None),
+            HandlerReport::Removed { installed: true } => {
+                Err("an installed handler reports its version".into())
+            }
+            HandlerReport::Installed {
+                version,
+                xherd,
+                os,
+                terminals,
+                root,
+            } => {
+                let plain = |what: &str, v: &str| {
+                    if v.is_empty() || v.len() > 4096 || v.chars().any(char::is_control) {
+                        Err(format!("bad {what}"))
+                    } else {
+                        Ok(())
+                    }
+                };
+                if version < 1 {
+                    return Err("bad version".into());
+                }
+                plain("xherd", &xherd)?;
+                plain("root", &root)?;
+                if os != "mac" && os != "linux" {
+                    return Err("os must be mac or linux".into());
+                }
+                if terminals.len() > 16
+                    || terminals
+                        .iter()
+                        .any(|t| !xherd_core::config::TERMINAL_APPS.contains(&t.as_str()))
+                {
+                    return Err("unknown terminal".into());
+                }
+                Ok(Some(HandlerRecord {
+                    version,
+                    xherd,
+                    os,
+                    terminals,
+                    root,
+                    at,
+                }))
+            }
+        }
+    }
+}
+
 /// The link handler (`xherd-open-terminal`), shipped inside the installer.
 pub const HANDLER_SH: &str = include_str!("terminal-handler.sh");
 /// The installer template that `handler_script` renders.
@@ -240,6 +308,54 @@ impl Daemon {
             .join("worktrees")
             .to_string_lossy()
             .into_owned()
+    }
+
+    /// `POST /open-in/terminal-handler/install` (native only): runs the
+    /// installer as the user the daemon runs as, reporting to this daemon on
+    /// loopback. Returns whether it succeeded and the end of its output.
+    pub async fn install_terminal_handler(
+        &self,
+        uninstall: bool,
+    ) -> Result<(bool, String), ActionError> {
+        if self.sandbox {
+            return Err(ActionError {
+                code: "native_only",
+                message: "xherd runs in a container: run the command from Settings → Open in \
+                          on your computer"
+                    .into(),
+            });
+        }
+        let report = format!("http://127.0.0.1:{}", self.config.port);
+        let script = handler_script(&self.worktrees_root(), &report).map_err(|m| ActionError {
+            code: "bad_config",
+            message: m,
+        })?;
+        let op = if uninstall { "uninstall" } else { "install" };
+        let mut cmd = xherd_core::exec::Cmd::new(["sh", "-s", op])
+            .stdin(script)
+            .timeout(std::time::Duration::from_secs(60));
+        // Not in the allowlist, but xdg-mime and terminal detection read them.
+        for k in [
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "TERMINAL",
+            "XDG_CURRENT_DESKTOP",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+        ] {
+            if let Ok(v) = std::env::var(k) {
+                cmd = cmd.env(k, v);
+            }
+        }
+        let out = xherd_core::exec::run(cmd).await.map_err(|e| ActionError {
+            code: "io",
+            message: format!("could not run the installer: {e}"),
+        })?;
+        let text = format!("{}{}", out.stdout_str(), out.stderr);
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines[lines.len().saturating_sub(20)..].join("\n");
+        Ok((out.success(), tail))
     }
 
     /// `GET /open-in`, for Settings → Open in: the link entries this daemon
