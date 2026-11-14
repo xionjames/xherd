@@ -152,7 +152,9 @@
     </div>
     <div class="row">
       <StatusPill {agent} />
-      {#if agent.status === 'paused' || agent.status === 'parked' || agent.status === 'error' || agent.status === 'watching'}
+      {#if agent.askHold}
+        <button class="btn" title="End the session you started with Ask" onclick={() => act('finish', 'Could not finish')}><Icon name="pause" />Finish</button>
+      {:else if agent.status === 'paused' || agent.status === 'parked' || agent.status === 'error' || agent.status === 'watching'}
         <button class="btn" onclick={() => act('resume', 'Could not resume')}><Icon name="play" />Resume</button>
       {:else if live && agent.pauseRequestedAt}
         <button class="btn" disabled title="Waiting for the agent to write its handoff note"><Icon name="pause" />Pausing…</button>
