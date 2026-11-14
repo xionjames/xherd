@@ -10,7 +10,7 @@ You give xherd a ticket. It creates an **agent**: a git worktree and a branch fo
 
 | Screen | What it is for |
 |---|---|
-| **Herd** (home) | Every agent: status, stage, progress, tasks. Agents waiting for you are on top. *By stage* puts them in columns by the role of their current stage. *Pause all* is the kill switch |
+| **Herd** (home) | Every agent: status, stage, progress, tasks. Agents waiting for you are on top. *By stage* puts them in columns by the role of their current stage; *Tiles* (a view plugin) and other [Herd view plugins](../extend/plugins.md#herd-view-plugins) add more layouts. *Pause all* is the kill switch |
 | **Agent page** | One agent: the your-call band on top, then tabs (below) |
 | **Board** | Every stage and task of every agent as cards in Pending / In progress / Done, plus your TODOs. Swimlanes by agent or repository, filters for one agent, one repository, or only what needs you |
 | **Needs attention** (✋ and a count in the bar) | Agents waiting for you, TODOs that are due, and approvals xherd made for you that you have not looked at |
