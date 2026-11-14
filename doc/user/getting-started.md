@@ -122,7 +122,7 @@ To update, install the newer package and restart `xherd daemon`.
 3. **Create an agent** from the UI (**New agent**) or the CLI:
 
    ```sh
-   xherd new PROJ-123 --repo https://github.com/you/project "Add login with passkeys"
+   xherd new passkeys --ticket PROJ-123 --repo https://github.com/you/project "Add login with passkeys"
    ```
 
    `--repo` takes a URL (cloned once into `<workspace>/repos/`) or a local path (in Docker, one inside the workspace). The agent writes a spec and stops for your approval: the [user guide](guide.md) takes it from there.

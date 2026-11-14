@@ -1103,7 +1103,7 @@ impl Actor {
         let (tx, generation, branch) = (
             self.tx.clone(),
             self.agent.generation,
-            self.agent.name.clone(),
+            self.agent.branch.clone(),
         );
         let settings = self.env.settings.get();
         let hosts = self.env.hosts.clone();

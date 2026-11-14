@@ -3,7 +3,7 @@
   "kind": "tracker",
   "version": "0.1.0",
   "label": "GitLab Issues",
-  "description": "Turns group/project#12 in the UI into a link to the GitLab issue, and shows the ticket and its comments (the ticket key is the issue number, with an optional GL- prefix).",
+  "description": "Turns group/project#12 in the UI into a link to the GitLab issue, and shows the ticket and its comments (the ticket is the issue URL, or its number with an optional # or GL- prefix).",
   "settings": [
     {
       "key": "baseUrl",
@@ -29,7 +29,8 @@
           "url": "{baseUrl}/{1}/-/issues/{2}"
         }
       ],
-      "key": "^(?:GL-)?(\\d+)$",
+      "key": "^(?:GL-|#)?(\\d+)$",
+      "url": "^https://[A-Za-z0-9.-]+(?::\\d+)?(?:/[A-Za-z0-9_.-]+)+/-/issues/(\\d+)/?(?:[?#].*)?$",
       "hosts": [
         "*gitlab*"
       ]

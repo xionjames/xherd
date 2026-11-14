@@ -5,6 +5,7 @@
   // count in each header shows where agents pile up. Cards outlined with
   // --gate need you.
   import StatusPill from './StatusPill.svelte';
+  import TicketPill from './TicketPill.svelte';
   import { app } from '../lib/store.svelte';
   import { href } from '../lib/router.svelte';
   import { flowOf, STAGE_LABEL } from '../lib/flow';
@@ -47,7 +48,7 @@
       <h3>{label} <span class="hint num">{list.length}</span></h3>
       {#each list as { a } (a.id)}
         <a class="card tk" class:needs={needsYou(a)} href={href(`/agent/${a.name}`)}>
-          <span class="mono"><b>{a.name}</b></span>
+          <span class="mono"><b>{a.name}</b> <TicketPill ticket={a.ticket} link={false} /></span>
           <StatusPill agent={a} />
           <span class="hint">{repoName(a)} · {agoText(a.statusSince)}</span>
         </a>

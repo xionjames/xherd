@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn a_poll_keeps_checks_reviewers_and_merge_state() {
-        let mut a = Agent::new("A", "A", 1);
+        let mut a = Agent::new("A", 1);
         let mut s = snap(PrState::Open, Mergeable::Unknown, &[("t", "pass")]);
         s.reviewers = vec![Reviewer {
             name: "bob".into(),
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn failing_then_passing_notifies_once_each() {
-        let mut a = Agent::new("A", "A", 1);
+        let mut a = Agent::new("A", 1);
         let pass = snap(PrState::Open, Mergeable::Yes, &[("t", "pass")]);
         assert_eq!(a.apply_pr(&pass), [], "passing from the start is not news");
         let fail = snap(
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn conflict_is_said_once_until_it_clears() {
-        let mut a = Agent::new("A", "A", 1);
+        let mut a = Agent::new("A", 1);
         let bad = snap(PrState::Open, Mergeable::No, &[]);
         assert_eq!(a.apply_pr(&bad), [Event::Conflict]);
         assert_eq!(a.apply_pr(&bad), []);
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn comments_are_new_once_and_never_ours() {
-        let mut a = Agent::new("A", "A", 1);
+        let mut a = Agent::new("A", 1);
         let all = vec![
             comment("1", "please rename"),
             comment("2", &format!("done {MARKER}")),
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn merged_or_closed_finishes() {
-        let mut a = Agent::new("A", "A", 1);
+        let mut a = Agent::new("A", 1);
         let s = snap(PrState::Merged, Mergeable::Unknown, &[("t", "fail")]);
         assert_eq!(a.apply_pr(&s), [Event::Finished(PrState::Merged)]);
         assert_eq!(a.pr_state, Some(PrState::Merged));

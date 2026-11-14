@@ -84,9 +84,12 @@ fn trusting(dir: &Path) -> String {
         .to_string()
 }
 
+/// An agent named after its ticket key, lower-cased: its branch is the key.
 fn req(t: &T, key: &str) -> NewAgent {
     NewAgent {
-        ticket_key: key.into(),
+        name: key.to_ascii_lowercase(),
+        ticket: Some(key.into()),
+        ticket_key: None,
         slug: None,
         repo: t.repo.path().to_string_lossy().into_owned(),
         base: None,
@@ -112,11 +115,11 @@ fn repo_name(t: &T) -> String {
 async fn creates_worktree_and_private_folder() {
     let t = setup().await;
     let mut r = req(&t, "sc-1");
-    r.slug = Some("login".into());
+    r.name = "login".into();
     let a: Agent = t.d.new_agent(r).await.unwrap();
     assert_eq!(
-        (a.name.as_str(), a.ticket_key.as_str()),
-        ("SC-1-login", "SC-1")
+        (a.name.as_str(), a.ticket_key(), a.branch.as_str()),
+        ("login", Some("SC-1"), "SC-1-login")
     );
     assert_eq!(
         (a.pack.as_deref(), a.flow.as_deref()),
@@ -132,7 +135,7 @@ async fn creates_worktree_and_private_folder() {
         t.ws.path()
             .join("worktrees")
             .join(repo_name(&t))
-            .join("SC-1-login");
+            .join("login");
     assert_eq!(a.workdir.as_deref(), Some(wt.to_string_lossy().as_ref()));
     let head = git(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]);
     assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), "SC-1-login");
@@ -146,7 +149,7 @@ async fn creates_worktree_and_private_folder() {
     let j: serde_json::Value =
         serde_json::from_slice(&std::fs::read(wt.join(".xherd/agent.json")).unwrap()).unwrap();
     assert_eq!(
-        (j["id"].as_str(), j["ticketKey"].as_str()),
+        (j["id"].as_str(), j["ticket"]["key"].as_str()),
         (Some(a.id.as_str()), Some("SC-1"))
     );
     assert!(
@@ -176,7 +179,7 @@ async fn refusals_leave_nothing_behind() {
             .path()
             .join("worktrees")
             .join(repo_name(&t))
-            .join("SC-2")
+            .join("sc-2")
             .exists()
     );
     assert!(
@@ -235,7 +238,7 @@ async fn starts_claude_code_with_hooks() {
         t.ws.path()
             .join("worktrees")
             .join(repo_name(&t))
-            .join("SC-5");
+            .join("sc-5");
     let a = t.d.new_agent(req(&t, "SC-5")).await.unwrap();
     // The default mode (accept edits) is passed explicitly, never the runtime's own default.
     assert_eq!(
@@ -272,7 +275,7 @@ async fn starts_claude_code_with_hooks() {
             assert!(
                 t.fake
                     .calls()
-                    .contains(&"start SC-5 claude --permission-mode acceptEdits".to_string())
+                    .contains(&"start sc-5 claude --permission-mode acceptEdits".to_string())
             );
             let ev = t.d.store.events(&a.id, 10).await.unwrap();
             assert!(ev.iter().any(|e| e.kind == "session-started"));
@@ -452,12 +455,12 @@ async fn version_files_wrap_the_launch_in_the_toolchain_step() {
         t.ws.path()
             .join("worktrees")
             .join(repo_name(&t))
-            .join("SC-7");
+            .join("sc-7");
     for _ in 0..200 {
-        if let Some(c) = t.fake.calls().iter().find(|c| c.starts_with("start SC-7 ")) {
+        if let Some(c) = t.fake.calls().iter().find(|c| c.starts_with("start sc-7 ")) {
             assert_eq!(
                 c,
-                "start SC-7 xherd toolchain exec -- claude --permission-mode acceptEdits"
+                "start sc-7 xherd toolchain exec -- claude --permission-mode acceptEdits"
             );
             let plan: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(wt.join(".xherd/toolchain.json")).unwrap())
@@ -540,7 +543,9 @@ async fn refuses_without_a_runtime_plugin() {
         .unwrap();
     assert!(git.success());
     let r = NewAgent {
-        ticket_key: "SC-6".into(),
+        name: "sc-6".into(),
+        ticket: None,
+        ticket_key: None,
         slug: None,
         repo: repo.to_string_lossy().into_owned(),
         base: None,
@@ -594,7 +599,7 @@ async fn url_uses_and_fetches_xherds_clone() {
     r.repo = "git@git.example.com:acme/app".into();
     let a = t.d.new_agent(r).await.unwrap();
     assert_eq!(a.repo.as_deref(), Some(clone.to_string_lossy().as_ref()));
-    assert!(t.ws.path().join("worktrees/app/SC-7").is_dir());
+    assert!(t.ws.path().join("worktrees/app/sc-7").is_dir());
 
     let known = t.d.known_repos().await.unwrap();
     assert_eq!(known.len(), 1);
@@ -673,4 +678,46 @@ async fn the_runtime_comes_from_the_request_then_the_profile_then_settings() {
         serde_json::from_value(serde_json::json!({"defaultRuntime": "nope"})).unwrap(),
     );
     assert!(bad.unwrap_err().message.contains("defaultRuntime"));
+}
+
+/// A ticket URL gets its key from the tracker that reads it, and the key
+/// prefixes the branch (#114); a URL no tracker reads stays a plain link.
+#[tokio::test]
+async fn a_ticket_url_names_the_branch() {
+    let t = setup().await;
+    let mut r = req(&t, "x");
+    r.name = "fix-login".into();
+    r.ticket = Some("https://github.com/acme/api/issues/12".into());
+    let a = t.d.new_agent(r).await.unwrap();
+    assert_eq!(a.ticket_key(), Some("#12"));
+    assert_eq!(a.branch, "12-fix-login");
+    assert_eq!(
+        a.next_prompt.as_deref(),
+        Some("/xherd:feature https://github.com/acme/api/issues/12 add login")
+    );
+    let v =
+        t.d.resolve_ticket_input("https://github.com/acme/api/issues/12", None)
+            .await
+            .unwrap();
+    assert_eq!(
+        (&v["key"], &v["tracker"]),
+        (
+            &serde_json::json!("#12"),
+            &serde_json::json!("github-issues")
+        )
+    );
+    // Jira reads only URLs of its own site, which is not set here.
+    let v =
+        t.d.resolve_ticket_input("https://acme.atlassian.net/browse/PAY-4", None)
+            .await
+            .unwrap();
+    assert_eq!(
+        (&v["key"], &v["tracker"]),
+        (&serde_json::Value::Null, &serde_json::Value::Null)
+    );
+    let v = t.d.resolve_ticket_input("pay-4", None).await.unwrap();
+    assert_eq!(
+        (&v["key"], &v["tracker"]),
+        (&serde_json::json!("PAY-4"), &serde_json::json!("jira"))
+    );
 }

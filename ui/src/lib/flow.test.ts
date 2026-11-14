@@ -7,7 +7,7 @@ describe('steps', () => {
     pack: 'xherd', flow: 'feature',
     stages: ['spec', 'design', 'tasks', 'implement'].map((id) => ({ id, role: id as never, class: 'routine', gate: true })),
   };
-  const a = (over: Partial<Agent>): Agent => ({ id: 'x', name: 'x', ticketKey: 'X', status: 'waiting-input', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
+  const a = (over: Partial<Agent>): Agent => ({ id: 'x', name: 'x', branch: 'x', status: 'waiting-input', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
   it('marks stages never entered as skipped', () => {
     const s = steps(a({ stage: 'tasks', visitedStages: ['spec', 'tasks'], gate: { kind: 'question', text: '?' } }), f);
     expect(s.map((x) => x.state)).toEqual(['ok', 'skip', 'now', 'todo']);
@@ -56,7 +56,7 @@ describe('stageNow', () => {
     ],
   };
   const a = (over: Partial<Agent>): Agent =>
-    ({ id: 'x', name: 'x', ticketKey: 'X', status: 'idle', createdAt: 0, statusSince: 0, lastActivity: 0, pack: 'xherd', flow: 'feature', ...over });
+    ({ id: 'x', name: 'x', branch: 'x', status: 'idle', createdAt: 0, statusSince: 0, lastActivity: 0, pack: 'xherd', flow: 'feature', ...over });
   it('names the stage and what waits at its gate', () => {
     expect(stageNow(a({ stage: 'ship', gate: { kind: 'docs', stage: 'ship', role: 'ship', files: [{ path: '.xherd/spec/pr.md', sha256: 's' }] } }), [f]))
       .toEqual({ name: 'Ship', waits: 'pr.md' });

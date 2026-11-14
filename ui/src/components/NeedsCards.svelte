@@ -4,6 +4,7 @@
   // Every card has the same height: the text is cut at three lines and the
   // details at one (the full text is in the tooltip and on the agent page).
   import AgentDot from './AgentDot.svelte';
+  import TicketPill from './TicketPill.svelte';
   import { href, go } from '../lib/router.svelte';
   import { ago, repoName, waitText } from '../lib/format';
   import type { Agent } from '../lib/types';
@@ -45,7 +46,7 @@
   {#each agents as a (a.id)}
     <article class="card need cb tight">
       <div class="row">
-        <AgentDot agent={a} /><a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a>
+        <AgentDot agent={a} /><a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
         <span class="grow"></span><span class="muted num">{ago(a.statusSince)}</span>
       </div>
       <p class="wrap-any nytext" class:mono={a.gate?.kind === 'commit'} title={waitText(a)}>{waitText(a)}</p>

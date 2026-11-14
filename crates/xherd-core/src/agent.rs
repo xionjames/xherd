@@ -30,13 +30,36 @@ pub struct MemoryProposal {
     pub at: Millis,
 }
 
+/// An agent's ticket (#114): what the user gave, a key (`PAY-412`, `#12`)
+/// or an issue URL, with the key found from the URL by a tracker plugin.
+/// A URL no tracker reads keeps no key and is only shown as a link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ticket {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// An https URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Agent {
     pub id: String,
-    /// `<KEY>` or `<KEY>-<slug>`; also the tmux session and branch name.
+    /// A lowercase slug (#114): the tmux session, the worktree folder and
+    /// what the UI shows. Unique.
     pub name: String,
-    pub ticket_key: String,
+    /// The ticket the agent works on, if any: a key, a URL, or both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<Ticket>,
+    /// The git branch: `<KEY>-<name>` with a ticket key, else the name
+    /// (`new::branch_name`). Agents from before the field use their name.
+    #[serde(default)]
+    pub branch: String,
+    /// Before #114 the ticket key was a field of its own; `upgrade` moves it.
+    #[serde(default, rename = "ticketKey", skip_serializing)]
+    legacy_ticket_key: Option<String>,
     pub status: Status,
     pub created_at: Millis,
     pub status_since: Millis,
@@ -176,11 +199,14 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn new(name: &str, ticket_key: &str, now: Millis) -> Agent {
+    /// A new agent with no ticket; its branch is its name.
+    pub fn new(name: &str, now: Millis) -> Agent {
         Agent {
             id: new_id(),
             name: name.to_string(),
-            ticket_key: ticket_key.to_string(),
+            ticket: None,
+            branch: name.to_string(),
+            legacy_ticket_key: None,
             status: Status::Queued,
             created_at: now,
             status_since: now,
@@ -234,6 +260,43 @@ impl Agent {
         }
     }
 
+    /// An agent as stored before #114: the ticket key moves into `ticket`
+    /// and the branch was the name. Run on every agent read from the store.
+    pub fn upgrade(mut self) -> Agent {
+        if let Some(k) = self.legacy_ticket_key.take()
+            && self.ticket.is_none()
+            && !k.is_empty()
+        {
+            self.ticket = Some(Ticket {
+                key: Some(k),
+                url: None,
+            });
+        }
+        if self.branch.is_empty() {
+            self.branch = self.name.clone();
+        }
+        self
+    }
+
+    /// The ticket's short id (`PAY-412`, `#12`), if it has one.
+    pub fn ticket_key(&self) -> Option<&str> {
+        self.ticket.as_ref()?.key.as_deref()
+    }
+
+    /// The ticket as handed to the agent's first command: its URL, else its
+    /// key, else empty.
+    pub fn ticket_ref(&self) -> &str {
+        self.ticket
+            .as_ref()
+            .and_then(|t| t.url.as_deref().or(t.key.as_deref()))
+            .unwrap_or("")
+    }
+
+    /// What time is booked to (spec §16.4): the ticket key, else the name.
+    pub fn work_item(&self) -> &str {
+        self.ticket_key().unwrap_or(&self.name)
+    }
+
     /// Add the current stage to `visited_stages` if it is new.
     pub fn note_stage(&mut self) {
         if let Some(s) = &self.stage
@@ -263,5 +326,32 @@ impl Agent {
             }
         }
         Some(from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_agent_stored_before_names_keeps_its_ticket_and_branch() {
+        let mut v = serde_json::to_value(Agent::new("SC-1-login", 1)).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("branch");
+        o.insert("ticketKey".into(), "SC-1".into());
+        let a: Agent = serde_json::from_value(v).unwrap();
+        let a = a.upgrade();
+        assert_eq!(a.branch, "SC-1-login");
+        assert_eq!(a.ticket_key(), Some("SC-1"));
+        assert_eq!((a.ticket_ref(), a.work_item()), ("SC-1", "SC-1"));
+        let out = serde_json::to_value(&a).unwrap();
+        assert!(out.get("ticketKey").is_none());
+        assert_eq!(out["ticket"], serde_json::json!({"key": "SC-1"}));
+
+        let plain = Agent::new("refund-retry", 1).upgrade();
+        assert_eq!(
+            (plain.ticket_ref(), plain.work_item()),
+            ("", "refund-retry")
+        );
     }
 }

@@ -69,7 +69,7 @@ async fn backup_and_restore_on_another_machine() {
     .unwrap();
     std::fs::write(p1.secrets(), r#"{"git":{"token":"nope"}}"#).unwrap();
     let store = Store::open(&p1.db(), &p1.backups()).unwrap();
-    let mut a = Agent::new("ag1", "T-1", 1);
+    let mut a = Agent::new("ag1", 1);
     a.status = Status::Running;
     a.workdir = Some(wt1.to_string_lossy().into_owned());
     a.repo = Some(repo1.to_string_lossy().into_owned());

@@ -53,6 +53,16 @@ export function linkFor(key: string): string | null {
   return s.length === 1 && s[0].href ? s[0].href : null;
 }
 
+/** An agent's ticket as a pill: the short id (else the URL's host) and the
+ *  link (the ticket URL when https, else the tracker link for its key). */
+export function ticketPill(t: { key?: string; url?: string } | undefined): { label: string; href: string | null } | null {
+  if (!t || (!t.key && !t.url)) return null;
+  const url = t.url?.startsWith('https://') ? t.url : null;
+  let label = t.key ?? '';
+  if (!label && url) { try { label = new URL(url).host; } catch { label = 'ticket'; } }
+  return { label: label || 'ticket', href: url ?? (t.key ? linkFor(t.key) : null) };
+}
+
 /** Links in already sanitised HTML: text nodes outside `a`, `code` and `pre`. */
 export function linkify(html: string): string {
   if (!compiled.length || typeof DOMParser === 'undefined') return html;

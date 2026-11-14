@@ -59,12 +59,13 @@ enum Cmd {
     Docker(DockerCmd),
     /// Is the daemon up?
     Status,
-    /// Create an agent: worktree, branch and `.xherd/` for a ticket.
+    /// Create an agent: worktree, branch and `.xherd/`.
     New {
-        /// Ticket key (upper-cased).
-        key: String,
+        /// Agent name: lowercase letters, digits and `-` (also the tmux session and worktree folder).
+        name: String,
+        /// Ticket: an issue URL or a key (PAY-412, #12). Its key prefixes the branch.
         #[arg(long)]
-        slug: Option<String>,
+        ticket: Option<String>,
         /// Flow of the built-in pack, or `none` (default `feature`).
         #[arg(long)]
         flow: Option<String>,
@@ -352,8 +353,8 @@ fn main() -> ExitCode {
         Cmd::Ls => ls(),
         Cmd::Install { runtime, pack } => install(runtime, pack),
         Cmd::New {
-            key,
-            slug,
+            name,
+            ticket,
             flow,
             repo,
             base,
@@ -365,8 +366,10 @@ fn main() -> ExitCode {
         } => new_agent(
             repo,
             xherd_core::new::NewAgent {
-                ticket_key: key,
-                slug,
+                name,
+                ticket,
+                ticket_key: None,
+                slug: None,
                 repo: String::new(),
                 base,
                 flow,

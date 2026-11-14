@@ -27,7 +27,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 
 | Command | Does |
 |---|---|
-| `xherd new <KEY> [PROMPT]` | Create an agent: worktree, branch and `.xherd/` for a ticket |
+| `xherd new <NAME> [PROMPT]` | Create an agent: worktree, branch and `.xherd/`. The name is lowercase letters, digits and `-` (up to 41), unique; it is the tmux session and the worktree folder |
 | `xherd ls` | List agents, with the open gate or the PR URL (session ids cut to 8 characters) |
 | `xherd diff <agent>` | The open commit proposal's diff; at a ship gate the branch as it will be pushed; otherwise every uncommitted change |
 | `xherd approve <agent> [--reason TEXT]` | Approve the open gate (documents or commit) as they are on disk now; the reason goes to the ledger |
@@ -47,7 +47,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 
 | Flag | Meaning |
 |---|---|
-| `--slug` | Short name used in the branch and worktree |
+| `--ticket` | The ticket: an issue URL (`https://acme.atlassian.net/browse/PAY-412`, `https://github.com/acme/api/issues/12`) or a key (`PAY-412`, `#12`). Its key starts the branch name (`PAY-412-<name>`, `12-<name>`); without one the branch is the name. A URL no enabled tracker reads is kept as a link only |
 | `--flow` | A flow of the built-in pack, or `none` for a plain session with your prompt (default `feature`) |
 | `--repo` | A local path, or a URL cloned once into `<workspace>/repos/<host>/<path>`. Default: the current directory |
 | `--base` | Base branch (default: the repository's default) |

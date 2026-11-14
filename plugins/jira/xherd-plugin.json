@@ -3,7 +3,7 @@
   "kind": "tracker",
   "version": "0.1.0",
   "label": "Jira",
-  "description": "Turns Jira ticket keys (PAY-412) into links to your Jira site, and shows the ticket and its comments through Atlassian's CLI (acli).",
+  "description": "Turns Jira ticket keys (PAY-412) into links to your Jira site, reads ticket URLs of that site, and shows the ticket and its comments through Atlassian's CLI (acli).",
   "settings": [
     {
       "key": "baseUrl",
@@ -24,7 +24,8 @@
           "url": "{baseUrl}/browse/{0}"
         }
       ],
-      "key": "^([A-Z][A-Z0-9]{1,9}-\\d+)$"
+      "key": "^([A-Z][A-Z0-9]{1,9}-\\d+)$",
+      "url": "{baseUrl}/browse/([A-Z][A-Z0-9]{1,9}-\\d+)/?(?:[?#].*)?$"
     }
   },
   "requires": [

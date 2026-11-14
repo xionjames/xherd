@@ -90,10 +90,16 @@ export type Gate =
   | { kind: 'pr-replies'; count: number }
   | { kind: 'question'; text: string };
 
+/** An agent's ticket (#114): a key (`PAY-412`, `#12`), an issue URL, or both. */
+export interface Ticket { key?: string; url?: string }
+
 export interface Agent {
   id: string;
+  /** Lowercase slug: what the UI shows, the tmux session and worktree folder. */
   name: string;
-  ticketKey: string;
+  ticket?: Ticket;
+  /** `<KEY>-<name>` with a ticket key, else the name. */
+  branch: string;
   status: Status;
   createdAt: number;
   statusSince: number;

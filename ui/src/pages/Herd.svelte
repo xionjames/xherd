@@ -2,6 +2,7 @@
   // Overview: "Needs you" (oldest first) then every agent (spec §17.2), as a
   // list or in columns by stage (R-210, `?layout=stages`).
   import AgentDot from '../components/AgentDot.svelte';
+  import TicketPill from '../components/TicketPill.svelte';
   import NeedsCards from '../components/NeedsCards.svelte';
   import Mini from '../components/Mini.svelte';
   import TaskBar from '../components/TaskBar.svelte';
@@ -97,7 +98,7 @@
                   <div class="row" style="flex-wrap:nowrap">
                     <AgentDot agent={a} />
                     <div class="wrap-any">
-                      <a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a>
+                      <a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
                       <div class="hint">{repoName(a)} · {a.flow ?? 'no workflow'}</div>
                     </div>
                   </div>
@@ -111,7 +112,7 @@
                 </td>
                 <td class="hide-sm"><Mini agent={a} /></td>
                 <td class="hide-sm"><TaskBar agent={a} /></td>
-                <td class="hide-sm mono muted">{a.workdir ? `← ${shortBase(a)}` : 'not created'}</td>
+                <td class="hide-sm mono muted">{a.workdir ? `${a.branch} ← ${shortBase(a)}` : 'not created'}</td>
                 <td class="num muted r">{ago(a.lastActivity)}</td>
               </tr>
             {/each}

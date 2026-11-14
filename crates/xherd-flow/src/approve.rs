@@ -82,7 +82,7 @@ pub fn next_command(
     let cmd = pack.command(
         runtime,
         tpl,
-        &[("key", &a.ticket_key), ("prompt", ""), ("commit", commit)],
+        &[("key", a.ticket_ref()), ("prompt", ""), ("commit", commit)],
     )?;
     Ok(Some((cmd, enters)))
 }
@@ -202,7 +202,7 @@ mod tests {
     }
 
     fn agent() -> Agent {
-        let mut a = Agent::new("SC-1", "SC-1", 0);
+        let mut a = Agent::new("SC-1", 0);
         a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         a

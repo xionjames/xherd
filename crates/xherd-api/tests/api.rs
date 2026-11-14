@@ -40,7 +40,7 @@ async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
     .save(&paths.config())
     .unwrap();
     let d = Daemon::start(paths, o).await.unwrap();
-    let mut a = Agent::new("SC-1", "SC-1", 1);
+    let mut a = Agent::new("SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
     let a = d.create_agent(a).await.unwrap();
     for _ in 0..100 {
@@ -395,37 +395,75 @@ async fn create_agent_endpoint() {
     run(&["commit", "-q", "--allow-empty", "-m", "base"]);
     let repo = repo.to_string_lossy().into_owned();
 
-    let (s, v) = call(
-        app.clone(),
-        post(json!({"ticketKey": "bad key", "repo": repo})),
-    )
-    .await;
-    assert_eq!(
-        (s, v["code"].clone()),
-        (StatusCode::UNPROCESSABLE_ENTITY, json!("bad_key"))
-    );
+    for (body, code) in [
+        (json!({"name": "Bad Name", "repo": repo}), "bad_name"),
+        (
+            json!({"name": "x", "ticket": "bad key", "repo": repo}),
+            "bad_ticket",
+        ),
+        (json!({"repo": repo}), "name_required"),
+    ] {
+        let (s, v) = call(app.clone(), post(body)).await;
+        assert_eq!(
+            (s, v["code"].clone()),
+            (StatusCode::UNPROCESSABLE_ENTITY, json!(code))
+        );
+    }
     let (s, _) = call(
         app.clone(),
-        post(json!({"ticketKey": "SC-9", "repo": repo, "extra": 1})),
+        post(json!({"name": "sc-9", "repo": repo, "extra": 1})),
     )
     .await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     let (s, v) = call(
         app.clone(),
-        post(json!({"ticketKey": "SC-1", "repo": repo})),
+        post(json!({"name": "refund-retry", "ticket": "sc-9", "repo": repo})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(
+        (
+            &v["agent"]["name"],
+            &v["agent"]["ticket"],
+            &v["agent"]["branch"]
+        ),
+        (
+            &json!("refund-retry"),
+            &json!({"key": "SC-9"}),
+            &json!("SC-9-refund-retry")
+        )
+    );
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"name": "refund-retry", "repo": repo})),
     )
     .await;
     assert_eq!(
         (s, v["code"].clone()),
         (StatusCode::CONFLICT, json!("name_taken"))
     );
+    // The fields from before names (#114) still work for one release.
     let (s, v) = call(
         app.clone(),
-        post(json!({"ticketKey": "sc-9", "repo": repo})),
+        post(json!({"ticketKey": "SC-10", "repo": repo})),
     )
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
-    assert_eq!(v["agent"]["name"], "SC-9");
+    assert_eq!(
+        (&v["agent"]["name"], &v["agent"]["branch"]),
+        (&json!("sc-10"), &json!("SC-10"))
+    );
+    // A ticket URL no tracker reads is kept as a link, with no key.
+    let (s, v) = call(
+        app.clone(),
+        post(json!({"name": "linked", "ticket": "https://example.org/t/1", "repo": repo})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(
+        (&v["agent"]["ticket"], &v["agent"]["branch"]),
+        (&json!({"url": "https://example.org/t/1"}), &json!("linked"))
+    );
 }
 
 #[tokio::test]
@@ -695,7 +733,7 @@ async fn findings_endpoint_reads_review_md() {
     let wt = dir.path().join("wt");
     let spec = wt.join(".xherd/spec");
     std::fs::create_dir_all(&spec).unwrap();
-    let mut b = Agent::new("SC-2", "SC-2", 2);
+    let mut b = Agent::new("SC-2", 2);
     b.launch = Some(vec!["rt".into()]);
     b.workdir = Some(wt.to_string_lossy().into_owned());
     d.create_agent(b).await.unwrap();
