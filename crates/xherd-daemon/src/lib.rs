@@ -577,10 +577,10 @@ impl Daemon {
     /// as it is). Read-only, outside the actor.
     pub async fn memory(&self, who: &str) -> Result<serde_json::Value, ActionError> {
         let a = self.action(who, UserAction::Get).await?;
-        let Some(p) = a.memory_proposal else {
+        let Some(p) = a.memory_proposal.clone() else {
             return Ok(serde_json::json!({"proposal": null}));
         };
-        let wd = std::path::PathBuf::from(a.workdir.unwrap_or_default());
+        let wd = workdir_of(&a)?.to_path_buf();
         let read = |f: &str| std::fs::read_to_string(wd.join(f)).ok();
         let proposed = xherd_flow::xap::doc_path(&p.file, &wd)
             .ok()
@@ -729,11 +729,7 @@ impl Daemon {
     ) -> Result<serde_json::Value, ActionError> {
         let fail = |code: &'static str, message: String| ActionError { code, message };
         let a = self.action(who, UserAction::Get).await?;
-        let wd = a
-            .workdir
-            .as_deref()
-            .map(std::path::Path::new)
-            .ok_or_else(|| fail("no_workspace", format!("{} has no worktree", a.name)))?;
+        let wd = workdir_of(&a)?;
         let git = xherd_git::Git::new("git");
         let git_err = |e: xherd_git::GitError| fail("git", e.to_string());
         let head = git.rev_parse(wd, "HEAD").await.map_err(git_err)?;
@@ -894,7 +890,13 @@ impl Daemon {
             return;
         };
         for a in agents {
-            let Some(wd) = &a.workdir else { continue };
+            let Some(wd) = a
+                .workdir
+                .as_ref()
+                .filter(|_| a.worktree_removed_at.is_none())
+            else {
+                continue;
+            };
             let Ok(text) = std::fs::read_to_string(
                 std::path::Path::new(wd).join(".xherd/ledger/approvals.jsonl"),
             ) else {
@@ -950,6 +952,12 @@ impl Daemon {
 }
 
 pub(crate) fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
+    if a.worktree_removed_at.is_some() {
+        return Err(ActionError {
+            code: "worktree_removed",
+            message: format!("{}'s worktree was removed", a.name),
+        });
+    }
     a.workdir
         .as_deref()
         .map(std::path::Path::new)

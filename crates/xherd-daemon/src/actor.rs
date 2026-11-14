@@ -47,7 +47,12 @@ pub enum UserAction {
     /// pause that still waits for one.
     PauseNow,
     Resume,
-    Cancel,
+    /// `remove_worktree`: once cancelled, also remove the worktree (R12).
+    Cancel {
+        remove_worktree: bool,
+    },
+    /// Remove a `done` or `cancelled` agent's worktree (R13, R14).
+    RemoveWorktree,
     Send {
         text: String,
     },
@@ -1589,6 +1594,12 @@ impl Actor {
     }
 
     fn workdir(&self) -> Result<PathBuf, Refusal> {
+        if self.agent.worktree_removed_at.is_some() {
+            return Err(refusal(
+                "worktree_removed",
+                format!("{}'s worktree was removed", self.agent.name),
+            ));
+        }
         self.agent
             .workdir
             .as_ref()
@@ -1866,6 +1877,12 @@ impl Actor {
                 "user.pause-all"
             }
             UserAction::Resume => {
+                if self.agent.worktree_removed_at.is_some() {
+                    return Err(refuse(
+                        "worktree_removed",
+                        format!("{}'s worktree was removed", self.agent.name),
+                    ));
+                }
                 if self.agent.fire(Trigger::Resume, now).is_none() {
                     return Err(refuse(
                         "not_allowed",
@@ -1875,7 +1892,7 @@ impl Actor {
                 self.prepare_resume(true).await;
                 "user.resume"
             }
-            UserAction::Cancel => {
+            UserAction::Cancel { remove_worktree } => {
                 if next_status(self.agent.status, Trigger::Cancel).is_some() {
                     if self.agent.status.is_live() {
                         self.end_session().await;
@@ -1888,7 +1905,46 @@ impl Actor {
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
+                if *remove_worktree {
+                    // The cancel stands whatever the removal does.
+                    self.log(None, "user.cancel", None).await;
+                    self.commit(before).await;
+                    let before = self.agent.status;
+                    if let Err(e) = self.remove_worktree().await {
+                        self.log(
+                            None,
+                            "worktree-remove-failed",
+                            Some(json!({"error": e.message})),
+                        )
+                        .await;
+                        self.notify(
+                            "error",
+                            format!(
+                                "{} was cancelled, but its worktree could not be removed: {}",
+                                self.agent.name, e.message
+                            ),
+                        );
+                    }
+                    self.commit(before).await;
+                    return Ok(());
+                }
                 "user.cancel"
+            }
+            UserAction::RemoveWorktree => {
+                if !matches!(self.agent.status, Status::Done | Status::Cancelled) {
+                    return Err(refuse(
+                        "not_allowed",
+                        format!(
+                            "{} is {}: only a done or cancelled agent's worktree can be removed",
+                            self.agent.name, self.agent.status
+                        ),
+                    ));
+                }
+                if self.agent.worktree_removed_at.is_some() {
+                    return Ok(());
+                }
+                self.remove_worktree().await?;
+                "user.remove-worktree"
             }
             UserAction::Send { text } => {
                 if self.agent.status == Status::Parked {
@@ -2033,6 +2089,37 @@ impl Actor {
             at: now,
             was_watching: status == Status::Watching,
         });
+        Ok(())
+    }
+
+    /// Remove the agent's worktree (R14): `git worktree remove --force` as the
+    /// agents' user, or `git worktree prune` when the folder is already gone.
+    /// The branch, `workdir` and the record stay. Inline: the user waits.
+    async fn remove_worktree(&mut self) -> Result<(), ActionError> {
+        let (Some(wd), Some(repo)) = (self.agent.workdir.clone(), self.agent.repo.clone()) else {
+            return Err(refuse(
+                "no_workspace",
+                format!("{} has no worktree", self.agent.name),
+            ));
+        };
+        let (wd, repo) = (PathBuf::from(wd), PathBuf::from(repo));
+        let res = if wd.exists() {
+            self.env.git.worktree_remove(&repo, &wd, true).await
+        } else {
+            self.env
+                .git
+                .run(&repo, &["worktree", "prune"])
+                .await
+                .map(drop)
+        };
+        res.map_err(|e| refuse("git", e.to_string()))?;
+        self.agent.worktree_removed_at = Some(self.now());
+        self.log(
+            None,
+            "worktree-removed",
+            Some(json!({"path": wd.to_string_lossy()})),
+        )
+        .await;
         Ok(())
     }
 

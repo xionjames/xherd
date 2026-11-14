@@ -367,7 +367,14 @@ async fn issue_ledger_and_queued_calls() {
 #[tokio::test]
 async fn refused_when_not_live_or_without_flow() {
     let t = setup().await;
-    t.d.action("SC-1", UserAction::Cancel).await.unwrap();
+    t.d.action(
+        "SC-1",
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     let e = xap(&t, "c1", "stage.enter", json!({"stage": "spec"}))
         .await
         .unwrap_err();
@@ -887,7 +894,14 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
 #[tokio::test]
 async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
     let t = setup().await;
-    act(&t, UserAction::Cancel).await.unwrap();
+    act(
+        &t,
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     let a = act(&t, UserAction::Resume).await.unwrap();
     assert_eq!(a.next_prompt.as_deref(), Some("/xherd:resume"));
 
@@ -2912,7 +2926,14 @@ async fn cancel_while_a_pause_waits_for_the_note() {
     session_start(&t, 1).await;
     stop(&t, 2).await;
     act(&t, UserAction::Pause).await.unwrap();
-    let a = act(&t, UserAction::Cancel).await.unwrap();
+    let a = act(
+        &t,
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(a.status, Status::Cancelled);
     assert_eq!(a.pause_requested_at, None);
 }
@@ -3134,6 +3155,13 @@ async fn ask_refusals() {
     assert_eq!((a.status, a.ask_hold.is_some()), (Status::Paused, false));
     assert_eq!(code(act(&t, ask("Again?")).await), "prompt_pending");
     act(&t, UserAction::Resume).await.unwrap();
-    act(&t, UserAction::Cancel).await.unwrap();
+    act(
+        &t,
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");
 }

@@ -100,7 +100,14 @@ async fn slots_queue_and_start_order() {
     // Resume puts SC-1 back in the queue; it waits for SC-2's slot.
     t.d.action("SC-1", UserAction::Resume).await.unwrap();
     assert_eq!(status(&t.d, "SC-1").await, Status::Queued);
-    t.d.action(&b.id, UserAction::Cancel).await.unwrap();
+    t.d.action(
+        &b.id,
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
 }
 
