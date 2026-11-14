@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn a_summary_lists_finished_work_only() {
-        let mut a = Agent::new("PAY-1", "PAY-1", 0);
+        let mut a = Agent::new("PAY-1", 0);
         a.tasks = vec![
             task("T01", "Add the retry", TaskStatus::Done),
             task("T02", "Still open", TaskStatus::Doing),
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn long_lists_and_lines_are_cut_and_an_empty_agent_still_says_something() {
-        let mut a = Agent::new("K-1", "K-1", 0);
+        let mut a = Agent::new("K-1", 0);
         a.tasks = (0..11)
             .map(|i| task(&format!("T{i:02}"), &"x".repeat(300), TaskStatus::Done))
             .collect();
@@ -138,7 +138,7 @@ mod tests {
         assert!(s.contains("- … and 3 more"), "{s}");
         assert!(s.lines().all(|l| l.chars().count() < 170), "{s}");
 
-        let empty = summary(&Agent::new("K-2", "K-2", 0));
+        let empty = summary(&Agent::new("K-2", 0));
         assert_eq!(
             empty,
             "Update from the coding agent K-2:\n\nThe work is on the branch K-2."

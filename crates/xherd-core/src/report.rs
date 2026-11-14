@@ -255,7 +255,7 @@ mod tests {
     }
 
     fn running() -> Agent {
-        let mut a = Agent::new("SC-1", "SC-1", 0);
+        let mut a = Agent::new("SC-1", 0);
         a.fire(Trigger::SlotFree, 0);
         a
     }

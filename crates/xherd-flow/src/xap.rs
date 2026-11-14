@@ -779,7 +779,7 @@ mod tests {
     use xherd_core::domain::{Role, Task};
 
     fn agent() -> Agent {
-        let mut a = Agent::new("SC-1", "SC-1", 0);
+        let mut a = Agent::new("SC-1", 0);
         a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         a
@@ -887,7 +887,7 @@ mod tests {
             "no_docs_gate"
         );
         assert_eq!(
-            gate_docs(&Agent::new("x", "x", 0), None, &gate_open("spec"), wt)
+            gate_docs(&Agent::new("x", 0), None, &gate_open("spec"), wt)
                 .unwrap_err()
                 .code,
             "no_flow"

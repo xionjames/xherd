@@ -35,9 +35,11 @@ The **Welcome** screen opens by itself the first time, in six steps: Welcome, Pl
 
 **New agent** (or `xherd new`) asks for:
 
-- the **ticket key** (`PROJ-123`) and what to do (the prompt);
-- the **repository**: a path inside the workspace, or a URL, cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use;
-- optionally the **base branch**, the **flow** (`feature`, or `none` for a plain session with your prompt and no gates), the **autonomy**, the **tool permissions**, the **runtime** and its **model**.
+- a **name** (`refund-retry`: lowercase letters, digits and `-`), which is what the UI shows, the tmux session and the worktree folder, and the **workflow** (`feature`, or *No workflow* for a plain session with your instructions and no gates);
+- optionally a **ticket**: an issue URL or a key (`PROJ-123`, `#12`). The form says which tracker reads it; its key starts the branch name (`PROJ-123-refund-retry`), and it shows as a label beside the name. A URL no tracker reads is kept as a link;
+- the **repository**: a path inside the workspace, or a URL, cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use, and optionally the **base branch**;
+- the **instructions** (required with *No workflow*);
+- under **More options**: the **autonomy**, the **runtime**, its **model** and the **tool permissions**. Closed, it shows one line with what will apply and whether a profile sets it; it opens by itself once you change one of them, and remembers whether you left it open.
 
 A [repo profile](#repo-profiles) that matches the repository fills in its defaults. If more agents are live than `maxConcurrentAgents`, the new one waits in *queued*.
 
@@ -138,7 +140,7 @@ GitHub works through `gh`, GitLab through `glab`. Bitbucket has git access only,
 
 ## Tickets
 
-With a tracker plugin on (Jira through `acli`, GitHub issues, GitLab issues), ticket keys in documents become links, and the *Ticket* tab reads the ticket and its comments. Once the PR is open, the agent page offers to post a summary on the ticket: xherd drafts it from the finished tasks, commits and the PR, you edit it, and it is posted only when you click *Post to the ticket*.
+With a tracker plugin on (Jira through `acli`, GitHub issues, GitLab issues), ticket keys in documents become links, and the *Ticket* tab reads the agent's ticket and its comments (from the repository the ticket URL names, when it is a URL). Once the PR is open, the agent page offers to post a summary on the ticket: xherd drafts it from the finished tasks, commits and the PR, you edit it, and it is posted only when you click *Post to the ticket*.
 
 ## Shared memory
 
@@ -183,7 +185,7 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | Command | Does |
 |---|---|
 | `xherd ls` | Agents, with the open gate or the PR URL |
-| `xherd new <KEY> --repo <path or URL> "<prompt>"` | Create an agent |
+| `xherd new <name> --repo <path or URL> [--ticket <URL or key>] "<prompt>"` | Create an agent |
 | `xherd diff <agent>` | What you are being asked to approve |
 | `xherd approve <agent>` / `xherd changes <agent> "<comment>"` | Approve, or ask for revisions |
 | `xherd send <agent> "<text>"` | Type into the agent's session (also answers a question) |

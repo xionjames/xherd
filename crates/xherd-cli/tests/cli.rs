@@ -180,7 +180,7 @@ fn end_to_end_replay_and_live_hooks() {
                 &home.path().join("backups"),
             )
             .unwrap();
-            let mut a = xherd_core::Agent::new("SC-1", "SC-1", 1);
+            let mut a = xherd_core::Agent::new("SC-1", 1);
             a.status = xherd_core::Status::Running;
             store.put_agent(&a).await.unwrap();
             store

@@ -78,7 +78,7 @@
     if (!flow) {
       // Flow `none`: the agent is the one unit of work.
       const col: Col = a.status === 'done' || a.status === 'watching' ? 'done' : a.status === 'queued' ? 'pending' : 'doing';
-      return [{ kind: 'stage', key: a.id, lane, col, agent: a, label: a.ticketKey || a.name, tab: 'terminal', hint: 'no workflow', needs: waits }];
+      return [{ kind: 'stage', key: a.id, lane, col, agent: a, label: a.name, tab: 'terminal', hint: 'no workflow', needs: waits }];
     }
     const tasks = a.tasks ?? [];
     const gateTasks = a.gate?.kind === 'commit' ? a.gate.tasks : [];

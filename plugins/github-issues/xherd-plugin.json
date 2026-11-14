@@ -3,7 +3,7 @@
   "kind": "tracker",
   "version": "0.1.0",
   "label": "GitHub Issues",
-  "description": "Turns owner/repo#12 in the UI into a link to the GitHub issue, and shows the ticket and its comments (the ticket key is the issue number, with an optional GH- prefix).",
+  "description": "Turns owner/repo#12 in the UI into a link to the GitHub issue, and shows the ticket and its comments (the ticket is the issue URL, or its number with an optional # or GH- prefix).",
   "data": {
     "tracker": {
       "links": [
@@ -12,7 +12,8 @@
           "url": "https://github.com/{1}/issues/{2}"
         }
       ],
-      "key": "^(?:GH-)?(\\d+)$",
+      "key": "^(?:GH-|#)?(\\d+)$",
+      "url": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/(\\d+)/?(?:[?#].*)?$",
       "hosts": [
         "github.com"
       ]

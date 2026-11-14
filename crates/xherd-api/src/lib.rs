@@ -58,6 +58,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/open-in", get(open_in_view))
         .route("/api/v1/repos", get(repos))
         .route("/api/v1/repos/resolve", post(resolve_repo))
+        .route("/api/v1/tickets/resolve", post(resolve_ticket))
         .route("/api/v1/install", post(install))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
@@ -155,11 +156,10 @@ impl From<ActionError> for ApiError {
             "unknown_agent" => StatusCode::NOT_FOUND,
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             "usage" => StatusCode::BAD_REQUEST,
-            "bad_key" | "bad_slug" | "unknown_flow" | "prompt_required" | "repo_url"
-            | "not_a_repo" | "base_unresolved" | "runtime_unusable" | "runtime_hooks"
-            | "unknown_pack" | "unknown_runtime" | "bad_model" | "model_unavailable" => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
+            "bad_ticket" | "bad_name" | "name_required" | "unknown_flow" | "prompt_required"
+            | "repo_url" | "not_a_repo" | "base_unresolved" | "runtime_unusable"
+            | "runtime_hooks" | "unknown_pack" | "unknown_runtime" | "bad_model"
+            | "model_unavailable" => StatusCode::UNPROCESSABLE_ENTITY,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "not_fixable" | "no_companion" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
@@ -439,6 +439,24 @@ async fn resolve_repo(
     Json(r): Json<ResolveReq>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.resolve_repo(&r.repo).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResolveTicketReq {
+    ticket: String,
+    #[serde(default)]
+    repo: Option<String>,
+}
+
+async fn resolve_ticket(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<ResolveTicketReq>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        d.resolve_ticket_input(&r.ticket, r.repo.as_deref()).await?,
+    ))
 }
 
 #[derive(Deserialize)]

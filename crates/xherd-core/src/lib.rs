@@ -27,7 +27,7 @@ pub mod untrusted;
 pub mod usage;
 pub mod xap;
 
-pub use agent::{Agent, Millis, new_id, now_ms};
+pub use agent::{Agent, Millis, Ticket, new_id, now_ms};
 pub use status::{Status, Trigger};
 
 /// The Cargo version: what compatibility checks and the store compare.

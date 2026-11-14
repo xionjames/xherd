@@ -351,6 +351,24 @@ pub fn jira_view(
     })
 }
 
+/// The host and project of an issue URL (`https://github.com/acme/api/issues/12`,
+/// `https://gitlab.example.com/g/p/-/issues/7`), every part a plain name.
+pub fn issue_project(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("https://")?;
+    let rest = rest.split(['?', '#']).next()?;
+    let (repo, _) = rest
+        .split_once("/-/issues/")
+        .or_else(|| rest.split_once("/issues/"))?;
+    let (host, project) = remote_project(&format!("https://{repo}"))?;
+    (!project.split('/').any(|p| p.starts_with('.'))).then_some((host, project))
+}
+
+/// `gh`'s `-R HOST/OWNER/REPO` for a GitHub issue URL.
+fn github_repo(url: Option<&str>) -> Option<String> {
+    let (host, project) = issue_project(url?)?;
+    (project.split('/').count() == 2).then(|| format!("{host}/{project}"))
+}
+
 /// An issue reference that can go onto a command line or into an API path:
 /// a plain name that cannot be read as an option (no leading `-`).
 fn plain_ref(issue: &str) -> bool {
@@ -365,8 +383,8 @@ fn plain_ref(issue: &str) -> bool {
 pub const MAX_COMMENT: usize = 10_000;
 
 impl Host {
-    /// `ticket-comment {key, issue, body, worktree}`: add a comment to the
-    /// ticket. Only ever called with text the user has read and accepted
+    /// `ticket-comment {key, issue, url, body, worktree}`: add a comment to
+    /// the ticket. Only ever called with text the user has read and accepted
     /// (R-308). `body` is passed as one argument, never through a shell; the
     /// GitHub and GitLab comments carry xherd's hidden marker.
     pub async fn ticket_comment(
@@ -374,6 +392,7 @@ impl Host {
         dir: &Path,
         key: &str,
         issue: &str,
+        url: Option<&str>,
         body: &str,
     ) -> Result<(), PluginError> {
         let name = "ticket-comment";
@@ -390,7 +409,7 @@ impl Host {
             run_command(
                 &self.plugin,
                 name,
-                json!({"key": key, "issue": issue, "body": body, "worktree": dir}),
+                json!({"key": key, "issue": issue, "url": url, "body": body, "worktree": dir}),
                 &self.ctx,
             )
             .await?;
@@ -410,25 +429,16 @@ impl Host {
                     .unwrap_or("gh");
                 // One argument, so a text starting with `-` is never read as an option.
                 let body_arg = format!("--body={marked}");
-                self.gh(gh, dir, &["issue", "comment", issue, &body_arg])
-                    .await?;
+                let repo = github_repo(url);
+                let mut args = vec!["issue", "comment", issue, &body_arg];
+                if let Some(r) = &repo {
+                    args.extend(["-R", r]);
+                }
+                self.gh(gh, dir, &args).await?;
                 Ok(())
             }
             GITLAB_ISSUES => {
-                let remote = run(Cmd::new([
-                    "git",
-                    "-C",
-                    &dir.display().to_string(),
-                    "config",
-                    "--get",
-                    "remote.origin.url",
-                ])
-                .as_agent())
-                .await?;
-                let (host, project) = remote_project(
-                    String::from_utf8_lossy(&remote.stdout).trim(),
-                )
-                .ok_or_else(|| self.shape(name, "the worktree's origin is not a GitLab project"))?;
+                let (host, project) = self.gitlab_project(dir, url, name).await?;
                 let path = format!(
                     "projects/{}/issues/{issue}/notes",
                     project.replace('/', "%2F")
@@ -461,6 +471,31 @@ impl Host {
         }
     }
 
+    /// The GitLab host and project of a ticket: from its URL, else from the
+    /// worktree's `origin`.
+    async fn gitlab_project(
+        &self,
+        dir: &Path,
+        url: Option<&str>,
+        name: &str,
+    ) -> Result<(String, String), PluginError> {
+        if let Some(p) = url.and_then(issue_project) {
+            return Ok(p);
+        }
+        let remote = run(Cmd::new([
+            "git",
+            "-C",
+            &dir.display().to_string(),
+            "config",
+            "--get",
+            "remote.origin.url",
+        ])
+        .as_agent())
+        .await?;
+        remote_project(String::from_utf8_lossy(&remote.stdout).trim())
+            .ok_or_else(|| self.shape(name, "the worktree's origin is not a GitLab project"))
+    }
+
     /// One `acli` run in `dir`; the CLI keeps its own login.
     async fn acli(&self, dir: &Path, bin: &str, args: &[&str]) -> Result<Vec<u8>, PluginError> {
         let out = self
@@ -469,21 +504,23 @@ impl Host {
         self.ok(out, args)
     }
 
-    /// `ticket-get {key, issue, worktree} → TicketView`: the ticket named by
-    /// `issue` (the reference the tracker's `key` pattern picked out of the
-    /// agent's ticket key), read from the repository in `dir`.
+    /// `ticket-get {key, issue, url, worktree} → TicketView`: the ticket
+    /// named by `issue` (the reference the tracker's `key` or `url` pattern
+    /// picked out of the agent's ticket), read from the repository of `url`
+    /// when the ticket is a URL, else from the repository in `dir`.
     pub async fn ticket_get(
         &self,
         dir: &Path,
         key: &str,
         issue: &str,
+        url: Option<&str>,
     ) -> Result<TicketView, PluginError> {
         let name = "ticket-get";
         if !self.plugin.builtin() {
             let v = run_command(
                 &self.plugin,
                 name,
-                json!({"key": key, "issue": issue, "worktree": dir}),
+                json!({"key": key, "issue": issue, "url": url, "worktree": dir}),
                 &self.ctx,
             )
             .await?;
@@ -501,36 +538,22 @@ impl Host {
                     .get("gh")
                     .and_then(Value::as_str)
                     .unwrap_or("gh");
-                let out = self
-                    .gh(
-                        gh,
-                        dir,
-                        &[
-                            "issue",
-                            "view",
-                            issue,
-                            "--json",
-                            "title,body,state,url,author,comments",
-                        ],
-                    )
-                    .await?;
+                let repo = github_repo(url);
+                let mut args = vec![
+                    "issue",
+                    "view",
+                    issue,
+                    "--json",
+                    "title,body,state,url,author,comments",
+                ];
+                if let Some(r) = &repo {
+                    args.extend(["-R", r]);
+                }
+                let out = self.gh(gh, dir, &args).await?;
                 github_view(&self.json("issue view", &out)?).map_err(|e| self.shape(name, &e))
             }
             GITLAB_ISSUES => {
-                let remote = run(Cmd::new([
-                    "git",
-                    "-C",
-                    &dir.display().to_string(),
-                    "config",
-                    "--get",
-                    "remote.origin.url",
-                ])
-                .as_agent())
-                .await?;
-                let (host, project) = remote_project(
-                    String::from_utf8_lossy(&remote.stdout).trim(),
-                )
-                .ok_or_else(|| self.shape(name, "the worktree's origin is not a GitLab project"))?;
+                let (host, project) = self.gitlab_project(dir, url, name).await?;
                 let base = format!("projects/{}/issues/{issue}", project.replace('/', "%2F"));
                 let issue_json = self.glab_get(dir, &host, &base).await?;
                 let notes = self
@@ -690,7 +713,10 @@ mod tests {
             r#"echo '{"title":"T","body":"b","state":"OPEN","url":"u","author":{"login":"a"},"comments":[{"id":"1","author":{"login":"c"},"body":"hi","createdAt":"t"}]}'"#,
         );
         let host = tracker_host(d.path(), "github-issues", "gh", &gh);
-        let t = host.ticket_get(d.path(), "GH-12", "12").await.unwrap();
+        let t = host
+            .ticket_get(d.path(), "GH-12", "12", None)
+            .await
+            .unwrap();
         assert_eq!((t.title.as_str(), t.comments.len()), ("T", 1));
         let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
         assert_eq!(
@@ -699,12 +725,12 @@ mod tests {
         );
         // A reference that is not a plain name never reaches the CLI.
         assert!(
-            host.ticket_get(d.path(), "k", "12; rm -rf /")
+            host.ticket_get(d.path(), "k", "12; rm -rf /", None)
                 .await
                 .is_err()
         );
         // Nor one that the CLI would read as an option.
-        assert!(host.ticket_get(d.path(), "k", "--web").await.is_err());
+        assert!(host.ticket_get(d.path(), "k", "--web", None).await.is_err());
         assert_eq!(
             std::fs::read_to_string(d.path().join("calls"))
                 .unwrap()
@@ -743,7 +769,7 @@ mod tests {
 esac"#,
         );
         let host = tracker_host(d.path(), "gitlab-issues", "glab", &glab);
-        let t = host.ticket_get(&repo, "GL-3", "3").await.unwrap();
+        let t = host.ticket_get(&repo, "GL-3", "3", None).await.unwrap();
         assert_eq!(
             (t.title.as_str(), t.state.as_str(), t.comments.len()),
             ("G", "open", 1)
@@ -759,6 +785,65 @@ esac"#,
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_ticket_url_names_its_own_repository() {
+        assert_eq!(
+            issue_project("https://github.com/acme/api/issues/12#c"),
+            Some(("github.com".into(), "acme/api".into()))
+        );
+        assert_eq!(
+            issue_project("https://gl.test/g/sub/p/-/issues/7"),
+            Some(("gl.test".into(), "g/sub/p".into()))
+        );
+        assert_eq!(issue_project("https://gl.test/../x/-/issues/7"), None);
+        assert_eq!(issue_project("http://github.com/a/b/issues/1"), None);
+
+        let d = tempfile::tempdir().unwrap();
+        let gh = fake(
+            d.path(),
+            "gh",
+            r#"echo '{"title":"T","body":"b","state":"OPEN","url":"u","author":{"login":"a"},"comments":[]}'"#,
+        );
+        let host = tracker_host(d.path(), "github-issues", "gh", &gh);
+        let url = Some("https://github.com/other/lib/issues/12");
+        host.ticket_get(d.path(), "#12", "12", url).await.unwrap();
+        host.ticket_comment(d.path(), "#12", "12", url, "done")
+            .await
+            .unwrap();
+        let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
+        assert!(
+            calls.contains(
+                "issue view 12 --json title,body,state,url,author,comments -R github.com/other/lib"
+            ),
+            "{calls}"
+        );
+        assert!(
+            calls.contains("-R github.com/other/lib\n")
+                || calls.trim_end().ends_with("-R github.com/other/lib"),
+            "{calls}"
+        );
+
+        // GitLab: host and project from the URL; no origin needed.
+        let glab = fake(
+            d.path(),
+            "glab",
+            r#"case "$*" in
+  *"/notes"*) echo '[]' ;;
+  *) echo '{"title":"G","description":"d","state":"opened","web_url":"https://gl.test/g/p/-/issues/3","author":{"username":"a"}}' ;;
+esac"#,
+        );
+        let host = tracker_host(d.path(), "gitlab-issues", "glab", &glab);
+        host.ticket_get(d.path(), "#3", "3", Some("https://gl.test/g/p/-/issues/3"))
+            .await
+            .unwrap();
+        let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
+        assert!(
+            calls.contains("api --hostname gl.test projects/g%2Fp/issues/3"),
+            "{calls}"
+        );
+    }
+
     #[tokio::test]
     async fn a_tracker_without_reading_says_so() {
         let d = tempfile::tempdir().unwrap();
@@ -768,7 +853,7 @@ esac"#,
             ctx: crate::Context::default(),
         };
         let e = host
-            .ticket_get(d.path(), "PAY-1", "PAY-1")
+            .ticket_get(d.path(), "PAY-1", "PAY-1", None)
             .await
             .unwrap_err()
             .to_string();
@@ -877,7 +962,10 @@ esac"#,
 esac"#,
         );
         let host = tracker_host(d.path(), "jira", "acli", &acli);
-        let t = host.ticket_get(d.path(), "PAY-1", "PAY-1").await.unwrap();
+        let t = host
+            .ticket_get(d.path(), "PAY-1", "PAY-1", None)
+            .await
+            .unwrap();
         assert_eq!((t.title.as_str(), t.comments.len()), ("S", 1));
         let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
         assert!(
@@ -890,7 +978,7 @@ esac"#,
             calls.contains("jira workitem comment list --key PAY-1 --json --paginate"),
             "{calls}"
         );
-        assert!(host.ticket_get(d.path(), "k", "A B").await.is_err());
+        assert!(host.ticket_get(d.path(), "k", "A B", None).await.is_err());
     }
 
     /// The shape `acli jira workitem view --json` really prints (a sample
@@ -1009,7 +1097,7 @@ esac"#,
 
         let gh = fake(d.path(), "gh", "true");
         let host = tracker_host(d.path(), "github-issues", "gh", &gh);
-        host.ticket_comment(d.path(), "GH-12", "12", body)
+        host.ticket_comment(d.path(), "GH-12", "12", None, body)
             .await
             .unwrap();
         let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
@@ -1043,7 +1131,7 @@ esac"#,
         }
         let glab = fake(d.path(), "glab", "true");
         let host = tracker_host(d.path(), "gitlab-issues", "glab", &glab);
-        host.ticket_comment(&repo, "GL-3", "3", "hello")
+        host.ticket_comment(&repo, "GL-3", "3", None, "hello")
             .await
             .unwrap();
         let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
@@ -1051,7 +1139,7 @@ esac"#,
 
         let acli = fake(d.path(), "acli", "true");
         let host = tracker_host(d.path(), "jira", "acli", &acli);
-        host.ticket_comment(d.path(), "PAY-1", "PAY-1", "plain text")
+        host.ticket_comment(d.path(), "PAY-1", "PAY-1", None, "plain text")
             .await
             .unwrap();
         let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
@@ -1064,7 +1152,7 @@ esac"#,
             "no marker on Jira"
         );
         // A text that starts with a dash stays the value of the flag.
-        host.ticket_comment(d.path(), "PAY-1", "PAY-1", "--key PAY-2")
+        host.ticket_comment(d.path(), "PAY-1", "PAY-1", None, "--key PAY-2")
             .await
             .unwrap();
         let calls = std::fs::read_to_string(d.path().join("calls")).unwrap();
@@ -1093,7 +1181,7 @@ esac"#,
             ("", "ok"),
         ] {
             assert!(
-                host.ticket_comment(d.path(), "k", issue, body)
+                host.ticket_comment(d.path(), "k", issue, None, body)
                     .await
                     .is_err(),
                 "{issue:?} {body:?}"
@@ -1101,7 +1189,7 @@ esac"#,
         }
         let long = "x".repeat(MAX_COMMENT + 1);
         assert!(
-            host.ticket_comment(d.path(), "k", "12", &long)
+            host.ticket_comment(d.path(), "k", "12", None, &long)
                 .await
                 .is_err()
         );
@@ -1111,7 +1199,7 @@ esac"#,
             ctx: crate::Context::default(),
         };
         let e = bb
-            .ticket_comment(d.path(), "k", "1", "ok")
+            .ticket_comment(d.path(), "k", "1", None, "ok")
             .await
             .unwrap_err()
             .to_string();

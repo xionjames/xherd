@@ -88,7 +88,7 @@ impl SupervisorHandle {
 struct Entry {
     tx: AgentTx,
     name: String,
-    ticket_key: String,
+    ticket_key: Option<String>,
     status: Status,
     created_at: Millis,
     port_block: Option<u16>,
@@ -137,7 +137,7 @@ impl Supervisor {
         let entry = Entry {
             tx: actor::spawn(a.clone(), self.env.clone()),
             name: a.name.clone(),
-            ticket_key: a.ticket_key.clone(),
+            ticket_key: a.ticket_key().map(str::to_string),
             status: a.status,
             created_at: a.created_at,
             port_block: None,
@@ -155,7 +155,7 @@ impl Supervisor {
         let by_key: Vec<&String> = self
             .agents
             .iter()
-            .filter(|(_, e)| e.ticket_key == who)
+            .filter(|(_, e)| e.ticket_key.as_deref() == Some(who))
             .map(|(id, _)| id)
             .collect();
         match by_key.as_slice() {
