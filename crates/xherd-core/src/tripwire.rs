@@ -4,7 +4,7 @@
 //! private key headers, and the content of `.env`-like files; matches are
 //! reported masked, the secret itself never leaves the diff. Also the diff size
 //! limit (R-115). Sensitive paths (R-115) are global until repo profiles; the test
-//! command waits for them; the scope fence (R-116) is a refusal in `xherd_flow::xap`.
+//! command waits for them; the scope fence (R-116) holds a commit in `xherd_flow::xap`.
 
 /// One suspicious added line.
 #[derive(Debug, Clone, PartialEq, Eq)]

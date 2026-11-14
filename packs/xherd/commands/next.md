@@ -16,8 +16,9 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
 5. Start it: `xherd task start T01` (with the real id). xherd writes the
    `status:` and `evidence:` lines of `tasks.md` itself; do not edit them.
 6. Implement it, changing only the files listed in its `files`. If it needs
-   another file, add it to `files`, run `xherd tasks sync`, and say so
-   in the commit proposal. If the task cannot be done, run
+   another file, do not edit the approved `tasks.md`: change the file, list
+   it in the commit proposal and say why in `--message`; xherd holds that
+   commit for the user. If the task cannot be done, run
    `xherd task block T01 --reason "The API has no endpoint for this"`
    and stop.
 7. Verify: run its `verify` command and the relevant tests. Fix until green.

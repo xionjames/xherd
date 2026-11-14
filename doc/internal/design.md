@@ -715,7 +715,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Secret tripwire on commit proposals (R-117)
     - [x] Pre-push guard per worktree (R-1204, `xherd guard pre-push`)
     - [x] Daemon/agent user split (R-1203): runner, shared folders, two users in the container; checked on Colima, to check on Linux
-    - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a refusal)
+    - [x] Code tripwires: sensitive paths and diff size as global settings `sensitivePaths` / `maxDiffLines` (R-115), scope fence (R-116, a hold; a sync of an edited approved `tasks.md` re-opens its gate)
     - [x] Untrusted-text blocks (R-1201): `xherd_core::untrusted::wrap`, used for PR comments (`pr-comments.json`); fetched ticket text will use it too
     - [x] Max session length (R-1206): `maxSessionMinutes`, pauses after a handoff note (R-026)
     - [x] `xherd security check` (R-1210): network binding, shared user, external plugins, session limit, sensitive paths; token budgets are reported; autonomy and branch protection are listed as not reported yet and join when those exist

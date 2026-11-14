@@ -1195,9 +1195,25 @@ impl Actor {
         let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
         self.review_hold(&mut call.cmd, pack)?;
         self.pr_review_check(&call.cmd)?;
+        // A sync carrying edits to an approved task list re-opens its gate at
+        // once (R-107), so a wider scope never reaches a commit unapproved
+        // (R-116); with another gate open it waits for that one.
+        let reopen =
+            matches!(call.cmd, XapCmd::TasksSync { .. }) && self.approved_tasks_edited(pack).await;
+        if reopen && self.agent.gate.is_some() {
+            return Err(refusal(
+                "tasks_approved",
+                "tasks.md was approved and has changed, so it needs the user's approval again; \
+                 wait until the open gate is decided, then sync",
+            ));
+        }
         let obs = self.observe(pack, &call.cmd).await?;
         let (before, now) = (self.agent.status, self.now());
-        let changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
+        let mut changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
+        if reopen {
+            self.infer_gate().await;
+            changed |= self.agent.gate.is_some();
+        }
         if let XapCmd::IssueAdd { .. } = &call.cmd {
             self.append_issue(&call)
                 .map_err(|e| refusal("internal", format!("issue ledger: {e}")))?;
@@ -2827,6 +2843,48 @@ impl Actor {
         self.agent.next_prompt = Some(text);
         self.agent.fire(Trigger::Unpark, self.now());
         self.prepare_resume().await;
+    }
+
+    /// The flow's tasks document was approved and has changed since (task
+    /// progress and fix tasks aside, `doc_sha256`), while the agent is past the
+    /// tasks stage. In the tasks stage the agent rewrites it on purpose and
+    /// declares the gate itself.
+    async fn approved_tasks_edited(&self, pack: Option<&Pack>) -> bool {
+        use xherd_core::domain::Role;
+        let Some(flow) = pack.and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()))
+        else {
+            return false;
+        };
+        let Ok(wd) = self.workdir() else { return false };
+        let stage = self.agent.stage.as_deref().and_then(|s| flow.stage(s));
+        if stage.is_some_and(|s| s.role == Role::Tasks) {
+            return false;
+        }
+        let ever = self
+            .env
+            .store
+            .approved_files(&self.agent.id)
+            .await
+            .unwrap_or_default();
+        for s in flow.stages.iter().filter(|s| s.role == Role::Tasks) {
+            for d in s.docs() {
+                let Ok(path) = xherd_flow::xap::doc_path(d, &wd) else {
+                    continue;
+                };
+                if !ever.contains(&path) {
+                    continue;
+                }
+                let Some(bytes) = inside(&wd, &path).and_then(|p| std::fs::read(p).ok()) else {
+                    continue;
+                };
+                let sha = xherd_flow::approve::doc_sha256(Some(flow), &wd, &path, &bytes);
+                let approved = self.env.store.approved(&self.agent.id, &path, &sha).await;
+                if !approved.unwrap_or(true) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// The agent stopped without a declared gate: open one from the flow's
