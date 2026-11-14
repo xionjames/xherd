@@ -126,7 +126,7 @@ A view plugin is **files only**: a manifest with `commands`, `hooks`, `checks`, 
 | Inline `style` attributes and `<style>`, `data:` images | `fetch`, XHR, WebSocket, EventSource (`connect-src 'none'`) |
 | Messages to and from the Herd page (below) | Forms, nested frames, workers, `<base>`, `localStorage` and cookies (opaque origin), opening windows or navigating the Herd page |
 
-So a view gets its data only by message, and does what it shows with the DOM. Agent fields (names, branches, tickets) are written by people and agents: draw them as text (`textContent`), never as HTML.
+So a view gets its data only by message, and does what it shows with the DOM. One thing no policy stops: a view can navigate its own frame to another site, and take the data it was given along in the URL. Install only views you trust with your agents' names, branches, repository folder names and ticket and PR links. After any new page loads in the frame the Herd page sends nothing until that page says `ready` again. Agent fields (names, branches, tickets) are written by people and agents: draw them as text (`textContent`), never as HTML.
 
 **Protocol v1.** Every message is a plain object with `xherdView: 1` and a `kind`. The view sends `{kind: "ready"}` once it listens; from then on the Herd page sends `{kind: "data", agents, flows, theme}` after each change (agents, flows or the visible theme). The view may send `{kind: "open", agentId}` to open that agent's page; anything else, and an `open` of an unknown agent, is ignored. The page accepts messages only from the frame's window with the origin `null`, and posts to that window only.
 
