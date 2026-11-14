@@ -133,28 +133,33 @@
       </div>
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
-        {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
-        <span>{agent.runtime ?? 'claude-code'}</span>
-        {#if canModel}
-          {#key agent.model}
-            <label class="row model" style="gap:6px;flex-wrap:nowrap" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume).">model
-              <ModelInput runtime={agent.runtime ?? 'claude-code'} value={agent.model ?? ''} disabled={finished} onchange={setModel} /></label>
-          {/key}
-        {:else if agent.model}<span class="mono">{agent.model}</span>{/if}
-        {#if agent.flow && agent.flow !== 'none'}
-          <label class="row" style="gap:6px;flex-wrap:nowrap">autonomy
-            <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
-              <option value="ask">ask</option><option value="important">important</option>
-            </select></label>
-        {/if}
-        {#if agent.permissionMode}
-          <label class="row" style="gap:6px;flex-wrap:nowrap" title={`${MODE_HINT[agent.permissionMode]} A change applies from the next session start (approved gate, resume).`}>tools
-            <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
-              {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
-            </select></label>
-        {/if}
-        <span>started {agoText(agent.createdAt)}</span>
-        <span>active {agoText(agent.lastActivity)}</span>
+        <div class="hfacts">
+          {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
+          <span>{agent.runtime ?? 'claude-code'}</span>
+          {#if !canModel && agent.model}<span class="mono">{agent.model}</span>{/if}
+          <span>started {agoText(agent.createdAt)}</span>
+          <span>active {agoText(agent.lastActivity)}</span>
+        </div>
+        <div class="hctl">
+          {#if canModel}
+            {#key agent.model}
+              <label class="hfield" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume)."><span>model</span>
+                <ModelInput runtime={agent.runtime ?? 'claude-code'} value={agent.model ?? ''} disabled={finished} onchange={setModel} /></label>
+            {/key}
+          {/if}
+          {#if agent.flow && agent.flow !== 'none'}
+            <label class="hfield"><span>autonomy</span>
+              <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
+                <option value="ask">ask</option><option value="important">important</option>
+              </select></label>
+          {/if}
+          {#if agent.permissionMode}
+            <label class="hfield" title={`${MODE_HINT[agent.permissionMode]} A change applies from the next session start (approved gate, resume).`}><span>tools</span>
+              <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
+                {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
+              </select></label>
+          {/if}
+        </div>
       </div>
     </div>
     <div class="row">
@@ -259,7 +264,4 @@
 <style>
   .anchor { position: relative; }
   .mpad { padding: 6px 10px; }
-  /* ModelInput's wrapper may shrink to nothing in this row; size it, not the select inside. */
-  .model :global(.mi) { flex: none; width: auto; }
-  .model :global(select), .model :global(input) { flex: none; width: 18ch; }
 </style>
