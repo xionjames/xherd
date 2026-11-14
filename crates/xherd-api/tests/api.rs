@@ -14,6 +14,12 @@ use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER, min
 use xherd_daemon::*;
 
 async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
+    setup_with(|_| {}).await
+}
+
+/// `setup`, with `prep` run on the data root before the daemon starts (to
+/// add external plugins).
+async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Agent) {
     let dir = tempfile::tempdir().unwrap();
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.scheduler = None;
@@ -39,6 +45,7 @@ async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
     }
     .save(&paths.config())
     .unwrap();
+    prep(&paths);
     let d = Daemon::start(paths, o).await.unwrap();
     let mut a = Agent::new("SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
@@ -811,4 +818,207 @@ async fn plugin_secrets_are_write_only() {
     assert_eq!(v["token"].as_bool(), Some(false));
     let file = std::fs::read_to_string(dir.path().join("secrets.json")).unwrap();
     assert!(!file.contains("ghp_SECRET_77"));
+}
+
+async fn fetch(app: axum::Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let res = app
+        .oneshot(get(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let (parts, body) = res.into_parts();
+    let bytes = body.collect().await.unwrap().to_bytes().to_vec();
+    (parts.status, parts.headers, bytes)
+}
+
+/// An external view plugin `my-view` (with a file over the size limit, a
+/// hidden file and a symlink out of its folder) and a non-view plugin
+/// `my-host` with an `index.html`.
+fn external_views(paths: &Paths) {
+    let dir = paths.plugins().join("my-view");
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        r#"{"name": "my-view", "kind": "view", "version": "0.1.0", "label": "Mine",
+            "data": {"view": {"entry": "index.html"}}}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("index.html"), "<p>mine</p>").unwrap();
+    std::fs::write(dir.join("assets/app.js"), "void 0;").unwrap();
+    std::fs::write(dir.join(".env"), "SECRET=1").unwrap();
+    std::fs::File::create(dir.join("big.js"))
+        .unwrap()
+        .set_len(xherd_plugin::view::MAX_FILE + 1)
+        .unwrap();
+    let outside = paths.root.join("outside.js");
+    std::fs::write(&outside, "outside").unwrap();
+    std::os::unix::fs::symlink(&outside, dir.join("link.js")).unwrap();
+    std::os::unix::fs::symlink(".env", dir.join("notes.txt")).unwrap();
+    let host = paths.plugins().join("my-host");
+    std::fs::create_dir_all(&host).unwrap();
+    std::fs::write(
+        host.join("xherd-plugin.json"),
+        r#"{"name": "my-host", "kind": "host", "version": "0.1.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(host.join("index.html"), "<p>host</p>").unwrap();
+}
+
+/// R8, R10: view files are served to anyone, with the locks of design §3:
+/// CSP `sandbox allow-scripts` and path-restricted sources, `nosniff`,
+/// `no-referrer`, and CORS open (the frame's origin is opaque).
+#[tokio::test]
+async fn view_plugin_files_are_served_sandboxed() {
+    let (_dir, d, _a) = setup_with(external_views).await;
+    let remote = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 5], 5555))));
+
+    let (s, h, body) = fetch(remote.clone(), "/api/v1/plugins/herd-tiles/view/index.html").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h["content-type"], "text/html; charset=utf-8");
+    assert_eq!(h["x-content-type-options"], "nosniff");
+    assert_eq!(h["referrer-policy"], "no-referrer");
+    assert_eq!(h["access-control-allow-origin"], "*");
+    assert_eq!(h["cache-control"], "no-cache");
+    let csp = h["content-security-policy"].to_str().unwrap();
+    assert!(csp.starts_with("sandbox allow-scripts;"), "{csp}");
+    assert!(csp.contains("connect-src 'none'"), "{csp}");
+    assert!(
+        csp.contains("script-src http://127.0.0.1:4740/api/v1/plugins/herd-tiles/view/ "),
+        "{csp}"
+    );
+    assert_eq!(
+        body,
+        xherd_plugin::view::builtin_file("herd-tiles", "index.html").unwrap()
+    );
+    let (s, h, _) = fetch(remote.clone(), "/api/v1/plugins/herd-tiles/view/tiles.js").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h["content-type"], "text/javascript; charset=utf-8");
+
+    let (s, h, body) = fetch(remote.clone(), "/api/v1/plugins/my-view/view/index.html").await;
+    assert_eq!((s, body.as_slice()), (StatusCode::OK, &b"<p>mine</p>"[..]));
+    assert!(
+        h["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("/api/v1/plugins/my-view/view/")
+    );
+    let (s, _, body) = fetch(remote.clone(), "/api/v1/plugins/my-view/view/assets/app.js").await;
+    assert_eq!((s, body.as_slice()), (StatusCode::OK, &b"void 0;"[..]));
+
+    for uri in [
+        "/api/v1/plugins/my-view/view/../my-host/index.html",
+        "/api/v1/plugins/my-view/view/assets/../index.html",
+        "/api/v1/plugins/my-view/view/%2e%2e/my-host/index.html",
+        "/api/v1/plugins/my-view/view/%2E%2E%2Foutside.js",
+        "/api/v1/plugins/my-view/view/.env",
+        "/api/v1/plugins/my-view/view/link.js",
+        "/api/v1/plugins/my-view/view/notes.txt",
+        "/api/v1/plugins/my-view/view/missing.js",
+        "/api/v1/plugins/my-view/view/assets",
+        "/api/v1/plugins/my-host/view/index.html",
+        "/api/v1/plugins/github/view/index.html",
+        "/api/v1/plugins/nope/view/index.html",
+        "/api/v1/plugins/herd-tiles/view/missing.js",
+    ] {
+        assert_eq!(
+            fetch(remote.clone(), uri).await.0,
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
+    }
+    assert_eq!(
+        fetch(remote.clone(), "/api/v1/plugins/my-view/view/big.js")
+            .await
+            .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    // A view plugin that is off is not served.
+    let patch =
+        serde_json::from_value(json!({"disabledPlugins": ["my-view", "herd-tiles"]})).unwrap();
+    d.save_config(patch).unwrap();
+    for uri in [
+        "/api/v1/plugins/my-view/view/index.html",
+        "/api/v1/plugins/herd-tiles/view/index.html",
+    ] {
+        assert_eq!(
+            fetch(remote.clone(), uri).await.0,
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
+    }
+}
+
+/// R10: the view kit (xherd's stylesheet and the protocol script) is public
+/// and locked like view files.
+#[tokio::test]
+async fn view_kit_is_served() {
+    let (_dir, d, _a) = setup().await;
+    let remote =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 5], 1))));
+    let (s, h, body) = fetch(remote.clone(), "/api/v1/view-kit/xherd.css").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h["content-type"], "text/css; charset=utf-8");
+    assert_eq!(h["access-control-allow-origin"], "*");
+    assert_eq!(h["x-content-type-options"], "nosniff");
+    assert!(String::from_utf8(body).unwrap().contains("--accent"));
+    let (s, h, body) = fetch(remote.clone(), "/api/v1/view-kit/xherd-view.js").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h["content-type"], "text/javascript; charset=utf-8");
+    assert!(
+        h["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .starts_with("sandbox")
+    );
+    assert!(String::from_utf8(body).unwrap().contains("xherdView"));
+    assert_eq!(
+        fetch(remote, "/api/v1/view-kit/app.css").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// R11: a view runs with an opaque origin (`Origin: null`): it never gets the
+/// local user's rights, not for the state nor for the live stream; `/state`
+/// tells the UI where a view starts.
+#[tokio::test]
+async fn opaque_origin_gets_no_rights() {
+    let (_dir, d, _a) = setup_with(external_views).await;
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    for uri in ["/api/v1/state", "/api/v1/agents"] {
+        let req = get(uri)
+            .header("origin", "null")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            call(local.clone(), req).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{uri}"
+        );
+    }
+    let req = get("/api/v1/ws")
+        .header("origin", "null")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local.clone(), req).await.0, StatusCode::UNAUTHORIZED);
+
+    let (s, v) = call(local, get("/api/v1/state").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::OK);
+    let plugin = |name: &str| {
+        v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(plugin("herd-tiles")["view"], json!({"entry": "index.html"}));
+    assert_eq!(plugin("my-view")["view"], json!({"entry": "index.html"}));
+    assert!(plugin("github").get("view").is_none());
 }

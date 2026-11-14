@@ -20,6 +20,7 @@ use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
 mod term;
 mod ui;
+mod view;
 mod ws;
 
 pub const BODY_LIMIT: usize = 5 * 1024 * 1024;
@@ -92,6 +93,11 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/ticket-comment", post(ticket_comment))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
+        .route(
+            "/api/v1/plugins/{name}/view/{*path}",
+            get(view::plugin_file),
+        )
+        .route("/api/v1/view-kit/{file}", get(view::kit_file))
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
         .route(
             "/api/v1/plugins/{name}/secrets",
@@ -367,11 +373,19 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
             // suggests come from `GET /runtimes/{name}/models`.
             let models = xherd_plugin::runtime::Terminal::of(&p.manifest)
                 .is_ok_and(|t| !t.model_args.is_empty());
-            json!({"name": p.name(), "kind": p.manifest.kind, "version": p.manifest.version,
+            let mut info = json!({"name": p.name(), "kind": p.manifest.kind,
+                   "version": p.manifest.version,
                    "label": p.manifest.label, "description": p.manifest.description,
                    "builtin": p.builtin(), "settings": settings,
                    "enabled": d.plugin_enabled(p.name()), "login": p.manifest.login.is_some(),
-                   "chooseModel": models})
+                   "chooseModel": models});
+            // A Herd view plugin: the file the Herd page frames (R9).
+            if p.manifest.kind == xherd_plugin::Kind::View
+                && let Ok(entry) = xherd_plugin::manifest::view_entry(&p.manifest)
+            {
+                info["view"] = json!({"entry": entry});
+            }
+            info
         })
         .collect();
     Ok(Json(json!({

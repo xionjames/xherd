@@ -23,6 +23,8 @@ pub enum Kind {
     Notifier,
     Toolchain,
     Panel,
+    /// A Herd view: static files shown in a sandboxed frame (`data.view`).
+    View,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,6 +258,21 @@ impl Manifest {
                 }
             }
         }
+        if self.kind == Kind::View {
+            let runs = !self.commands.is_empty()
+                || !self.hooks.is_empty()
+                || !self.checks.is_empty()
+                || !self.requires.is_empty()
+                || self.login.is_some()
+                || self.build.is_some()
+                || !self.instructions.is_empty();
+            if runs {
+                return Err("a view plugin has files only: no commands, hooks, checks, \
+                     requires, login, build or instructions"
+                    .into());
+            }
+            view_entry(self)?;
+        }
         let argvs = self
             .commands
             .iter()
@@ -301,6 +318,23 @@ impl Manifest {
     }
 }
 
+/// The HTML file a view plugin shows (`data.view.entry`), relative to its
+/// folder: plain segments only, ending in `.html`.
+pub fn view_entry(m: &Manifest) -> Result<&str, String> {
+    let entry = m
+        .data
+        .get("view")
+        .and_then(|v| v.get("entry"))
+        .and_then(Value::as_str)
+        .ok_or("data.view.entry is missing")?;
+    match crate::view::clean_path(entry) {
+        Some(e) if e.ends_with(".html") => Ok(e),
+        _ => Err(format!(
+            "data.view.entry {entry:?} must be a relative .html path inside the plugin folder"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +371,46 @@ mod tests {
         assert!(bad(r#"{"commands": {"x": []}}"#).contains("empty argv"));
         assert!(bad(r#"{"commands": {"x": ["./../evil"]}}"#).contains("inside"));
         assert!(bad(r#"{"kind": "spaceship"}"#).contains("unknown variant"));
+    }
+
+    #[test]
+    fn view_plugins_have_files_only_and_a_plain_entry() {
+        let view = |extra: &str, entry: &str| {
+            Manifest::parse(&format!(
+                r#"{{"name": "v", "kind": "view", "version": "0.1.0",
+                    "data": {{"view": {{"entry": {entry:?}}}}}{extra}}}"#
+            ))
+        };
+        let m = view("", "index.html").unwrap();
+        assert_eq!(m.kind, Kind::View);
+        assert_eq!(view_entry(&m), Ok("index.html"));
+        assert!(view("", "sub/page.html").is_ok());
+        for extra in [
+            r#", "commands": {"x": ["true"]}"#,
+            r#", "hooks": {"x": ["true"]}"#,
+            r#", "checks": [{"name": "c", "argv": ["true"]}]"#,
+            r#", "requires": [{"name": "jq"}]"#,
+            r#", "login": ["true"]"#,
+            r#", "build": ["true"]"#,
+            r#", "instructions": {"a": "b"}"#,
+        ] {
+            let err = view(extra, "index.html").unwrap_err();
+            assert!(err.contains("files only"), "{extra}: {err}");
+        }
+        for entry in [
+            "../x.html",
+            "/x.html",
+            "a\\b.html",
+            "x.js",
+            "a//b.html",
+            "",
+            "./x.html",
+        ] {
+            let err = view("", entry).unwrap_err();
+            assert!(err.contains("entry"), "{entry}: {err}");
+        }
+        let none = r#"{"name": "v", "kind": "view", "version": "0.1.0"}"#;
+        assert!(Manifest::parse(none).unwrap_err().contains("missing"));
     }
 
     #[test]

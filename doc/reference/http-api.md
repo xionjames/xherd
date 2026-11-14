@@ -30,7 +30,7 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 | Method and path | Does |
 |---|---|
 | `GET /healthz` | Liveness, no auth |
-| `GET /state` | Everything the UI starts from: agents, flows (each pack flow's stages), plugins (with `enabled`), tracker links, `buildVersion` |
+| `GET /state` | Everything the UI starts from: agents, flows (each pack flow's stages), plugins (with `enabled`, and `view: {entry}` for a view plugin), tracker links, `buildVersion` |
 | `GET /ws` (WebSocket) | The change feed: one JSON message per change, tagged `type` (kebab-case). The UI reloads `/state` when it reconnects. A client that falls behind is disconnected |
 | `GET /checks`, `POST /checks/{id}/fix` | Setup checks, and running a check's fix |
 | `POST /install` | Install the pack's commands for the runtimes (`xherd install`) |
@@ -87,6 +87,8 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 | `POST /git/credential` | The git credential helper's endpoint (local user or an agent token with `credential`) |
 | `POST /plugins/{name}/login` | Start a plugin's login in the setup terminal |
 | `GET /plugins/{name}/secrets`, `PUT /plugins/{name}/secrets` | Which declared secrets are set (never their values), and setting them |
+| `GET /plugins/{name}/view/{path}` | A file of an enabled [Herd view plugin](../extend/plugins.md#herd-view-plugins) (404 for any other plugin, a hidden or `..` path, or a file outside its folder; 413 over 16 MiB). No authentication. Served with `Content-Security-Policy: sandbox allow-scripts; …` (sources limited to the plugin's files and the view kit, no `connect-src`), `X-Content-Type-Options: nosniff`, `Cache-Control: no-cache`, `Referrer-Policy: no-referrer`, `Access-Control-Allow-Origin: *` |
+| `GET /view-kit/{file}` | The view kit: `xherd-view.js` (protocol v1 for views) and `xherd.css` (design tokens and component classes). No authentication; same headers |
 | `GET /toolchains`, `GET /toolchains/installed`, `GET /toolchains/{tool}/versions`, `POST /toolchains/install` | Toolchain tools, installed versions, installable versions (container), installing one |
 | `GET /open-in` | Settings → Open in: links, the companion's apps and terminals |
 | `GET /companion/next` | Long poll used by `xherd companion` |

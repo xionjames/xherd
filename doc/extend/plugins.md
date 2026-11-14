@@ -14,10 +14,11 @@ A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in 
 | `bitbucket` | host | Git access only (a token kept by xherd); no pull request support yet |
 | `jira`, `github-issues`, `gitlab-issues` | tracker | Ticket keys as links, the Ticket tab (reading the ticket and its comments), posting a summary you accepted |
 | `sdkman`, `nvm`, `uv`, `go`, `rustup` | toolchain | Which version files they read and how to find or install a tool |
+| `herd-tiles` | view | A layout of the Herd page: one tile per agent, grouped by repository. The example of a [Herd view plugin](#herd-view-plugins) |
 
-Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host, tracker and toolchain plugins; the others are accepted by the manifest but nothing consumes them yet.
+Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `view`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host, tracker, toolchain and view plugins; the others are accepted by the manifest but nothing consumes them yet.
 
-Every plugin can be switched on or off in Settings → Plugins (or the Welcome screen), as long as one plugin of each kind stays on; host plugins (shown as **Git providers**) and trackers are optional, so having none is fine (with no Git provider on, no agent gets pull request lookup, polling, comments or templates). Its card there opens its options in a dialog: settings, secrets, checks with their fixes, its login, and for a toolchain the versions.
+Every plugin can be switched on or off in Settings → Plugins (or the Welcome screen), as long as one plugin of each kind stays on; host plugins (shown as **Git providers**), trackers and view plugins (shown as **Herd views**) are optional, so having none is fine (with no Git provider on, no agent gets pull request lookup, polling, comments or templates). Its card there opens its options in a dialog: settings, secrets, checks with their fixes, its login, and for a toolchain the versions.
 
 ## Manifest
 
@@ -97,6 +98,105 @@ A tracker can also read the agent's ticket, shown in the agent page's **Ticket**
 **Posting a summary.** When a pull request is open, the agent page offers to post a summary on the ticket (only if an enabled tracker reads it and nothing was posted; "Not now" is remembered in the browser), and the packs do not touch tickets at all: the built-in ship prompt only writes `pr.md`, which becomes the PR body. The Ticket tab can post a short summary of what the agent did as a comment (R-308: only the user's accept posts anything). *Draft a summary* asks xherd for a draft built from the agent's finished tasks, commits and pull request (`xherd_core::ticket::summary`, no model, no ticket text in it); the user reads and edits it, and *Post to the ticket* sends exactly that text (`POST /agents/{id}/ticket-comment`, at most 10 000 characters, no control characters). The built-in trackers run `gh issue comment <n> --body <text>`, `glab api -X POST projects/<path>/issues/<n>/notes -f body=<text>` (both add xherd's hidden marker `<!-- xherd -->`) and `acli jira workitem comment create --key <KEY> --body <text>`; the text is one argument, never through a shell. An external tracker answers `ticket-comment` (stdin `{command, input: {key, issue, url, body, worktree}}`, `url` null for a ticket given as a key; no output needed). The post is logged as the event `ticket-comment` with its length, not its text. Jira takes plain text here: how it handles newlines in `--body` is unchecked.
 
 An external tracker answers the command `ticket-get` (stdin `{command, input: {key, issue, url, worktree}}`, stdout `{title, body?, state?, url?, author?, comments?: [{id, kind, author, body, url?, createdAt?}]}`). Ticket and comment text is written by other people: the UI renders it through the sanitiser, and anything that hands it to an agent must wrap it as untrusted (R-1201).
+
+## Herd view plugins
+
+A `view` plugin adds a layout to the Herd page: a web page of your own, drawn with any tools you like, that receives the agents and can open one. Each enabled view plugin is a choice in the Herd's **Layout** switch after the built-in ones (*List*, *By stage*), labelled with the manifest's `label` (else its name), chosen in the URL as `?layout=plugin:<name>`. Switch it off in Settings → Plugins (**Herd views**) to remove it; having none is fine.
+
+```json
+{
+  "name": "my-view",
+  "kind": "view",
+  "version": "0.1.0",
+  "label": "My view",
+  "description": "Agents as a timeline.",
+  "data": { "view": { "entry": "index.html" } }
+}
+```
+
+A view plugin is **files only**: a manifest with `commands`, `hooks`, `checks`, `requires`, `login`, `build` or `instructions` is refused. `data.view.entry` is the page to show, a relative `.html` path inside the folder. Nothing of a view runs in the daemon.
+
+**Files.** The daemon serves the plugin's folder at `/api/v1/plugins/<name>/view/<path>` (only while the plugin is on; no login needed, so put nothing private in it: every file there is served, the manifest included). Paths are plain: no `..`, no hidden files or folders (a segment starting with `.`), nothing that resolves outside the folder through a symlink, at most 16 MiB per file. The type comes from the extension (`html`, `js`/`mjs`, `css`, `json`, `map`, `svg`, `png`, `jpg`/`jpeg`, `gif`, `webp`, `ico`, `woff`/`woff2`, `ttf`, `txt`; anything else is `application/octet-stream`).
+
+**The sandbox.** The Herd page shows the entry in an `<iframe sandbox="allow-scripts">`, and every view file is also served with a `Content-Security-Policy` that starts with `sandbox allow-scripts`, so the page has an opaque origin even when opened in a tab of its own. It cannot read xherd's API, cookies or storage, and the policy allows:
+
+| Allowed | Not allowed |
+|---|---|
+| Scripts, styles, images and fonts from the plugin's own files and the view kit (by URL path, so not from the rest of `/api/v1/`) | Inline `<script>` and `on…=` attributes, `eval`, scripts from anywhere else |
+| Inline `style` attributes and `<style>`, `data:` images | `fetch`, XHR, WebSocket, EventSource (`connect-src 'none'`) |
+| Messages to and from the Herd page (below) | Forms, nested frames, workers, `<base>`, `localStorage` and cookies (opaque origin), opening windows or navigating the Herd page |
+
+So a view gets its data only by message, and does what it shows with the DOM. One thing no policy stops: a view can navigate its own frame to another site, and take the data it was given along in the URL. Install only views you trust with your agents' names, branches, repository folder names and ticket and PR links. After any new page loads in the frame the Herd page sends nothing until that page says `ready` again. Agent fields (names, branches, tickets) are written by people and agents: draw them as text (`textContent`), never as HTML.
+
+**Protocol v1.** Every message is a plain object with `xherdView: 1` and a `kind`. The view sends `{kind: "ready"}` once it listens; from then on the Herd page sends `{kind: "data", agents, flows, theme}` after each change (agents, flows or the visible theme). The view may send `{kind: "open", agentId}` to open that agent's page; anything else, and an `open` of an unknown agent, is ignored. The page accepts messages only from the frame's window with the origin `null`, and posts to that window only.
+
+`theme` is `light` or `dark`. `flows` are the packs' flows (`{pack, flow, stages: [{id, role, class, gate}]}`, as in `GET /state`). `agents` holds every agent (finished ones too, unfiltered) as a `ViewAgent`, and nothing else of it: no prompts, messages, question texts, documents, comments or paths.
+
+| Field | Meaning |
+|---|---|
+| `id`, `name` | The agent's id (for `open`) and name |
+| `status`, `statusSince` | `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `paused`, `watching`, `done`, `cancelled`, `error`; since when (ms) |
+| `createdAt`, `lastActivity` | Times in ms since the epoch |
+| `repo`, `branch` | The repository's folder name, the branch |
+| `ticket` | `{key?, url?}` when it has one |
+| `runtime`, `flow`, `stage` | When known |
+| `stageName`, `waitsOn` | The current stage's label, and what its open gate waits on (document names, a commit id, a count) |
+| `gate` | The open gate's kind only (`docs`, `commit`, `question`) |
+| `needsYou` | Whether it waits for the user |
+| `hue` | The agent's colour as a CSS `hsl(…)`, the one the rest of the UI uses |
+| `prUrl`, `prState`, `prCi` | The pull request, its state and checks, when there is one |
+
+A field with no value is left out. `gate` may also be `pr-triage` or `pr-replies` (pull request comment rounds).
+
+**The view kit.** Two files at `/api/v1/view-kit/` save writing the protocol and the styles yourself:
+
+- `xherd-view.js`, a classic script that defines the global `xherdView`: `xherdView.onData(cb)` calls `cb({agents, flows, theme})` for every `data` message (a callback added after the first message gets the last one at once), `xherdView.open(agentId)` asks to open an agent. It says `ready` when it loads and sets `data-theme` on `<html>` before each callback. Load it before your own scripts.
+- `xherd.css`, xherd's design tokens and component classes (`app.css`), which follow `data-theme`, so the view matches the UI in both themes.
+
+Reference them by absolute path (`/api/v1/view-kit/xherd-view.js`); your own files by relative path.
+
+**Example.** The built-in `herd-tiles` ([`plugins/herd-tiles`](../../plugins/herd-tiles)) is a whole view in plain HTML, CSS and JavaScript with no build step, about 150 lines: copy its folder to start.
+
+```html
+<link rel="stylesheet" href="/api/v1/view-kit/xherd.css">
+<link rel="stylesheet" href="tiles.css">
+…
+<script src="/api/v1/view-kit/xherd-view.js"></script>
+<script src="tiles.js"></script>
+```
+
+```js
+xherdView.onData(function (d) {
+  root.replaceChildren();
+  d.agents.forEach(function (a) {
+    var b = document.createElement('button');
+    b.textContent = a.name;
+    b.onclick = function () { xherdView.open(a.id); };
+    root.appendChild(b);
+  });
+});
+```
+
+**With Vite and Svelte** (or any bundler): build a static page, and make it fit the policy. In `vite.config.js` set `base: './'` (the files are served under the plugin's path) and `build: { modulePreload: false }` (Vite's preload helper uses `fetch`, which is blocked). In `index.html` load the kit by absolute URL, as a plain script, before your module:
+
+```html
+<link rel="stylesheet" href="/api/v1/view-kit/xherd.css">
+<script src="/api/v1/view-kit/xherd-view.js"></script>
+<div id="app"></div>
+<script type="module" src="/src/main.js"></script>
+```
+
+```svelte
+<script>
+  let agents = $state([]);
+  window.xherdView.onData((d) => (agents = d.agents));
+</script>
+{#each agents as a (a.id)}
+  <button onclick={() => window.xherdView.open(a.id)}>{a.name}</button>
+{/each}
+```
+
+`vite build` then gives `dist/` with `index.html` and `assets/` (Vite warns that the kit's URLs do not exist at build time; that is expected). The plugin folder is the contents of `dist/` plus `xherd-plugin.json` with `"entry": "index.html"`. `vite dev` does not work as a view (its client uses inline scripts and a WebSocket): build, copy the folder to `<data root>/plugins/<name>/` and restart the daemon. After a later build, reloading the Herd page is enough natively (files are served with `no-cache`); in the container the daemon serves a copy made at start, so restart it again.
 
 ## Tools a plugin needs (`requires`)
 

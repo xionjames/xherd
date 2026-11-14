@@ -76,7 +76,7 @@ by theme; update it together with them.
 ## M4 → v1.0
 
 - [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for agents created from now on
-- [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence is a refusal (R-116)
+- [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence holds the commit (R-116)
 - [x] Repo profiles, first slice: matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-agent token budget, test command tripwire (R-115) and repo instructions, with the global values as defaults; Settings → Repo profiles, JSON export/import (R-1407)
 - [ ] More profile fields: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, spec folder mode, default flow/pack, ticket prefix, tool permissions; the daily budget and a cost estimate per profile
 - [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)

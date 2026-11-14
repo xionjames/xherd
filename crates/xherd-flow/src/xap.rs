@@ -491,6 +491,37 @@ pub fn apply(
                     "list the files of this commit (--files)",
                 ));
             }
+            // Scope fence (R-116): files outside the `files:` of the listed
+            // tasks hold the commit for a human instead of being refused, so
+            // the agent never widens an approved task list to get past it.
+            let mut allowed: Vec<&str> = Vec::new();
+            let mut fenced = !tasks.is_empty();
+            for t in tasks {
+                let task = a.tasks.iter().find(|x| &x.id == t).ok_or_else(|| {
+                    refuse(
+                        "task_unknown",
+                        format!("no task {t}; run `xherd tasks sync`"),
+                    )
+                })?;
+                fenced &= !task.files.is_empty();
+                allowed.extend(task.files.iter().map(String::as_str));
+            }
+            let outside: Vec<&str> = files
+                .iter()
+                .map(String::as_str)
+                .filter(|f| fenced && !allowed.contains(f))
+                .collect();
+            let scope = (!outside.is_empty()).then(|| {
+                format!(
+                    "outside the files: of {}: {}",
+                    tasks.join(", "),
+                    outside.join(", ")
+                )
+            });
+            let needs_human = match (needs_human.clone(), scope) {
+                (Some(own), Some(why)) => Some(format!("{own}; {why}")),
+                (own, why) => own.or(why),
+            };
             let proposal = Commit {
                 id: id.clone(),
                 subject: subject.clone(),
@@ -503,7 +534,7 @@ pub fn apply(
                 status: CommitStatus::Proposed,
                 tasks: tasks.clone(),
                 sha: None,
-                needs_human: needs_human.clone(),
+                needs_human,
             };
             if let Some(open) = open_commit(a) {
                 if open.id == *id && open.status == CommitStatus::Proposed {
@@ -533,36 +564,6 @@ pub fn apply(
                     "docs_gate_open",
                     format!("the {stage} gate is still open; wait for its approval"),
                 ));
-            }
-            let mut allowed: Vec<&str> = Vec::new();
-            let mut fenced = !tasks.is_empty();
-            for t in tasks {
-                let task = a.tasks.iter().find(|x| &x.id == t).ok_or_else(|| {
-                    refuse(
-                        "task_unknown",
-                        format!("no task {t}; run `xherd tasks sync`"),
-                    )
-                })?;
-                fenced &= !task.files.is_empty();
-                allowed.extend(task.files.iter().map(String::as_str));
-            }
-            if fenced {
-                let outside: Vec<&str> = proposal
-                    .files
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|f| !allowed.contains(f))
-                    .collect();
-                if !outside.is_empty() {
-                    return Err(refuse(
-                        "files_outside_scope",
-                        format!(
-                            "{} not in the files: of {}; update tasks.md and sync, or split the commit",
-                            outside.join(", "),
-                            tasks.join(", ")
-                        ),
-                    ));
-                }
             }
             if let Some(s) = flow.stages.iter().find(|s| s.is_commit_gate()) {
                 a.stage = Some(s.id.clone());
@@ -1200,16 +1201,16 @@ mod tests {
             )),
             "task_unknown"
         );
-        assert_eq!(
-            code(apply(
-                &mut a,
-                Some(&p),
-                &propose("C01", &["a.rs", "c.rs"], &["T01"]),
-                Observed::Nothing,
-                0
-            )),
-            "files_outside_scope"
-        );
+        // Outside the task's files: proposed, but held for a human (R-116),
+        // after the agent's own reason.
+        let mut held = a.clone();
+        let mut own = propose("C01", &["a.rs", "c.rs"], &["T01"]);
+        if let XapCmd::CommitPropose { needs_human, .. } = &mut own {
+            *needs_human = Some("why".into());
+        }
+        assert!(apply(&mut held, Some(&p), &own, Observed::Nothing, 0).unwrap());
+        assert!(matches!(&held.gate, Some(Gate::Commit(c))
+            if c.needs_human.as_deref() == Some("why; outside the files: of T01: c.rs")));
         // A task without files: no fence.
         assert!(
             apply(
