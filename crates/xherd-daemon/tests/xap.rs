@@ -253,15 +253,17 @@ async fn tasks_and_commit_with_real_git() {
     xap(&t, "c2", "task.start", json!({"id": "T01"}))
         .await
         .unwrap();
-    let e = xap(
+    // Outside the task's files: held for a human, not refused (R-116).
+    xap(
         &t,
         "c3",
         "commit.propose",
         json!({"id": "C01", "subject": "a", "files": ["b.txt"], "tasks": ["T01"]}),
     )
     .await
-    .unwrap_err();
-    assert_eq!(e.code, "files_outside_scope");
+    .unwrap();
+    assert!(matches!(get(&t).await.gate, Some(Gate::Commit(c))
+        if c.needs_human.as_deref() == Some("outside the files: of T01: b.txt")));
     xap(
         &t,
         "c4",
@@ -270,7 +272,7 @@ async fn tasks_and_commit_with_real_git() {
     )
     .await
     .unwrap();
-    assert!(matches!(get(&t).await.gate, Some(Gate::Commit(_))));
+    assert!(matches!(get(&t).await.gate, Some(Gate::Commit(c)) if c.needs_human.is_none()));
 
     std::fs::write(t.wt.path().join("a.txt"), "a").unwrap();
     std::fs::write(t.wt.path().join("b.txt"), "b").unwrap();
@@ -642,6 +644,63 @@ async fn task_progress_does_not_reopen_the_tasks_gate() {
     let a = get(&t).await;
     assert_eq!(a.status, Status::WaitingInput);
     assert!(matches!(&a.gate, Some(Gate::Docs { stage, .. }) if stage == "tasks"));
+}
+
+#[tokio::test]
+async fn syncing_an_edited_approved_task_list_reopens_its_gate_at_once() {
+    let t = setup().await;
+    let tasks = t.wt.path().join(".xherd/spec/tasks.md");
+    let v1 = "# Tasks\n\n## T01: Store\n- files: `a.rs`\n";
+    std::fs::write(&tasks, v1).unwrap();
+    xap(&t, "c1", "tasks.sync", json!({})).await.unwrap();
+    stop(&t, 1).await;
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap();
+    xap(&t, "c2", "stage.enter", json!({"stage": "implement"}))
+        .await
+        .unwrap();
+
+    // Widened while another gate is open: refused until that one is decided.
+    xap(&t, "q1", "ask", json!({"text": "which db?"}))
+        .await
+        .unwrap();
+    std::fs::write(&tasks, v1.replace("`a.rs`", "`a.rs`, `b.rs`")).unwrap();
+    let e = xap(&t, "c3", "tasks.sync", json!({})).await.unwrap_err();
+    assert_eq!(e.code, "tasks_approved");
+    stop(&t, 2).await;
+    act(
+        &t,
+        UserAction::Send {
+            text: "sqlite".into(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // With no gate open the sync re-opens the tasks gate, held for a human,
+    // so the wider scope cannot reach a commit unapproved.
+    xap(&t, "c4", "tasks.sync", json!({})).await.unwrap();
+    let a = get(&t).await;
+    assert!(
+        matches!(&a.gate, Some(Gate::Docs { stage, needs_human: Some(_), .. }) if stage == "tasks")
+    );
+    let e = xap(
+        &t,
+        "c5",
+        "commit.propose",
+        json!({"id": "C01", "subject": "a", "files": ["b.rs"], "tasks": ["T01"]}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, "docs_gate_open");
 }
 
 #[tokio::test]
