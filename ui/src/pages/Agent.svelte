@@ -227,5 +227,7 @@
 <style>
   .anchor { position: relative; }
   .mpad { padding: 6px 10px; }
-  .model :global(select), .model :global(input) { width: 18ch; }
+  /* ModelInput's wrapper may shrink to nothing in this row; size it, not the select inside. */
+  .model :global(.mi) { flex: none; width: auto; }
+  .model :global(select), .model :global(input) { flex: none; width: 18ch; }
 </style>
