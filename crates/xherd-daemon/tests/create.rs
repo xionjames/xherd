@@ -798,4 +798,7 @@ async fn remove_worktree_only_once_the_agent_is_finished() {
     assert!(a.worktree_removed_at.is_some());
     let list = git(t.repo.path(), &["worktree", "list", "--porcelain"]);
     assert!(!String::from_utf8_lossy(&list.stdout).contains(wt.to_string_lossy().as_ref()));
+    // The Ticket tab keeps working: it reads the main checkout's origin.
+    let status = t.d.ticket_status("SC-8").await.unwrap();
+    assert_eq!(status["posted"], false);
 }

@@ -166,7 +166,12 @@ impl Daemon {
         who: &str,
     ) -> Result<(xherd_core::agent::Agent, Option<Resolved>), ActionError> {
         let a = self.action(who, crate::actor::UserAction::Get).await?;
-        let wd = crate::workdir_of(&a)?.to_path_buf();
+        // Once the worktree is removed, the main checkout has the same
+        // `origin`, so the ticket can still be read and commented on (R14).
+        let wd = match (&a.worktree_removed_at, &a.repo) {
+            (Some(_), Some(repo)) => std::path::PathBuf::from(repo),
+            _ => crate::workdir_of(&a)?.to_path_buf(),
+        };
         let Some(ticket) = a.ticket.clone() else {
             return Ok((a, None));
         };
