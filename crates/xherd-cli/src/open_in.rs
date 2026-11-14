@@ -187,6 +187,62 @@ pub fn attach(client: &Client, who: &str, shell: bool) -> i32 {
     1
 }
 
+/// `xherd terminal-handler install|uninstall` (R7, native): registers the
+/// `xherd-term://` link for the user running it, with the daemon's worktrees
+/// folder as the only root it opens, and reports to the daemon on loopback.
+/// Runs on the user's own computer, like `open`, with their environment
+/// (the installer needs `HOME`, the `XDG_*` folders and the desktop's tools).
+pub fn terminal_handler(uninstall: bool) -> i32 {
+    if std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "xherd runs in a container here: run the command from Settings → Open in on your computer"
+        );
+        return 2;
+    }
+    let cfg = match xherd_core::config::Config::load(&xherd_core::paths::Paths::from_env().config())
+    {
+        Ok((c, _)) => c,
+        Err(e) => {
+            eprintln!("xherd: {e}");
+            return 2;
+        }
+    };
+    let root = cfg.workspace_root().join("worktrees");
+    let report = format!("http://127.0.0.1:{}", cfg.port);
+    let script = match xherd_daemon::open_in::handler_script(&root.to_string_lossy(), &report) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("xherd: {e}");
+            return 2;
+        }
+    };
+    let op = if uninstall { "uninstall" } else { "install" };
+    let child = std::process::Command::new("sh")
+        .args(["-s", op])
+        .stdin(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("xherd: sh: {e}");
+            return 1;
+        }
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        // A failed write shows as the script's own failure below.
+        let _ = stdin.write_all(script.as_bytes());
+    }
+    match child.wait() {
+        Ok(s) if s.success() => 0,
+        Ok(_) => 1,
+        Err(e) => {
+            eprintln!("xherd: sh: {e}");
+            1
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

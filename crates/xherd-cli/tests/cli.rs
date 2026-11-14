@@ -369,3 +369,75 @@ fn xap_exit_codes_without_daemon() {
     );
     assert_eq!(o.status.code(), Some(64));
 }
+
+/// R7: `xherd terminal-handler install|uninstall` renders the installer from
+/// the saved config and runs it for this user, with no daemon running.
+#[test]
+fn terminal_handler_install_and_uninstall() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    let bin = home.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = home.join("tools.log");
+    for t in ["xdg-mime", "update-desktop-database", "curl"] {
+        let p = bin.join(t);
+        std::fs::write(
+            &p,
+            format!("#!/bin/sh\necho \"{t} $*\" >> '{}'\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let workspace = home.join("ws");
+    std::fs::write(
+        home.join("config.json"),
+        serde_json::json!({"port": 47999, "workspace": workspace}).to_string(),
+    )
+    .unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let env = [("PATH", path.as_str()), ("XHERD_TERM_OS", "linux")];
+    let handler = home.join(".local/bin/xherd-open-terminal");
+    let desktop = home.join(".local/share/applications/xherd-term.desktop");
+    let conf = home.join(".config/xherd/terminal-handler.conf");
+
+    let o = xherd(&home, &home, &["terminal-handler", "install"], &env, "");
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(handler.is_file() && desktop.is_file());
+    let root = workspace.join("worktrees");
+    let conf_text = std::fs::read_to_string(&conf).unwrap();
+    assert!(
+        conf_text.contains(&format!("root={}", root.display())),
+        "{conf_text}"
+    );
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains("xdg-mime default xherd-term.desktop"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("http://127.0.0.1:47999/api/v1/open-in/terminal-handler"),
+        "{calls}"
+    );
+
+    let o = xherd(&home, &home, &["terminal-handler", "uninstall"], &env, "");
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(!handler.exists() && !desktop.exists() && !conf.exists());
+
+    // Inside the container it refuses: the handler belongs on the user's computer.
+    let mut env = env.to_vec();
+    env.push(("XHERD_SANDBOX", "1"));
+    let o = xherd(&home, &home, &["terminal-handler", "install"], &env, "");
+    assert_eq!(o.status.code(), Some(2));
+    assert!(!handler.exists());
+}
