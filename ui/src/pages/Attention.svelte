@@ -1,26 +1,34 @@
 <script lang="ts">
   // Needs attention: everything waiting on you in one place. Agents at a gate,
   // blocked or asking (oldest first); TODOs that are due or whose check
-  // failed; and what xherd approved by itself (R-111), newest first, until
-  // marked seen ("Mark seen" hides an item; the approval ledger keeps it).
+  // failed; and, last and folded, what xherd approved by itself (R-111, R2),
+  // newest first, until marked seen ("Mark seen" hides an item; the approval
+  // ledger keeps it). Approvals never count as needing you (R1).
   import { app } from '../lib/store.svelte';
   import { post } from '../lib/api';
   import { href } from '../lib/router.svelte';
   import { agoText } from '../lib/format';
   import { showError } from '../lib/errors.svelte';
-  import { attention, refresh, waitingAgents, dueTodos, unseenApprovals, type AutoApproval } from '../lib/attention.svelte';
+  import { attention, refresh, waitingAgents, dueTodos, unseenApprovals, approvalHref, type AutoApproval } from '../lib/attention.svelte';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
   import NeedsCards from '../components/NeedsCards.svelte';
 
   let showSeen = $state(false);
+  // The approvals section is folded unless the user opened it (remembered).
+  const OPEN = 'xherd.attention.approvals';
+  let open = $state((() => { try { return localStorage.getItem(OPEN) === '1'; } catch { return false; } })());
+  function toggle() {
+    open = !open;
+    try { localStorage.setItem(OPEN, open ? '1' : '0'); } catch { /* not remembered */ }
+  }
   $effect(() => { refresh(); });
 
   const waiting = $derived(waitingAgents());
   const todos = $derived(dueTodos());
   const unseen = $derived(unseenApprovals());
   const approvals = $derived((attention.reviews ?? []).filter((i) => showSeen || !i.seen));
-  const nothing = $derived(!waiting.length && !todos.length && !unseen.length);
+  const nothing = $derived(!waiting.length && !todos.length);
 
   async function markSeen(list: AutoApproval[]) {
     try {
@@ -63,18 +71,27 @@
   {/if}
 
   {#if attention.reviews?.length}
-    <Panel title="Approved by xherd" hint="under autonomy important; anything a tripwire held waited for you instead" flush>
+    <Panel label="Approved by xherd" flush>
       {#snippet head()}
-        <label class="f chk"><input type="checkbox" bind:checked={showSeen} /> Show seen</label>
-        <button class="btn sm" disabled={!unseen.length} onclick={() => markSeen(unseen)}>Mark all seen</button>
+        <button class="btn ghost sm icon" aria-label={open ? 'Fold' : 'Unfold'} aria-expanded={open} onclick={toggle}>{open ? '▾' : '▸'}</button>
+        <div class="t"><h2>Approved by xherd</h2><p class="hint">under autonomy important; anything a tripwire held waited for you instead</p></div>
+        {#if unseen.length}<span class="pill" title="not seen yet">{unseen.length} unseen</span>{/if}
+        {#if open}
+          <label class="f chk"><input type="checkbox" bind:checked={showSeen} /> Show seen</label>
+          <button class="btn sm" disabled={!unseen.length} onclick={() => markSeen(unseen)}>Mark all seen</button>
+        {/if}
       {/snippet}
-      {#if approvals.length}
+      {#if !open}
+        <!-- folded: the header alone -->
+      {:else if approvals.length}
         <ul class="list">
           {#each approvals as it (`${it.agentId}${it.at}${it.gate}`)}
             <li>
               <div class="row">
-                {#if name(it.agentId)}<a href={href(`/agent/${name(it.agentId)}`)}><b>{name(it.agentId)}</b></a>{:else}<span class="muted">removed agent</span>{/if}
-                <span class="pill mono">{it.gate}</span>
+                {#if name(it.agentId)}
+                  <a href={href(`/agent/${name(it.agentId)}`)}><b>{name(it.agentId)}</b></a>
+                  <a class="pill mono" href={approvalHref(it, name(it.agentId)!)} title="Open what was approved">{it.gate}</a>
+                {:else}<span class="muted">removed agent</span><span class="pill mono">{it.gate}</span>{/if}
                 <span class="hint">{agoText(it.at)}</span>
                 <span class="grow"></span>
                 {#if it.seen}<span class="hint">seen</span>{:else}<button class="btn ghost sm" onclick={() => markSeen([it])}>Mark seen</button>{/if}
