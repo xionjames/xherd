@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Agent } from '../lib/types';
-  import { needsYou, STATUS_LABEL } from '../lib/format';
+  import { needsYou, STATUS_LABEL, waitsAtGate } from '../lib/format';
   let { agent }: { agent: Agent } = $props();
   const tone = $derived(
     needsYou(agent) ? 'gate'
@@ -11,7 +11,7 @@
   // The state only; where it waits (stage, document, commit) is shown apart.
   const wait = $derived(
     agent.status === 'blocked' ? 'blocked'
-      : agent.gate && agent.gate.kind !== 'question' ? 'needs you'
+      : waitsAtGate(agent) && agent.gate?.kind !== 'question' ? 'needs you'
       : 'your answer',
   );
 </script>

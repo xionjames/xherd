@@ -15,7 +15,7 @@
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
   import { flowOf, prGate } from '../lib/flow';
-  import { agoText, needsYou, repoName, shortBase } from '../lib/format';
+  import { agoText, needsYou, repoName, shortBase, waitsAtGate } from '../lib/format';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { MODE_HINT, modes } from '../lib/modes';
@@ -72,7 +72,8 @@
   const live = $derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
 
   function badge(id: string): { n: string | number; tone: string } | undefined {
-    const g = agent.gate;
+    // A gate autonomy will approve at the stop gets no ✋ (R4).
+    const g = waitsAtGate(agent) ? agent.gate : undefined;
     if (id === 'spec' && g?.kind === 'docs' && !prGate(g)) return { n: '✋', tone: 'g' };
     if (id === 'pr' && prGate(g)) return { n: '✋', tone: 'g' };
     if (id === 'changes' && g?.kind === 'commit') return { n: '✋', tone: 'g' };

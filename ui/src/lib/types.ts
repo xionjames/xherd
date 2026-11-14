@@ -140,6 +140,12 @@ export interface Agent {
   permissionMode?: import('./modes').PermissionMode;
   /** Model the runtime is launched with; missing = the runtime's own default. */
   model?: string;
+  /** An Ask session held open (#121): the agent stays live until Finish. */
+  askHold?: { at: number; wasWatching: boolean };
+  /** When the worktree folder was removed (#123); the branch stays. */
+  worktreeRemovedAt?: number;
+  /** The open gate is one autonomy will approve at the next stop (R4): it does not wait for you. */
+  autoApprovePending?: boolean;
 }
 
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean }
