@@ -159,6 +159,8 @@ export interface PluginInfo {
   login: boolean;
   /** A runtime plugin that takes a model; its suggestions come from `GET /runtimes/{name}/models`. */
   chooseModel?: boolean;
+  /** A Herd view plugin: its page, served at `/api/v1/plugins/{name}/view/{entry}`. */
+  view?: { entry: string };
 }
 
 export interface ModelSuggestion { id: string; label?: string; tier?: string }

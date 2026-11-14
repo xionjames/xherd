@@ -7,6 +7,7 @@ export const KIND_LABEL: Record<string, string> = {
   host: 'Git providers',
   tracker: 'Issue trackers',
   toolchain: 'Languages',
+  view: 'Herd views',
 };
 
 /** One plugin of the kind. */
@@ -15,12 +16,13 @@ export const KIND_ONE: Record<string, string> = {
   host: 'Git provider',
   tracker: 'Issue tracker',
   toolchain: 'Language',
+  view: 'Herd view',
 };
 
-export const KIND_ORDER = ['runtime', 'host', 'tracker', 'toolchain'];
+export const KIND_ORDER = ['runtime', 'host', 'tracker', 'toolchain', 'view'];
 
 /** Kinds that may have every plugin switched off. */
-export const OPTIONAL_KINDS = ['tracker', 'host'];
+export const OPTIONAL_KINDS = ['tracker', 'host', 'view'];
 
 /** The last plugin on in a kind that must keep one cannot be switched off. */
 export const lastOn = (p: PluginInfo, plugins: PluginInfo[]) =>
