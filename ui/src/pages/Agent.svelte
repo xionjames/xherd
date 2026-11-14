@@ -144,7 +144,7 @@
           {#if canModel}
             {#key agent.model}
               <label class="hfield" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume)."><span>model</span>
-                <ModelInput runtime={agent.runtime ?? 'claude-code'} value={agent.model ?? ''} disabled={finished} onchange={setModel} /></label>
+                <ModelInput inline runtime={agent.runtime ?? 'claude-code'} value={agent.model ?? ''} placeholder="default" disabled={finished} onchange={setModel} /></label>
             {/key}
           {/if}
           {#if agent.flow && agent.flow !== 'none'}
