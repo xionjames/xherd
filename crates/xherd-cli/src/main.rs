@@ -155,8 +155,6 @@ enum Cmd {
     Attach { agent: String },
     /// A shell in an agent's worktree (in the container when xherd runs in Docker).
     Shell { agent: String },
-    /// Run Open-in requests from the browser with this computer's apps.
-    Companion,
     /// Toolchains of the current worktree (R-652).
     #[command(subcommand)]
     Toolchain(ToolchainCmd),
@@ -421,7 +419,6 @@ fn main() -> ExitCode {
         Cmd::Open { agent, app } => with_client(|c| open_in::open(c, &agent, app)),
         Cmd::Attach { agent } => with_client(|c| open_in::attach(c, &agent, false)),
         Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),
-        Cmd::Companion => with_client(open_in::companion),
         Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
         Cmd::Security(SecurityCmd::Check) => with_client(security_check),
         Cmd::Backup(BackupCmd::Create { to }) => backup::create(to),

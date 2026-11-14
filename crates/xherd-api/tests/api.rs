@@ -1022,3 +1022,32 @@ async fn opaque_origin_gets_no_rights() {
     assert_eq!(plugin("my-view")["view"], json!({"entry": "index.html"}));
     assert!(plugin("github").get("view").is_none());
 }
+
+#[tokio::test]
+async fn companion_routes_are_gone() {
+    let (_dir, d, _a) = setup().await;
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    // Now only the generic action route matches: no such action.
+    let req = Request::post("/api/v1/agents/SC-1/open")
+        .header("host", "127.0.0.1:4740")
+        .body(Body::empty())
+        .unwrap();
+    let (s, v) = call(local.clone(), req).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_action"))
+    );
+    let req = get("/api/v1/companion/next?wait=0")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local.clone(), req).await.0, StatusCode::NOT_FOUND);
+
+    // The test agent has no worktree.
+    let req = get("/api/v1/agents/SC-1/open-targets")
+        .body(Body::empty())
+        .unwrap();
+    let (s, v) = call(local, req).await;
+    assert!(s.is_client_error(), "{s}");
+    assert_eq!(v["code"], "no_workspace");
+}

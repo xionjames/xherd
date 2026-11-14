@@ -53,9 +53,7 @@ pub fn router(d: Daemon) -> Router {
             get(get_viewed).post(post_viewed),
         )
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
-        .route("/api/v1/agents/{id}/open", post(open_in))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
-        .route("/api/v1/companion/next", get(companion_next))
         .route("/api/v1/open-in", get(open_in_view))
         .route("/api/v1/repos", get(repos))
         .route("/api/v1/repos/resolve", post(resolve_repo))
@@ -167,7 +165,7 @@ impl From<ActionError> for ApiError {
             | "runtime_hooks" | "unknown_pack" | "unknown_runtime" | "bad_model"
             | "model_unavailable" => StatusCode::UNPROCESSABLE_ENTITY,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
-            "not_fixable" | "no_companion" => StatusCode::NOT_FOUND,
+            "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
@@ -782,63 +780,9 @@ async fn open_targets(
     Ok(Json(json!({"targets": d.open_targets(&id).await?})))
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OpenReq {
-    app: String,
-}
-
-async fn open_in(
-    _: User,
-    State(d): State<Daemon>,
-    Path(id): Path<String>,
-    Json(r): Json<OpenReq>,
-) -> ApiResult<Json<Value>> {
-    d.open_with_companion(&id, &r.app).await?;
-    Ok(Json(json!({"ok": true})))
-}
-
-/// Settings → Open in (R-706): link entries and the companion's offer.
+/// Settings → Open in (R-706): the link entries.
 async fn open_in_view(_: User, State(d): State<Daemon>) -> Json<Value> {
     Json(d.open_in_view())
-}
-
-#[derive(Deserialize)]
-struct CompanionQuery {
-    #[serde(default)]
-    apps: String,
-    /// Request kinds it understands: `terminal`, `commands` (R-706, R-707).
-    #[serde(default)]
-    features: String,
-    /// Terminal apps installed there, its default first (R-707).
-    #[serde(default)]
-    terminals: String,
-    #[serde(default)]
-    wait: Option<u64>,
-}
-
-/// The host companion's long poll (`xherd companion`): `{request}` or
-/// `{request: null}` after `wait` seconds (at most 30).
-async fn companion_next(
-    _: User,
-    State(d): State<Daemon>,
-    axum::extract::Query(q): axum::extract::Query<CompanionQuery>,
-) -> ApiResult<Json<Value>> {
-    let list = |s: &str| {
-        s.split(',')
-            .map(str::trim)
-            .filter(|a| !a.is_empty())
-            .map(str::to_string)
-            .collect()
-    };
-    let offer = xherd_daemon::open_in::Offer {
-        apps: list(&q.apps),
-        features: list(&q.features),
-        terminals: list(&q.terminals),
-    };
-    let wait = std::time::Duration::from_secs(q.wait.unwrap_or(25).min(30));
-    let r = d.companion.next(offer, wait).await;
-    Ok(Json(json!({"request": r})))
 }
 
 // ---- git access ----------------------------------------------------------------

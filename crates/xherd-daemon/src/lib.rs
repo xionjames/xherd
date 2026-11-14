@@ -166,8 +166,6 @@ pub struct Daemon {
     pub sandbox: bool,
     /// See `Options::local_peers`.
     pub local_peers: Arc<Vec<std::net::IpAddr>>,
-    /// Open-in requests for the host companion (R-704).
-    pub companion: open_in::Companion,
     /// When the work log last booked agent time (ms; 0 = not yet).
     pub worklog_flushed: Arc<std::sync::atomic::AtomicI64>,
     /// Held while `secrets.json` is read, changed and saved, so two saves
@@ -309,7 +307,6 @@ impl Daemon {
             xherd_bin: opts.xherd_bin,
             sandbox: opts.sandbox,
             local_peers: Arc::new(opts.local_peers),
-            companion: open_in::Companion::default(),
             worklog_flushed: Arc::default(),
             secrets_write: Arc::default(),
             config_write: Arc::default(),
