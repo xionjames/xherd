@@ -852,6 +852,7 @@ fn external_views(paths: &Paths) {
     let outside = paths.root.join("outside.js");
     std::fs::write(&outside, "outside").unwrap();
     std::os::unix::fs::symlink(&outside, dir.join("link.js")).unwrap();
+    std::os::unix::fs::symlink(".env", dir.join("notes.txt")).unwrap();
     let host = paths.plugins().join("my-host");
     std::fs::create_dir_all(&host).unwrap();
     std::fs::write(
@@ -911,6 +912,7 @@ async fn view_plugin_files_are_served_sandboxed() {
         "/api/v1/plugins/my-view/view/%2E%2E%2Foutside.js",
         "/api/v1/plugins/my-view/view/.env",
         "/api/v1/plugins/my-view/view/link.js",
+        "/api/v1/plugins/my-view/view/notes.txt",
         "/api/v1/plugins/my-view/view/missing.js",
         "/api/v1/plugins/my-view/view/assets",
         "/api/v1/plugins/my-host/view/index.html",
@@ -947,7 +949,7 @@ async fn view_plugin_files_are_served_sandboxed() {
     }
 }
 
-/// R11: the view kit (xherd's stylesheet and the protocol script) is public
+/// R10: the view kit (xherd's stylesheet and the protocol script) is public
 /// and locked like view files.
 #[tokio::test]
 async fn view_kit_is_served() {
@@ -976,7 +978,7 @@ async fn view_kit_is_served() {
     );
 }
 
-/// R10: a view runs with an opaque origin (`Origin: null`): it never gets the
+/// R11: a view runs with an opaque origin (`Origin: null`): it never gets the
 /// local user's rights, not for the state nor for the live stream; `/state`
 /// tells the UI where a view starts.
 #[tokio::test]

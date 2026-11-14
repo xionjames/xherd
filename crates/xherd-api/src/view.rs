@@ -69,7 +69,15 @@ fn read_under(root: &std::path::Path, rel: &str) -> Result<Vec<u8>, StatusCode> 
         .join(rel)
         .canonicalize()
         .map_err(|_| StatusCode::NOT_FOUND)?;
-    if !file.starts_with(&root) {
+    // Under the root, and no hidden segment once symlinks are resolved
+    // (`notes.txt -> .env` must not serve `.env`).
+    let below = file
+        .strip_prefix(&root)
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+    if below
+        .components()
+        .any(|c| c.as_os_str().to_string_lossy().starts_with('.'))
+    {
         return Err(StatusCode::NOT_FOUND);
     }
     let meta = std::fs::metadata(&file).map_err(|_| StatusCode::NOT_FOUND)?;
