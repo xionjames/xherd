@@ -102,6 +102,9 @@ pub enum Trigger {
     SessionLost,
     /// User cancelled.
     Cancel,
+    /// User finished an Ask session of an agent that was watching its PR
+    /// (#121): back to watching. Other Finishes are a `Pause`.
+    Finish,
 }
 
 /// The lifecycle table. `None` means the trigger does not apply in that status.
@@ -126,6 +129,9 @@ pub fn next_status(from: Status, trigger: Trigger) -> Option<Status> {
             Some(S::Queued)
         }
         (T::Watch, S::Idle) => Some(S::Watching),
+        (T::Finish, S::Queued | S::Running | S::Blocked | S::Idle | S::WaitingInput) => {
+            Some(S::Watching)
+        }
         (T::PrComments, S::Watching) => Some(S::Queued),
         (T::PrFinished, S::Watching) => Some(S::Done),
         (T::SessionLost, s) if s.is_live() => Some(S::Error),
@@ -170,6 +176,9 @@ mod tests {
             (S::Parked, T::Resume, S::Queued),
             (S::Watching, T::Resume, S::Queued),
             (S::Idle, T::Watch, S::Watching),
+            (S::Queued, T::Finish, S::Watching),
+            (S::Idle, T::Finish, S::Watching),
+            (S::WaitingInput, T::Finish, S::Watching),
             (S::Watching, T::PrComments, S::Queued),
             (S::Watching, T::PrFinished, S::Done),
             (S::Running, T::SessionLost, S::Error),

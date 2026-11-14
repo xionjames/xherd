@@ -3,8 +3,10 @@
   // "Other…" for any name, or a text box when the runtime lists none.
   import { modelList, modelText, type ModelList } from '../lib/models';
 
-  let { runtime, value = $bindable(''), placeholder = "Default (the runtime's own)", disabled = false, label = 'Model', onchange }: {
-    runtime: string; value?: string; placeholder?: string; disabled?: boolean; label?: string;
+  // `inline`: sized by its content, next to other controls (the agent page
+  // header), instead of filling a form field.
+  let { runtime, value = $bindable(''), placeholder = "Default (the runtime's own)", disabled = false, label = 'Model', inline = false, onchange }: {
+    runtime: string; value?: string; placeholder?: string; disabled?: boolean; label?: string; inline?: boolean;
     onchange?: (v: string) => void;
   } = $props();
 
@@ -30,11 +32,11 @@
 </script>
 
 {#if list && models.length === 0}
-  <input class="mono" aria-label={label} bind:value {placeholder} {disabled} autocomplete="off" spellcheck="false"
+  <input class:mono={!inline} aria-label={label} bind:value {placeholder} {disabled} autocomplete="off" spellcheck="false"
     title={list.error ? `No model list: ${list.error}` : undefined} onchange={() => onchange?.(value)} />
 {:else}
-  <span class="mi">
-    <select class="mono" aria-label={label} value={custom ? OTHER : value} {disabled} onchange={pick}>
+  <span class="mpick" class:inline>
+    <select class:mono={!inline} aria-label={label} value={custom ? OTHER : value} {disabled} onchange={pick}>
       <option value="">{placeholder}</option>
       {#if extra}<option value={extra}>{extra}</option>{/if}
       {#each models as m (m.id)}<option value={m.id} title={m.id}>{modelText(m)}</option>{/each}
@@ -50,6 +52,8 @@
 {/if}
 
 <style>
-  .mi { display: flex; gap: 6px; width: 100%; min-width: 0; }
-  .mi select, .mi input { flex: 1 1 0; min-width: 0; }
+  .mpick { display: flex; gap: 6px; width: 100%; min-width: 0; }
+  .mpick select, .mpick input { flex: 1 1 0; min-width: 0; }
+  .mpick.inline { display: inline-flex; width: auto; }
+  .mpick.inline select, .mpick.inline input { flex: none; }
 </style>

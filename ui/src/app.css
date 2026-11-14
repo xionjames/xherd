@@ -301,8 +301,17 @@ label.f.chk.top { align-items: flex-start; }
 .htop { display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: flex-start; }
 .hid { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1 1 320px; }
 .hname { font: 600 22px var(--mono); display: flex; align-items: center; gap: 10px; margin: 0; overflow-wrap: anywhere; }
-.hmeta { font-size: 12px; color: var(--ink-3); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
-.hmeta select { width: auto; height: 28px; }
+/* One line: the facts on the left, the controls pushed to the right (they wrap under the facts, still right-aligned). */
+.hmeta { font-size: 12px; color: var(--ink-3); display: flex; flex-wrap: wrap; align-items: center; gap: 8px 32px; }
+.hfacts { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; min-width: 0; }
+.hfacts > * + *::before { content: '·'; padding: 0 8px; color: var(--ink-3); }
+.hctl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; }
+.hctl:not(:empty)::before { content: "|"; color: var(--ink-3); margin-right: -12px; }
+.hctl:empty { display: none; }
+.hfield { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-3); white-space: nowrap; }
+/* One look for every header control; ModelInput takes `inline` so its form sizing stays out. */
+.hero .hctl .hfield select, .hero .hctl .hfield input { flex: none; width: auto; min-width: 11ch; max-width: 28ch; height: 28px; padding: 0 8px; font: 12px var(--sans); }
+@media (pointer: coarse) { .hero .hctl .hfield select, .hero .hctl .hfield input { height: 40px; font-size: 16px; } }
 .stepper { display: flex; align-items: center; gap: 4px 0; list-style: none; margin: 0; padding: 0; overflow-x: auto; scrollbar-width: none; }
 .stepper::-webkit-scrollbar { display: none; }
 .st { flex: none; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px 0 5px; border-radius: 17px; font-weight: 500; color: var(--ink-3); white-space: nowrap; }

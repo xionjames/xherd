@@ -158,10 +158,7 @@ impl Daemon {
     /// local browser (R-671), minus what Settings hides (R-706).
     pub async fn open_targets(&self, who: &str) -> Result<Vec<Target>, ActionError> {
         let a = self.action(who, UserAction::Get).await?;
-        let dir = a.workdir.ok_or_else(|| ActionError {
-            code: "no_workspace",
-            message: format!("{} has no worktree", a.name),
-        })?;
+        let dir = crate::workdir_of(&a)?.to_string_lossy().into_owned();
         let cfg = self.live_config().open_in;
         let mut out = url_targets(&dir, self.container().as_deref());
         out.extend(companion_targets(
@@ -230,10 +227,7 @@ impl Daemon {
         // The companion knows its own apps by their plain name.
         let app = app.strip_prefix("companion:").unwrap_or(app);
         let a = self.action(who, UserAction::Get).await?;
-        let dir = a.workdir.ok_or_else(|| ActionError {
-            code: "no_workspace",
-            message: format!("{} has no worktree", a.name),
-        })?;
+        let dir = crate::workdir_of(&a)?.to_string_lossy().into_owned();
         self.companion.push(OpenRequest {
             app: app.into(),
             dir,

@@ -13,7 +13,7 @@ You give xherd a ticket. It creates an **agent**: a git worktree and a branch fo
 | **Herd** (home) | Every agent: status, stage, progress, tasks. Agents waiting for you are on top. *By stage* puts them in columns by the role of their current stage; *Tiles* (a view plugin) and other [Herd view plugins](../extend/plugins.md#herd-view-plugins) add more layouts. *Pause all* is the kill switch |
 | **Agent page** | One agent: the your-call band on top, then tabs (below) |
 | **Board** | Every stage and task of every agent as cards in Pending / In progress / Done, plus your TODOs. Swimlanes by agent or repository, filters for one agent, one repository, or only what needs you |
-| **Needs attention** (✋ and a count in the bar) | Agents waiting for you, TODOs that are due, and approvals xherd made for you that you have not looked at |
+| **Needs attention** (✋ and a count in the bar) | Agents waiting for you and TODOs that are due or whose check failed: only these raise the ✋ and the count. Below them, folded, *Approved by xherd*: the approvals xherd made for you that you have not marked seen, each linking to what was approved |
 | **TODOs** | Reminders and condition checks (below) |
 | **Time** | Agent time and your time per day and ticket, cycle time, review rounds and rework |
 | **Settings** | General, Gates & autonomy, Notifications, Open in, Git access, Repo profiles, Backups, Plugins, About |
@@ -64,7 +64,7 @@ Every stage starts a **fresh session** of the runtime. What carries over is `.xh
 When an agent stops at a gate, the **your-call band** on its page says what it waits for, with **Approve** and **Request changes** on the tab that holds what you approve.
 
 - **Documents** (the *Spec* tab) render Markdown, with Mermaid diagrams drawn. Click any block, or a list item, to comment on it. Questions the agent lists under `## Open questions` get an answer box each. After a change request, the blocks that changed since you read them are marked.
-- **Changes** shows diffs. Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*. A new or changed file over 8 MiB that is not committed yet (a heap dump, a build artefact) is listed with its size but not read.
+- **Changes** shows diffs. The side column lists the files of the diff shown, with their +/− counts and a box that filters the list by path; clicking a file jumps to it (on a phone the list is folded behind *Files (N)* above the diff). Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*. A new or changed file over 8 MiB that is not committed yet (a heap dump, a build artefact) is listed with its size but not read.
 - **Send N comments** sends every comment, from documents and diffs, as one change request.
 - **Approve** covers exactly what you read: the UI sends the hash of what it showed, and if a file changed since, the approval is refused. Editing an approved document re-opens its gate.
 - At a commit gate you can edit the commit message before approving. If git refuses the commit (a hook fails), the agent is asked to fix it.
@@ -77,7 +77,7 @@ If the agent asks a question (`xherd ask`), the band shows it with an answer box
 
 | Tab | Shows |
 |---|---|
-| Terminal | The live session. Type into it. Selecting text needs Shift+drag (Option+drag on a Mac) because the runtime takes the mouse |
+| Terminal | The live session. Type into it. Selecting text needs Shift+drag (Option+drag on a Mac) because the runtime takes the mouse. With no session, *Ask* (below) |
 | Tasks | Tasks with status, evidence and dependencies; tasks from a review or PR round are tagged |
 | Commits | Proposed and made commits, with message and files |
 | Ticket | The ticket and its comments, read from the tracker, and posting a summary (below) |
@@ -116,14 +116,16 @@ stateDiagram-v2
 - **Parked**: an agent that waits at a gate longer than `gateParkMinutes` frees its slot. Approving it still works: it gets a fresh session with the next command.
 - **Blocked**: the runtime shows a permission prompt or dialog. Open the terminal and answer it. A git authentication failure also blocks an agent with the reason *git access*; the band shows the git doctor's first failure and its fix.
 - **Pause** asks the agent to write a handoff note (`.xherd/HANDOFF.md`) and ends the session once it has, or after `pauseTimeoutSec`. **Resume** starts a fresh session from that note. **Pause all** (or `xherd pause --all`) stops every agent at once, without notes.
-- **Cancel** ends the session at once. The worktree stays, and the agent can be resumed.
+- **Ask**: a paused, parked, watching or failed agent has a text box in its Terminal tab. Your text starts a session (continuing the last conversation when the runtime finds it) as its first prompt, and the session stays open while the agent only answers: it is not approved automatically or sent back to *watching*, and you can go on typing in the terminal. A band says so, and **Finish** (in the band, in place of Pause, or `xherd finish`) ends it: back to *watching* when it was watching its PR, else *paused*. If the agent starts flow work instead (enters a stage, opens a gate, works on tasks or commits), the hold ends and the usual rules apply. From the CLI: `xherd talk <agent> "<text>"`.
+- **Cancel** ends the session at once. The worktree stays, and the agent can be resumed, unless you tick *Also remove the worktree*.
+- **Remove worktree…** (the agent page's More menu, for a *done* or *cancelled* agent, or `xherd remove-worktree`) deletes the worktree folder, with its uncommitted changes and the spec documents in `.xherd/`. The branch and the agent's record (approvals included) stay; the tabs that read the worktree then say it was removed, and the agent can no longer be resumed.
 - After a restart of the daemon or the container, agents at a gate are parked and the others resumed. A session that dies while the daemon runs is resumed up to twice an hour, then stays in *error*.
 
 ## Autonomy
 
 By default every gate waits for you (`ask`). With `important`, xherd approves *routine* and *code* gates itself (design, tasks, review, commits) and leaves *critical* ones (spec, ship) and *human-only* ones (pr-review) to you. Set it per agent at creation (`--autonomy`), later on the agent page (`xherd autonomy`), per repository in a profile, or as the default in Settings → Gates & autonomy.
 
-Held gates are never auto-approved, nor is a gate xherd inferred because the agent stopped without declaring one. After `maxAutoApprovalsInRow` automatic approvals in a row (default 10), the next gate waits for you. Automatic approvals are listed under **Needs attention** until you mark them seen.
+Held gates are never auto-approved, nor is a gate xherd inferred because the agent stopped without declaring one. After `maxAutoApprovalsInRow` automatic approvals in a row (default 10), the next gate waits for you. A gate xherd will approve when the agent stops does not show as waiting for you meanwhile; if it is held or refused at the stop, it does. Automatic approvals are listed under **Needs attention** (*Approved by xherd*) until you mark them seen; they never raise the ✋.
 
 **Tool permissions** are separate: they say what the runtime may do without asking. `ask` asks before each tool that needs permission, `edits` (default) accepts file edits, `auto` lets the runtime's own checks decide, `all` asks nothing (only in the container). A change applies from the agent's next session.
 
@@ -189,7 +191,9 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | `xherd diff <agent>` | What you are being asked to approve |
 | `xherd approve <agent>` / `xherd changes <agent> "<comment>"` | Approve, or ask for revisions |
 | `xherd send <agent> "<text>"` | Type into the agent's session (also answers a question) |
-| `xherd pause\|resume\|cancel <agent>` | Lifecycle; `xherd pause --all` stops every agent at once |
+| `xherd pause\|resume\|cancel <agent>` | Lifecycle; `xherd pause --all` stops every agent at once; `cancel --remove-worktree` also deletes the worktree |
+| `xherd talk <agent> "<text>"` / `xherd finish <agent>` | Ask a stopped agent something, and end that session |
+| `xherd remove-worktree <agent>` | Delete a done or cancelled agent's worktree (the branch stays) |
 | `xherd autonomy <agent> <level>`, `xherd mode <agent> <mode>`, `xherd model <agent> <model>` | Autonomy, tool permissions and model |
 | `xherd backup create` | Archive of the agents and their work |
 | `xherd security check` | Exposure overview: binding, user split, plugins, limits |

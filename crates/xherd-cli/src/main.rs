@@ -117,10 +117,21 @@ enum Cmd {
     },
     /// Resume a paused, cancelled or failed agent.
     Resume { agent: String },
-    /// Cancel an agent (ends its session, keeps the worktree).
-    Cancel { agent: String },
+    /// Cancel an agent (ends its session, keeps the worktree unless --remove-worktree).
+    Cancel {
+        agent: String,
+        /// Also remove the worktree folder (the branch and the agent's record stay).
+        #[arg(long)]
+        remove_worktree: bool,
+    },
+    /// Remove a done or cancelled agent's worktree folder (the branch and the record stay).
+    RemoveWorktree { agent: String },
     /// Type a message into an agent's session.
     Send { agent: String, text: String },
+    /// Ask a paused, parked, watching or failed agent something: starts a session with the text and holds it there (no auto-approval, no move to watching) until `xherd finish` or new flow work.
+    Talk { agent: String, text: String },
+    /// End a `talk`: back to watching its PR when it was watching, else paused.
+    Finish { agent: String },
     /// Approve the agent's open gate (documents or commit) as they are now.
     Approve {
         agent: String,
@@ -400,10 +411,20 @@ fn main() -> ExitCode {
             2
         }
         Cmd::Resume { agent } => action(&agent, "resume", None),
-        Cmd::Cancel { agent } => action(&agent, "cancel", None),
+        Cmd::Cancel {
+            agent,
+            remove_worktree,
+        } => action(
+            &agent,
+            "cancel",
+            remove_worktree.then(|| serde_json::json!({"removeWorktree": true})),
+        ),
+        Cmd::RemoveWorktree { agent } => action(&agent, "remove-worktree", None),
         Cmd::Send { agent, text } => {
             action(&agent, "send", Some(serde_json::json!({"text": text})))
         }
+        Cmd::Talk { agent, text } => action(&agent, "ask", Some(serde_json::json!({"text": text}))),
+        Cmd::Finish { agent } => action(&agent, "finish", None),
         Cmd::Approve { agent, reason } => action(
             &agent,
             "approve",
@@ -1012,6 +1033,36 @@ mod tests {
         }
         assert!(seen > 30, "only {seen} calls found");
         assert_eq!(words(r#"a "b c" 'd' """#), ["a", "b c", "d", ""]);
+    }
+
+    #[test]
+    fn talk_and_finish_parse() {
+        let cli = Cli::try_parse_from(["xherd", "talk", "shop", "Why the retry?"]).unwrap();
+        assert!(
+            matches!(cli.cmd, Cmd::Talk { ref agent, ref text } if agent == "shop" && text == "Why the retry?")
+        );
+        let cli = Cli::try_parse_from(["xherd", "finish", "shop"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Finish { ref agent } if agent == "shop"));
+        assert!(Cli::try_parse_from(["xherd", "talk", "shop"]).is_err());
+    }
+
+    #[test]
+    fn cancel_and_remove_worktree_parse() {
+        let cli = Cli::try_parse_from(["xherd", "cancel", "shop"]).unwrap();
+        assert!(
+            matches!(cli.cmd, Cmd::Cancel { ref agent, remove_worktree: false } if agent == "shop")
+        );
+        let cli = Cli::try_parse_from(["xherd", "cancel", "shop", "--remove-worktree"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Cancel {
+                remove_worktree: true,
+                ..
+            }
+        ));
+        let cli = Cli::try_parse_from(["xherd", "remove-worktree", "shop"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::RemoveWorktree { ref agent } if agent == "shop"));
+        assert!(Cli::try_parse_from(["xherd", "remove-worktree"]).is_err());
     }
 
     #[test]

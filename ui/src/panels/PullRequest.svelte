@@ -99,5 +99,6 @@
       {/if}
     </Panel>
   {/if}
-  {#if agent.prUrl}<PrComments {agent} />{/if}
+  <!-- The PR round reads and writes files of the worktree. -->
+  {#if agent.prUrl && !agent.worktreeRemovedAt}<PrComments {agent} />{/if}
 </div>

@@ -1222,6 +1222,9 @@ struct ActionBody {
     mode: Option<xherd_core::permission::PermissionMode>,
     /// Model: a name, or null/empty for the runtime's default (issue #112).
     model: Option<String>,
+    /// Cancel: also remove the worktree (R12).
+    #[serde(rename = "removeWorktree")]
+    remove_worktree: Option<bool>,
 }
 
 async fn agent_action(
@@ -1258,10 +1261,17 @@ async fn agent_action(
     let a = match action.as_str() {
         "pause" => UserAction::Pause,
         "resume" => UserAction::Resume,
-        "cancel" => UserAction::Cancel,
+        "cancel" => UserAction::Cancel {
+            remove_worktree: b.remove_worktree.unwrap_or(false),
+        },
+        "remove-worktree" => UserAction::RemoveWorktree,
         "send" => UserAction::Send {
             text: required(b.text, "text")?,
         },
+        "ask" => UserAction::Ask {
+            text: required(b.text, "text")?,
+        },
+        "finish" => UserAction::Finish,
         "approve" => UserAction::Approve {
             reason: b.reason,
             expect: b.expect.unwrap_or_default(),

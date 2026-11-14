@@ -31,19 +31,21 @@ export interface TabDef {
   icon: string;
   /** Shown for flow `none` agents too. */
   noFlow: boolean;
+  /** Reads the worktree: replaced by a note once it is removed (R14). */
+  worktree: boolean;
 }
 
 /** The built-in agent view (labels as in the design). */
 export const AGENT_VIEW: TabDef[] = [
-  { id: 'terminal', panel: 'terminal', label: 'Terminal', icon: 'term', noFlow: true },
-  { id: 'spec', panel: 'documents', label: 'Spec', icon: 'doc', noFlow: false },
-  { id: 'tasks', panel: 'tasks', label: 'Tasks', icon: 'tasks', noFlow: false },
-  { id: 'commits', panel: 'commits', label: 'Commits', icon: 'commit', noFlow: false },
-  { id: 'changes', panel: 'diff', label: 'Changes', icon: 'diff', noFlow: true },
-  { id: 'ticket', panel: 'ticket', label: 'Ticket', icon: 'doc', noFlow: true },
-  { id: 'pr', panel: 'pr', label: 'Pull request', icon: 'pr', noFlow: true },
-  { id: 'memory', panel: 'memory', label: 'Shared memory', icon: 'doc', noFlow: false },
-  { id: 'activity', panel: 'log', label: 'Activity', icon: 'activity', noFlow: true },
+  { id: 'terminal', panel: 'terminal', label: 'Terminal', icon: 'term', noFlow: true, worktree: false },
+  { id: 'spec', panel: 'documents', label: 'Spec', icon: 'doc', noFlow: false, worktree: true },
+  { id: 'tasks', panel: 'tasks', label: 'Tasks', icon: 'tasks', noFlow: false, worktree: false },
+  { id: 'commits', panel: 'commits', label: 'Commits', icon: 'commit', noFlow: false, worktree: false },
+  { id: 'changes', panel: 'diff', label: 'Changes', icon: 'diff', noFlow: true, worktree: true },
+  { id: 'ticket', panel: 'ticket', label: 'Ticket', icon: 'doc', noFlow: true, worktree: false },
+  { id: 'pr', panel: 'pr', label: 'Pull request', icon: 'pr', noFlow: true, worktree: false },
+  { id: 'memory', panel: 'memory', label: 'Shared memory', icon: 'doc', noFlow: false, worktree: true },
+  { id: 'activity', panel: 'log', label: 'Activity', icon: 'activity', noFlow: true, worktree: false },
 ];
 
 /** Tabs whose panel exists, filtered for flow `none`. */

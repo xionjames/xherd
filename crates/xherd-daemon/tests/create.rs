@@ -721,3 +721,84 @@ async fn a_ticket_url_names_the_branch() {
         (&serde_json::json!("PAY-4"), &serde_json::json!("jira"))
     );
 }
+
+#[tokio::test]
+async fn cancel_can_remove_the_worktree_and_keeps_the_branch() {
+    let t = setup().await;
+    let a = t.d.new_agent(req(&t, "SC-7")).await.unwrap();
+    let wt = std::path::PathBuf::from(a.workdir.clone().unwrap());
+    assert!(wt.is_dir());
+    let a =
+        t.d.action(
+            "SC-7",
+            UserAction::Cancel {
+                remove_worktree: true,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(a.status, Status::Cancelled);
+    assert!(a.worktree_removed_at.is_some());
+    assert!(!wt.exists());
+    // The branch and the record stay.
+    let branches = git(t.repo.path(), &["branch", "--list", "SC-7"]);
+    assert!(String::from_utf8_lossy(&branches.stdout).contains("SC-7"));
+    assert_eq!(a.workdir.as_deref(), Some(wt.to_string_lossy().as_ref()));
+    // Every reader of the worktree answers the same code.
+    assert_eq!(
+        t.d.diff("SC-7", None, None).await.unwrap_err().code,
+        "worktree_removed"
+    );
+    assert_eq!(t.d.docs("SC-7").await.unwrap_err().code, "worktree_removed");
+    assert_eq!(
+        t.d.open_targets("SC-7").await.unwrap_err().code,
+        "worktree_removed"
+    );
+    assert_eq!(
+        t.d.action("SC-7", UserAction::Resume)
+            .await
+            .unwrap_err()
+            .code,
+        "worktree_removed"
+    );
+    // A second removal changes nothing.
+    let again =
+        t.d.action("SC-7", UserAction::RemoveWorktree)
+            .await
+            .unwrap();
+    assert_eq!(again.worktree_removed_at, a.worktree_removed_at);
+}
+
+#[tokio::test]
+async fn remove_worktree_only_once_the_agent_is_finished() {
+    let t = setup().await;
+    let a = t.d.new_agent(req(&t, "SC-8")).await.unwrap();
+    let wt = std::path::PathBuf::from(a.workdir.clone().unwrap());
+    let err =
+        t.d.action("SC-8", UserAction::RemoveWorktree)
+            .await
+            .unwrap_err();
+    assert_eq!(err.code, "not_allowed");
+    assert!(wt.is_dir());
+    t.d.action(
+        "SC-8",
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(wt.is_dir());
+    // Deleted by hand: the removal prunes git's record of it.
+    std::fs::remove_dir_all(&wt).unwrap();
+    let a =
+        t.d.action("SC-8", UserAction::RemoveWorktree)
+            .await
+            .unwrap();
+    assert!(a.worktree_removed_at.is_some());
+    let list = git(t.repo.path(), &["worktree", "list", "--porcelain"]);
+    assert!(!String::from_utf8_lossy(&list.stdout).contains(wt.to_string_lossy().as_ref()));
+    // The Ticket tab keeps working: it reads the main checkout's origin.
+    let status = t.d.ticket_status("SC-8").await.unwrap();
+    assert_eq!(status["posted"], false);
+}

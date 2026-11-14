@@ -12,7 +12,7 @@
   import { route, href } from '../lib/router.svelte';
   import { get } from '../lib/api';
   import { flowOf, steps, stageLabel } from '../lib/flow';
-  import { agentHue, agoText, needsYou, repoName } from '../lib/format';
+  import { agentHue, agoText, needsYou, repoName, waitsAtGate } from '../lib/format';
   import type { Agent, StageInfo, Task } from '../lib/types';
 
   type Todo = { id: string; title: string; due: number; status: 'open' | 'checking' | 'due' | 'done' | 'error'; condition?: string; completedAt?: number };
@@ -102,7 +102,7 @@
       if (col === 'pending') nextShown = true;
       // A later stage already visited: the agent was sent back (review → fix).
       const again = state === 'todo' && (a.visitedStages ?? []).includes(stage.id);
-      const hint = state === 'skip' ? 'skipped' : again ? 'again after the fixes' : current && a.gate ? 'waiting for you' : '';
+      const hint = state === 'skip' ? 'skipped' : again ? 'again after the fixes' : current && waitsAtGate(a) ? 'waiting for you' : '';
       out.push({ kind: 'stage', key: `${a.id}:${stage.id}`, lane, col, agent: a, label: stageLabel(stage), tab: stageTab(stage), hint, needs: current && waits });
     }
     // Fix tasks of a later stage (review, PR) when the implement stage had none.

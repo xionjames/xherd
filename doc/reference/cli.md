@@ -34,7 +34,10 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `xherd changes <agent> "<comment>"` | Ask the agent to revise its open gate |
 | `xherd send <agent> "<text>"` | Type into the session; the answer to a question gate |
 | `xherd pause --all` | Kill switch: pause every queued and live agent now, with no handoff note; nothing new starts |
-| `xherd pause\|resume\|cancel <agent>` | Lifecycle. Pause asks the agent for a handoff note first (up to `pauseTimeoutSec`), then ends the session; cancel ends it at once. Both keep the worktree |
+| `xherd pause\|resume\|cancel <agent>` | Lifecycle. Pause asks the agent for a handoff note first (up to `pauseTimeoutSec`), then ends the session; cancel ends it at once. Both keep the worktree, unless `cancel --remove-worktree` |
+| `xherd remove-worktree <agent>` | Delete a `done` or `cancelled` agent's worktree folder, with its uncommitted changes and `.xherd/` documents; the branch and the agent's record stay, and the agent can no longer be resumed |
+| `xherd talk <agent> "<text>"` | Ask a paused, parked, watching or failed agent something: starts a session with the text as its first prompt and keeps it open (no auto-approval, no move to watching) until `xherd finish` or until the agent does flow work. (`xherd ask` is the agents' question call) |
+| `xherd finish <agent>` | End a `talk` session: back to watching its PR when it was watching, else paused |
 | `xherd autonomy <agent> <ask\|important>` | Change what xherd may approve by itself (rewrites the agent's instructions and tries an auto-approval at once) |
 | `xherd mode <agent> <ask\|edits\|auto\|all>` | Change the agent's tool permissions; the running session keeps its mode, the next session start uses the new one. `all` only in the container |
 | `xherd model <agent> <model>` | Change the agent's model (`""` = the runtime's default); like `mode`, it applies from the next session start |

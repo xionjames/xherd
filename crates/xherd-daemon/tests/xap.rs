@@ -369,7 +369,14 @@ async fn issue_ledger_and_queued_calls() {
 #[tokio::test]
 async fn refused_when_not_live_or_without_flow() {
     let t = setup().await;
-    t.d.action("SC-1", UserAction::Cancel).await.unwrap();
+    t.d.action(
+        "SC-1",
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     let e = xap(&t, "c1", "stage.enter", json!({"stage": "spec"}))
         .await
         .unwrap_err();
@@ -946,7 +953,14 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
 #[tokio::test]
 async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
     let t = setup().await;
-    act(&t, UserAction::Cancel).await.unwrap();
+    act(
+        &t,
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     let a = act(&t, UserAction::Resume).await.unwrap();
     assert_eq!(a.next_prompt.as_deref(), Some("/xherd:resume"));
 
@@ -2644,6 +2658,98 @@ async fn important_approves_a_routine_gate_and_records_it() {
     assert!(events.iter().any(|e| e.kind == "approval"));
 }
 
+/// Writes the gate document and opens the gate, without a stop.
+async fn open_running(t: &T, id: &str, stage: &str, file: &str, extra: Value) -> Agent {
+    std::fs::write(
+        t.wt.path().join(".xherd/spec").join(file),
+        format!("# {stage}\n"),
+    )
+    .unwrap();
+    let mut args = json!({"stage": stage});
+    if let (Some(a), Some(e)) = (args.as_object_mut(), extra.as_object()) {
+        a.extend(e.clone());
+    }
+    xap(t, id, "gate.open", args).await.unwrap();
+    get(t).await
+}
+
+#[tokio::test]
+async fn auto_approve_pending_marks_a_gate_autonomy_will_approve() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(&t, "c1", "design", "design.md", json!({})).await;
+    assert_eq!(a.status, Status::Running);
+    assert!(a.gate.is_some());
+    assert!(
+        a.auto_approve_pending,
+        "important approves design at the stop"
+    );
+
+    stop(&t, 2).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_none(), "approved at the stop");
+    assert!(!a.auto_approve_pending);
+    assert_eq!(ledger_lines(&t).len(), 1);
+}
+
+#[tokio::test]
+async fn auto_approve_pending_is_off_for_a_held_gate_or_level_ask() {
+    // Level ask: a human approves.
+    let t = setup().await;
+    session_start(&t, 1).await;
+    let a = open_running(&t, "c1", "design", "design.md", json!({})).await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+
+    // The agent's own hold.
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(
+        &t,
+        "c1",
+        "design",
+        "design.md",
+        json!({"needsHuman": "touches billing"}),
+    )
+    .await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+
+    // Open questions.
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(
+        &t,
+        "c1",
+        "design",
+        "design.md",
+        json!({"questions": ["Which db?"]}),
+    )
+    .await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+
+    // A class the level does not allow (spec waits under important).
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(&t, "c1", "spec", "spec.md", json!({})).await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+    stop(&t, 2).await;
+    assert!(!get(&t).await.auto_approve_pending);
+}
+
+#[tokio::test]
+async fn auto_approve_pending_is_off_once_the_run_limit_is_reached() {
+    let t = setup_config(json!({"freshSessions": true, "maxAutoApprovalsInRow": 1})).await;
+    act(&t, level("important")).await.unwrap();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert_eq!(get(&t).await.auto_in_row, 1);
+    session_start(&t, 2).await;
+    let a = open_running(&t, "c2", "tasks", "tasks.md", json!({})).await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+}
+
 #[tokio::test]
 async fn important_still_waits_at_the_spec_and_ship_gates() {
     let t = setup().await;
@@ -2879,7 +2985,14 @@ async fn cancel_while_a_pause_waits_for_the_note() {
     session_start(&t, 1).await;
     stop(&t, 2).await;
     act(&t, UserAction::Pause).await.unwrap();
-    let a = act(&t, UserAction::Cancel).await.unwrap();
+    let a = act(
+        &t,
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(a.status, Status::Cancelled);
     assert_eq!(a.pause_requested_at, None);
 }
@@ -2982,4 +3095,183 @@ async fn a_dismissed_starter_agents_md_is_not_proposed_again() {
     // Once the repo has an AGENTS.md, updates are welcome again.
     std::fs::write(wt.join("AGENTS.md"), "# Agents\n").unwrap();
     propose("m3").await.unwrap();
+}
+
+// ---- Ask and Finish (#121) ---------------------------------------------------
+
+/// The agent ships and watches its PR (as in `a_review_after_the_pr_keeps_the_session`).
+async fn watching(t: &T) -> &'static str {
+    let url = "https://github.com/acme/app/pull/42";
+    xap(t, "w1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    xap(t, "w2", "pr.opened", json!({"url": url}))
+        .await
+        .unwrap();
+    stop(t, 1).await;
+    assert_eq!(get(t).await.status, Status::Watching);
+    url
+}
+
+fn stops(t: &T) -> usize {
+    t.drv.calls().iter().filter(|c| *c == "stop SC-1").count()
+}
+
+#[tokio::test]
+async fn ask_holds_the_session_until_the_agent_does_flow_work() {
+    let t = setup().await;
+    watching(&t).await;
+    let a = act(
+        &t,
+        UserAction::Ask {
+            text: "  Why the retry?  ".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (a.status, a.next_prompt.as_deref()),
+        (Status::Queued, Some("Why the retry?"))
+    );
+    assert!(a.ask_hold.as_ref().is_some_and(|h| h.was_watching));
+    until(&t, |a| a.status == Status::Running).await;
+    session_start(&t, 2).await;
+    assert!(sends(&t).iter().any(|s| s.contains("Why the retry?")));
+
+    // It only answers: the session stays open (no move to watching).
+    let ended = stops(&t);
+    stop(&t, 3).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::Idle);
+    assert!(a.ask_hold.is_some());
+    assert_eq!(stops(&t), ended);
+
+    // Flow work ends the hold; the next stop follows the usual rules.
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    assert!(get(&t).await.ask_hold.is_none());
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "ask-hold-ended"));
+    let ask = events.iter().find(|e| e.kind == "user.ask").unwrap();
+    assert_eq!(ask.payload.as_ref().unwrap()["chars"], 14);
+    stop(&t, 4).await;
+    assert_eq!(get(&t).await.status, Status::Watching);
+}
+
+#[tokio::test]
+async fn ask_then_finish_returns_to_watching() {
+    let t = setup().await;
+    let url = watching(&t).await;
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    until(&t, |a| a.status == Status::Running).await;
+    let a = act(&t, UserAction::Finish).await.unwrap();
+    assert_eq!(
+        (a.status, a.pr_url.as_deref(), a.ask_hold.is_some()),
+        (Status::Watching, Some(url), false)
+    );
+    assert!(t.drv.calls().contains(&"stop SC-1".to_string()));
+}
+
+#[tokio::test]
+async fn ask_then_finish_on_a_paused_agent_pauses_it_again() {
+    let t = setup().await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    let a = act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(a.ask_hold.as_ref().is_some_and(|h| !h.was_watching));
+    until(&t, |a| a.status == Status::Running).await;
+    let a = act(&t, UserAction::Finish).await.unwrap();
+    assert_eq!((a.status, a.ask_hold.is_some()), (Status::Paused, false));
+}
+
+#[tokio::test]
+async fn ask_refusals() {
+    let t = setup().await;
+    let code = |r: Result<Agent, ActionError>| r.unwrap_err().code;
+    let ask = |s: &str| UserAction::Ask { text: s.into() };
+    // A live agent has a session: Send is the way.
+    assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");
+    assert_eq!(code(act(&t, UserAction::Finish).await), "not_asked");
+    act(&t, UserAction::PauseNow).await.unwrap();
+    assert_eq!(code(act(&t, ask("   ")).await), "usage");
+    // Asked, paused before the prompt was taken: the text still waits.
+    act(&t, ask("Status?")).await.unwrap();
+    let a = act(&t, UserAction::PauseNow).await.unwrap();
+    assert_eq!((a.status, a.ask_hold.is_some()), (Status::Paused, false));
+    assert_eq!(code(act(&t, ask("Again?")).await), "prompt_pending");
+    act(&t, UserAction::Resume).await.unwrap();
+    act(
+        &t,
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");
+}
+
+#[tokio::test]
+async fn ask_then_finish_before_the_text_was_taken_drops_it() {
+    let t = setup().await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    // No `user-prompt-submit` yet: the text still waits in `next_prompt`.
+    let a = act(&t, UserAction::Finish).await.unwrap();
+    assert_eq!((a.status, a.next_prompt.as_deref()), (Status::Paused, None));
+    // Ask works again, and a later Resume types the pack's `resume` command.
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Again?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    act(&t, UserAction::Finish).await.unwrap();
+    let a = act(&t, UserAction::Resume).await.unwrap();
+    assert!(a.next_prompt.is_some_and(|p| !p.contains('?')));
+}
+
+#[tokio::test]
+async fn ask_hold_ends_when_the_session_is_lost() {
+    let t = setup().await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    until(&t, |a| a.status == Status::Running).await;
+    // The container restarted: the agent is resumed at once, not held.
+    t.drv.alive.lock().unwrap().clear();
+    t.d.reconcile_with(true).await;
+    let a = until(&t, |a| a.ask_hold.is_none()).await;
+    assert!(a.ask_hold.is_none());
+    let ev = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(ev.iter().any(|e| e.kind == "session-lost"));
 }

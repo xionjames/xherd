@@ -36,9 +36,14 @@ export function hollow(s: Status): boolean {
   return ['queued', 'paused', 'watching', 'parked', 'cancelled'].includes(s);
 }
 
+/** An open gate for the user: not one autonomy will approve at the next stop (R4). */
+export function waitsAtGate(a: Agent): boolean {
+  return !!a.gate && !a.autoApprovePending;
+}
+
 /** Needs you = waiting for input, blocked, or an open gate (R-007). */
 export function needsYou(a: Agent): boolean {
-  return a.status === 'waiting-input' || a.status === 'blocked' || !!a.gate;
+  return a.status === 'waiting-input' || a.status === 'blocked' || waitsAtGate(a);
 }
 
 /** One-line description of what waits on the human. */

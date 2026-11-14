@@ -11,6 +11,8 @@
   import FilePreview from '../components/FilePreview.svelte';
   import FilePath from '../components/FilePath.svelte';
   import Seg from '../components/Seg.svelte';
+  import FileNav from '../components/FileNav.svelte';
+  import { tick } from 'svelte';
 
   let { agent }: { agent: Agent } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -110,6 +112,13 @@
   $effect(() => { void key; load(); });
 
   const files = $derived(d ? parseUnified(d.diff) : []);
+  // R15: open the picked file's section and bring it into view.
+  async function goTo(path: string) {
+    collapsed[path] = false;
+    await tick();
+    const i = files.findIndex((f) => f.path === path);
+    document.getElementById(`cf-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   // Only the commit awaiting approval (no sha yet): its files are what is in the worktree.
   const canPreview = $derived(!!d?.commit && !d.commit.sha);
   const what = $derived(
@@ -149,8 +158,8 @@
         <button class="btn sm" onclick={load} disabled={loading}>Refresh</button>
       </div>
       {#if !files.length}<div class="card cb"><p class="empty">No changes.</p></div>{/if}
-      {#each files as f (f.path)}
-        <section class="card">
+      {#each files as f, i (f.path)}
+        <section class="card" id="cf-{i}">
           <div class="ch">
             <button class="btn ghost sm icon" aria-label={collapsed[f.path] ? 'Expand' : 'Collapse'} aria-expanded={!collapsed[f.path]} onclick={() => (collapsed[f.path] = !collapsed[f.path])}>
               {collapsed[f.path] ? '▸' : '▾'}
@@ -177,7 +186,7 @@
       <div class="card cb"><p class="empty">Loading…</p></div>
     {/if}
   </div>
-  {#if d && (d.files.length || d.others.length || d.commit)}
+  {#if d && (files.length || d.others.length || d.commit)}
     <aside class="colside">
       {#if d.commit}
         <section class="card cb">
@@ -185,11 +194,8 @@
           <pre class="mono pre msg">{d.commit.message ?? d.commit.subject}</pre>
         </section>
       {/if}
-      {#if d.files.length}
-        <section class="card cb">
-          <span class="lbl">{d.commit ? 'In this commit' : 'Files'} · {d.files.length}</span>
-          <ul class="mono">{#each d.files as f (f)}<li><FilePath path={f} /></li>{/each}</ul>
-        </section>
+      {#if files.length}
+        <FileNav {files} label={d.commit ? 'In this commit' : 'Files'} onpick={goTo} />
       {/if}
       {#if d.others.length && (d.commit || d.branch)}
         <section class="card cb">
@@ -207,4 +213,6 @@
   .adds { color: var(--live); font-weight: 600; }
   .dels { color: var(--halt); font-weight: 600; }
   .msg { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; }
+  /* R17: on a phone the file list comes before the diff. */
+  @media (max-width: 759px) { .colside { order: -1; } }
 </style>
