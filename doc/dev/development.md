@@ -82,7 +82,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 **Change the database** — append a migration in `xherd-store/src/schema.rs`; never edit an existing one. The store copies the database with `VACUUM INTO` before migrating.
 
-**Change the UI** — add the type to `lib/types.ts` (mirrors the wire JSON), call through `lib/api.ts`, and register panels in `lib/panels.ts`. Only screens for features that exist are shown. Use the components listed at the top of `app.css` (`PageHead`, `Panel`, `SaveBar`, `Tabs`, `Seg`, `Callout`, `Dialog`), never `alert`/`confirm`.
+**Change the UI** — add the type to `lib/types.ts` (mirrors the wire JSON), call through `lib/api.ts`, and register panels in `lib/panels.ts`. A Herd view (a layout of the Herd page) is a component registered in `HERD_VIEWS` in `lib/herdViews.ts` with an `id` and a `label`; it takes `agents` (all of them, unfiltered), `flows` and `open(agent)`, owns the whole page body below the head (wrap it in `HerdSummary` to keep the counts, Needs you and the filter), and only reads. The first entry is the default; the others are chosen with `?layout=<id>`. Only screens for features that exist are shown. Use the components listed at the top of `app.css` (`PageHead`, `Panel`, `SaveBar`, `Tabs`, `Seg`, `Callout`, `Dialog`), never `alert`/`confirm`.
 
 **Add an API route** — in `crates/xherd-api/src/lib.rs`, with the `User` or `AgentAuth` extractor, and list it in [HTTP API](../reference/http-api.md).
 
