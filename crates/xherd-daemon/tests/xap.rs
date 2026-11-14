@@ -2585,6 +2585,98 @@ async fn important_approves_a_routine_gate_and_records_it() {
     assert!(events.iter().any(|e| e.kind == "approval"));
 }
 
+/// Writes the gate document and opens the gate, without a stop.
+async fn open_running(t: &T, id: &str, stage: &str, file: &str, extra: Value) -> Agent {
+    std::fs::write(
+        t.wt.path().join(".xherd/spec").join(file),
+        format!("# {stage}\n"),
+    )
+    .unwrap();
+    let mut args = json!({"stage": stage});
+    if let (Some(a), Some(e)) = (args.as_object_mut(), extra.as_object()) {
+        a.extend(e.clone());
+    }
+    xap(t, id, "gate.open", args).await.unwrap();
+    get(t).await
+}
+
+#[tokio::test]
+async fn auto_approve_pending_marks_a_gate_autonomy_will_approve() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(&t, "c1", "design", "design.md", json!({})).await;
+    assert_eq!(a.status, Status::Running);
+    assert!(a.gate.is_some());
+    assert!(
+        a.auto_approve_pending,
+        "important approves design at the stop"
+    );
+
+    stop(&t, 2).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_none(), "approved at the stop");
+    assert!(!a.auto_approve_pending);
+    assert_eq!(ledger_lines(&t).len(), 1);
+}
+
+#[tokio::test]
+async fn auto_approve_pending_is_off_for_a_held_gate_or_level_ask() {
+    // Level ask: a human approves.
+    let t = setup().await;
+    session_start(&t, 1).await;
+    let a = open_running(&t, "c1", "design", "design.md", json!({})).await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+
+    // The agent's own hold.
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(
+        &t,
+        "c1",
+        "design",
+        "design.md",
+        json!({"needsHuman": "touches billing"}),
+    )
+    .await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+
+    // Open questions.
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(
+        &t,
+        "c1",
+        "design",
+        "design.md",
+        json!({"questions": ["Which db?"]}),
+    )
+    .await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+
+    // A class the level does not allow (spec waits under important).
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    session_start(&t, 1).await;
+    let a = open_running(&t, "c1", "spec", "spec.md", json!({})).await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+    stop(&t, 2).await;
+    assert!(!get(&t).await.auto_approve_pending);
+}
+
+#[tokio::test]
+async fn auto_approve_pending_is_off_once_the_run_limit_is_reached() {
+    let t = setup_config(json!({"freshSessions": true, "maxAutoApprovalsInRow": 1})).await;
+    act(&t, level("important")).await.unwrap();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert_eq!(get(&t).await.auto_in_row, 1);
+    session_start(&t, 2).await;
+    let a = open_running(&t, "c2", "tasks", "tasks.md", json!({})).await;
+    assert!(a.gate.is_some() && !a.auto_approve_pending);
+}
+
 #[tokio::test]
 async fn important_still_waits_at_the_spec_and_ship_gates() {
     let t = setup().await;

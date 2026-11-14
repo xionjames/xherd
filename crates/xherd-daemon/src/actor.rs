@@ -456,6 +456,21 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
     tx
 }
 
+/// What autonomy would do with the open gate (`Actor::auto_check`).
+enum AutoCheck {
+    /// Not autonomy's to approve: level `ask`, an Ask hold, no gate, a class
+    /// the level does not allow.
+    No,
+    /// A tripwire or open questions hold it: (gate label, why).
+    Held(String, String),
+    /// The run limit is reached: (gate label, why).
+    Limit(String, String),
+    Approve {
+        label: String,
+        class: xherd_core::domain::Class,
+    },
+}
+
 struct Actor {
     agent: Agent,
     env: Env,
@@ -665,6 +680,10 @@ impl Actor {
         if !self.agent.status.is_live() {
             self.agent.pause_requested_at = None;
         }
+        // R4: a gate autonomy will approve at the stop does not wait for the
+        // user while the agent still runs.
+        self.agent.auto_approve_pending = self.agent.status == Status::Running
+            && matches!(self.auto_check(), AutoCheck::Approve { .. });
         if let Err(err) = self.env.store.put_agent(&self.agent).await {
             tracing::error!(agent = %self.agent.name, %err, "agent not stored");
         }
@@ -2179,31 +2198,27 @@ impl Actor {
         })
     }
 
-    /// Auto-approval (R-110, R-111): when the agent stops at a gate its class
-    /// allows at the agent's autonomy level, approve it unless a tripwire
-    /// holds it. The tripwires that look at the work (secrets, sensitive
-    /// paths, diff size, scope, `verify:`, review findings) ran when the gate
-    /// was opened and left `needs_human`; the run limit is checked here. This
-    /// runs inline in the actor on the stop itself, so the gate cannot change
-    /// meanwhile and a user message queued behind it is handled afterwards.
-    async fn try_auto_approve(&mut self) {
+    /// What autonomy would do with the open gate at a stop (R-110, R-121),
+    /// whatever the status: callers check it (`try_auto_approve` at a stop,
+    /// the mark in `commit()` while running). Reads the agent, the pack and
+    /// the settings snapshot only.
+    fn auto_check(&self) -> AutoCheck {
         use xherd_core::autonomy::{may_auto_approve, run_limit};
-        let level = self.agent.autonomy;
-        if level == xherd_core::autonomy::Autonomy::Ask
-            || !matches!(self.agent.status, Status::WaitingInput | Status::Idle)
+        if self.agent.autonomy == xherd_core::autonomy::Autonomy::Ask
+            || self.agent.ask_hold.is_some()
         {
-            return;
+            return AutoCheck::No;
         }
-        let Some(gate) = self.agent.gate.clone() else {
-            return;
+        let Some(gate) = &self.agent.gate else {
+            return AutoCheck::No;
         };
-        let Some(class) = self.gate_class(&gate) else {
-            return;
+        let Some(class) = self.gate_class(gate) else {
+            return AutoCheck::No;
         };
-        if !may_auto_approve(level, class) {
-            return;
+        if !may_auto_approve(self.agent.autonomy, class) {
+            return AutoCheck::No;
         }
-        let (label, held) = match &gate {
+        let (label, held) = match gate {
             Gate::Docs {
                 stage,
                 needs_human,
@@ -2218,40 +2233,65 @@ impl Actor {
                 }),
             ),
             Gate::Commit(c) => (format!("commit {}", c.id), c.needs_human.clone()),
-            _ => return,
+            _ => return AutoCheck::No,
         };
-        if held.is_some() {
-            // Already shown as "Held:"; nothing more to say.
-            self.log(None, "auto-held", Some(json!({"gate": label, "why": held})))
-                .await;
-            return;
+        if let Some(held) = held {
+            return AutoCheck::Held(label, held);
         }
         if let Some(why) = run_limit(
             self.agent.auto_in_row,
             self.env.settings.get().max_auto_approvals_in_row,
         ) {
-            // Make the reason visible on the gate, and say so once.
-            match &mut self.agent.gate {
-                Some(Gate::Docs { needs_human, .. }) => *needs_human = Some(why.clone()),
-                Some(Gate::Commit(c)) => c.needs_human = Some(why.clone()),
-                _ => {}
-            }
-            if let Some(Gate::Commit(c)) = &self.agent.gate
-                && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
-            {
-                mine.needs_human = Some(why.clone());
-            }
-            self.agent.generation += 1;
-            self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
-                .await;
-            self.notify(
-                "gate",
-                format!("{}: {label} waits for you: {why}", self.agent.name),
-            );
-            let status = self.agent.status;
-            self.commit(status).await;
+            return AutoCheck::Limit(label, why);
+        }
+        AutoCheck::Approve { label, class }
+    }
+
+    /// Auto-approval (R-110, R-111): when the agent stops at a gate its class
+    /// allows at the agent's autonomy level, approve it unless a tripwire
+    /// holds it. The tripwires that look at the work (secrets, sensitive
+    /// paths, diff size, scope, `verify:`, review findings) ran when the gate
+    /// was opened and left `needs_human`; the run limit is checked here. This
+    /// runs inline in the actor on the stop itself, so the gate cannot change
+    /// meanwhile and a user message queued behind it is handled afterwards.
+    async fn try_auto_approve(&mut self) {
+        if !matches!(self.agent.status, Status::WaitingInput | Status::Idle) {
             return;
         }
+        let level = self.agent.autonomy;
+        let (label, class) = match self.auto_check() {
+            AutoCheck::No => return,
+            AutoCheck::Held(label, held) => {
+                // Already shown as "Held:"; nothing more to say.
+                self.log(None, "auto-held", Some(json!({"gate": label, "why": held})))
+                    .await;
+                return;
+            }
+            AutoCheck::Limit(label, why) => {
+                // Make the reason visible on the gate, and say so once.
+                match &mut self.agent.gate {
+                    Some(Gate::Docs { needs_human, .. }) => *needs_human = Some(why.clone()),
+                    Some(Gate::Commit(c)) => c.needs_human = Some(why.clone()),
+                    _ => {}
+                }
+                if let Some(Gate::Commit(c)) = &self.agent.gate
+                    && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
+                {
+                    mine.needs_human = Some(why.clone());
+                }
+                self.agent.generation += 1;
+                self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
+                    .await;
+                self.notify(
+                    "gate",
+                    format!("{}: {label} waits for you: {why}", self.agent.name),
+                );
+                let status = self.agent.status;
+                self.commit(status).await;
+                return;
+            }
+            AutoCheck::Approve { label, class } => (label, class),
+        };
         let before = self.agent.status;
         let reason =
             format!("autonomy {level}: {label} is a {class:?} gate and no tripwire held it");
