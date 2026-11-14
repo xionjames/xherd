@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lineDiff, parseUnified } from './diff';
+import { filterFiles, lineDiff, parseUnified } from './diff';
 
 describe('parseUnified', () => {
   it('reads files, hunks and line numbers', () => {
@@ -38,5 +38,18 @@ describe('parseUnified', () => {
 describe('lineDiff', () => {
   it('marks added and deleted lines', () => {
     expect(lineDiff('a\nb\nc', 'a\nx\nc').map((l) => l.kind + l.text)).toEqual(['ca', 'db', 'ax', 'cc']);
+  });
+});
+
+describe('filterFiles', () => {
+  const files = [{ path: 'src/Cache.rs' }, { path: 'ui/src/App.svelte' }, { path: 'README.md' }];
+  it('keeps every file for an empty or blank query', () => {
+    expect(filterFiles(files, '')).toEqual(files);
+    expect(filterFiles(files, '  ')).toEqual(files);
+  });
+  it('matches a substring of the path, ignoring case', () => {
+    expect(filterFiles(files, 'cache').map((f) => f.path)).toEqual(['src/Cache.rs']);
+    expect(filterFiles(files, ' SRC/ ').map((f) => f.path)).toEqual(['src/Cache.rs', 'ui/src/App.svelte']);
+    expect(filterFiles(files, 'nope')).toEqual([]);
   });
 });

@@ -42,6 +42,12 @@ export function parseUnified(diff: string): FileDiff[] {
   return files;
 }
 
+/** The files whose path contains `q`, ignoring case and surrounding spaces (R16). */
+export function filterFiles<T extends { path: string }>(files: T[], q: string): T[] {
+  const s = q.trim().toLowerCase();
+  return s ? files.filter((f) => f.path.toLowerCase().includes(s)) : files;
+}
+
 /** Line diff (LCS) of two texts; context lines kept so the result reads in full. */
 export function lineDiff(before: string, after: string): Line[] {
   const a = before.split('\n'), b = after.split('\n');
