@@ -19,6 +19,7 @@ pub mod manifest;
 pub mod runtime;
 pub mod toolchain;
 pub mod tracker;
+pub mod view;
 
 pub use manifest::{Check, Kind, MANIFEST_FILE, Manifest, Setting};
 
