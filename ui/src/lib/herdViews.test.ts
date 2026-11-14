@@ -15,6 +15,7 @@ describe('herd views', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids[0]).toBe('list');
     expect(ids).toContain('stages');
+    expect(ids).toContain('tiles');
   });
   it('pick a view by id', () => {
     expect(pickView('stages').id).toBe('stages');

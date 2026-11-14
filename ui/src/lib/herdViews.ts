@@ -6,6 +6,7 @@ import type { Component } from 'svelte';
 import type { Agent, FlowInfo } from './types';
 import HerdList from '../components/HerdList.svelte';
 import StageColumns from '../components/StageColumns.svelte';
+import HerdTiles from '../components/HerdTiles.svelte';
 
 export interface HerdViewProps {
   agents: Agent[];
@@ -22,6 +23,7 @@ export interface HerdView {
 export const HERD_VIEWS: HerdView[] = [
   { id: 'list', label: 'List', component: HerdList },
   { id: 'stages', label: 'By stage', component: StageColumns },
+  { id: 'tiles', label: 'Tiles', component: HerdTiles }, // a small example view
 ];
 
 /** The view for a `layout` value; the first one when it is unknown or missing. */
