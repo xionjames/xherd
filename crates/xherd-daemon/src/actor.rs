@@ -1979,6 +1979,10 @@ impl Actor {
                     self.end_session().await;
                 }
                 self.agent.pause_requested_at = None;
+                // Still queued, the Ask text was never delivered: drop it so
+                // a later Resume types the pack's `resume` command and a new
+                // Ask is not refused `prompt_pending`.
+                self.agent.next_prompt = None;
                 let trigger = if hold.was_watching && self.agent.pr_url.is_some() {
                     Trigger::Finish
                 } else {
@@ -3164,6 +3168,10 @@ impl Actor {
                         );
                     } else {
                         self.agent.fire(Trigger::SessionLost, now);
+                        // Every end of the session ends an Ask hold, also
+                        // when it is resumed at once below (no `commit()`
+                        // sees the error status in between).
+                        self.agent.ask_hold = None;
                         self.log(None, "session-lost", None).await;
                         if recover {
                             // Same as Resume: a new session reloads the state.

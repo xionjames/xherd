@@ -3165,3 +3165,54 @@ async fn ask_refusals() {
     .unwrap();
     assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");
 }
+
+#[tokio::test]
+async fn ask_then_finish_before_the_text_was_taken_drops_it() {
+    let t = setup().await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    // No `user-prompt-submit` yet: the text still waits in `next_prompt`.
+    let a = act(&t, UserAction::Finish).await.unwrap();
+    assert_eq!((a.status, a.next_prompt.as_deref()), (Status::Paused, None));
+    // Ask works again, and a later Resume types the pack's `resume` command.
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Again?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    act(&t, UserAction::Finish).await.unwrap();
+    let a = act(&t, UserAction::Resume).await.unwrap();
+    assert!(a.next_prompt.is_some_and(|p| !p.contains('?')));
+}
+
+#[tokio::test]
+async fn ask_hold_ends_when_the_session_is_lost() {
+    let t = setup().await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    until(&t, |a| a.status == Status::Running).await;
+    // The container restarted: the agent is resumed at once, not held.
+    t.drv.alive.lock().unwrap().clear();
+    t.d.reconcile_with(true).await;
+    let a = until(&t, |a| a.ask_hold.is_none()).await;
+    assert!(a.ask_hold.is_none());
+    let ev = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(ev.iter().any(|e| e.kind == "session-lost"));
+}
