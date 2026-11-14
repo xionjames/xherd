@@ -1,0 +1,24 @@
+<!doctype html>
+<!--
+  Herd view "Tiles": the example view plugin. The Herd page shows this file in
+  a sandboxed frame. It may load only its own files and the view kit (no
+  fetches, no inline scripts): the agents arrive by message through the kit.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tiles</title>
+  <!-- The kit's stylesheet: xherd's design tokens and component classes. -->
+  <link rel="stylesheet" href="/api/v1/view-kit/xherd.css">
+  <link rel="stylesheet" href="tiles.css">
+</head>
+<body>
+  <div class="x">
+    <div class="stack" id="tiles"></div>
+  </div>
+  <!-- The kit script (global `xherdView`) first, then the view's own. -->
+  <script src="/api/v1/view-kit/xherd-view.js"></script>
+  <script src="tiles.js"></script>
+</body>
+</html>

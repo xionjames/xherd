@@ -5,6 +5,35 @@
 /// Largest view file served (bytes).
 pub const MAX_FILE: u64 = 16 * 1024 * 1024;
 
+/// The built-in view plugins' files (plugin, path inside its folder, bytes),
+/// from `plugins/<plugin>/`; the manifest is not one of them. A test compares
+/// the table with the folders.
+pub const BUILTIN_FILES: &[(&str, &str, &[u8])] = &[
+    (
+        "herd-tiles",
+        "index.html",
+        include_bytes!("../../../plugins/herd-tiles/index.html"),
+    ),
+    (
+        "herd-tiles",
+        "tiles.css",
+        include_bytes!("../../../plugins/herd-tiles/tiles.css"),
+    ),
+    (
+        "herd-tiles",
+        "tiles.js",
+        include_bytes!("../../../plugins/herd-tiles/tiles.js"),
+    ),
+];
+
+/// A built-in view plugin's file, by plugin name and path.
+pub fn builtin_file(name: &str, path: &str) -> Option<&'static [u8]> {
+    BUILTIN_FILES
+        .iter()
+        .find(|(n, p, _)| *n == name && *p == path)
+        .map(|(_, _, bytes)| *bytes)
+}
+
 /// `path` when it is a plain relative path inside a plugin folder: segments
 /// separated by `/`, none empty or starting with `.` (so no `..`, and hidden
 /// files stay private), no `\` and no control characters.
@@ -72,6 +101,56 @@ pub fn csp(host: Option<&str>, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Kind, MANIFEST_FILE, builtins};
+
+    /// Every file of every built-in view plugin folder, manifest aside, is in
+    /// the table, and nothing else is.
+    #[test]
+    fn builtin_files_match_the_plugin_folders() {
+        let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+        let mut on_disk = Vec::new();
+        for m in builtins().iter().filter(|m| m.kind == Kind::View) {
+            let mut stack = vec![plugins.join(&m.name)];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(&dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    let rel = path.strip_prefix(plugins.join(&m.name)).unwrap();
+                    let rel = rel.to_str().unwrap().replace('\\', "/");
+                    if rel != MANIFEST_FILE {
+                        on_disk.push((m.name.clone(), rel, std::fs::read(&path).unwrap()));
+                    }
+                }
+            }
+        }
+        on_disk.sort();
+        let mut table: Vec<_> = BUILTIN_FILES
+            .iter()
+            .map(|(n, p, b)| (n.to_string(), p.to_string(), b.to_vec()))
+            .collect();
+        table.sort();
+        assert_eq!(table, on_disk);
+        for (_, path, _) in &table {
+            assert_eq!(clean_path(path), Some(path.as_str()));
+        }
+    }
+
+    #[test]
+    fn builtin_file_finds_herd_tiles() {
+        let html = builtin_file("herd-tiles", "index.html").unwrap();
+        assert!(std::str::from_utf8(html).unwrap().contains("tiles.js"));
+        assert!(builtin_file("herd-tiles", "missing.js").is_none());
+        assert!(builtin_file("other", "index.html").is_none());
+        let tiles = builtins()
+            .into_iter()
+            .find(|m| m.name == "herd-tiles")
+            .unwrap();
+        assert_eq!(tiles.kind, Kind::View);
+        assert_eq!(crate::manifest::view_entry(&tiles), Ok("index.html"));
+    }
 
     #[test]
     fn clean_paths() {
