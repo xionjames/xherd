@@ -3016,3 +3016,124 @@ async fn a_dismissed_starter_agents_md_is_not_proposed_again() {
     std::fs::write(wt.join("AGENTS.md"), "# Agents\n").unwrap();
     propose("m3").await.unwrap();
 }
+
+// ---- Ask and Finish (#121) ---------------------------------------------------
+
+/// The agent ships and watches its PR (as in `a_review_after_the_pr_keeps_the_session`).
+async fn watching(t: &T) -> &'static str {
+    let url = "https://github.com/acme/app/pull/42";
+    xap(t, "w1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    xap(t, "w2", "pr.opened", json!({"url": url}))
+        .await
+        .unwrap();
+    stop(t, 1).await;
+    assert_eq!(get(t).await.status, Status::Watching);
+    url
+}
+
+fn stops(t: &T) -> usize {
+    t.drv.calls().iter().filter(|c| *c == "stop SC-1").count()
+}
+
+#[tokio::test]
+async fn ask_holds_the_session_until_the_agent_does_flow_work() {
+    let t = setup().await;
+    watching(&t).await;
+    let a = act(
+        &t,
+        UserAction::Ask {
+            text: "  Why the retry?  ".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (a.status, a.next_prompt.as_deref()),
+        (Status::Queued, Some("Why the retry?"))
+    );
+    assert!(a.ask_hold.as_ref().is_some_and(|h| h.was_watching));
+    until(&t, |a| a.status == Status::Running).await;
+    session_start(&t, 2).await;
+    assert!(sends(&t).iter().any(|s| s.contains("Why the retry?")));
+
+    // It only answers: the session stays open (no move to watching).
+    let ended = stops(&t);
+    stop(&t, 3).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::Idle);
+    assert!(a.ask_hold.is_some());
+    assert_eq!(stops(&t), ended);
+
+    // Flow work ends the hold; the next stop follows the usual rules.
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    assert!(get(&t).await.ask_hold.is_none());
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "ask-hold-ended"));
+    let ask = events.iter().find(|e| e.kind == "user.ask").unwrap();
+    assert_eq!(ask.payload.as_ref().unwrap()["chars"], 14);
+    stop(&t, 4).await;
+    assert_eq!(get(&t).await.status, Status::Watching);
+}
+
+#[tokio::test]
+async fn ask_then_finish_returns_to_watching() {
+    let t = setup().await;
+    let url = watching(&t).await;
+    act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    until(&t, |a| a.status == Status::Running).await;
+    let a = act(&t, UserAction::Finish).await.unwrap();
+    assert_eq!(
+        (a.status, a.pr_url.as_deref(), a.ask_hold.is_some()),
+        (Status::Watching, Some(url), false)
+    );
+    assert!(t.drv.calls().contains(&"stop SC-1".to_string()));
+}
+
+#[tokio::test]
+async fn ask_then_finish_on_a_paused_agent_pauses_it_again() {
+    let t = setup().await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    let a = act(
+        &t,
+        UserAction::Ask {
+            text: "Status?".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(a.ask_hold.as_ref().is_some_and(|h| !h.was_watching));
+    until(&t, |a| a.status == Status::Running).await;
+    let a = act(&t, UserAction::Finish).await.unwrap();
+    assert_eq!((a.status, a.ask_hold.is_some()), (Status::Paused, false));
+}
+
+#[tokio::test]
+async fn ask_refusals() {
+    let t = setup().await;
+    let code = |r: Result<Agent, ActionError>| r.unwrap_err().code;
+    let ask = |s: &str| UserAction::Ask { text: s.into() };
+    // A live agent has a session: Send is the way.
+    assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");
+    assert_eq!(code(act(&t, UserAction::Finish).await), "not_asked");
+    act(&t, UserAction::PauseNow).await.unwrap();
+    assert_eq!(code(act(&t, ask("   ")).await), "usage");
+    // Asked, paused before the prompt was taken: the text still waits.
+    act(&t, ask("Status?")).await.unwrap();
+    let a = act(&t, UserAction::PauseNow).await.unwrap();
+    assert_eq!((a.status, a.ask_hold.is_some()), (Status::Paused, false));
+    assert_eq!(code(act(&t, ask("Again?")).await), "prompt_pending");
+    act(&t, UserAction::Resume).await.unwrap();
+    act(&t, UserAction::Cancel).await.unwrap();
+    assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");
+}

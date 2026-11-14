@@ -51,6 +51,14 @@ pub enum UserAction {
     Send {
         text: String,
     },
+    /// Resume a session-less agent with a question (#121, R5–R7): the
+    /// session is held open until the agent does flow work or the user
+    /// finishes it.
+    Ask {
+        text: String,
+    },
+    /// End an Ask session (R9): back to `watching`, else `paused`.
+    Finish,
     /// Approve the open gate and hand on the next command (R-104).
     Approve {
         reason: Option<String>,
@@ -680,6 +688,10 @@ impl Actor {
         if !self.agent.status.is_live() {
             self.agent.pause_requested_at = None;
         }
+        // Every end of the session ends an Ask hold (queued = still starting).
+        if !self.agent.status.is_live() && self.agent.status != Status::Queued {
+            self.agent.ask_hold = None;
+        }
         // R4: a gate autonomy will approve at the stop does not wait for the
         // user while the agent still runs.
         self.agent.auto_approve_pending = self.agent.status == Status::Running
@@ -791,6 +803,11 @@ impl Actor {
                     if running > 0 {
                         self.log(None, "background-running", Some(json!({"tasks": running})))
                             .await;
+                        continue;
+                    }
+                    // R7: an Ask session stays open while the agent only
+                    // answers; flow work ends the hold.
+                    if self.agent.ask_hold.is_some() {
                         continue;
                     }
                     self.try_auto_approve().await;
@@ -1236,7 +1253,13 @@ impl Actor {
         {
             self.fetch_templates();
         }
-        if changed {
+        // R8: flow work after an Ask ends its hold.
+        let hold_ended = call.cmd.is_flow_work() && self.agent.ask_hold.take().is_some();
+        if hold_ended {
+            self.log(None, "ask-hold-ended", Some(json!({"by": call.cmd.name()})))
+                .await;
+        }
+        if changed || hold_ended {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
@@ -1808,6 +1831,7 @@ impl Actor {
     async fn on_user(&mut self, action: UserAction) -> Result<(), ActionError> {
         let before = self.agent.status;
         let now = self.now();
+        let mut payload = None;
         let kind = match &action {
             UserAction::Get => return Ok(()),
             UserAction::Start { port_base } => {
@@ -1848,7 +1872,7 @@ impl Actor {
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
-                self.prepare_resume().await;
+                self.prepare_resume(true).await;
                 "user.resume"
             }
             UserAction::Cancel => {
@@ -1883,6 +1907,30 @@ impl Actor {
                     "user.send"
                 }
             }
+            UserAction::Ask { text } => {
+                self.ask(text).await?;
+                payload = Some(json!({"chars": text.trim().chars().count()}));
+                "user.ask"
+            }
+            UserAction::Finish => {
+                let Some(hold) = self.agent.ask_hold.take() else {
+                    return Err(refuse(
+                        "not_asked",
+                        format!("{} has no Ask session to finish", self.agent.name),
+                    ));
+                };
+                if self.agent.status.is_live() {
+                    self.end_session().await;
+                }
+                self.agent.pause_requested_at = None;
+                let trigger = if hold.was_watching && self.agent.pr_url.is_some() {
+                    Trigger::Finish
+                } else {
+                    Trigger::Pause
+                };
+                self.agent.fire(trigger, now);
+                "user.finish"
+            }
             UserAction::Approve {
                 reason,
                 expect,
@@ -1890,10 +1938,13 @@ impl Actor {
             } => {
                 self.approve(reason.clone(), expect, message.clone(), false)
                     .await?;
+                // The user moved the flow on: an Ask session ends (R8).
+                self.agent.ask_hold = None;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
                 self.request_changes(comment).await?;
+                self.agent.ask_hold = None;
                 "user.request-changes"
             }
             UserAction::SetAutonomy { level } => {
@@ -1933,8 +1984,55 @@ impl Actor {
                 "user.model"
             }
         };
-        self.log(None, kind, None).await;
+        self.log(None, kind, payload).await;
         self.commit(before).await;
+        Ok(())
+    }
+
+    /// Ask (#121, R5–R7): resume an agent that has no session with the
+    /// user's text as its first prompt, continuing the last conversation, and
+    /// hold the session open (no auto-approval, no move to watching) until the
+    /// agent does flow work, the user decides a gate, or finishes it.
+    async fn ask(&mut self, text: &str) -> Result<(), ActionError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(refuse("usage", "say what to ask"));
+        }
+        if self.agent.worktree_removed_at.is_some() {
+            return Err(refuse(
+                "worktree_removed",
+                format!("{}'s worktree was removed", self.agent.name),
+            ));
+        }
+        let status = self.agent.status;
+        if !matches!(
+            status,
+            Status::Paused | Status::Parked | Status::Watching | Status::Error
+        ) {
+            return Err(refuse(
+                "not_allowed",
+                format!(
+                    "{} is {status}: Ask needs an agent with no session",
+                    self.agent.name
+                ),
+            ));
+        }
+        // A command waits (after an approval, say): Resume delivers it; Ask
+        // would replace it.
+        if self.agent.next_prompt.is_some() {
+            return Err(refuse(
+                "prompt_pending",
+                format!("{} has a command waiting: resume it first", self.agent.name),
+            ));
+        }
+        let now = self.now();
+        self.agent.next_prompt = Some(text.to_string());
+        self.agent.fire(Trigger::Resume, now);
+        self.prepare_resume(false).await;
+        self.agent.ask_hold = Some(xherd_core::agent::AskHold {
+            at: now,
+            was_watching: status == Status::Watching,
+        });
         Ok(())
     }
 
@@ -2755,13 +2853,17 @@ impl Actor {
         self.commit(before).await;
     }
 
-    async fn prepare_resume(&mut self) {
+    /// `after_handoff_fresh`: a handoff note starts a fresh session from it
+    /// (R-027), using the note up; Ask passes false, keeping the note and
+    /// continuing the last conversation, since its question needs the context.
+    async fn prepare_resume(&mut self, after_handoff_fresh: bool) {
         if self.agent.next_prompt.is_none() {
             self.agent.next_prompt = self.resume_command();
         }
         // After a handoff the next session starts fresh from the note (R-027).
-        let handed_off =
-            self.agent.handoff_at.take().is_some() && self.env.settings.get().fresh_sessions;
+        let handed_off = after_handoff_fresh
+            && self.agent.handoff_at.take().is_some()
+            && self.env.settings.get().fresh_sessions;
         let resume = self.runtime_kit().and_then(|k| k.resume.clone());
         self.resume_session = match (&resume, &self.agent.session) {
             (Some(r), Some(id))
@@ -2866,7 +2968,7 @@ impl Actor {
     async fn unpark_with(&mut self, text: String) {
         self.agent.next_prompt = Some(text);
         self.agent.fire(Trigger::Unpark, self.now());
-        self.prepare_resume().await;
+        self.prepare_resume(true).await;
     }
 
     /// The agent stopped without a declared gate: open one from the flow's
@@ -2979,7 +3081,7 @@ impl Actor {
                         if recover {
                             // Same as Resume: a new session reloads the state.
                             self.agent.fire(Trigger::Resume, now);
-                            self.prepare_resume().await;
+                            self.prepare_resume(true).await;
                             self.notify(
                                 "recovery",
                                 format!("{}: xherd restarted; resuming", self.agent.name),
@@ -2994,7 +3096,7 @@ impl Actor {
                             if self.auto_resumes.len() < AUTO_RESUMES {
                                 self.auto_resumes.push(now);
                                 self.agent.fire(Trigger::Resume, now);
-                                self.prepare_resume().await;
+                                self.prepare_resume(true).await;
                                 self.log(
                                     None,
                                     "auto-resume",

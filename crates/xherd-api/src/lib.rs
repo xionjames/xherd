@@ -1248,6 +1248,10 @@ async fn agent_action(
         "send" => UserAction::Send {
             text: required(b.text, "text")?,
         },
+        "ask" => UserAction::Ask {
+            text: required(b.text, "text")?,
+        },
+        "finish" => UserAction::Finish,
         "approve" => UserAction::Approve {
             reason: b.reason,
             expect: b.expect.unwrap_or_default(),
