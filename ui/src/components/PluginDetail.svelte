@@ -1,19 +1,23 @@
 <script lang="ts">
-  // One plugin's options in the Welcome wizard: its settings (saved here), its
-  // checks with their fixes, and for a toolchain its tools and versions. The
-  // same things Settings → Plugins shows, in the place where the plugin is picked.
+  // One plugin's options in a dialog (Welcome step 2 and Settings → Plugins):
+  // its settings (saved here), its checks with their fixes, for a toolchain its
+  // tools and versions, and the plugin's login terminal (the only one).
+  import { onMount } from 'svelte';
   import { get, put, post } from '../lib/api';
   import { boundProvider } from '../lib/gitProviders';
+  import { KIND_ONE } from '../lib/plugins';
   import { loadChecks, loadConfig, setup } from '../lib/setup.svelte';
-  import { app } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
-  import Panel from './Panel.svelte';
+  import Dialog from './Dialog.svelte';
   import CheckRow from './CheckRow.svelte';
   import Toolchains from './Toolchains.svelte';
   import TermView from './TermView.svelte';
+  import ModelInput from './ModelInput.svelte';
+  import { validModel } from '../lib/models';
   import type { PluginInfo, GitHostsView } from '../lib/types';
 
-  let { plugin, onclose }: { plugin: PluginInfo; onclose: () => void } = $props();
+  let { plugin, onclose, autologin = false }: { plugin: PluginInfo; onclose: () => void; autologin?: boolean } = $props();
+  const label = $derived(plugin.label || plugin.name);
 
   const saved = (k: string) => String(((setup.config?.config.pluginSettings ?? {}) as Record<string, Record<string, unknown>>)[plugin.name]?.[k] ?? '');
   const fields = $derived(plugin.settings.filter((s) => !s.secret));
@@ -34,16 +38,30 @@
   }
   const secretsDirty = $derived(secretFields.some((s) => (secretNew[s.key] ?? '') !== ''));
   const fieldsDirty = $derived(fields.some((s) => (values[s.key] ?? '') !== saved(s.key)));
-  const dirty = $derived(secretsDirty || fieldsDirty);
+  // A runtime that can choose a model: its default model (config `runtimeModels`, live).
+  const canModel = $derived(plugin.kind === 'runtime' && !!plugin.chooseModel);
+  const savedModels = $derived((setup.config?.config.runtimeModels ?? {}) as Record<string, string>);
+  let model = $state('');
+  $effect(() => { model = savedModels[plugin.name] ?? ''; });
+  const modelDirty = $derived(canModel && model.trim() !== (savedModels[plugin.name] ?? ''));
+  const modelOk = $derived(validModel(model));
+  const dirty = $derived(secretsDirty || fieldsDirty || modelDirty);
   let busy = $state(false);
   const checks = $derived((setup.checks ?? []).filter((c) => c.id.startsWith(`plugin:${plugin.name}:`)));
-  const loginFails = $derived(plugin.login && checks.some((c) => c.id.endsWith(':login') && !c.ok));
+  const loginFails = $derived(plugin.enabled && plugin.login && checks.some((c) => c.id.endsWith(':login') && !c.ok));
 
   let loggingIn = $state(false);
   async function login() {
-    try { await post(`/plugins/${plugin.name}/login`); loggingIn = true; } catch (e) { showError(`Could not log in to ${plugin.label || plugin.name}`, e); }
+    try { await post(`/plugins/${plugin.name}/login`); loggingIn = true; } catch (e) { showError(`Could not log in to ${label}`, e); }
   }
   function loginEnded() { loggingIn = false; loadChecks(); }
+  // Log in on a card opens this dialog and starts the login here.
+  // Closing the dialog during a login drops the terminal before it reports the end,
+  // so the checks run again here.
+  onMount(() => {
+    if (autologin) login();
+    return () => { if (loggingIn) loadChecks(); };
+  });
 
   async function save() {
     busy = true;
@@ -52,6 +70,8 @@
       // The server replaces this plugin's settings as a whole, so an emptied field is cleared.
       // Only when a plain setting changed: it needs a daemon restart, a secret does not.
       if (fieldsDirty) await put('/config', { pluginSettings: { [plugin.name]: mine } });
+      // The map is replaced as a whole; an empty model removes the entry.
+      if (modelDirty) await put('/config', { runtimeModels: { ...savedModels, [plugin.name]: model.trim() } });
       const fresh = Object.fromEntries(Object.entries(secretNew).filter(([, v]) => v !== ''));
       if (Object.keys(fresh).length) {
         secretSet = await put<Record<string, boolean>>(`/plugins/${plugin.name}/secrets`, { values: fresh });
@@ -66,7 +86,7 @@
     }
   }
 
-  // A git provider (D24): the hosts of Settings → Git access that use it.
+  // A Git provider (D24): the hosts of Settings → Git access that use it.
   let gitView = $state<GitHostsView | null>(null);
   $effect(() => {
     gitView = null;
@@ -76,7 +96,13 @@
   const usedBy = $derived(gitView && provider ? gitView.hosts.filter((h) => boundProvider(gitView!.providers, h)?.name === plugin.name) : []);
 </script>
 
-<Panel title={`${plugin.label || plugin.name} options`} hint={plugin.description}>
+<Dialog title={`${label} options`} {onclose}>
+  <p class="muted">{plugin.description}</p>
+  <p class="hint">{KIND_ONE[plugin.kind] ?? plugin.kind} · {plugin.version}{plugin.builtin ? ' · built in' : ''}{plugin.enabled ? '' : ' · switched off'}</p>
+  {#if loggingIn}
+    <TermView path="/ws/setup/plugin-login" title={`Log in to ${label}`} height="360px" onclose={loginEnded}
+      hint="Follow the steps; the check runs again when it ends." />
+  {/if}
   {#if plugin.settings.length}
     {#each fields as s (s.key)}
       <label class="f">{s.label || s.key}{#if s.required} *{/if}
@@ -89,8 +115,14 @@
         {#if secretSet[s.key]}<button class="btn ghost danger sm" style="align-self:flex-start" onclick={(e) => { e.preventDefault(); forget(s.key); }}>Forget the stored value</button>{/if}</label>
     {/each}
     {#if secretFields.length}<p class="hint">Secrets are kept in secrets.json on the daemon's side and never shown again.</p>{/if}
-  {:else}
+  {:else if !canModel}
     <p class="hint">This plugin has no settings.</p>
+  {/if}
+  {#if canModel}
+    <label class="f">Default model
+      <ModelInput runtime={plugin.name} bind:value={model} />
+      {#if !modelOk}<span class="hint err">Letters, digits and . _ : / @ - [ ] only.</span>
+      {:else}<span class="hint">New agents of this runtime start with it; empty = the runtime's own default. A repo profile or the New agent form can choose another, and each agent can change it. Applies at once.</span>{/if}</label>
   {/if}
   {#if provider}
     <p class="hint">Git provider for {provider.hosts.join(', ')}.
@@ -100,19 +132,18 @@
   {#if plugin.kind === 'toolchain'}
     {#key plugin.name}<Toolchains plugin={plugin.name} />{/key}
   {/if}
-  {#snippet foot()}
-    {#if loginFails}<button class="btn" onclick={login}>Log in</button>{/if}
+  {#if checks.length}
+    <span class="lbl">Checks</span>
+    <div class="card">
+      {#each checks as c, i (c.id)}<CheckRow check={c} first={i === 0} />{/each}
+    </div>
+  {:else if !plugin.enabled}
+    <p class="hint">Its checks run once it is switched on.</p>
+  {/if}
+  {#snippet actions()}
+    {#if loginFails && !loggingIn}<button class="btn" onclick={login}>Log in</button>{/if}
     <span class="grow"></span>
     <button class="btn ghost" onclick={onclose}>Close</button>
-    {#if fields.length || secretFields.length}<button class="btn primary" disabled={!dirty || busy} onclick={save}>{busy ? 'Saving…' : 'Save settings'}</button>{/if}
+    {#if fields.length || secretFields.length || canModel}<button class="btn primary" disabled={!dirty || busy || !modelOk} onclick={save}>{busy ? 'Saving…' : 'Save settings'}</button>{/if}
   {/snippet}
-</Panel>
-{#if checks.length}
-  <Panel title="Checks" flush>
-    {#each checks as c, i (c.id)}<CheckRow check={c} first={i === 0} />{/each}
-  </Panel>
-{/if}
-{#if loggingIn}
-  <TermView path="/ws/setup/plugin-login" title={`Log in to ${plugin.label || plugin.name}`} height="360px" onclose={loginEnded}
-    hint="Follow the steps; the check runs again when it ends." />
-{/if}
+</Dialog>

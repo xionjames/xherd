@@ -21,13 +21,25 @@ You give xherd a ticket. It creates an **agent**: a git worktree and a branch fo
 
 ⌘K (Ctrl+K) jumps to an agent by name. The bell in the bar keeps the latest notifications.
 
+## Welcome, plugins and git access
+
+The **Welcome** screen opens by itself the first time, in six steps: Welcome, Plugins, Commit identity, Git access, Connect & check, Ready. Everything it sets is in Settings later.
+
+**Plugins** (Welcome step 2 and Settings → Plugins show the same view) lists the plugins that are on under *Enabled* and the others under *Available*, each grouped by kind: coding agents, Git providers, issue trackers, languages. A search box filters them by name, description or kind. Each card has a switch, its state (Off, Ready, Not ready with the first failing check, Not logged in), *Log in* when the plugin has a login, and *Options*, which opens the plugin's settings, checks, login terminal and, for a language, its versions in a dialog; the cards do not move. In Settings the open dialog is in the URL (`#/settings?tab=plugins&plugin=github`). One coding agent and one language must stay on; Git providers and issue trackers may all be off. In Welcome an enabled plugin that is not logged in (Claude Code, GitHub) holds the step until you log in or switch it off. When a login ends, the checks run again.
+
+**Git** has two parts. *Commit identity* and *Git access* are how git commits, fetches and pushes, for any host. A **Git provider** plugin (GitHub through `gh`, GitLab through `glab`) is the optional, host-specific part: pull requests, comments, logins. A provider that is on and logged in also gives git access for its own host with nothing more to set: GitHub, logged in, covers `github.com` through `gh`. Git access shows such a row marked *From the GitHub plugin*, with its check result; it is never saved, *Edit* turns it into an ordinary row you change, and a row you save for the same host replaces it. Switching the provider off removes it. When xherd runs natively, such a row is not written to xherd's gitconfig, so your own git setup for that host is left alone; save it as a row (*Edit*) if you want xherd to set its credential helper. With no provider on and no hosts, configure access by hand (an SSH key or a token per host) or switch a provider on.
+
+**Connect & check** runs the setup checks again each time you enter it, so a login done in an earlier step shows at once.
+
 ## Creating an agent
 
 **New agent** (or `xherd new`) asks for:
 
-- the **ticket key** (`PROJ-123`) and what to do (the prompt);
-- the **repository**: a path inside the workspace, or a URL, cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use;
-- optionally the **base branch**, the **flow** (`feature`, or `none` for a plain session with your prompt and no gates), the **autonomy**, the **tool permissions** and the **runtime**.
+- a **name** (`refund-retry`: lowercase letters, digits and `-`), which is what the UI shows, the tmux session and the worktree folder, and the **workflow** (`feature`, or *No workflow* for a plain session with your instructions and no gates);
+- optionally a **ticket**: an issue URL or a key (`PROJ-123`, `#12`). The form says which tracker reads it; its key starts the branch name (`PROJ-123-refund-retry`), and it shows as a label beside the name. A URL no tracker reads is kept as a link;
+- the **repository**: a path inside the workspace, or a URL, cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use, and optionally the **base branch**;
+- the **instructions** (required with *No workflow*);
+- under **More options**: the **autonomy**, the **runtime**, its **model** and the **tool permissions**. Closed, it shows one line with what will apply and whether a profile sets it; it opens by itself once you change one of them, and remembers whether you left it open.
 
 A [repo profile](#repo-profiles) that matches the repository fills in its defaults. If more agents are live than `maxConcurrentAgents`, the new one waits in *queued*.
 
@@ -115,6 +127,8 @@ Held gates are never auto-approved, nor is a gate xherd inferred because the age
 
 **Tool permissions** are separate: they say what the runtime may do without asking. `ask` asks before each tool that needs permission, `edits` (default) accepts file edits, `auto` lets the runtime's own checks decide, `all` asks nothing (only in the container). A change applies from the agent's next session.
 
+The **model** is the runtime's: leave it empty for the runtime's own default, pick a suggestion (Claude Code offers `opus`, `sonnet`, `haiku`) or type any name the runtime knows (opencode takes `provider/model`). The default per runtime is in Settings → Plugins → the runtime's Options, a repo profile can set its own, and the agent page changes it for the agent's next session.
+
 ## Pull requests
 
 Approving the ship gate tells the agent to push its branch and open a draft PR; xherd itself never pushes. The agent then goes to *watching*:
@@ -122,11 +136,11 @@ Approving the ship gate tells the agent to push its branch and open a draft PR; 
 - Every `prPollMinutes` (default 5) xherd reads the PR's state, checks, mergeability and reviewers. You are notified when checks start failing, pass again, or the branch conflicts with its base. A merged or closed PR finishes the agent (*done*).
 - New review comments start a **PR round**: the agent reads them (as untrusted text), decides per comment (fix, reply, skip) and stops at the `pr-review` gate. Its *Your call* band and ✋ point at the *Pull request* tab (the plan file is not listed under Spec while you decide): each comment shows the agent's choice, coloured on its edge (fix, reply, skip), and you can change any of them. **Send decisions to the agent** (at the bottom of the comments, or in the band) approves the round: it posts the replies, then the agent makes the fixes as tasks, pushes and goes back to watching.
 
-GitHub works through `gh`, GitLab through `glab`. Bitbucket has git access only, no pull request support yet.
+GitHub works through `gh`, GitLab through `glab`. Bitbucket has git access only, no pull request support yet. With no Git provider on, xherd neither looks up nor follows pull requests.
 
 ## Tickets
 
-With a tracker plugin on (Jira through `acli`, GitHub issues, GitLab issues), ticket keys in documents become links, and the *Ticket* tab reads the ticket and its comments. Once the PR is open, the agent page offers to post a summary on the ticket: xherd drafts it from the finished tasks, commits and the PR, you edit it, and it is posted only when you click *Post to the ticket*.
+With a tracker plugin on (Jira through `acli`, GitHub issues, GitLab issues), ticket keys in documents become links, and the *Ticket* tab reads the agent's ticket and its comments (from the repository the ticket URL names, when it is a URL). Once the PR is open, the agent page offers to post a summary on the ticket: xherd drafts it from the finished tasks, commits and the PR, you edit it, and it is posted only when you click *Post to the ticket*.
 
 ## Shared memory
 
@@ -134,7 +148,7 @@ During review, an agent may propose an update of the repository's `AGENTS.md` (w
 
 ## Repo profiles
 
-Settings → Repo profiles holds per-repository settings, matched by the `origin` URL (`github.com/acme/*`) or by folder: the base branch, autonomy, tool permissions, runtime, tripwires (`sensitivePaths`, `maxDiffLines`), a per-agent token budget, a **lint command** and a **test command** run at every commit proposal (a failure holds the commit for you), and instructions added to every agent's `instructions.md`. Profiles can be exported and imported as JSON. Field by field: [Configuration](../reference/configuration.md#repo-profiles).
+Settings → Repo profiles holds per-repository settings, matched by the `origin` URL (`github.com/acme/*`) or by folder: the base branch, autonomy, tool permissions, runtime, a model per runtime, tripwires (`sensitivePaths`, `maxDiffLines`), a per-agent token budget, a **lint command** and a **test command** run at every commit proposal (a failure holds the commit for you), and instructions added to every agent's `instructions.md`. Profiles can be exported and imported as JSON. Field by field: [Configuration](../reference/configuration.md#repo-profiles).
 
 ## Limits and budgets
 
@@ -171,12 +185,12 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | Command | Does |
 |---|---|
 | `xherd ls` | Agents, with the open gate or the PR URL |
-| `xherd new <KEY> --repo <path or URL> "<prompt>"` | Create an agent |
+| `xherd new <name> --repo <path or URL> [--ticket <URL or key>] "<prompt>"` | Create an agent |
 | `xherd diff <agent>` | What you are being asked to approve |
 | `xherd approve <agent>` / `xherd changes <agent> "<comment>"` | Approve, or ask for revisions |
 | `xherd send <agent> "<text>"` | Type into the agent's session (also answers a question) |
 | `xherd pause\|resume\|cancel <agent>` | Lifecycle; `xherd pause --all` stops every agent at once |
-| `xherd autonomy <agent> <level>`, `xherd mode <agent> <mode>` | Autonomy and tool permissions |
+| `xherd autonomy <agent> <level>`, `xherd mode <agent> <mode>`, `xherd model <agent> <model>` | Autonomy, tool permissions and model |
 | `xherd backup create` | Archive of the agents and their work |
 | `xherd security check` | Exposure overview: binding, user split, plugins, limits |
 

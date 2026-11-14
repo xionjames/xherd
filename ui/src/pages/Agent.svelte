@@ -2,7 +2,7 @@
   // Agent page: your-call band, hero (name, meta, actions, progress), tabs of
   // panels from the registry.
   import Icon from '../components/Icon.svelte';
-  import { linkFor } from '../lib/links';
+  import TicketPill from '../components/TicketPill.svelte';
   import AgentDot from '../components/AgentDot.svelte';
   import Stepper from '../components/Stepper.svelte';
   import StatusPill from '../components/StatusPill.svelte';
@@ -19,6 +19,8 @@
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { MODE_HINT, modes } from '../lib/modes';
+  import ModelInput from '../components/ModelInput.svelte';
+  import { canChooseModel, validModel } from '../lib/models';
 
   let { agent }: { agent: Agent } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -96,6 +98,14 @@
     catch (err) { showError('Could not change the tool permissions', err); }
   }
 
+  const canModel = $derived(canChooseModel(app.state?.plugins, agent.runtime ?? 'claude-code'));
+  async function setModel(model: string) {
+    if (!validModel(model)) { showError('Could not change the model', new Error('Letters, digits and . _ : / @ - [ ] only')); return; }
+    if (model.trim() === (agent.model ?? '')) return;
+    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/model`, { model: model.trim() })).agent); }
+    catch (err) { showError('Could not change the model', err); }
+  }
+
   async function act(action: string, label: string) {
     menu = false;
     try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`)).agent); }
@@ -111,12 +121,18 @@
     <div class="hid">
       <div class="row">
         <span class="lbl">{repoName(agent)} · {agent.flow ?? 'no workflow'}</span>
-        {#if linkFor(agent.ticketKey)}<a class="pill acc mono" href={linkFor(agent.ticketKey)} target="_blank" rel="noopener noreferrer" title="Open the ticket">{agent.ticketKey}</a>{:else}<span class="pill acc mono">{agent.ticketKey}</span>{/if}
+        <TicketPill ticket={agent.ticket} />
       </div>
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
-        {#if agent.base}<span class="mono">{agent.name} ← {shortBase(agent)}</span>{/if}
+        {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
         <span>{agent.runtime ?? 'claude-code'}</span>
+        {#if canModel}
+          {#key agent.model}
+            <label class="row model" style="gap:6px;flex-wrap:nowrap" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume).">model
+              <ModelInput runtime={agent.runtime ?? 'claude-code'} value={agent.model ?? ''} disabled={finished} onchange={setModel} /></label>
+          {/key}
+        {:else if agent.model}<span class="mono">{agent.model}</span>{/if}
         {#if agent.flow && agent.flow !== 'none'}
           <label class="row" style="gap:6px;flex-wrap:nowrap">autonomy
             <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
@@ -211,4 +227,7 @@
 <style>
   .anchor { position: relative; }
   .mpad { padding: 6px 10px; }
+  /* ModelInput's wrapper may shrink to nothing in this row; size it, not the select inside. */
+  .model :global(.mi) { flex: none; width: auto; }
+  .model :global(select), .model :global(input) { flex: none; width: 18ch; }
 </style>

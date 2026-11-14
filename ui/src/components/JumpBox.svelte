@@ -11,7 +11,7 @@
 
   const hits = $derived(
     (app.state?.agents ?? [])
-      .filter((a) => q && (a.name + ' ' + a.ticketKey).toLowerCase().includes(q.toLowerCase()))
+      .filter((a) => q && [a.name, a.ticket?.key ?? '', a.ticket?.url ?? ''].join(' ').toLowerCase().includes(q.toLowerCase()))
       .slice(0, 8),
   );
 

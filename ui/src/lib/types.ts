@@ -90,10 +90,16 @@ export type Gate =
   | { kind: 'pr-replies'; count: number }
   | { kind: 'question'; text: string };
 
+/** An agent's ticket (#114): a key (`PAY-412`, `#12`), an issue URL, or both. */
+export interface Ticket { key?: string; url?: string }
+
 export interface Agent {
   id: string;
+  /** Lowercase slug: what the UI shows, the tmux session and worktree folder. */
   name: string;
-  ticketKey: string;
+  ticket?: Ticket;
+  /** `<KEY>-<name>` with a ticket key, else the name. */
+  branch: string;
   status: Status;
   createdAt: number;
   statusSince: number;
@@ -132,6 +138,8 @@ export interface Agent {
   autonomy?: 'ask' | 'important' | 'never';
   /** Tool permissions (R-002a); missing on agents created before it existed. */
   permissionMode?: import('./modes').PermissionMode;
+  /** Model the runtime is launched with; missing = the runtime's own default. */
+  model?: string;
 }
 
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean }
@@ -149,7 +157,11 @@ export interface PluginInfo {
   enabled: boolean;
   /** Has an interactive login; its status is the check `plugin:<name>:login`. */
   login: boolean;
+  /** A runtime plugin that takes a model; its suggestions come from `GET /runtimes/{name}/models`. */
+  chooseModel?: boolean;
 }
+
+export interface ModelSuggestion { id: string; label?: string; tier?: string }
 
 export interface PluginSetting {
   key: string;
@@ -222,6 +234,8 @@ export interface GitHost {
   preferSsh: boolean;
   /** A token is stored in secrets.json (never sent). */
   hasToken?: boolean;
+  /** The plugin this implicit row comes from; never saved. */
+  from?: string;
 }
 
 export interface GitProvider {

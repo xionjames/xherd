@@ -128,6 +128,98 @@ async fn disabled_plugins_apply_live() {
     }
 }
 
+/// Git providers are optional, like trackers: all of them may be off, while
+/// the last runtime still may not.
+#[tokio::test]
+async fn git_providers_may_all_be_off() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    o.builtin_plugins.retain(|m| {
+        ["claude-code", "opencode", "github", "gitlab", "bitbucket"].contains(&m.name.as_str())
+    });
+    let d = Daemon::start(paths, o).await.unwrap();
+
+    let patch =
+        serde_json::from_value(json!({"disabledPlugins": ["github", "gitlab", "bitbucket"]}))
+            .unwrap();
+    d.save_config(patch).unwrap();
+    assert!(!d.plugin_enabled("github") && !d.plugin_enabled("bitbucket"));
+
+    let patch = serde_json::from_value(
+        json!({"disabledPlugins": ["github", "gitlab", "bitbucket", "claude-code", "opencode"]}),
+    )
+    .unwrap();
+    let e = d.save_config(patch).unwrap_err();
+    assert_eq!(e.code, "bad_config");
+    assert!(e.message.contains("runtime"), "{}", e.message);
+}
+
+/// R7, R8: a Git provider that is on gives its host an implicit Git access
+/// row (in `GET /git/hosts`, and the managed gitconfig in the container only;
+/// never saved); a saved
+/// row for that host replaces it, and switching the provider off removes it.
+#[tokio::test]
+async fn providers_that_are_on_give_implicit_git_access_rows() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    o.builtin_plugins
+        .retain(|m| ["claude-code", "github", "gitlab"].contains(&m.name.as_str()));
+    let d = Daemon::start(paths, o).await.unwrap();
+    let gitconfig = || std::fs::read_to_string(d.gitconfig_path().unwrap()).unwrap();
+    let rows = || d.git_hosts()["hosts"].as_array().unwrap().clone();
+
+    // GitHub on: the row is listed from the plugin. Natively the gitconfig is
+    // included from the user's own, so an implicit row writes no helper there
+    // (it would replace theirs); the container's gets it (not testable here).
+    assert!(!gitconfig().contains("github.com"));
+    let r = rows();
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!(
+        (&r[0]["host"], &r[0]["from"], &r[0]["hasToken"]),
+        (&json!("github.com"), &json!("github"), &json!(false))
+    );
+    let saved = std::fs::read_to_string(home.path().join("data/config.json")).unwrap();
+    assert!(!saved.contains("github.com"), "never saved: {saved}");
+
+    // A saved row for the host takes its place, whatever its case, and a
+    // saved row is what writes the provider's helper natively.
+    let u = serde_json::from_value(json!({"hosts": [{
+        "host": "GitHub.com", "protocols": ["https"], "credential": "provider"
+    }]}))
+    .unwrap();
+    d.set_git_hosts(u).unwrap();
+    let r = rows();
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(r[0].get("from").is_none());
+    assert!(gitconfig().contains("gh auth git-credential"));
+
+    // Off: no implicit row, no helper.
+    d.set_git_hosts(serde_json::from_value(json!({"hosts": []})).unwrap())
+        .unwrap();
+    let patch = serde_json::from_value(json!({"disabledPlugins": ["github"]})).unwrap();
+    d.save_config(patch).unwrap();
+    assert!(rows().is_empty());
+    assert!(!gitconfig().contains("github.com"));
+}
+
 /// R-691: a tool a plugin requires is a check; natively a missing one shows
 /// the instructions (the host is never installed into), and installing it
 /// from the UI is refused.

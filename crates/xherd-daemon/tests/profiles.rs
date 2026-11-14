@@ -78,9 +78,12 @@ fn trusting(dir: &Path) -> String {
         .to_string()
 }
 
+/// An agent named after its ticket key, lower-cased: its branch is the key.
 fn req(t: &T, key: &str) -> NewAgent {
     NewAgent {
-        ticket_key: key.into(),
+        name: key.to_ascii_lowercase(),
+        ticket: Some(key.into()),
+        ticket_key: None,
         slug: None,
         repo: t.repo.path().to_string_lossy().into_owned(),
         base: None,
@@ -89,6 +92,7 @@ fn req(t: &T, key: &str) -> NewAgent {
         autonomy: None,
         permission_mode: None,
         runtime: None,
+        model: None,
     }
 }
 

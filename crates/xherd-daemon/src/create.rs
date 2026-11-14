@@ -27,11 +27,13 @@ impl From<Refusal> for ActionError {
     }
 }
 
-/// The runtime's launch argv for a tool-permission mode (R-002a): the
-/// runtime must offer it, and `all` only runs in the container (T4).
+/// The runtime's launch argv for a tool-permission mode (R-002a) and a
+/// model (issue #112, already checked): the runtime must offer both, and
+/// `all` only runs in the container (T4).
 pub(crate) fn mode_launch(
     rt: &Terminal,
     mode: PermissionMode,
+    model: Option<&str>,
     sandbox: bool,
 ) -> Result<Vec<String>, ActionError> {
     if !mode.allowed(sandbox) {
@@ -40,8 +42,21 @@ pub(crate) fn mode_launch(
             "permission mode all asks nothing, so it is only offered in the container",
         ));
     }
-    rt.argv(mode.as_str())
-        .map_err(|e| refuse("mode_unavailable", e))
+    let mut argv = rt
+        .argv(mode.as_str())
+        .map_err(|e| refuse("mode_unavailable", e))?;
+    if let Some(m) = model {
+        argv.extend(
+            rt.model_argv(m)
+                .map_err(|e| refuse("model_unavailable", e))?,
+        );
+    }
+    Ok(argv)
+}
+
+/// A model name from a request, checked (`None` = empty).
+pub(crate) fn clean_model(m: Option<&str>) -> Result<Option<String>, ActionError> {
+    xherd_core::model::clean(m.unwrap_or_default()).map_err(|e| refuse("bad_model", e))
 }
 
 /// Last path component, for `worktrees/<repo>/<agent>`.
@@ -100,7 +115,15 @@ impl Daemon {
             .permission_mode
             .or(profile.as_ref().and_then(|p| p.permission_mode))
             .unwrap_or(self.live_config().permission_mode);
-        let launch = mode_launch(&rt, mode, self.sandbox)?;
+        // Request, then the profile's model for this runtime, then Settings.
+        let model = match clean_model(req.model.as_deref())? {
+            Some(m) => Some(m),
+            None => profile
+                .as_ref()
+                .and_then(|p| p.models.get(rt_name).cloned())
+                .or_else(|| self.live_config().runtime_models.get(rt_name).cloned()),
+        };
+        let launch = mode_launch(&rt, mode, model.as_deref(), self.sandbox)?;
         let agents = self
             .store
             .list_agents()
@@ -109,10 +132,19 @@ impl Daemon {
         if agents.iter().any(|a| a.name == c.name) {
             return Err(refuse("name_taken", format!("agent {} exists", c.name)));
         }
-        if git.branch_exists(&repo, &c.name).await {
+        // A ticket URL gets its key from the tracker that reads it (#114).
+        let ticket = match &c.ticket {
+            Some(t) => {
+                let remote = crate::actor::origin_host(&repo).await;
+                Some(self.ticket_of(t, remote.as_deref()).0)
+            }
+            None => None,
+        };
+        let branch = new::branch_name(ticket.as_ref().and_then(|t| t.key.as_deref()), &c.name);
+        if git.branch_exists(&repo, &branch).await {
             return Err(refuse(
                 "branch_exists",
-                format!("branch {} already exists in {}", c.name, repo.display()),
+                format!("branch {branch} already exists in {}", repo.display()),
             ));
         }
         let workdir = self
@@ -141,13 +173,16 @@ impl Daemon {
             std::fs::create_dir_all(parent)
                 .map_err(|e| refuse("io", format!("{}: {e}", parent.display())))?;
         }
-        git.worktree_add(&repo, &workdir, &c.name, &base)
+        git.worktree_add(&repo, &workdir, &branch, &base)
             .await
             .map_err(|e| refuse("git", e.to_string()))?;
 
-        let mut a = Agent::new(&c.name, &c.ticket_key, self.clock.now());
+        let mut a = Agent::new(&c.name, self.clock.now());
+        a.ticket = ticket;
+        a.branch = branch.clone();
         a.autonomy = autonomy;
         a.permission_mode = Some(mode);
+        a.model = model;
         a.profile = profile.as_ref().map(|p| p.id.clone());
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
@@ -161,7 +196,7 @@ impl Daemon {
                     rt_name,
                     start,
                     &[
-                        ("key", &c.ticket_key),
+                        ("key", a.ticket_ref()),
                         ("prompt", &c.prompt),
                         ("commit", ""),
                     ],
@@ -185,7 +220,7 @@ impl Daemon {
         if res.is_err() {
             // Leave nothing behind (R-002).
             let _ = git.worktree_remove(&repo, &workdir, true).await;
-            let _ = git.run(&repo, &["branch", "-D", &c.name]).await;
+            let _ = git.run(&repo, &["branch", "-D", &branch]).await;
         }
         let a = res?;
         debug_assert_eq!(a.status, Status::Queued);
@@ -236,7 +271,7 @@ impl Daemon {
             &workdir,
             &workdir.join(".xherd/hooks"),
             &self.xherd_bin,
-            &a.name,
+            &a.branch,
         )
         .await
         .map_err(|e| refuse("push_guard", e.to_string()))?;

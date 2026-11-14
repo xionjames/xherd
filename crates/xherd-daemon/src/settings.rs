@@ -43,6 +43,8 @@ pub struct ConfigPatch {
     pub autonomy: Option<xherd_core::autonomy::Autonomy>,
     pub permission_mode: Option<xherd_core::permission::PermissionMode>,
     pub default_runtime: Option<String>,
+    /// Runtime → model (replaces the map; an empty model removes the entry).
+    pub runtime_models: Option<std::collections::BTreeMap<String, String>>,
     pub open_in: Option<xherd_core::config::OpenIn>,
     pub max_auto_approvals_in_row: Option<u32>,
     pub agent_token_budget: Option<u64>,
@@ -180,6 +182,10 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
     }
     if let Some(r) = p.default_runtime {
         c.default_runtime = r.trim().to_string();
+    }
+    if let Some(m) = p.runtime_models {
+        c.runtime_models =
+            xherd_core::model::clean_map(m).map_err(|e| bad(format!("runtimeModels: {e}")))?;
     }
     if let Some(o) = p.open_in {
         c.open_in = check_open_in(o)?;
@@ -352,7 +358,8 @@ impl Daemon {
         }))
     }
 
-    /// Names must exist, and every kind that has plugins keeps one on.
+    /// Names must exist, and every kind that has plugins keeps one on, except
+    /// the optional ones (trackers, Git providers).
     fn check_disabled(&self, off: &[String]) -> Result<(), ActionError> {
         if let Some(n) = off.iter().find(|n| self.plugins.get(n).is_none()) {
             return Err(bad(format!("no plugin named {n}")));
@@ -363,8 +370,9 @@ impl Daemon {
             .map(|p| format!("{:?}", p.manifest.kind))
             .collect();
         for k in kinds {
-            // Having no issue tracker is fine; every other kind needs one.
-            if k == "Tracker" {
+            // Having no issue tracker or Git provider is fine (Git access
+            // works without one); every other kind needs one.
+            if k == "Tracker" || k == "Host" {
                 continue;
             }
             let any_on = self
@@ -394,6 +402,18 @@ impl Daemon {
         }
     }
 
+    /// `name` is a runtime plugin that can choose a model (switched off is
+    /// allowed: its default model is kept for when it is on again).
+    pub(crate) fn check_model_runtime(&self, name: &str) -> Result<(), String> {
+        self.check_runtime(name, &[])?;
+        let p = self.plugins.get(name).expect("checked above");
+        match xherd_plugin::runtime::Terminal::of(&p.manifest) {
+            Ok(t) if !t.model_args.is_empty() => Ok(()),
+            Ok(_) => Err(format!("{name} cannot choose a model")),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn save_config(&self, patch: ConfigPatch) -> Result<Value, ActionError> {
         // Held from reading the config to saving it (`set_git_hosts` too).
         let write = self.config_write.lock().unwrap_or_else(|e| e.into_inner());
@@ -402,6 +422,10 @@ impl Daemon {
         self.check_disabled(&c.disabled_plugins)?;
         self.check_runtime(&c.default_runtime, &c.disabled_plugins)
             .map_err(|e| bad(format!("defaultRuntime: {e}")))?;
+        for rt in c.runtime_models.keys() {
+            self.check_model_runtime(rt)
+                .map_err(|e| bad(format!("runtimeModels: {e}")))?;
+        }
         c.save(&self.paths.config()).map_err(|e| ActionError {
             code: "io",
             message: e.to_string(),

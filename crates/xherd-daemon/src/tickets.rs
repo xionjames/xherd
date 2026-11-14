@@ -5,30 +5,49 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
+use xherd_core::Ticket;
+use xherd_core::new::{TicketInput, key_of_issue};
 use xherd_plugin::tracker::Tracker;
 
 use crate::{ActionError, Daemon};
 
-/// The tracker plugin that reads `key` for a repository on `remote_host`, and
-/// the issue reference it makes of the key: a tracker that serves the host
-/// first, then one that serves any host. `None`: no enabled tracker reads it.
+/// An enabled tracker plugin that reads tickets: name, rules, and its
+/// `baseUrl` setting (for `{baseUrl}` in its URL pattern).
+pub struct Reader {
+    pub name: String,
+    pub tracker: Tracker,
+    pub base_url: Option<String>,
+}
+
+/// The tracker plugin that reads `ticket`, and the issue reference it makes
+/// of it. A URL goes to the first tracker whose `url` pattern reads it (#114).
+/// A key goes to a tracker that serves `remote_host` first, then to one that
+/// serves any host. `None`: no enabled tracker reads it.
 pub fn pick_tracker(
-    trackers: &[(String, Tracker)],
+    trackers: &[Reader],
     remote_host: Option<&str>,
-    key: &str,
+    ticket: &Ticket,
 ) -> Option<(String, String)> {
-    let by_host = trackers.iter().find_map(|(n, t)| {
-        let served = remote_host.is_some_and(|h| t.serves(h));
+    if let Some(url) = &ticket.url {
+        return trackers.iter().find_map(|r| {
+            r.tracker
+                .issue_from_url(url, r.base_url.as_deref())
+                .map(|i| (r.name.clone(), i))
+        });
+    }
+    let key = ticket.key.as_deref()?;
+    let by_host = trackers.iter().find_map(|r| {
+        let served = remote_host.is_some_and(|h| r.tracker.serves(h));
         served
-            .then(|| t.issue_ref(key))
+            .then(|| r.tracker.issue_ref(key))
             .flatten()
-            .map(|r| (n.clone(), r))
+            .map(|i| (r.name.clone(), i))
     });
     by_host.or_else(|| {
         trackers
             .iter()
-            .filter(|(_, t)| t.hosts.is_empty())
-            .find_map(|(n, t)| t.issue_ref(key).map(|r| (n.clone(), r)))
+            .filter(|r| r.tracker.hosts.is_empty())
+            .find_map(|r| r.tracker.issue_ref(key).map(|i| (r.name.clone(), i)))
     })
 }
 
@@ -37,17 +56,109 @@ struct Resolved {
     wd: std::path::PathBuf,
     tracker: String,
     issue: String,
+    url: Option<String>,
+    key: String,
     host: Arc<xherd_plugin::host::Host>,
 }
 
-fn no_tracker(key: &str) -> ActionError {
+fn no_tracker(a: &xherd_core::agent::Agent) -> ActionError {
     ActionError {
         code: "no_tracker",
-        message: format!("no enabled issue tracker reads the ticket key {key}"),
+        message: match a.ticket_ref() {
+            "" => format!("{} has no ticket", a.name),
+            t => format!("no enabled issue tracker reads the ticket {t}"),
+        },
     }
 }
 
+/// The host of an https URL, lower-cased.
+fn url_host(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    Some(host.split(':').next()?.to_ascii_lowercase())
+}
+
 impl Daemon {
+    /// Every enabled tracker plugin that reads tickets (a `key` or `url`
+    /// pattern).
+    fn ticket_readers(&self) -> Vec<Reader> {
+        self.plugins
+            .of_kind(xherd_plugin::Kind::Tracker)
+            .filter(|p| self.plugin_enabled(p.name()))
+            .filter_map(|p| match Tracker::of(&p.manifest) {
+                Ok(Some(t)) if t.key.is_some() || t.url.is_some() => {
+                    let base_url = self
+                        .plugin_context(p)
+                        .settings
+                        .get("baseUrl")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    Some(Reader {
+                        name: p.name().to_string(),
+                        tracker: t,
+                        base_url,
+                    })
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    tracing::warn!(plugin = p.name(), "{e}");
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// A ticket as the user gave it, made into the agent's `Ticket` (#114):
+    /// a URL gets its key from the tracker that reads it (none: the URL is
+    /// kept as a plain link); a key stays as given. Also the tracker found,
+    /// for a repository on `remote_host`.
+    pub(crate) fn ticket_of(
+        &self,
+        input: &TicketInput,
+        remote_host: Option<&str>,
+    ) -> (Ticket, Option<String>) {
+        let ticket = match input {
+            TicketInput::Key(k) => Ticket {
+                key: Some(k.clone()),
+                url: None,
+            },
+            TicketInput::Url(u) => Ticket {
+                key: None,
+                url: Some(u.clone()),
+            },
+        };
+        let found = pick_tracker(&self.ticket_readers(), remote_host, &ticket);
+        let ticket = match (input, &found) {
+            (TicketInput::Url(u), Some((_, issue))) => Ticket {
+                key: key_of_issue(issue),
+                url: Some(u.clone()),
+            },
+            _ => ticket,
+        };
+        (ticket, found.map(|(t, _)| t))
+    }
+
+    /// `POST /tickets/resolve {ticket, repo?}`: what the New agent form
+    /// shows under the ticket field: the key, the URL and the tracker that
+    /// reads it (`null`: none, the URL stays a plain link). `repo` is a
+    /// local repository path, for the tracker of its host.
+    pub async fn resolve_ticket_input(
+        &self,
+        ticket: &str,
+        repo: Option<&str>,
+    ) -> Result<Value, ActionError> {
+        let Some(input) = xherd_core::new::parse_ticket(ticket)? else {
+            return Ok(json!({"key": null, "url": null, "tracker": null}));
+        };
+        let remote = match repo.map(std::path::Path::new).filter(|p| p.is_absolute()) {
+            Some(p) => crate::actor::origin_host(p).await,
+            None => None,
+        };
+        let (t, tracker) = self.ticket_of(&input, remote.as_deref());
+        Ok(json!({"key": t.key, "url": t.url, "tracker": tracker}))
+    }
+
     /// The agent and, when an enabled tracker reads its ticket key, that
     /// tracker (with the live secrets of its settings).
     async fn resolve_ticket(
@@ -56,22 +167,12 @@ impl Daemon {
     ) -> Result<(xherd_core::agent::Agent, Option<Resolved>), ActionError> {
         let a = self.action(who, crate::actor::UserAction::Get).await?;
         let wd = crate::workdir_of(&a)?.to_path_buf();
+        let Some(ticket) = a.ticket.clone() else {
+            return Ok((a, None));
+        };
         let remote = crate::actor::origin_host(&wd).await;
-        let trackers: Vec<(String, Tracker)> = self
-            .plugins
-            .of_kind(xherd_plugin::Kind::Tracker)
-            .filter(|p| self.plugin_enabled(p.name()))
-            .filter_map(|p| match Tracker::of(&p.manifest) {
-                Ok(Some(t)) if t.key.is_some() => Some((p.name().to_string(), t)),
-                Ok(_) => None,
-                Err(e) => {
-                    tracing::warn!(plugin = p.name(), "{e}");
-                    None
-                }
-            })
-            .collect();
-        let Some((tracker, issue)) = pick_tracker(&trackers, remote.as_deref(), &a.ticket_key)
-        else {
+        let trackers = self.ticket_readers();
+        let Some((tracker, issue)) = pick_tracker(&trackers, remote.as_deref(), &ticket) else {
             return Ok((a, None));
         };
         let p = self
@@ -87,10 +188,17 @@ impl Daemon {
             plugin: p,
         });
         // The repository host's token goes only to a tracker that serves that
-        // host (github-issues for github.com), never to one for any host.
-        let served = remote
-            .as_deref()
-            .filter(|r| trackers.iter().any(|(n, t)| n == &tracker && t.serves(r)));
+        // host (github-issues for github.com), never to one for any host, and
+        // never for a ticket URL on another host.
+        let ticket_host = ticket.url.as_deref().map(url_host);
+        let served = remote.as_deref().filter(|r| {
+            trackers
+                .iter()
+                .any(|t| t.name == tracker && t.tracker.serves(r))
+                && ticket_host
+                    .as_ref()
+                    .is_none_or(|h| h.as_deref() == Some(r.to_ascii_lowercase().as_str()))
+        });
         let git_hosts = self.live_config().git_hosts;
         let host = crate::actor::with_git_token(host, served, &git_hosts, &self.paths.secrets());
         Ok((
@@ -99,21 +207,24 @@ impl Daemon {
                 wd,
                 tracker,
                 issue,
+                url: ticket.url,
+                key: ticket.key.unwrap_or_default(),
                 host,
             }),
         ))
     }
 
     /// `GET /agents/{id}/ticket`: `{tracker, issue, ticket}`, or
-    /// `{tracker: null}` when no enabled tracker reads this ticket key.
+    /// `{tracker: null, ticket}` when the agent has no ticket or no enabled
+    /// tracker reads it.
     pub async fn agent_ticket(&self, who: &str) -> Result<Value, ActionError> {
         let (a, r) = self.resolve_ticket(who).await?;
         let Some(r) = r else {
-            return Ok(json!({"tracker": null, "key": a.ticket_key}));
+            return Ok(json!({"tracker": null, "ticket": a.ticket}));
         };
         let ticket = r
             .host
-            .ticket_get(&r.wd, &a.ticket_key, &r.issue)
+            .ticket_get(&r.wd, &r.key, &r.issue, r.url.as_deref())
             .await
             .map_err(|e| ActionError {
                 code: "ticket_failed",
@@ -144,7 +255,7 @@ impl Daemon {
     /// has done, for the user to read and edit. Nothing is posted.
     pub async fn ticket_summary(&self, who: &str) -> Result<Value, ActionError> {
         let (a, r) = self.resolve_ticket(who).await?;
-        let r = r.ok_or_else(|| no_tracker(&a.ticket_key))?;
+        let r = r.ok_or_else(|| no_tracker(&a))?;
         Ok(json!({
             "tracker": r.tracker,
             "issue": r.issue,
@@ -157,9 +268,9 @@ impl Daemon {
     /// event `ticket-comment` (its length, never its text).
     pub async fn post_ticket_comment(&self, who: &str, body: &str) -> Result<Value, ActionError> {
         let (a, r) = self.resolve_ticket(who).await?;
-        let r = r.ok_or_else(|| no_tracker(&a.ticket_key))?;
+        let r = r.ok_or_else(|| no_tracker(&a))?;
         r.host
-            .ticket_comment(&r.wd, &a.ticket_key, &r.issue, body)
+            .ticket_comment(&r.wd, &r.key, &r.issue, r.url.as_deref(), body)
             .await
             .map_err(|e| ActionError {
                 code: "comment_failed",
@@ -188,24 +299,76 @@ impl Daemon {
 mod tests {
     use super::*;
 
-    fn tracker(hosts: &[&str], key: &str) -> Tracker {
-        serde_json::from_value(json!({"hosts": hosts, "key": key})).unwrap()
+    fn reader(name: &str, hosts: &[&str], key: &str, url: Option<&str>) -> Reader {
+        Reader {
+            name: name.into(),
+            tracker: serde_json::from_value(json!({"hosts": hosts, "key": key, "url": url}))
+                .unwrap(),
+            base_url: Some("https://acme.atlassian.net".into()),
+        }
+    }
+
+    fn key(k: &str) -> Ticket {
+        Ticket {
+            key: Some(k.into()),
+            url: None,
+        }
+    }
+
+    #[test]
+    fn a_ticket_url_goes_to_the_tracker_that_reads_it() {
+        let ts = vec![
+            reader(
+                "github-issues",
+                &["github.com"],
+                r"^(?:GH-|#)?(\d+)$",
+                Some(r"^https://github\.com/[\w.-]+/[\w.-]+/issues/(\d+)$"),
+            ),
+            reader(
+                "jira",
+                &[],
+                r"^([A-Z]+-\d+)$",
+                Some(r"{baseUrl}/browse/([A-Z]+-\d+)$"),
+            ),
+        ];
+        let url = |u: &str| Ticket {
+            key: None,
+            url: Some(u.into()),
+        };
+        assert_eq!(
+            pick_tracker(
+                &ts,
+                Some("gitlab.com"),
+                &url("https://github.com/a/b/issues/3")
+            ),
+            Some(("github-issues".into(), "3".into()))
+        );
+        assert_eq!(
+            pick_tracker(&ts, None, &url("https://acme.atlassian.net/browse/PAY-4")),
+            Some(("jira".into(), "PAY-4".into()))
+        );
+        assert_eq!(
+            pick_tracker(&ts, None, &url("https://example.org/x/1")),
+            None
+        );
+        assert_eq!(
+            pick_tracker(&ts, Some("github.com"), &key("#7")),
+            Some(("github-issues".into(), "7".into()))
+        );
+        assert_eq!(
+            url_host("https://Me@GitHub.com:443/a"),
+            Some("github.com".into())
+        );
     }
 
     #[test]
     fn a_ticket_goes_to_the_tracker_of_its_host_then_to_one_for_any_host() {
         let ts = vec![
-            (
-                "github-issues".to_string(),
-                tracker(&["github.com"], r"^(?:GH-)?(\d+)$"),
-            ),
-            (
-                "gitlab-issues".to_string(),
-                tracker(&["*gitlab*"], r"^(?:GL-)?(\d+)$"),
-            ),
-            ("any".to_string(), tracker(&[], r"^([A-Z]+-\d+)$")),
+            reader("github-issues", &["github.com"], r"^(?:GH-)?(\d+)$", None),
+            reader("gitlab-issues", &["*gitlab*"], r"^(?:GL-)?(\d+)$", None),
+            reader("any", &[], r"^([A-Z]+-\d+)$", None),
         ];
-        let pick = |h, k| pick_tracker(&ts, h, k);
+        let pick = |h, k| pick_tracker(&ts, h, &key(k));
         assert_eq!(
             pick(Some("github.com"), "GH-12"),
             Some(("github-issues".into(), "12".into()))

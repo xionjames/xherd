@@ -65,9 +65,91 @@ pub struct Terminal {
     /// like opencode's, would lose the text).
     #[serde(default)]
     pub prompt_args: Vec<String>,
+    /// Launch arguments that choose the model, `{model}` once (issue #112);
+    /// without them agents of this runtime cannot choose one.
+    #[serde(default)]
+    pub model_args: Vec<String>,
+    /// Models to suggest in the UI: a fixed list, or a shell command that
+    /// prints them; any other name may still be typed.
+    #[serde(default)]
+    pub models: Models,
+}
+
+/// `data.terminal.models`: a list, or `{"command": "…"}` run with `sh -c`
+/// (pipes, `grep`, `jq`… allowed) that prints one model per line, as
+/// `id`, `id<TAB>label` or `id<TAB>label<TAB>tier`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum Models {
+    Fixed(Vec<ModelSuggestion>),
+    Command(ModelCommand),
+}
+
+impl Default for Models {
+    fn default() -> Models {
+        Models::Fixed(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCommand {
+    pub command: String,
+}
+
+/// At most this many models are taken from a command's output.
+pub const MAX_LISTED_MODELS: usize = 500;
+
+/// The models a list command printed: lines of `id[\tlabel[\ttier]]`; an
+/// odd id is skipped, a repeated one kept once.
+pub fn parse_model_list(out: &str) -> Vec<ModelSuggestion> {
+    let mut seen = std::collections::HashSet::new();
+    let text = |s: Option<&str>| {
+        s.map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.chars().filter(|c| !c.is_control()).take(80).collect())
+    };
+    out.lines()
+        .filter_map(|l| {
+            let mut parts = l.split('\t');
+            let id = xherd_core::model::clean(parts.next()?).ok().flatten()?;
+            Some(ModelSuggestion {
+                id,
+                label: text(parts.next()),
+                tier: text(parts.next()),
+            })
+        })
+        .filter(|m| seen.insert(m.id.clone()))
+        .take(MAX_LISTED_MODELS)
+        .collect()
+}
+
+/// A model the UI offers for a runtime (`data.terminal.models`).
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelSuggestion {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// A rough cost/strength class (`fast`, `balanced`, `strong`…), shown as is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 impl Terminal {
+    /// `model_args` with the model; refused when the runtime takes none.
+    /// The name must already be checked (`xherd_core::model::clean`).
+    pub fn model_argv(&self, model: &str) -> Result<Vec<String>, String> {
+        if self.model_args.is_empty() {
+            return Err("this runtime cannot choose a model (no modelArgs)".into());
+        }
+        Ok(self
+            .model_args
+            .iter()
+            .map(|a| a.replace("{model}", model))
+            .collect())
+    }
+
     /// `prompt_args` with the prompt; `None` when the runtime has none.
     pub fn prompt_argv(args: &[String], prompt: &str) -> Option<Vec<String>> {
         (!args.is_empty()).then(|| args.iter().map(|a| a.replace("{prompt}", prompt)).collect())
@@ -644,6 +726,40 @@ impl Terminal {
                 m.name
             ));
         }
+        if !t.model_args.is_empty()
+            && t.model_args
+                .iter()
+                .filter(|a| a.contains("{model}"))
+                .count()
+                != 1
+        {
+            return Err(format!(
+                "runtime {}: modelArgs needs {{model}} once",
+                m.name
+            ));
+        }
+        match &t.models {
+            Models::Fixed(list) => {
+                if let Some(x) = list.iter().find(|x| {
+                    xherd_core::model::clean(&x.id).ok().flatten().as_deref() != Some(&x.id)
+                }) {
+                    return Err(format!(
+                        "runtime {}: models: {:?} is not a plain model name",
+                        m.name, x.id
+                    ));
+                }
+            }
+            Models::Command(c) if c.command.trim().is_empty() => {
+                return Err(format!("runtime {}: models: empty command", m.name));
+            }
+            Models::Command(_) => {}
+        }
+        if t.models != Models::default() && t.model_args.is_empty() {
+            return Err(format!(
+                "runtime {}: models needs modelArgs (how to pass the model)",
+                m.name
+            ));
+        }
         if let Some(c) = &t.check {
             let n = |p: &str| c.argv.iter().filter(|a| a.contains(p)).count();
             if c.argv.is_empty() || n("{prompt}") != 1 || n("{system}") != 1 {
@@ -1206,6 +1322,71 @@ mod check_tests {
                 .map(String::from)
                 .to_vec(),
             model_args: ["--model", "{model}"].map(String::from).to_vec(),
+        }
+    }
+
+    #[test]
+    fn model_args_take_the_model_once() {
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "claude-code")
+            .unwrap();
+        let t = Terminal::of(&m).unwrap();
+        assert_eq!(t.model_argv("opus").unwrap(), ["--model", "opus"]);
+        assert!(matches!(&t.models, Models::Fixed(l) if l.iter().any(|x| x.id == "sonnet")));
+        let term = m.data.get_mut("terminal").unwrap();
+        term["modelArgs"] = json!(["--model"]);
+        assert!(Terminal::of(&m).unwrap_err().contains("modelArgs"));
+        let term = m.data.get_mut("terminal").unwrap();
+        term["modelArgs"] = json!([]);
+        term["models"] = json!([]);
+        let t = Terminal::of(&m).unwrap();
+        assert!(t.model_argv("opus").is_err(), "no modelArgs, no model");
+        let term = m.data.get_mut("terminal").unwrap();
+        term["models"] = json!([{"id": "-x"}]);
+        assert!(Terminal::of(&m).unwrap_err().contains("models"));
+        let term = m.data.get_mut("terminal").unwrap();
+        term["models"] = json!({"command": "x models"});
+        assert!(Terminal::of(&m).unwrap_err().contains("needs modelArgs"));
+        let term = m.data.get_mut("terminal").unwrap();
+        term["modelArgs"] = json!(["-m", "{model}"]);
+        let t = Terminal::of(&m).unwrap();
+        assert_eq!(
+            t.models,
+            Models::Command(ModelCommand {
+                command: "x models".into()
+            })
+        );
+        let term = m.data.get_mut("terminal").unwrap();
+        term["models"] = json!({"command": " "});
+        assert!(Terminal::of(&m).unwrap_err().contains("empty command"));
+        let term = m.data.get_mut("terminal").unwrap();
+        term["models"] = json!({"command": "x", "other": 1});
+        assert!(Terminal::of(&m).is_err(), "unknown fields refused");
+    }
+
+    #[test]
+    fn a_model_list_is_lines_of_id_label_tier() {
+        let out =
+            "opencode/big-pickle\ngpt-6\tGPT-6\tstrong\n\n-bad\na b\ngpt-6\tagain\n  sonnet  \t \n";
+        let got = parse_model_list(out);
+        let ids: Vec<&str> = got.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["opencode/big-pickle", "gpt-6", "sonnet"]);
+        assert_eq!(got[1].label.as_deref(), Some("GPT-6"));
+        assert_eq!(got[1].tier.as_deref(), Some("strong"));
+        assert_eq!(got[2].label, None);
+        let many: String = (0..600).map(|i| format!("m{i}\n")).collect();
+        assert_eq!(parse_model_list(&many).len(), MAX_LISTED_MODELS);
+    }
+
+    #[test]
+    fn every_builtin_runtime_can_choose_a_model() {
+        for m in crate::builtins()
+            .iter()
+            .filter(|m| m.kind == crate::Kind::Runtime)
+        {
+            let t = Terminal::of(m).unwrap();
+            assert!(!t.model_args.is_empty(), "{}", m.name);
         }
     }
 

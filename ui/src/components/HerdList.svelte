@@ -5,6 +5,7 @@
   import Mini from './Mini.svelte';
   import TaskBar from './TaskBar.svelte';
   import StatusPill from './StatusPill.svelte';
+  import TicketPill from './TicketPill.svelte';
   import Panel from './Panel.svelte';
   import { href } from '../lib/router.svelte';
   import { ago, repoName, shortBase } from '../lib/format';
@@ -28,7 +29,7 @@
                     <div class="row" style="flex-wrap:nowrap">
                       <AgentDot agent={a} />
                       <div class="wrap-any">
-                        <a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a>
+                        <a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
                         <div class="hint">{repoName(a)} · {a.flow ?? 'no workflow'}</div>
                       </div>
                     </div>
@@ -42,7 +43,7 @@
                   </td>
                   <td class="hide-sm"><Mini agent={a} /></td>
                   <td class="hide-sm"><TaskBar agent={a} /></td>
-                  <td class="hide-sm mono muted">{a.workdir ? `← ${shortBase(a)}` : 'not created'}</td>
+                  <td class="hide-sm mono muted">{a.workdir ? `${a.branch} ← ${shortBase(a)}` : 'not created'}</td>
                   <td class="num muted r">{ago(a.lastActivity)}</td>
                 </tr>
               {/each}

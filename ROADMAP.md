@@ -107,6 +107,8 @@ by theme; update it together with them.
 
 - [x] opencode runtime (branch `runtime-opencode`): choice per agent, profile and setting
 - [x] Codex runtime (branch `runtime-codex`): skills as commands, hooks, sandbox modes; not yet run end to end with a model
+- [x] A model per agent (#112): `modelArgs` in runtime manifests, defaults per runtime in Settings (`runtimeModels`) and in repo profiles (`models`), changed per agent for its next session
+- [ ] A model per step (R-522: per role, plus tier and effort)
 - [x] To review and Work log views (per-ticket cycle time, review loops and rework)
 - [x] Kanban Board: stages and tasks as work units, TODOs, swimlanes; agents by stage on the Herd
 - [ ] Pack-declared Kanban cards (R-1101)

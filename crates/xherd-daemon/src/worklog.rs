@@ -56,7 +56,7 @@ impl Daemon {
         for a in agents.iter().filter(|a| a.status == Status::Running) {
             if let Err(e) = self
                 .store
-                .add_worklog(&day(now), &a.ticket_key, "agent", ms)
+                .add_worklog(&day(now), a.work_item(), "agent", ms)
                 .await
             {
                 tracing::warn!(error = %e, "work log not written");
@@ -70,7 +70,7 @@ impl Daemon {
         self.store
             .add_worklog(
                 &day(self.clock.now()),
-                &a.ticket_key,
+                a.work_item(),
                 "user",
                 ms.min(MAX_SPAN_MS),
             )
@@ -125,7 +125,7 @@ impl Daemon {
                 let (auto, redone) = rw.get(&a.id).copied().unwrap_or_default();
                 let finished = a.status == Status::Done;
                 json!({
-                    "ticket": a.ticket_key,
+                    "ticket": a.work_item(),
                     "agent": a.name,
                     "status": a.status,
                     "cycleMs": finished.then(|| (a.status_since - a.created_at).max(0)),

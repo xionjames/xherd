@@ -59,12 +59,13 @@ enum Cmd {
     Docker(DockerCmd),
     /// Is the daemon up?
     Status,
-    /// Create an agent: worktree, branch and `.xherd/` for a ticket.
+    /// Create an agent: worktree, branch and `.xherd/`.
     New {
-        /// Ticket key (upper-cased).
-        key: String,
+        /// Agent name: lowercase letters, digits and `-` (also the tmux session and worktree folder).
+        name: String,
+        /// Ticket: an issue URL or a key (PAY-412, #12). Its key prefixes the branch.
         #[arg(long)]
-        slug: Option<String>,
+        ticket: Option<String>,
         /// Flow of the built-in pack, or `none` (default `feature`).
         #[arg(long)]
         flow: Option<String>,
@@ -82,6 +83,9 @@ enum Cmd {
         /// Runtime plugin (claude-code, opencode, codex); default: the profile's, else Settings.
         #[arg(long)]
         runtime: Option<String>,
+        /// Model for the runtime (opus, sonnet…); default: the profile's, else Settings, else the runtime's own.
+        #[arg(long)]
+        model: Option<String>,
         prompt: Option<String>,
     },
     /// List agents.
@@ -103,6 +107,8 @@ enum Cmd {
         agent: String,
         mode: xherd_core::permission::PermissionMode,
     },
+    /// Change an agent's model ("" = the runtime's default); used from its next session start.
+    Model { agent: String, model: String },
     /// Pause an agent (it writes a handoff note first), or with --all every live agent at once, with no note (kill switch).
     Pause {
         agent: Option<String>,
@@ -347,20 +353,23 @@ fn main() -> ExitCode {
         Cmd::Ls => ls(),
         Cmd::Install { runtime, pack } => install(runtime, pack),
         Cmd::New {
-            key,
-            slug,
+            name,
+            ticket,
             flow,
             repo,
             base,
             autonomy,
             mode,
             runtime,
+            model,
             prompt,
         } => new_agent(
             repo,
             xherd_core::new::NewAgent {
-                ticket_key: key,
-                slug,
+                name,
+                ticket,
+                ticket_key: None,
+                slug: None,
                 repo: String::new(),
                 base,
                 flow,
@@ -368,8 +377,12 @@ fn main() -> ExitCode {
                 autonomy,
                 permission_mode: mode,
                 runtime,
+                model,
             },
         ),
+        Cmd::Model { agent, model } => {
+            action(&agent, "model", Some(serde_json::json!({"model": model})))
+        }
         Cmd::Mode { agent, mode } => {
             action(&agent, "mode", Some(serde_json::json!({"mode": mode})))
         }

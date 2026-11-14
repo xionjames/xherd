@@ -41,9 +41,11 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 
 | Method and path | Does |
 |---|---|
-| `GET /agents`, `POST /agents` | List, create (body: `ticketKey` and `repo` (a path or URL), optional `slug`, `flow`, `base`, `autonomy`, `permissionMode`, `runtime`, `prompt`; the same as `xherd new`) |
+| `GET /runtimes/{name}/models` | A runtime's model suggestions: `{choose, models: [{id, label?, tier?}], error?}`; `choose` is false when the runtime takes no model, `error` says why its list command gave nothing |
+| `GET /agents`, `POST /agents` | List, create (body: `name` and `repo` (a path or URL), optional `ticket` (issue URL or key), `flow`, `base`, `autonomy`, `permissionMode`, `runtime`, `model`, `prompt`; the same as `xherd new`. Until the next release `ticketKey` and `slug` are still taken when `name` is missing: the name is the slug, else the key lower-cased. Refusals include `name_required`, `bad_name`, `bad_ticket`, `name_taken`, `branch_exists`). An agent has `name`, `branch` and, with a ticket, `ticket: {key?, url?}` |
+| `POST /tickets/resolve {ticket, repo?}` | What a ticket field stands for: `{key, url, tracker}` (`tracker` null when no enabled tracker reads it; `repo`, a local path, picks the tracker of its host for a key) |
 | `GET /agents/{id}` | One agent |
-| `POST /agents/{id}/{action}` | `pause`, `resume`, `cancel`, `send {text}`, `approve {reason?, expect?, message?}`, `request-changes {comment}`, `autonomy {level}`, `mode {mode}`, `memory-accept {text?}`, `memory-dismiss`. `expect` maps each document to the hash the client showed (from `GET /file`); a mismatch is refused with `changed_since_read`. `message` replaces a commit's message |
+| `POST /agents/{id}/{action}` | `pause`, `resume`, `cancel`, `send {text}`, `approve {reason?, expect?, message?}`, `request-changes {comment}`, `autonomy {level}`, `mode {mode}`, `model {model}` (empty or null = the runtime's default; refused with `bad_model` for an odd name, `model_unavailable` when the runtime takes no model), `memory-accept {text?}`, `memory-dismiss`. `expect` maps each document to the hash the client showed (from `GET /file`); a mismatch is refused with `changed_since_read`. `message` replaces a commit's message |
 | `POST /agents/pause-all` | Kill switch: pause every queued and live agent now, no handoff |
 | `GET /agents/{id}/diff` | What is being approved: the commit proposal against `HEAD`, the branch at a ship gate, else every uncommitted change |
 | `GET /agents/{id}/docs` | The spec folder's Markdown files, gate documents first |
@@ -80,7 +82,7 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 
 | Method and path | Does |
 |---|---|
-| `GET /git/hosts`, `PUT /git/hosts` | Hosts, their provider and credential source (`providers` lists the host plugins) |
+| `GET /git/hosts`, `PUT /git/hosts` | Hosts, their provider and credential source (`providers` lists the host plugins). `GET` also lists the implicit rows of the Git providers that are on, each with `from` = the plugin's name; they are never saved, and `PUT` takes only the user's rows (a row carrying `from` is refused) |
 | `POST /git/doctor`, `POST /git/known-hosts`, `POST /git/login` | Check access to a host, accept a host key (re-scanned, same fingerprint required), start a browser login in a terminal |
 | `POST /git/credential` | The git credential helper's endpoint (local user or an agent token with `credential`) |
 | `POST /plugins/{name}/login` | Start a plugin's login in the setup terminal |

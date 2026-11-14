@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn usage_is_cumulative_per_session() {
-        let mut a = Agent::new("A", "A", 1);
+        let mut a = Agent::new("A", 1);
         assert_eq!(a.record_usage("s1", 100), 100);
         assert_eq!(a.record_usage("s1", 250), 150);
         assert_eq!(a.record_usage("s1", 200), 0, "never goes backwards");

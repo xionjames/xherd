@@ -83,7 +83,7 @@ async fn setup_inner(
     }
     o.pr_poll = Some(Duration::from_millis(1));
     let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
-    let mut a = Agent::new("SC-1", "SC-1", 1);
+    let mut a = Agent::new("SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(wt.path().to_string_lossy().into_owned());
     a.pack = Some("xherd".into());
@@ -373,7 +373,7 @@ async fn refused_when_not_live_or_without_flow() {
         .unwrap_err();
     assert_eq!(e.code, "not_live");
 
-    let mut b = Agent::new("SC-2", "SC-2", 2);
+    let mut b = Agent::new("SC-2", 2);
     b.launch = Some(vec!["rt".into()]);
     let b = t.d.create_agent(b).await.unwrap();
     for _ in 0..200 {
@@ -388,14 +388,9 @@ async fn refused_when_not_live_or_without_flow() {
             .unwrap_err();
     assert_eq!(e.code, "no_flow");
     let e =
-        t.d.xap(call(
-            &Agent::new("x", "x", 0),
-            "c3",
-            "ask",
-            json!({"text": "?"}),
-        ))
-        .await
-        .unwrap_err();
+        t.d.xap(call(&Agent::new("x", 0), "c3", "ask", json!({"text": "?"})))
+            .await
+            .unwrap_err();
     assert_eq!(e.code, "unknown_agent");
 }
 
@@ -1642,7 +1637,7 @@ async fn memory_is_not_checked_without_a_flow() {
     let t = setup().await;
     std::fs::remove_file(t.wt.path().join(".xherd/spec/memory.md")).unwrap();
     // Flow none is refused for its own reason, never as memory_invalid.
-    let mut a = Agent::new("SC-2", "SC-2", 2);
+    let mut a = Agent::new("SC-2", 2);
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(t.wt.path().to_string_lossy().into_owned());
     let a = t.d.create_agent(a).await.unwrap();
@@ -2903,7 +2898,7 @@ async fn a_dismissed_starter_agents_md_is_not_proposed_again() {
     let t = setup().await;
     let wt = t.wt.path();
     // A second agent of the same repository.
-    let mut b = Agent::new("SC-2", "SC-2", 1);
+    let mut b = Agent::new("SC-2", 1);
     b.workdir = t.a.workdir.clone();
     b.pack = Some("xherd".into());
     b.flow = Some("feature".into());

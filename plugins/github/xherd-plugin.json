@@ -21,8 +21,9 @@
     }
   ],
   "checks": [
-    { "name": "gh auth", "argv": ["gh", "auth", "status"], "optional": true }
+    { "name": "login", "argv": ["gh", "auth", "status"], "optional": true }
   ],
+  "login": ["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"],
   "data": {
     "git": {
       "hosts": [

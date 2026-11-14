@@ -6,6 +6,7 @@
   import HerdSummary from './HerdSummary.svelte';
   import Panel from './Panel.svelte';
   import StatusPill from './StatusPill.svelte';
+  import TicketPill from './TicketPill.svelte';
   import { href } from '../lib/router.svelte';
   import { flowOf, STAGE_LABEL } from '../lib/flow';
   import { agoText, needsYou, repoName } from '../lib/format';
@@ -58,7 +59,7 @@
             <h3>{label} <span class="hint num">{list.length}</span></h3>
             {#each list as { a } (a.id)}
               <a class="card tk" class:needs={needsYou(a)} href={href(`/agent/${a.name}`)} onclick={(e) => click(e, a)}>
-                <span class="mono"><b>{a.name}</b></span>
+                <span class="mono"><b>{a.name}</b> <TicketPill ticket={a.ticket} link={false} /></span>
                 <StatusPill agent={a} />
                 <span class="hint">{repoName(a)} · {agoText(a.statusSince)}</span>
               </a>

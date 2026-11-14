@@ -43,7 +43,7 @@ async fn daemon(max: usize) -> T {
 }
 
 fn agent(name: &str, created: i64) -> Agent {
-    let mut a = Agent::new(name, name, created);
+    let mut a = Agent::new(name, created);
     a.workdir = Some("/tmp".into());
     a.launch = Some(vec!["fake-runtime".into(), "--go".into()]);
     a
@@ -188,7 +188,7 @@ async fn reports_sequence_dedupe_and_unknown_agents() {
     assert_eq!(t.d.report(old).await, Some(ReportResult::Stale));
     assert_eq!(status(&t.d, "SC-1").await, Status::Idle);
 
-    let ghost = Agent::new("NOPE-1", "NOPE-1", 0);
+    let ghost = Agent::new("NOPE-1", 0);
     assert_eq!(
         t.d.report(rep(&ghost, "x", ReportEvent::Stop, 1, Value::Null))
             .await,

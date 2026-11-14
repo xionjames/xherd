@@ -258,7 +258,10 @@ impl Store {
             let data: Option<String> = c
                 .query_row("SELECT data FROM agents WHERE id = ?1", [id], |r| r.get(0))
                 .optional()?;
-            Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
+            Ok(data
+                .map(|d| serde_json::from_str::<Agent>(&d))
+                .transpose()?
+                .map(Agent::upgrade))
         })
         .await
     }
@@ -269,7 +272,7 @@ impl Store {
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
             let mut out = Vec::new();
             for d in rows {
-                out.push(serde_json::from_str(&d?)?);
+                out.push(serde_json::from_str::<Agent>(&d?)?.upgrade());
             }
             Ok(out)
         })
@@ -887,7 +890,7 @@ mod tests {
     #[tokio::test]
     async fn agent_roundtrip_and_update() {
         let (_d, s) = open();
-        let mut a = Agent::new("SC-1", "SC-1", 1);
+        let mut a = Agent::new("SC-1", 1);
         s.put_agent(&a).await.unwrap();
         a.status = Status::Running;
         s.put_agent(&a).await.unwrap();

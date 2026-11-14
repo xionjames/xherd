@@ -27,6 +27,11 @@ pub struct Tracker {
     /// tracker only makes links.
     #[serde(default)]
     pub key: Option<String>,
+    /// Which issue URLs the tracker reads (#114): a regular expression over
+    /// the whole URL with one group, the issue reference (as for `key`). It
+    /// may start with `{baseUrl}`, the plugin's setting, matched literally.
+    #[serde(default)]
+    pub url: Option<String>,
     /// Git host names the tracker serves (`github.com`, `*gitlab*`): it is
     /// asked about tickets of repositories on them before any other tracker.
     #[serde(default)]
@@ -71,14 +76,41 @@ impl Tracker {
     }
 
     fn validate_key(&self) -> Result<(), String> {
-        let Some(k) = &self.key else { return Ok(()) };
-        let re = Regex::new(k).map_err(|e| format!("key {k:?}: {e}"))?;
-        if k.len() > 100 || re.captures_len() != 2 {
-            return Err(format!(
-                "key {k:?} needs one group and at most 100 characters"
-            ));
+        if let Some(k) = &self.key {
+            let re = Regex::new(k).map_err(|e| format!("key {k:?}: {e}"))?;
+            if k.len() > 100 || re.captures_len() != 2 {
+                return Err(format!(
+                    "key {k:?} needs one group and at most 100 characters"
+                ));
+            }
+        }
+        if let Some(u) = &self.url {
+            let re = Regex::new(&url_regex(u, "https://x.test"))
+                .map_err(|e| format!("url {u:?}: {e}"))?;
+            if u.len() > MAX_PATTERN
+                || re.captures_len() != 2
+                || u.match_indices("{baseUrl}").any(|(i, _)| i > 0)
+            {
+                return Err(format!(
+                    "url {u:?} needs one group, at most {MAX_PATTERN} characters, and {{baseUrl}} only at the start"
+                ));
+            }
         }
         Ok(())
+    }
+
+    /// The issue reference an issue URL stands for, if this tracker reads
+    /// it. `base_url` is the plugin's `baseUrl` setting; a pattern that needs
+    /// it reads nothing without one.
+    pub fn issue_from_url(&self, url: &str, base_url: Option<&str>) -> Option<String> {
+        let u = self.url.as_ref()?;
+        let base = match base_url.map(|b| b.trim_end_matches('/')) {
+            Some(b) if b.starts_with("https://") => b,
+            _ if u.starts_with("{baseUrl}") => return None,
+            _ => "",
+        };
+        let re = Regex::new(&url_regex(u, base)).ok()?;
+        plain_issue(re.captures(url)?.get(1)?.as_str())
     }
 
     /// The issue reference `ticket` stands for (the key's group), if this
@@ -86,17 +118,29 @@ impl Tracker {
     /// command line.
     pub fn issue_ref(&self, ticket: &str) -> Option<String> {
         let re = Regex::new(self.key.as_ref()?).ok()?;
-        let r = re.captures(ticket)?.get(1)?.as_str();
-        (!r.is_empty()
-            && r.len() <= 40
-            && r.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
-        .then(|| r.to_string())
+        plain_issue(re.captures(ticket)?.get(1)?.as_str())
     }
 
     /// The tracker serves repositories on `host`.
     pub fn serves(&self, host: &str) -> bool {
         self.hosts.iter().any(|p| crate::git::host_matches(p, host))
+    }
+}
+
+/// An issue reference that can go onto a command line.
+fn plain_issue(r: &str) -> Option<String> {
+    (!r.is_empty()
+        && r.len() <= 40
+        && r.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+    .then(|| r.to_string())
+}
+
+/// A `url` pattern with a leading `{baseUrl}` replaced by `base`, escaped.
+fn url_regex(pattern: &str, base: &str) -> String {
+    match pattern.strip_prefix("{baseUrl}") {
+        Some(rest) => format!("^{}{rest}", regex::escape(base)),
+        None => pattern.to_string(),
     }
 }
 
@@ -264,6 +308,51 @@ mod tests {
                 .to_string(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn reads_issue_urls() {
+        let jira = Tracker::of(&manifest(json!({
+            "url": r"{baseUrl}/browse/([A-Z][A-Z0-9]{1,9}-\d+)/?(?:[?#].*)?$"
+        })))
+        .unwrap()
+        .unwrap();
+        let base = Some("https://acme.atlassian.net/");
+        let read = |u: &str| jira.issue_from_url(u, base);
+        assert_eq!(
+            read("https://acme.atlassian.net/browse/PAY-412").as_deref(),
+            Some("PAY-412")
+        );
+        assert_eq!(
+            read("https://acme.atlassian.net/browse/PAY-412?focused=1").as_deref(),
+            Some("PAY-412")
+        );
+        assert_eq!(read("https://other.atlassian.net/browse/PAY-412"), None);
+        assert_eq!(read("https://acmeXatlassian.net/browse/PAY-412"), None);
+        assert_eq!(
+            jira.issue_from_url("https://acme.atlassian.net/browse/PAY-1", None),
+            None
+        );
+        let gh = Tracker::of(&manifest(json!({
+            "url": r"^https://github\.com/[\w.-]+/[\w.-]+/issues/(\d+)/?(?:[?#].*)?$"
+        })))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            gh.issue_from_url("https://github.com/acme/api/issues/12#x", None)
+                .as_deref(),
+            Some("12")
+        );
+        for bad in [
+            r"^https://x/(\d+)/(\d+)$",
+            r"^https://{baseUrl}/(\d+)$",
+            "(",
+        ] {
+            assert!(
+                Tracker::of(&manifest(json!({"url": bad}))).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

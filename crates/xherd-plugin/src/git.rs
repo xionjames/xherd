@@ -255,6 +255,35 @@ mod tests {
         Git::of(&m).unwrap().unwrap()
     }
 
+    /// GitHub's login goes through the plugin-login path (Welcome's Plugins
+    /// step): a top-level `login` argv and an optional check named `login`.
+    #[test]
+    fn github_has_a_plugin_login() {
+        let m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "github")
+            .unwrap();
+        assert_eq!(
+            m.login.as_deref().unwrap(),
+            [
+                "gh",
+                "auth",
+                "login",
+                "--hostname",
+                "github.com",
+                "--git-protocol",
+                "https",
+                "--web"
+            ]
+        );
+        let check = m
+            .checks
+            .iter()
+            .find(|c| c.name == crate::manifest::LOGIN_CHECK)
+            .unwrap();
+        assert!(check.optional);
+    }
+
     /// What `git_access.rs` hardcoded before D24 step 1, now in the manifests.
     #[test]
     fn the_built_in_providers_say_what_the_daemon_used_to() {

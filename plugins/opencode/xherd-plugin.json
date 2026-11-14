@@ -34,6 +34,13 @@
           }
         }
       },
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "command": "opencode models"
+      },
       "hooks": {
         "file": ".opencode/plugin/xherd.js",
         "format": "opencode-plugin",
