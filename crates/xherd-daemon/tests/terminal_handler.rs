@@ -1,12 +1,22 @@
-//! The `xherd-term://` handler script (R-707): validation, decoding and the
-//! command per terminal, run in dry-run mode with `sh` (and `bash` when found)
-//! against a temporary worktrees root, fake terminals and a minimal `PATH`.
+//! The `xherd-term://` handler script and its installer (R-707): the handler
+//! is taken from a rendered install in a temporary `HOME`, then its
+//! validation, decoding and the command per terminal are run in dry-run mode
+//! with `sh` (and `bash` when found) against a temporary worktrees root, fake
+//! terminals and a minimal `PATH`.
 
+use std::io::Write;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-const HANDLER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/terminal-handler.sh");
+use xherd_daemon::open_in::{HANDLER_SH, HANDLER_VERSION, handler_script};
+
+const REPORT: &str = "http://127.0.0.1:9";
+
+/// What the installer needs besides the shell's builtins.
+const INSTALL_TOOLS: &[&str] = &[
+    "awk", "cat", "chmod", "mkdir", "mv", "rm", "rmdir", "sed", "uname",
+];
 
 /// Every Linux terminal id, in the handler's order.
 const LINUX: &[&str] = &[
@@ -61,7 +71,12 @@ struct Env {
     base: PathBuf,
     home: PathBuf,
     root: PathBuf,
+    /// The fake `PATH` the handler runs with.
     bin: PathBuf,
+    /// Links to the installer's tools, before `bin` in its `PATH`.
+    tools: PathBuf,
+    /// The handler the install wrote.
+    handler: PathBuf,
 }
 
 /// Writes an executable script `name` running `body` in the fake `PATH`.
@@ -84,24 +99,96 @@ fn setup() -> Env {
     // A space in the root: the conf line and every check must cope.
     let root = base.join("x herd/worktrees");
     let bin = base.join("bin");
-    std::fs::create_dir_all(home.join(".config/xherd")).unwrap();
+    let tools = base.join("tools");
+    std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(
-        home.join(".config/xherd/terminal-handler.conf"),
-        format!("version=1\nroot={}/\n", root.display()),
-    )
-    .unwrap();
+    std::fs::create_dir_all(&tools).unwrap();
     for t in ["awk", "sed", "uname"] {
         symlink(which(t), bin.join(t)).unwrap();
     }
+    for t in INSTALL_TOOLS {
+        symlink(which(t), tools.join(t)).unwrap();
+    }
     worktree(&root.join("app/fix-login"));
-    Env {
+    let handler = home.join(".local/bin/xherd-open-terminal");
+    let e = Env {
         _tmp: tmp,
         base,
         home,
         root,
         bin,
+        tools,
+        handler,
+    };
+    let o = install(&e, &sh(), "linux", &["install"], &[]);
+    assert_eq!(o.code, 0, "install failed: {}", o.stderr);
+    // A trailing slash in the conf: the handler must cope.
+    std::fs::write(
+        e.home.join(".config/xherd/terminal-handler.conf"),
+        format!("version=1\nroot={}/\n", e.root.display()),
+    )
+    .unwrap();
+    e
+}
+
+/// Runs the installer rendered for `e.root` as `sh -s <args>` with the script
+/// on stdin (as `curl … | sh` does), in dry-run mode.
+fn install(e: &Env, shell: &[String], os: &str, args: &[&str], extra: &[(&str, &str)]) -> Out {
+    let script = handler_script(&e.root.to_string_lossy(), REPORT).unwrap();
+    let path = format!("{}:{}", e.tools.display(), e.bin.display());
+    let mut c = Command::new(&shell[0]);
+    c.args(&shell[1..])
+        .arg("-s")
+        .args(args)
+        .env_clear()
+        .env("HOME", &e.home)
+        .env("PATH", path)
+        .env("XHERD_TERM_DRY_RUN", "1")
+        .env("XHERD_TERM_OS", os)
+        .current_dir(&e.base)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in extra {
+        c.env(k, v);
     }
+    let mut child = c.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
+    let o = child.wait_with_output().unwrap();
+    Out {
+        code: o.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+    }
+}
+
+/// Every file under `dir`, relative, with its content and mode.
+fn files(dir: &Path) -> Vec<(String, Vec<u8>, u32)> {
+    let mut out = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for entry in std::fs::read_dir(&d).unwrap() {
+            let p = entry.unwrap().path();
+            let m = std::fs::symlink_metadata(&p).unwrap();
+            if m.is_dir() {
+                todo.push(p);
+            } else {
+                let rel = p.strip_prefix(dir).unwrap().to_string_lossy().into_owned();
+                out.push((
+                    rel,
+                    std::fs::read(&p).unwrap(),
+                    m.permissions().mode() & 0o777,
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// Percent-encodes every byte but unreserved ones and `/`.
@@ -135,7 +222,7 @@ struct Out {
 fn run_with(e: &Env, shell: &[String], os: &str, args: &[&str], extra: &[(&str, &str)]) -> Out {
     let mut c = Command::new(&shell[0]);
     c.args(&shell[1..])
-        .arg(HANDLER)
+        .arg(&e.handler)
         .args(args)
         .env_clear()
         .env("HOME", &e.home)
@@ -493,4 +580,257 @@ fn refusals_never_echo_the_link() {
     let url = "xherd-term://open?dir=/secret-marker/$(x)";
     let msg = refused(&e, url);
     assert!(!msg.contains("secret-marker"), "{msg}");
+}
+
+#[test]
+fn the_handler_comes_from_the_install() {
+    let e = setup();
+    assert_eq!(std::fs::read_to_string(&e.handler).unwrap(), HANDLER_SH);
+    let mode = std::fs::metadata(&e.handler).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o755);
+}
+
+#[test]
+fn install_on_linux_writes_and_registers() {
+    let e = setup();
+    fake_tool(&e.bin, "kitty", "exit 0");
+    fake_tool(&e.bin, "foot", "exit 0");
+    for sh in shells() {
+        let o = install(&e, &sh, "linux", &[], &[]);
+        assert_eq!(o.code, 0, "{sh:?}: {}", o.stderr);
+        let apps = e.home.join(".local/share/applications");
+        let root = e.root.display();
+        assert_eq!(
+            o.stdout.lines().collect::<Vec<_>>(),
+            [
+                "xdg-mime default xherd-term.desktop x-scheme-handler/xherd-term".to_string(),
+                format!("update-desktop-database {}", apps.display()),
+                format!(
+                    "curl -fsS -m 10 -o /dev/null -H Content-Type: application/json -d \
+                     {{\"version\":{HANDLER_VERSION},\"xherd\":\"{}\",\"os\":\"linux\",\
+                     \"terminals\":[\"kitty\",\"foot\"],\"root\":\"{root}\"}} \
+                     {REPORT}/api/v1/open-in/terminal-handler",
+                    xherd_core::BUILD_VERSION
+                ),
+            ],
+            "{sh:?}"
+        );
+        let conf = e.home.join(".config/xherd/terminal-handler.conf");
+        assert_eq!(
+            std::fs::read_to_string(&conf).unwrap(),
+            format!("root={root}\nversion={HANDLER_VERSION}\n")
+        );
+        assert_eq!(
+            std::fs::metadata(&conf).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let desktop = std::fs::read_to_string(apps.join("xherd-term.desktop")).unwrap();
+        assert!(desktop.starts_with("[Desktop Entry]\n"), "{desktop}");
+        assert!(
+            desktop.contains(&format!("\nExec=\"{}\" open %u\n", e.handler.display())),
+            "{desktop}"
+        );
+        assert!(desktop.contains("\nNoDisplay=true\n"));
+        assert!(desktop.contains("\nMimeType=x-scheme-handler/xherd-term;\n"));
+    }
+    // XDG_DATA_HOME moves the desktop entry.
+    let data = e.base.join("data");
+    let o = install(
+        &e,
+        &sh(),
+        "linux",
+        &[],
+        &[("XDG_DATA_HOME", &data.to_string_lossy())],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(data.join("applications/xherd-term.desktop").is_file());
+}
+
+#[test]
+fn installing_twice_changes_nothing_and_replaces_an_older_install() {
+    let e = setup();
+    let first = install(&e, &sh(), "linux", &[], &[]);
+    assert_eq!(first.code, 0, "{}", first.stderr);
+    let before = files(&e.home);
+    let again = install(&e, &sh(), "linux", &[], &[]);
+    assert_eq!(again.code, 0, "{}", again.stderr);
+    assert_eq!(files(&e.home), before);
+    assert_eq!(again.stdout, first.stdout);
+    // An older install: every file is replaced.
+    let desktop = e.home.join(".local/share/applications/xherd-term.desktop");
+    let conf = e.home.join(".config/xherd/terminal-handler.conf");
+    std::fs::write(&e.handler, "#!/bin/sh\necho old\n").unwrap();
+    std::fs::write(&desktop, "[Desktop Entry]\nExec=old\n").unwrap();
+    std::fs::write(&conf, "root=/old\nversion=0\n").unwrap();
+    let o = install(&e, &sh(), "linux", &[], &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(files(&e.home), before);
+    // No temporary files left behind.
+    assert!(
+        before.iter().all(|(p, _, _)| !p.contains(".tmp.")),
+        "{before:?}"
+    );
+}
+
+#[test]
+fn uninstall_on_linux_leaves_nothing() {
+    let e = setup();
+    let mimeapps = e.home.join(".config/mimeapps.list");
+    std::fs::write(
+        &mimeapps,
+        "[Default Applications]\nx-scheme-handler/xherd-term=xherd-term.desktop\ntext/plain=kate.desktop\n",
+    )
+    .unwrap();
+    for sh in shells() {
+        let o = install(&e, &sh, "linux", &["uninstall"], &[]);
+        assert_eq!(o.code, 0, "{sh:?}: {}", o.stderr);
+        assert_eq!(
+            o.stdout.lines().collect::<Vec<_>>(),
+            [
+                format!(
+                    "update-desktop-database {}",
+                    e.home.join(".local/share/applications").display()
+                ),
+                format!(
+                    "curl -fsS -m 10 -o /dev/null -H Content-Type: application/json -d \
+                     {{\"installed\":false}} {REPORT}/api/v1/open-in/terminal-handler"
+                ),
+            ]
+        );
+        let left: Vec<_> = files(&e.home).into_iter().map(|f| f.0).collect();
+        assert_eq!(left, [".config/mimeapps.list"], "{sh:?}");
+        assert_eq!(
+            std::fs::read_to_string(&mimeapps).unwrap(),
+            "[Default Applications]\ntext/plain=kate.desktop\n"
+        );
+    }
+}
+
+#[test]
+fn install_and_uninstall_on_macos_dry_run() {
+    let e = setup();
+    std::fs::create_dir_all(e.home.join("Applications/iTerm.app")).unwrap();
+    let support = e.home.join("Library/Application Support/xherd");
+    let handler = support.join("xherd-open-terminal");
+    let app = support.join("XherdTerminal.app");
+    let plist = app.join("Contents/Info.plist");
+    let pb = "/usr/libexec/PlistBuddy";
+    let ls = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+    let id = "io.github.xionjames.xherd.terminal";
+    for sh in shells() {
+        let o = install(&e, &sh, "mac", &[], &[]);
+        assert_eq!(o.code, 0, "{sh:?}: {}", o.stderr);
+        assert_eq!(std::fs::read_to_string(&handler).unwrap(), HANDLER_SH);
+        assert_eq!(
+            o.stdout.lines().collect::<Vec<_>>(),
+            [
+                format!(
+                    "osacompile -o {} -e on open location u -e do shell script quoted form of \"{}\" \
+                     & \" open \" & quoted form of u & \" >/dev/null 2>&1 &\" -e end open location",
+                    app.display(),
+                    handler.display()
+                ),
+                format!("{pb} -c Set :CFBundleIdentifier {id} {}", plist.display()),
+                format!("{pb} -c Add :LSUIElement bool true {}", plist.display()),
+                format!(
+                    "{pb} -c Add :CFBundleURLTypes array -c Add :CFBundleURLTypes:0 dict \
+                     -c Add :CFBundleURLTypes:0:CFBundleURLName string {id} \
+                     -c Add :CFBundleURLTypes:0:CFBundleURLSchemes array \
+                     -c Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string xherd-term {}",
+                    plist.display()
+                ),
+                format!("{ls} -f {}", app.display()),
+                format!(
+                    "curl -fsS -m 10 -o /dev/null -H Content-Type: application/json -d \
+                     {{\"version\":{HANDLER_VERSION},\"xherd\":\"{}\",\"os\":\"mac\",\
+                     \"terminals\":[\"terminal\",\"iterm\"],\"root\":\"{}\"}} \
+                     {REPORT}/api/v1/open-in/terminal-handler",
+                    xherd_core::BUILD_VERSION,
+                    e.root.display()
+                ),
+            ],
+            "{sh:?}"
+        );
+        let o = install(&e, &sh, "mac", &["uninstall"], &[]);
+        assert_eq!(o.code, 0, "{sh:?}: {}", o.stderr);
+        assert_eq!(
+            o.stdout.lines().next(),
+            Some(&*format!("{ls} -u {}", app.display()))
+        );
+        assert!(!support.exists(), "{sh:?}");
+        assert!(!e.home.join(".config/xherd/terminal-handler.conf").exists());
+    }
+}
+
+#[test]
+fn a_real_run_registers_and_reports_or_warns() {
+    let e = setup();
+    let log = e.base.join("log");
+    let l = log.display();
+    fake_tool(&e.bin, "kitty", "exit 0");
+    fake_tool(
+        &e.bin,
+        "xdg-mime",
+        &format!("echo \"xdg-mime $*\" >> '{l}'"),
+    );
+    fake_tool(
+        &e.bin,
+        "update-desktop-database",
+        &format!("echo \"udd $*\" >> '{l}'"),
+    );
+    // No curl or wget: installed, with a warning, exit 0.
+    let real = [("XHERD_TERM_DRY_RUN", "")];
+    let o = install(&e, &sh(), "linux", &[], &real);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("xherd was not told"), "{}", o.stderr);
+    let apps = e.home.join(".local/share/applications");
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        format!(
+            "xdg-mime default xherd-term.desktop x-scheme-handler/xherd-term\nudd {}\n",
+            apps.display()
+        )
+    );
+    // A curl that fails: the same warning.
+    fake_tool(&e.bin, "curl", "exit 7");
+    let o = install(&e, &sh(), "linux", &[], &real);
+    assert_eq!(o.code, 0);
+    assert!(o.stderr.contains("xherd was not told"), "{}", o.stderr);
+    // A curl that works: no warning, the body as one argument.
+    fake_tool(
+        &e.bin,
+        "curl",
+        &format!("for a in \"$@\"; do echo \"[$a]\"; done >> '{l}.curl'"),
+    );
+    let o = install(&e, &sh(), "linux", &["uninstall"], &real);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(!o.stderr.contains("not told"), "{}", o.stderr);
+    let args = std::fs::read_to_string(format!("{l}.curl")).unwrap();
+    assert!(args.contains("\n[{\"installed\":false}]\n"), "{args}");
+    // wget when there is no curl.
+    std::fs::remove_file(e.bin.join("curl")).unwrap();
+    fake_tool(
+        &e.bin,
+        "wget",
+        &format!("for a in \"$@\"; do echo \"[$a]\"; done >> '{l}.wget'"),
+    );
+    let o = install(&e, &sh(), "linux", &[], &real);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let args = std::fs::read_to_string(format!("{l}.wget")).unwrap();
+    assert!(args.contains("[--post-data={\"version\":"), "{args}");
+    assert!(args.contains(&format!("[{REPORT}/api/v1/open-in/terminal-handler]")));
+}
+
+#[test]
+fn install_refuses_a_home_it_cannot_quote_and_bad_usage() {
+    let e = setup();
+    let odd = e.base.join("we\"ird");
+    std::fs::create_dir_all(&odd).unwrap();
+    let o = install(&e, &sh(), "linux", &[], &[("HOME", &odd.to_string_lossy())]);
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.contains("cannot be registered"), "{}", o.stderr);
+    assert!(files(&odd).is_empty());
+    let o = install(&e, &sh(), "linux", &["remove"], &[]);
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.contains("usage"), "{}", o.stderr);
 }

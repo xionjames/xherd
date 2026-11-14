@@ -41,6 +41,52 @@ pub struct HandlerRecord {
     pub at: i64,
 }
 
+/// The link handler (`xherd-open-terminal`), shipped inside the installer.
+pub const HANDLER_SH: &str = include_str!("terminal-handler.sh");
+/// The installer template that `handler_script` renders.
+pub const INSTALL_SH: &str = include_str!("terminal-install.sh");
+
+/// The installer for this computer: `root` (the worktrees folder the handler
+/// accepts) and `report_url` (where it reports, `http://host:port`) are baked
+/// into single-quoted shell literals, the AppleScript and the report's JSON,
+/// so a value with a quote, `\`, `$`, a backquote or a control character is
+/// refused.
+pub fn handler_script(root: &str, report_url: &str) -> Result<String, String> {
+    let plain = |what: &str, v: &str| {
+        if v.is_empty()
+            || v.chars()
+                .any(|c| c.is_control() || matches!(c, '\'' | '"' | '\\' | '$' | '`'))
+        {
+            Err(format!(
+                "the {what} has a character the handler cannot carry"
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    plain("worktrees folder", root)?;
+    if !root.starts_with('/') {
+        return Err("the worktrees folder is not an absolute path".into());
+    }
+    plain("report address", report_url)?;
+    if !(report_url.starts_with("http://") || report_url.starts_with("https://"))
+        || report_url.contains(char::is_whitespace)
+    {
+        return Err("the report address is not an http address".into());
+    }
+    plain("xherd version", xherd_core::BUILD_VERSION)?;
+    let root = root.trim_end_matches('/');
+    let root = if root.is_empty() { "/" } else { root };
+    // Values first, then the handler, so nothing in it is ever replaced.
+    let script = INSTALL_SH
+        .replace("@ROOT@", root)
+        .replace("@REPORT_URL@", report_url.trim_end_matches('/'))
+        .replace("@VERSION@", &HANDLER_VERSION.to_string())
+        .replace("@XHERD@", xherd_core::BUILD_VERSION);
+    let handler = format!("{}\n", HANDLER_SH.trim_end_matches('\n'));
+    Ok(script.replacen("@HANDLER@\n", &handler, 1))
+}
+
 /// Percent-encodes every byte but the unreserved ones; `keep_slash` keeps `/`.
 fn pct(s: &str, keep_slash: bool) -> String {
     s.bytes()
@@ -318,5 +364,75 @@ mod tests {
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["terminals"][0], "konsole");
         assert_eq!(serde_json::from_value::<HandlerRecord>(v).unwrap(), r);
+    }
+
+    /// A change to either script must bump `HANDLER_VERSION` (so installed
+    /// handlers are offered the update) and then update these hashes.
+    #[test]
+    fn handler_version_is_pinned_to_the_scripts() {
+        use sha2::{Digest, Sha256};
+        let sha = |s: &str| hex::encode(Sha256::digest(s.as_bytes()));
+        assert_eq!(
+            (HANDLER_VERSION, sha(HANDLER_SH), sha(INSTALL_SH)),
+            (
+                1,
+                "6235be7359183ae7050b788df7cc07cb1c723fe98b7c0a35c7009287758473cf".to_string(),
+                "c827fca1d327bdcd6f3b0d6ba17bb501a77467570441ca9d17efd92ac9d21050".to_string()
+            ),
+            "a script changed: bump HANDLER_VERSION and update the pinned hashes"
+        );
+    }
+
+    /// The installer's quoted heredoc ends at this line; the handler must not
+    /// contain it.
+    const HEREDOC_END: &str = "XHERD_HANDLER_EOF";
+
+    #[test]
+    fn the_handler_never_ends_the_heredoc() {
+        assert!(!HANDLER_SH.contains(HEREDOC_END));
+        assert_eq!(INSTALL_SH.matches(HEREDOC_END).count(), 2);
+        assert_eq!(INSTALL_SH.matches("\n@HANDLER@\n").count(), 1);
+    }
+
+    #[test]
+    fn handler_script_bakes_in_plain_values() {
+        let s = handler_script("/home/me/x herd/worktrees/", "http://127.0.0.1:4740").unwrap();
+        assert!(s.contains("\nroot='/home/me/x herd/worktrees'\n"));
+        assert!(s.contains("\nreport_url='http://127.0.0.1:4740'\n"));
+        assert!(s.contains(&format!("\nhandler_version='{HANDLER_VERSION}'\n")));
+        assert!(s.contains(HANDLER_SH));
+        // The handler's own text is not touched by the replacements.
+        let rest = s.replace(HANDLER_SH, "");
+        for p in [
+            "@ROOT@",
+            "@REPORT_URL@",
+            "@VERSION@",
+            "@XHERD@",
+            "@HANDLER@",
+        ] {
+            assert!(!rest.contains(p), "{p} left");
+        }
+    }
+
+    #[test]
+    fn handler_script_refuses_what_breaks_the_quoting() {
+        let url = "http://127.0.0.1:4740";
+        for root in [
+            "/a'b", "/a\"b", "/a\\b", "/a$b", "/a`b`", "/a\nb", "/a\tb", "/a\u{7f}", "", "rel",
+        ] {
+            assert!(handler_script(root, url).is_err(), "{root:?}");
+        }
+        for url in [
+            "http://h'",
+            "http://h$(x)",
+            "http://h\n",
+            "http://h x",
+            "ftp://h",
+            "h:1",
+            "",
+        ] {
+            assert!(handler_script("/w", url).is_err(), "{url:?}");
+        }
+        assert!(handler_script("/w", "https://[::1]:4740/").is_ok());
     }
 }
