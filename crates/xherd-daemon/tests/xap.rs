@@ -2185,6 +2185,42 @@ async fn a_watched_pr_is_polled_for_ci_conflicts_and_merge() {
     assert_eq!(said.matches("merge conflict").count(), 1);
 }
 
+/// The check-now button (issue #131): a manual check polls like the
+/// automatic one without the interval guards, also on a paused agent, and
+/// is refused `no_pr` without a pull request URL.
+#[tokio::test]
+async fn pr_check_polls_on_demand() {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let d = bin_dir.path();
+    let gh = fake_gh_pr(d, "https://github.com/acme/app/pull/7");
+    let put = |f: &str, v: &str| std::fs::write(d.join(f), v).unwrap();
+    put("view.json", r#"{"state":"OPEN","mergeable":"MERGEABLE"}"#);
+    put("checks.json", "[]");
+    let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
+
+    // No pull request URL yet: refused.
+    let err = act(&t, UserAction::CheckPr).await.unwrap_err();
+    assert_eq!(err.code, "no_pr");
+
+    // The agent opens its PR, then the user pauses it: still checkable.
+    xap(
+        &t,
+        "c1",
+        "pr.opened",
+        json!({"url": "https://github.com/acme/app/pull/7"}),
+    )
+    .await
+    .unwrap();
+    act(&t, UserAction::Pause).await.unwrap();
+    until(&t, |a| a.status == Status::Paused).await;
+
+    // The manual check polls and records the time, like the automatic one.
+    let a = act(&t, UserAction::CheckPr).await.unwrap();
+    assert!(a.pr_polled_at.is_some());
+    let a = until(&t, |a| a.pr_state.is_some()).await;
+    assert_eq!(a.pr_state, Some(xherd_core::pr::PrState::Open));
+}
+
 /// When the host does not know whether the PR merges, the daemon fetches
 /// and works it out in the worktree (#75).
 #[tokio::test]

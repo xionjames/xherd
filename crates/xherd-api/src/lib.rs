@@ -1279,6 +1279,7 @@ async fn agent_action(
         },
         "memory-accept" => UserAction::MemoryAccept { text: b.text },
         "memory-dismiss" => UserAction::MemoryDismiss,
+        "pr-check" => UserAction::CheckPr,
         "request-changes" => UserAction::RequestChanges {
             comment: required(b.comment, "comment")?,
         },
