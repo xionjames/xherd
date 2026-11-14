@@ -2,8 +2,26 @@
   import Panel from '../components/Panel.svelte';
   import type { Agent, PrCheck, PrReviewer } from '../lib/types';
   import { agoText } from '../lib/format';
+  import { post } from '../lib/api';
+  import { upsertAgent } from '../lib/store.svelte';
+  import { showError } from '../lib/errors.svelte';
   import PrComments from '../components/PrComments.svelte';
   let { agent }: { agent: Agent } = $props();
+  // Effects key on the id: the agent object is replaced on every update.
+  const id = $derived(agent.id);
+  // The check-now button (issue #131): poll the pull request on demand.
+  let checking = $state(false);
+  async function checkNow() {
+    checking = true;
+    try {
+      const r = await post<{ agent: Agent }>(`/agents/${id}/pr-check`);
+      upsertAgent(r.agent);
+    } catch (e) {
+      showError('Could not check the pull request', e);
+    } finally {
+      checking = false;
+    }
+  }
   const STATE_TONE = { open: 'acc', merged: 'done', closed: '' };
   const STATE_GLYPH = { open: '●', merged: '✓', closed: '○' };
   const CI_TONE = { pending: '', failing: 'halt', passing: 'live' };
@@ -47,16 +65,18 @@
   <Panel title="Pull request">
     {#if agent.prUrl}
       <p class="wrap-any">PR: {#if safe}<a href={safe} target="_blank" rel="noopener noreferrer">{agent.prUrl}</a>{:else}<span class="mono">{agent.prUrl}</span>{/if}</p>
-      {#if agent.prState}
-        <p class="row">
+      <p class="row">
+        {#if agent.prState}
           <span class="pill {STATE_TONE[agent.prState]}">{STATE_GLYPH[agent.prState]} {agent.prState}</span>
           {#if agent.prCi}<span class="pill {CI_TONE[agent.prCi]}">{CI_GLYPH[agent.prCi]} checks {agent.prCi}</span>{/if}
           {#if open && merge === 'no'}<span class="pill halt">✕ merge conflict</span>
           {:else if open && merge === 'yes'}<span class="pill live">✓ no conflicts</span>
           {:else if open && merge === 'unknown'}<span class="pill">? conflicts unknown</span>{/if}
           {#if agent.prPolledAt}<span class="hint">checked {agoText(agent.prPolledAt)}</span>{/if}
-        </p>
-      {:else if agent.status === 'watching'}
+        {/if}
+        <button class="btn sm" disabled={checking} onclick={checkNow}>↻ Check now</button>
+      </p>
+      {#if !agent.prState && agent.status === 'watching'}
         <p class="empty">Waiting for the first check of the pull request.</p>
       {/if}
       <p class="muted">New comments on the pull request wake the agent to triage them; you approve its plan before it changes anything.</p>
