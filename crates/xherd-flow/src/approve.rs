@@ -70,7 +70,7 @@ pub fn next_command(
             (def.next_template(facts, auto), "")
         }
         Gate::Commit(c) => {
-            let def = flow.stages.iter().find(|s| s.is_commit_gate());
+            let def = flow.commit_stage(a.stage.as_deref());
             (
                 def.and_then(|d| d.next_template(facts, auto)),
                 c.id.as_str(),
@@ -110,15 +110,20 @@ pub fn changes_message(gate: &Gate, comment: &str) -> String {
 }
 
 /// Hash of a gate document for approvals (R-104, R-107): the content hash,
-/// except that in the document gated by the flow's tasks stage the task
-/// progress lines do not count ([`crate::tasks::without_progress`]).
+/// except that in the task list a stage gates ([`crate::StageDef::gates_tasks`]:
+/// the documents of a `tasks`-role stage, the `tasks.md` of any other) the
+/// task progress lines do not count ([`crate::tasks::without_progress`]).
 /// `path` is canonical ([`crate::xap::doc_path`]).
 pub fn doc_sha256(flow: Option<&Flow>, workdir: &Path, path: &str, bytes: &[u8]) -> String {
     let tasks_doc = flow.is_some_and(|f| {
         f.stages
             .iter()
-            .filter(|s| s.role == Role::Tasks)
-            .flat_map(|s| s.docs())
+            .filter(|s| s.gates_tasks())
+            .flat_map(|s| {
+                s.docs().iter().filter(move |d| {
+                    s.role == Role::Tasks || d.rsplit('/').next() == Some("tasks.md")
+                })
+            })
             .any(|d| crate::xap::doc_path(d, workdir).is_ok_and(|p| p == path))
     });
     if !tasks_doc {
@@ -270,6 +275,33 @@ mod tests {
             *next = Some("/sdd-task".into());
         }
         assert_eq!(n(&g, &F(false), false), Some(("/sdd-task".into(), 1)));
+    }
+
+    #[test]
+    fn commit_gates_follow_the_current_commit_stage() {
+        let p = crate::xap::tests::two_commit_stages();
+        let mut a = agent();
+        a.flow = Some("f".into());
+        let n = |a: &Agent| next_command(&p, a, &commit(), &F(false), false).unwrap();
+        a.stage = Some("reproduce".into());
+        assert_eq!(n(&a), Some(("/t:commit C02".into(), 1)));
+        a.stage = Some("implement".into());
+        assert_eq!(n(&a), Some(("/t:fix C02".into(), 1)));
+        a.stage = None;
+        assert_eq!(n(&a), Some(("/t:commit C02".into(), 1)));
+    }
+
+    #[test]
+    fn task_progress_is_not_content_in_a_tasks_gating_stage() {
+        let p = crate::xap::tests::two_commit_stages();
+        let f = p.flow("f").unwrap();
+        let wd = Path::new("/w");
+        let a = b"## T01: a\n- status: todo\n- files: a.rs\n";
+        let b = b"## T01: a\n- status: done\n- files: a.rs\n- evidence: ok\n";
+        let h = |path: &str, x: &[u8]| doc_sha256(Some(f), wd, path, x);
+        assert_eq!(h("tasks.md", a), h("tasks.md", b));
+        assert_ne!(h("spec.md", a), h("spec.md", b));
+        assert_ne!(h("review.md", a), h("review.md", b));
     }
 
     #[test]
