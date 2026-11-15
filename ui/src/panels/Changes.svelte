@@ -121,6 +121,12 @@
   }
   // Only the commit awaiting approval (no sha yet): its files are what is in the worktree.
   const canPreview = $derived(!!d?.commit && !d.commit.sha);
+  // The open proposal's tasks, with what proved each one (title, evidence from the agent).
+  const commitTasks = $derived(
+    d?.commit && !d.commit.sha
+      ? d.commit.tasks.map((tid) => agent.tasks?.find((t) => t.id === tid) ?? { id: tid, title: undefined, evidence: undefined })
+      : [],
+  );
   const what = $derived(
     !d ? '' : d.commit ? (d.commit.sha ? `Commit ${d.commit.id} (${d.commit.sha.slice(0, 8)})` : `Commit ${d.commit.id}: the proposed files against HEAD`)
       : d.branch ? (d.view === 'branch' ? `Everything changed since the base (${d.branch})` : `The branch as it will be pushed (${d.branch})`)
@@ -194,6 +200,19 @@
           <pre class="mono pre msg">{d.commit.message ?? d.commit.subject}</pre>
         </section>
       {/if}
+      {#if commitTasks.length}
+        <section class="card cb">
+          <span class="lbl">Tasks in this commit · {commitTasks.length}</span>
+          <ul class="ctasks">
+            {#each commitTasks as t (t.id)}
+              <li>
+                <span class="mono">{t.id}</span> {t.title ?? ''}
+                {#if t.evidence}<div class="muted ev">{t.evidence}</div>{/if}
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
       {#if files.length}
         <FileNav {files} label={d.commit ? 'In this commit' : 'Files'} onpick={goTo} />
       {/if}
@@ -213,6 +232,9 @@
   .adds { color: var(--live); font-weight: 600; }
   .dels { color: var(--halt); font-weight: 600; }
   .msg { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; }
+  .ctasks { margin: 6px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.45; }
+  .ctasks li + li { margin-top: 6px; }
+  .ev { font-size: 12.5px; overflow-wrap: anywhere; }
   /* R17: on a phone the file list comes before the diff. */
   @media (max-width: 759px) { .colside { order: -1; } }
 </style>
