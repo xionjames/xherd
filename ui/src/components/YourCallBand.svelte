@@ -2,16 +2,16 @@
   // The full-width band shown when the agent waits on the human: what to
   // decide, why it is held, and the decision controls.
   import Icon from './Icon.svelte';
-  import type { Agent, FlowInfo, GitFinding } from '../lib/types';
+  import type { Job, FlowInfo, GitFinding } from '../lib/types';
   import { get, post } from '../lib/api';
-  import { app, upsertAgent } from '../lib/store.svelte';
+  import { app, upsertJob } from '../lib/store.svelte';
   import { reads } from '../lib/reads.svelte';
   import { showError } from '../lib/errors.svelte';
   import { ago } from '../lib/format';
   import { prGate, stageLabel } from '../lib/flow';
   import { href } from '../lib/router.svelte';
 
-  let { agent, flow, tabId }: { agent: Agent; flow?: FlowInfo; tabId?: string } = $props();
+  let { agent, flow, tabId }: { agent: Job; flow?: FlowInfo; tabId?: string } = $props();
   let text = $state('');
   let busy = $state(false);
   // Open questions are answered in the Documents panel, on their items (R-105a).
@@ -23,7 +23,7 @@
   async function checkGit() {
     doctor = { host: '', checking: true };
     try {
-      const r = await get<{ host: string; findings: GitFinding[] }>(`/agents/${agentId}/git-access`);
+      const r = await get<{ host: string; findings: GitFinding[] }>(`/jobs/${agentId}/git-access`);
       doctor = { host: r.host, first: r.findings.find((f) => !f.ok), checking: false };
     } catch (e) {
       doctor = { host: '', checking: false, error: e instanceof Error ? e.message : String(e) };
@@ -60,7 +60,7 @@
     prRound ? 'Decide the PR comments' : g?.kind === 'docs' ? `Open ${g.files[0]?.path.split('/').pop() ?? 'the document'}` : 'Review the changes',
   );
   const reviewHref = $derived(
-    href(`/agent/${agent.name}`, !prRound && g?.kind === 'docs' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
+    href(`/jobs/${agent.name}`, !prRound && g?.kind === 'docs' && g.files[0] ? { s: 'spec', doc: g.files[0].path } : { s: reviewTab ?? 'changes' }),
   );
 
   const title = $derived.by(() => {
@@ -95,8 +95,8 @@
   async function run(action: string, body: Record<string, unknown>, label: string): Promise<boolean> {
     busy = true;
     try {
-      const r = await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`, body);
-      upsertAgent(r.agent);
+      const r = await post<{ job: Job }>(`/jobs/${agent.id}/${action}`, body);
+      upsertJob(r.job);
       text = '';
       return true;
     } catch (e) {
@@ -143,12 +143,12 @@
       {#if agent.memoryProposal}
         <p class="gwhy">The agent proposes an update of AGENTS.md (shared memory):
           {#if tabId === 'memory'}accept or dismiss it below; it never blocks the PR.
-          {:else}<a href={href(`/agent/${agent.name}`, { s: 'memory' })}>review it</a>; it never blocks the PR.{/if}</p>
+          {:else}<a href={href(`/jobs/${agent.name}`, { s: 'memory' })}>review it</a>; it never blocks the PR.{/if}</p>
       {/if}
       {#if openQuestions}
         <p class="gwhy">{openQuestions} open question{openQuestions === 1 ? '' : 's'}:
           {#if tabId === 'spec'}answer them in the document, then send them with your comments.
-          {:else}<a href={href(`/agent/${agent.name}`, { s: 'spec', ...(g?.kind === 'docs' && g.files[0] ? { doc: g.files[0].path } : {}), q: '1' })}>answer them in the document</a>.{/if}
+          {:else}<a href={href(`/jobs/${agent.name}`, { s: 'spec', ...(g?.kind === 'docs' && g.files[0] ? { doc: g.files[0].path } : {}), q: '1' })}>answer them in the document</a>.{/if}
         </p>
       {/if}
       <button class="gtoggle" aria-expanded={open} onclick={() => (open = !open)}>{open ? 'Show less' : 'Show more'}</button>
@@ -158,7 +158,7 @@
         {#if agent.blockReason === 'git access'}
           <a class="btn gate lg" href={href('/settings', { tab: 'git' })}>Fix git access</a>
         {/if}
-        <a class="btn gate lg" href={href(`/agent/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
+        <a class="btn gate lg" href={href(`/jobs/${agent.name}`, { s: 'terminal' })}><Icon name="term" />Open the terminal</a>
       {/if}
       {#if approvable && !reviewing}
         <a class="btn gate lg" href={reviewHref}><Icon name={reviewTab === 'spec' ? 'doc' : reviewTab === 'pr' ? 'pr' : 'diff'} />{openLabel}</a>

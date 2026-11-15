@@ -625,7 +625,7 @@ async fn shutdown_signal() {
 
 /// `xherd security check` (R-1210): informational, exit 0 when it answered.
 fn pause_all(c: &Client) -> i32 {
-    match c.call("POST", "/agents/pause-all", None) {
+    match c.call("POST", "/jobs/pause-all", None) {
         Ok(v) => {
             let names: Vec<&str> = v["paused"]
                 .as_array()
@@ -773,14 +773,14 @@ fn status() -> i32 {
 }
 
 fn ls() -> i32 {
-    let v = match Client::new().and_then(|c| c.call("GET", "/agents", None)) {
+    let v = match Client::new().and_then(|c| c.call("GET", "/jobs", None)) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
             return 1;
         }
     };
-    let agents = v["agents"].as_array().cloned().unwrap_or_default();
+    let agents = v["jobs"].as_array().cloned().unwrap_or_default();
     if agents.is_empty() {
         println!("no agents");
         return 0;
@@ -886,9 +886,9 @@ fn new_job(repo: Option<String>, mut req: xherd_core::new::NewJob) -> i32 {
     };
     req.repo = repo;
     let body = serde_json::to_value(&req).expect("serialisable");
-    match Client::new().and_then(|c| c.call("POST", "/agents", Some(body))) {
+    match Client::new().and_then(|c| c.call("POST", "/jobs", Some(body))) {
         Ok(v) => {
-            let a = &v["agent"];
+            let a = &v["job"];
             println!(
                 "{} {} in {}",
                 a["name"].as_str().unwrap_or("?"),
@@ -906,8 +906,7 @@ fn new_job(repo: Option<String>, mut req: xherd_core::new::NewJob) -> i32 {
 
 /// The diff on stdout (pipe it to a pager); what it covers on stderr.
 fn diff(agent: &str, json: bool) -> i32 {
-    let v = match Client::new().and_then(|c| c.call("GET", &format!("/agents/{agent}/diff"), None))
-    {
+    let v = match Client::new().and_then(|c| c.call("GET", &format!("/jobs/{agent}/diff"), None)) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
@@ -963,12 +962,12 @@ fn diff(agent: &str, json: bool) -> i32 {
 }
 
 fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
-    match Client::new().and_then(|c| c.call("POST", &format!("/agents/{agent}/{what}"), body)) {
+    match Client::new().and_then(|c| c.call("POST", &format!("/jobs/{agent}/{what}"), body)) {
         Ok(v) => {
             println!(
                 "{} is {}",
-                v["agent"]["name"].as_str().unwrap_or(agent),
-                v["agent"]["status"].as_str().unwrap_or("?")
+                v["job"]["name"].as_str().unwrap_or(agent),
+                v["job"]["status"].as_str().unwrap_or("?")
             );
             0
         }

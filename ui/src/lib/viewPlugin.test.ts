@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { acceptMessage, dataMessage, project } from './viewPlugin';
-import type { Agent, FlowInfo } from './types';
+import type { Job, FlowInfo } from './types';
 
 const flows: FlowInfo[] = [
   {
@@ -13,7 +13,7 @@ const flows: FlowInfo[] = [
   },
 ];
 
-const agent = (extra: Partial<Agent> = {}): Agent => ({
+const agent = (extra: Partial<Job> = {}): Job => ({
   id: 'a1',
   name: 'cache',
   branch: 'PAY-1-cache',
@@ -85,7 +85,7 @@ describe('project', () => {
   });
 
   it('carries only the key and url of a ticket', () => {
-    const odd = { key: 'K', url: 'https://x', extra: 'leak' } as unknown as Agent['ticket'];
+    const odd = { key: 'K', url: 'https://x', extra: 'leak' } as unknown as Job['ticket'];
     expect(project(agent({ ticket: odd }), flows).ticket).toEqual({ key: 'K', url: 'https://x' });
   });
 

@@ -6,14 +6,14 @@
   import Callout from '../components/Callout.svelte';
   import DiffLines from '../components/DiffLines.svelte';
   import Seg from '../components/Seg.svelte';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { get, post } from '../lib/api';
-  import { upsertAgent } from '../lib/store.svelte';
+  import { upsertJob } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
   import { lineDiff } from '../lib/diff';
   import { agoText } from '../lib/format';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   type View = {
     proposal: { file: string; reason: string; at: number } | null;
     proposed?: string | null;
@@ -29,7 +29,7 @@
 
   async function load(agentId: string) {
     try {
-      view = await get<View>(`/agents/${agentId}/memory`);
+      view = await get<View>(`/jobs/${agentId}/memory`);
       text = view.proposed ?? '';
       mode = 'diff';
     } catch (e) { showError('Could not read the memory proposal', e); }
@@ -50,7 +50,7 @@
     busy = true;
     try {
       const body = action === 'memory-accept' && edited ? { text } : {};
-      upsertAgent((await post<{ agent: Agent }>(`/agents/${id}/${action}`, body)).agent);
+      upsertJob((await post<{ job: Job }>(`/jobs/${id}/${action}`, body)).job);
       await load(id);
     } catch (e) {
       showError(action === 'memory-accept' ? 'Could not commit AGENTS.md' : 'Could not dismiss the proposal', e);

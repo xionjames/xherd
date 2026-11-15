@@ -93,7 +93,7 @@ export type Gate =
 /** An agent's ticket (#114): a key (`PAY-412`, `#12`), an issue URL, or both. */
 export interface Ticket { key?: string; url?: string }
 
-export interface Agent {
+export interface Job {
   id: string;
   /** Lowercase slug: what the UI shows, the tmux session and worktree folder. */
   name: string;
@@ -190,7 +190,7 @@ export interface AppState {
   buildVersion: string;
   platform: string;
   config: Record<string, unknown>;
-  agents: Agent[];
+  jobs: Job[];
   plugins: PluginInfo[];
   /** Link rules of the enabled tracker plugins. */
   trackerLinks: { plugin: string; pattern: string; url: string }[];
@@ -201,7 +201,7 @@ export interface AppState {
 }
 
 export interface DiffAnswer {
-  agent: string;
+  job: string;
   head: string;
   commit?: Commit;
   view?: 'uncommitted' | 'branch' | 'commit';

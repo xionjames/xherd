@@ -9,7 +9,7 @@ use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -35,25 +35,25 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/ws/setup/{id}", get(term::setup_terminal))
         .route("/api/v1/state", get(state))
         .route("/api/v1/backups", get(backups).post(new_backup))
-        .route("/api/v1/agents", get(list_jobs).post(new_job))
-        .route("/api/v1/agents/pause-all", post(pause_all))
-        .route("/api/v1/agents/{id}", get(get_job))
-        .route("/api/v1/agents/{id}/diff", get(diff))
-        .route("/api/v1/agents/{id}/docs", get(docs))
-        .route("/api/v1/agents/{id}/findings", get(findings))
-        .route("/api/v1/agents/{id}/memory", get(memory))
-        .route("/api/v1/agents/{id}/pr-review", get(pr_review))
+        .route("/api/v1/jobs", get(list_jobs).post(new_job))
+        .route("/api/v1/jobs/pause-all", post(pause_all))
+        .route("/api/v1/jobs/{id}", get(get_job))
+        .route("/api/v1/jobs/{id}/diff", get(diff))
+        .route("/api/v1/jobs/{id}/docs", get(docs))
+        .route("/api/v1/jobs/{id}/findings", get(findings))
+        .route("/api/v1/jobs/{id}/memory", get(memory))
+        .route("/api/v1/jobs/{id}/pr-review", get(pr_review))
         .route(
-            "/api/v1/agents/{id}/pr-decisions",
+            "/api/v1/jobs/{id}/pr-decisions",
             axum::routing::put(put_pr_decisions),
         )
-        .route("/api/v1/agents/{id}/file", get(file))
+        .route("/api/v1/jobs/{id}/file", get(file))
         .route(
-            "/api/v1/agents/{id}/viewed",
+            "/api/v1/jobs/{id}/viewed",
             get(get_viewed).post(post_viewed),
         )
-        .route("/api/v1/agents/{id}/open-targets", get(open_targets))
-        .route("/api/v1/agents/{id}/{action}", post(agent_action))
+        .route("/api/v1/jobs/{id}/open-targets", get(open_targets))
+        .route("/api/v1/jobs/{id}/{action}", post(agent_action))
         .route("/api/v1/open-in", get(open_in_view))
         .route(
             "/api/v1/open-in/terminal-handler.sh",
@@ -90,17 +90,22 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/todos/{id}/check", post(todo_check))
         .route("/api/v1/todos/{id}/reschedule", post(todo_reschedule))
         .route("/api/v1/worklog", get(worklog))
-        .route("/api/v1/agents/{id}/user-time", post(user_time))
+        .route("/api/v1/jobs/{id}/user-time", post(user_time))
         .route("/api/v1/reviews", get(reviews))
         .route("/api/v1/reviews/seen", post(reviews_seen))
         .route("/api/v1/checks/{id}/fix", post(fix_check))
         .route("/api/v1/git/hosts", get(git_hosts).put(put_git_hosts))
         .route("/api/v1/git/doctor", post(git_doctor))
-        .route("/api/v1/agents/{id}/git-access", get(agent_git_access))
-        .route("/api/v1/agents/{id}/ticket", get(agent_ticket))
-        .route("/api/v1/agents/{id}/ticket-status", get(ticket_status))
-        .route("/api/v1/agents/{id}/ticket-summary", get(ticket_summary))
-        .route("/api/v1/agents/{id}/ticket-comment", post(ticket_comment))
+        .route("/api/v1/jobs/{id}/git-access", get(agent_git_access))
+        .route("/api/v1/jobs/{id}/ticket", get(agent_ticket))
+        .route("/api/v1/jobs/{id}/ticket-status", get(ticket_status))
+        .route("/api/v1/jobs/{id}/ticket-summary", get(ticket_summary))
+        .route("/api/v1/jobs/{id}/ticket-comment", post(ticket_comment))
+        // The old job routes (R3): one release of `410 moved`.
+        .route("/api/v1/agents", any(gone_list))
+        .route("/api/v1/agents/pause-all", any(gone_pause_all))
+        .route("/api/v1/agents/{id}", any(gone_job))
+        .route("/api/v1/agents/{id}/{*rest}", any(gone_job))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
         .route(
@@ -150,6 +155,7 @@ pub struct ApiError {
     status: StatusCode,
     code: String,
     message: String,
+    location: Option<String>,
 }
 
 impl ApiError {
@@ -158,6 +164,7 @@ impl ApiError {
             status,
             code: code.into(),
             message: message.into(),
+            location: None,
         }
     }
     fn internal(e: impl std::fmt::Display) -> ApiError {
@@ -169,7 +176,7 @@ impl ApiError {
 impl From<ActionError> for ApiError {
     fn from(e: ActionError) -> ApiError {
         let status = match e.code {
-            "unknown_agent" => StatusCode::NOT_FOUND,
+            "unknown_job" => StatusCode::NOT_FOUND,
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             "usage" => StatusCode::BAD_REQUEST,
             "bad_ticket" | "bad_name" | "name_required" | "unknown_flow" | "prompt_required"
@@ -190,11 +197,11 @@ impl From<ActionError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(json!({"error": self.message, "code": self.code})),
-        )
-            .into_response()
+        let mut body = json!({"error": self.message, "code": self.code});
+        if let Some(l) = self.location {
+            body["location"] = json!(l);
+        }
+        (self.status, Json(body)).into_response()
     }
 }
 
@@ -403,7 +410,7 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "buildVersion": xherd_core::BUILD_VERSION,
         "platform": std::env::consts::OS,
         "config": config,
-        "agents": agents,
+        "jobs": agents,
         "plugins": plugins,
         "trackerLinks": d.tracker_links(),
         "brokenPlugins": d.plugins.broken(),
@@ -437,7 +444,7 @@ fn flows(d: &Daemon) -> Vec<Value> {
 
 async fn list_jobs(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
     let agents = d.store.list_jobs().await.map_err(ApiError::internal)?;
-    Ok(Json(json!({"agents": agents})))
+    Ok(Json(json!({"jobs": agents})))
 }
 
 /// Create an agent (spec §5.1). Body: `NewJob`, unknown fields refused.
@@ -447,7 +454,7 @@ async fn new_job(
     Json(req): Json<xherd_core::new::NewJob>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let agent = d.new_job(req).await?;
-    Ok((StatusCode::CREATED, Json(json!({"agent": agent}))))
+    Ok((StatusCode::CREATED, Json(json!({"job": agent}))))
 }
 
 /// Repositories the New agent screen offers (earlier agents', xherd's clones).
@@ -649,7 +656,7 @@ struct UserTimeBody {
     ms: u64,
 }
 
-/// `POST /agents/:id/user-time`: the agent page was open for `ms` (heartbeat).
+/// `POST /jobs/:id/user-time`: the agent page was open for `ms` (heartbeat).
 async fn user_time(
     _: User,
     State(d): State<Daemon>,
@@ -675,7 +682,7 @@ async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         .map(|e| {
             let p = e.payload.unwrap_or_default();
             let seen = seen.contains(&seen_id(&e.job_id, e.at, p["gate"].as_str().unwrap_or("")));
-            json!({"agentId": e.job_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"], "seen": seen})
+            json!({"jobId": e.job_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"], "seen": seen})
         })
         .collect();
     Ok(Json(json!({"reviews": items})))
@@ -689,7 +696,6 @@ fn seen_id(job_id: &str, at: i64, gate: &str) -> String {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SeenItem {
-    #[serde(rename = "agentId")]
     job_id: String,
     at: i64,
     gate: String,
@@ -933,7 +939,7 @@ async fn agent_ticket(
     Ok(Json(d.agent_ticket(&id).await?))
 }
 
-/// `GET /agents/:id/git-access` (R-688): the doctor for the agent's host.
+/// `GET /jobs/:id/git-access` (R-688): the doctor for the agent's host.
 async fn agent_git_access(
     _: User,
     State(d): State<Daemon>,
@@ -1110,7 +1116,7 @@ async fn get_job(
         .into_iter()
         .map(|e| json!({"id": e.id, "kind": e.kind, "payload": e.payload, "at": e.at}))
         .collect();
-    Ok(Json(json!({"agent": agent, "events": events})))
+    Ok(Json(json!({"job": agent, "events": events})))
 }
 
 #[derive(Deserialize)]
@@ -1121,7 +1127,7 @@ struct DiffQuery {
     commit: Option<String>,
 }
 
-/// `GET /agents/:id/diff`: the open commit proposal's diff, else every
+/// `GET /jobs/:id/diff`: the open commit proposal's diff, else every
 /// uncommitted change (`Daemon::diff`).
 async fn diff(
     _: User,
@@ -1134,7 +1140,7 @@ async fn diff(
     ))
 }
 
-/// `GET /agents/:id/pr-review`: this round's PR comments, the agent's
+/// `GET /jobs/:id/pr-review`: this round's PR comments, the agent's
 /// proposals and the user's decisions (R-306).
 async fn pr_review(
     _: User,
@@ -1149,7 +1155,7 @@ struct DecisionsReq {
     decisions: std::collections::BTreeMap<String, xherd_core::pr::Verdict>,
 }
 
-/// `PUT /agents/:id/pr-decisions`: replace the user's decisions on the
+/// `PUT /jobs/:id/pr-decisions`: replace the user's decisions on the
 /// comments of this round (R-306).
 async fn put_pr_decisions(
     _: User,
@@ -1161,7 +1167,7 @@ async fn put_pr_decisions(
     Ok(Json(json!({"ok": true})))
 }
 
-/// `GET /agents/:id/findings`: the findings of `review.md`.
+/// `GET /jobs/:id/findings`: the findings of `review.md`.
 async fn findings(
     _: User,
     State(d): State<Daemon>,
@@ -1170,7 +1176,7 @@ async fn findings(
     Ok(Json(d.findings(&id).await?))
 }
 
-/// `GET /agents/:id/memory`: the pending shared-memory proposal (§16.6).
+/// `GET /jobs/:id/memory`: the pending shared-memory proposal (§16.6).
 async fn memory(
     _: User,
     State(d): State<Daemon>,
@@ -1179,7 +1185,7 @@ async fn memory(
     Ok(Json(d.memory(&id).await?))
 }
 
-/// `GET /agents/:id/docs`: the agent's documents, open gate's first.
+/// `GET /jobs/:id/docs`: the agent's documents, open gate's first.
 async fn docs(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({"docs": d.docs(&id).await?})))
 }
@@ -1190,7 +1196,7 @@ struct FileQuery {
     path: String,
 }
 
-/// `GET /agents/:id/file?path=spec.md`: a document with its approval hash
+/// `GET /jobs/:id/file?path=spec.md`: a document with its approval hash
 /// and the text last approved (R-107).
 async fn file(
     _: User,
@@ -1201,7 +1207,7 @@ async fn file(
     Ok(Json(d.doc(&id, &q.path).await?))
 }
 
-/// `GET /agents/:id/viewed`: the files of the Changes panel marked viewed.
+/// `GET /jobs/:id/viewed`: the files of the Changes panel marked viewed.
 async fn get_viewed(
     _: User,
     State(d): State<Daemon>,
@@ -1218,7 +1224,7 @@ struct ViewedBody {
     fingerprint: Option<String>,
 }
 
-/// `POST /agents/:id/viewed`: mark a file viewed, or clear the mark.
+/// `POST /jobs/:id/viewed`: mark a file viewed, or clear the mark.
 async fn post_viewed(
     _: User,
     State(d): State<Daemon>,
@@ -1229,7 +1235,7 @@ async fn post_viewed(
     Ok(Json(json!({"ok": true})))
 }
 
-/// `POST /api/v1/agents/pause-all` (R-032): the kill switch.
+/// `POST /api/v1/jobs/pause-all` (R-032): the kill switch.
 async fn pause_all(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({"paused": d.pause_all().await?})))
 }
@@ -1253,6 +1259,44 @@ struct ActionBody {
     /// Cancel: also remove the worktree (R12).
     #[serde(rename = "removeWorktree")]
     remove_worktree: Option<bool>,
+}
+
+/// `410 moved` for a route that now lives elsewhere (R3, issue #141).
+fn moved(location: String) -> ApiError {
+    let mut e = ApiError::new(
+        StatusCode::GONE,
+        "moved",
+        format!("agents are jobs now: use {location}"),
+    );
+    e.location = Some(location);
+    e
+}
+
+async fn gone_list(_: User) -> ApiError {
+    moved("/api/v1/jobs".into())
+}
+
+async fn gone_pause_all(_: User) -> ApiError {
+    moved("/api/v1/jobs/pause-all".into())
+}
+
+/// The old `/api/v1/agents/{id}/…` routes: `410` when `{id}` is a job (its id,
+/// name or ticket key), else `404`.
+async fn gone_job(
+    _: User,
+    State(d): State<Daemon>,
+    Path(p): Path<std::collections::HashMap<String, String>>,
+) -> ApiError {
+    let id = p.get("id").cloned().unwrap_or_default();
+    if d.action(&id, UserAction::Get).await.is_err() {
+        return ApiError::new(
+            StatusCode::NOT_FOUND,
+            "unknown_job",
+            format!("no job {id:?}"),
+        );
+    }
+    let rest = p.get("rest").map(|r| format!("/{r}")).unwrap_or_default();
+    moved(format!("/api/v1/jobs/{id}{rest}"))
 }
 
 async fn agent_action(
@@ -1280,11 +1324,11 @@ async fn agent_action(
             )
         })?;
         let agent = d.set_permission_mode(&id, mode).await?;
-        return Ok(Json(json!({"agent": agent})));
+        return Ok(Json(json!({"job": agent})));
     }
     if action == "model" {
         let agent = d.set_model(&id, b.model.as_deref()).await?;
-        return Ok(Json(json!({"agent": agent})));
+        return Ok(Json(json!({"job": agent})));
     }
     let a = match action.as_str() {
         "pause" => UserAction::Pause,
@@ -1330,7 +1374,7 @@ async fn agent_action(
         }
     };
     let agent = d.action(&id, a).await?;
-    Ok(Json(json!({"agent": agent})))
+    Ok(Json(json!({"job": agent})))
 }
 
 async fn hooks(
@@ -1342,16 +1386,16 @@ async fn hooks(
     if r.job_id != auth.job_id {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
-            "wrong_agent",
-            "token belongs to another agent",
+            "wrong_job",
+            "token belongs to another job",
         ));
     }
     match d.report(r).await {
         Some(res) => Ok(Json(json!({"ok": true, "result": res}))),
         None => Err(ApiError::new(
             StatusCode::NOT_FOUND,
-            "unknown_agent",
-            "no such agent",
+            "unknown_job",
+            "no such job",
         )),
     }
 }
@@ -1381,15 +1425,15 @@ async fn xap(auth: AgentAuth, State(d): State<Daemon>, body: axum::body::Bytes) 
     if call.job_id != auth.job_id {
         return fail(
             StatusCode::FORBIDDEN,
-            "wrong_agent",
-            "token belongs to another agent".into(),
+            "wrong_job",
+            "token belongs to another job".into(),
         );
     }
     match d.xap(call).await {
         Ok(result) => Json(json!({"ok": true, "result": result})).into_response(),
         Err(r) => {
             let status = match r.code {
-                "unknown_agent" => StatusCode::NOT_FOUND,
+                "unknown_job" => StatusCode::NOT_FOUND,
                 "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
                 "internal" => StatusCode::INTERNAL_SERVER_ERROR,
                 _ => StatusCode::UNPROCESSABLE_ENTITY,

@@ -1,7 +1,7 @@
 <script lang="ts">
   // `documents` panel: the agent's spec documents, rendered as paper, with
   // "changed since you approved" against the last approved text (R-107).
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { mdNoteText, questionBlocks, type MdNote } from '../lib/notes';
@@ -16,7 +16,7 @@
   import Seg from '../components/Seg.svelte';
   import { prGate } from '../lib/flow';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
 
@@ -39,13 +39,13 @@
   $effect(() => {
     void gateKey;
     const hide = hidden.split('\n');
-    get<{ docs: string[] }>(`/agents/${id}/docs`).then((r) => (docs = r.docs.filter((d) => !hide.includes(d))), (e) => (error = e.message));
+    get<{ docs: string[] }>(`/jobs/${id}/docs`).then((r) => (docs = r.docs.filter((d) => !hide.includes(d))), (e) => (error = e.message));
   });
   $effect(() => {
     void gateKey;
     const path = selected;
     if (!path) return;
-    get<Doc>(`/agents/${id}/file?path=${encodeURIComponent(path)}`).then(
+    get<Doc>(`/jobs/${id}/file?path=${encodeURIComponent(path)}`).then(
       (d) => { doc = d; error = null; markRead(id, d.path, d.sha256); },
       (e) => { doc = null; error = e.message; },
     );
@@ -72,7 +72,7 @@
     ];
     sending = true;
     try {
-      await post(`/agents/${id}/request-changes`, { comment: `Review comments on the documents:\n\n${out.join('\n\n')}` });
+      await post(`/jobs/${id}/request-changes`, { comment: `Review comments on the documents:\n\n${out.join('\n\n')}` });
       notes = {};
       answers = {};
     } catch (e) { showError('Could not send the comments', e); }
@@ -101,7 +101,7 @@
   <div class="colmain">
     {#if docs.length}
       <div class="row">
-        <Seg label="Document" value={selected ?? ''} onchange={(d) => go(`/agent/${agent.name}`, { s: 'spec', doc: d })}
+        <Seg label="Document" value={selected ?? ''} onchange={(d) => go(`/jobs/${agent.name}`, { s: 'spec', doc: d })}
           options={docs.map((d) => ({ value: d, label: gateFiles.includes(d) ? `${d} ✋` : d }))} />
         <span class="grow"></span>
         {#if count}

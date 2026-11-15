@@ -1,16 +1,16 @@
 <script lang="ts">
   import Panel from '../components/Panel.svelte';
-  // `log` panel: the agent's recent events (GET /agents/:id).
-  import type { Agent, AgentEvent } from '../lib/types';
+  // `log` panel: the agent's recent events (GET /jobs/:id).
+  import type { Job, AgentEvent } from '../lib/types';
   import { get } from '../lib/api';
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   let events = $state<AgentEvent[]>([]);
   $effect(() => {
     void agent.lastActivity;
     void agent.status;
-    get<{ events: AgentEvent[] }>(`/agents/${id}`).then((r) => (events = r.events));
+    get<{ events: AgentEvent[] }>(`/jobs/${id}`).then((r) => (events = r.events));
   });
   const time = (ms: number) => new Date(ms).toLocaleString();
   const summary = (p: unknown) => {

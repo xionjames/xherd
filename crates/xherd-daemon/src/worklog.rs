@@ -126,7 +126,7 @@ impl Daemon {
                 let finished = a.status == Status::Done;
                 json!({
                     "ticket": a.work_item(),
-                    "agent": a.name,
+                    "job": a.name,
                     "status": a.status,
                     "cycleMs": finished.then(|| (a.status_since - a.created_at).max(0)),
                     "reviewRounds": a.review_rounds,

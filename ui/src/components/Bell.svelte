@@ -1,7 +1,7 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { ago } from '../lib/format';
-  import { agentByName } from '../lib/store.svelte';
+  import { jobByName } from '../lib/store.svelte';
   import { notices, unread, open as openNotice, markAllRead, clearAll, enableBrowser, disableBrowser, testBrowser, browserBlock, browserEnv, BLOCK_TEXT } from '../lib/notices.svelte';
   let shown = $state(false);
   // Why browser notifications cannot be on (R5), looked at again each time the list opens.
@@ -27,7 +27,7 @@
       <ul>
         {#each notices.list as n (n.key)}
           <li class:unread={!n.read}>
-            <button class="item" onclick={() => go(n)} disabled={!agentByName(n.agentId) && !n.agentId.startsWith('todo:')}>
+            <button class="item" onclick={() => go(n)} disabled={!jobByName(n.jobId) && !n.jobId.startsWith('todo:')}>
               <span>{n.text}</span><span class="muted num">{ago(n.at)}</span>
             </button>
           </li>

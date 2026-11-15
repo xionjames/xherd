@@ -32,11 +32,11 @@
 
   async function markSeen(list: AutoApproval[]) {
     try {
-      await post('/reviews/seen', { items: list.map(({ agentId, at, gate }) => ({ agentId, at, gate })) });
+      await post('/reviews/seen', { items: list.map(({ jobId, at, gate }) => ({ jobId, at, gate })) });
       await refresh();
     } catch (e) { showError('Could not mark them seen', e); }
   }
-  const name = (id: string) => app.state?.agents.find((a) => a.id === id)?.name;
+  const name = (id: string) => app.state?.jobs.find((a) => a.id === id)?.name;
 </script>
 
 <PageHead title="Needs attention">
@@ -85,12 +85,12 @@
         <!-- folded: the header alone -->
       {:else if approvals.length}
         <ul class="list">
-          {#each approvals as it (`${it.agentId}${it.at}${it.gate}`)}
+          {#each approvals as it (`${it.jobId}${it.at}${it.gate}`)}
             <li>
               <div class="row">
-                {#if name(it.agentId)}
-                  <a href={href(`/agent/${name(it.agentId)}`)}><b>{name(it.agentId)}</b></a>
-                  <a class="pill mono" href={approvalHref(it, name(it.agentId)!)} title="Open what was approved">{it.gate}</a>
+                {#if name(it.jobId)}
+                  <a href={href(`/jobs/${name(it.jobId)}`)}><b>{name(it.jobId)}</b></a>
+                  <a class="pill mono" href={approvalHref(it, name(it.jobId)!)} title="Open what was approved">{it.gate}</a>
                 {:else}<span class="muted">removed agent</span><span class="pill mono">{it.gate}</span>{/if}
                 <span class="hint">{agoText(it.at)}</span>
                 <span class="grow"></span>

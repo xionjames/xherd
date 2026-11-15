@@ -1,4 +1,4 @@
-import type { Agent } from './types';
+import type { Job } from './types';
 import { repoName } from './format';
 
 /** The Board's swimlanes (`?lanes=`). */
@@ -10,7 +10,7 @@ export const NO_FLOW_LANE = 'No workflow';
 
 /** The lane an agent's cards go in: none, its name, its repository, or its
  *  workflow (`Feature`, `Bugfix`; `No workflow` for flow `none`). */
-export function boardLane(a: Agent, lanes: Lanes): string {
+export function boardLane(a: Job, lanes: Lanes): string {
   if (lanes === 'agent') return a.name;
   if (lanes === 'repo') return repoName(a);
   if (lanes === 'flow') return a.flow ? a.flow.charAt(0).toUpperCase() + a.flow.slice(1) : NO_FLOW_LANE;

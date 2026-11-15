@@ -10,7 +10,7 @@
   let input: HTMLInputElement;
 
   const hits = $derived(
-    (app.state?.agents ?? [])
+    (app.state?.jobs ?? [])
       .filter((a) => q && [a.name, a.ticket?.key ?? '', a.ticket?.url ?? ''].join(' ').toLowerCase().includes(q.toLowerCase()))
       .slice(0, 8),
   );
@@ -29,7 +29,7 @@
     q = '';
     open = false;
     input.blur();
-    go(`/agent/${a.name}`);
+    go(`/jobs/${a.name}`);
   }
 
   function onKey(e: KeyboardEvent) {
@@ -45,7 +45,7 @@
 <div class="jwrap">
   <label class="jump">
     <Icon name="search" />
-    <input bind:this={input} bind:value={q} placeholder="Jump to an agent or ticket…" aria-label="Jump to an agent or ticket"
+    <input bind:this={input} bind:value={q} placeholder="Jump to a job or ticket…" aria-label="Jump to a job or ticket"
       onfocus={() => (open = true)} onblur={() => setTimeout(() => (open = false), 120)}
       oninput={() => (sel = 0)} onkeydown={onKey} role="combobox" aria-expanded={open && hits.length > 0}
       aria-controls="jump-list" />

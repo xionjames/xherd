@@ -88,7 +88,7 @@
         <dl class="kv">
           <dt>Mode</dt><dd>{#if app.state?.sandbox}In the xherd <b>Docker container</b>{:else}Native on <b>{app.state?.platform}</b>{/if}, version {app.state?.buildVersion}</dd>
           <dt>Workspace</dt><dd class="mono">{workspace}</dd>
-          <dt>Worktrees</dt><dd class="muted">One folder per repo, one worktree per agent, under the workspace.</dd>
+          <dt>Worktrees</dt><dd class="muted">One folder per repo, one worktree per job, under the workspace.</dd>
         </dl>
         {#if app.state?.sandbox}
           <p class="hint">The workspace is mounted at the same path on your computer, so your editor opens worktrees directly. Languages your repositories ask for are installed in the container on first use.</p>
@@ -120,7 +120,7 @@
       <div><button class="btn" disabled={setup.running} onclick={() => loadChecks()}>Re-run</button></div>
     {:else}
       <h1>{blocked ? 'Almost ready' : 'Ready'}</h1>
-      <p class="muted">{blocked ? 'Some required checks still fail; Setup checks lists them.' : 'Start your first agent on a ticket, or open the herd.'}</p>
+      <p class="muted">{blocked ? 'Some required checks still fail; Setup checks lists them.' : 'Start your first job on a ticket, or open the herd.'}</p>
     {/if}
 
     <div class="row end wnav">
@@ -132,7 +132,7 @@
         <button class="btn primary lg" onclick={() => finish('/setup')}>Open setup checks</button>
       {:else}
         <button class="btn lg" onclick={() => finish('/')}>Open the herd</button>
-        <button class="btn primary lg" onclick={() => finish('/new')}>Start an agent</button>
+        <button class="btn primary lg" onclick={() => finish('/new')}>Start a job</button>
       {/if}
     </div>
   </main>

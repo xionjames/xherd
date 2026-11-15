@@ -1,7 +1,7 @@
 <script lang="ts">
-  // `diff` panel: what the user reviews before approving (GET /agents/:id/diff):
+  // `diff` panel: what the user reviews before approving (GET /jobs/:id/diff):
   // the proposed commit, the branch at a ship gate, else every uncommitted change.
-  import type { Agent, DiffAnswer } from '../lib/types';
+  import type { Job, DiffAnswer } from '../lib/types';
   import { get, post } from '../lib/api';
   import { mdNoteText, type MdNote } from '../lib/notes';
   import { showError } from '../lib/errors.svelte';
@@ -14,7 +14,7 @@
   import FileNav from '../components/FileNav.svelte';
   import { tick } from 'svelte';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   let d = $state<DiffAnswer | null>(null);
@@ -49,7 +49,7 @@
     for (const [path, n] of Object.entries(mdNotes)) out.push(...mdNoteText(path, n));
     sending = true;
     try {
-      await post(`/agents/${id}/request-changes`, { comment: `Review comments on the diff:\n\n${out.join('\n\n')}` });
+      await post(`/jobs/${id}/request-changes`, { comment: `Review comments on the diff:\n\n${out.join('\n\n')}` });
       notes = {}; mdNotes = {};
     } catch (e) { showError('Could not send the comments', e); }
     finally { sending = false; }
@@ -65,7 +65,7 @@
   async function toggleViewed(f: { path: string; lines: { kind: string; text: string }[] }) {
     const fp = isViewed(f) ? undefined : fingerprint(f);
     try {
-      await post(`/agents/${id}/viewed`, { path: f.path, ...(fp ? { fingerprint: fp } : {}) });
+      await post(`/jobs/${id}/viewed`, { path: f.path, ...(fp ? { fingerprint: fp } : {}) });
       const v = { ...viewed };
       if (fp) v[f.path] = fp; else delete v[f.path];
       viewed = v;
@@ -74,7 +74,7 @@
   }
   $effect(() => {
     const a = id;
-    get<{ viewed: Record<string, string> }>(`/agents/${a}/viewed`).then((r) => { if (a === id) viewed = r.viewed; }, () => {});
+    get<{ viewed: Record<string, string> }>(`/jobs/${a}/viewed`).then((r) => { if (a === id) viewed = r.viewed; }, () => {});
   });
   let collapsed = $state<Record<string, boolean>>({});
   let previewing = $state<Record<string, boolean>>({});
@@ -96,14 +96,14 @@
   const commitId = $derived(
     route.query.get('commit') ?? (gate?.kind === 'commit' ? gate.id : agent.commits?.[agent.commits.length - 1]?.id ?? ''),
   );
-  const pick = (v: View, c?: string) => go(`/agent/${agent.name}`, { s: 'changes', view: v, ...(c ? { commit: c } : {}) });
+  const pick = (v: View, c?: string) => go(`/jobs/${agent.name}`, { s: 'changes', view: v, ...(c ? { commit: c } : {}) });
   const query = $derived(
     explicit ? `?view=${explicit}${explicit === 'commit' ? `&commit=${encodeURIComponent(commitId)}` : ''}` : '',
   );
 
   async function load() {
     loading = true;
-    try { d = await get<DiffAnswer>(`/agents/${id}/diff${query}`); error = null; }
+    try { d = await get<DiffAnswer>(`/jobs/${id}/diff${query}`); error = null; }
     catch (e) { error = (e as Error).message; }
     finally { loading = false; }
   }

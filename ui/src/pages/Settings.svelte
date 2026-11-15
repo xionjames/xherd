@@ -28,7 +28,7 @@
   type Form = Record<string, string | boolean>;
   const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
   let form = $state<Form>({});
-  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
+  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
   function toggleKind(k: string, on: boolean) {
     const next = new Set(muted);
@@ -74,7 +74,7 @@
   })));
 </script>
 
-<PageHead width="mid" title="Settings" sub="How many agents run at once, how long xherd waits for you, git access, and the plugins it uses.">
+<PageHead width="mid" title="Settings" sub="How many jobs run at once, how long xherd waits for you, git access, and the plugins it uses.">
   {#snippet tabs()}<Tabs label="Settings" items={tabItems} current={tab} />{/snippet}
 </PageHead>
 
@@ -105,7 +105,7 @@
   {:else if tab === 'general'}
     <div class="secs">
       <Panel title="Agents" hint="How many run at once.">
-        <label class="f">Max agents running at once
+        <label class="f">Max jobs running at once
           <span class="unit"><input type="number" min="1" max="64" bind:value={form.maxConcurrentAgents} /><span>agents</span></span>
           <span class="hint">More wait in Queued.</span></label>
         <label class="f">Pause timeout

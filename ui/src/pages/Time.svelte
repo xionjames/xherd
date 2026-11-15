@@ -9,7 +9,7 @@
   import Panel from '../components/Panel.svelte';
 
   type Day = { day: string; tickets: { ticket: string; agentMs: number; userMs: number }[] };
-  type Metric = { ticket: string; agent: string; status: string; cycleMs: number | null; reviewRounds: number; autoApprovals: number; rework: number };
+  type Metric = { ticket: string; job: string; status: string; cycleMs: number | null; reviewRounds: number; autoApprovals: number; rework: number };
   let data = $state<{ days: Day[]; tickets: Metric[] } | null>(null);
   let days = $state('14');
   $effect(() => {
@@ -19,7 +19,7 @@
   const total = (d: Day, k: 'agentMs' | 'userMs') => d.tickets.reduce((n, t) => n + t[k], 0);
 </script>
 
-<PageHead width="mid" title="Time" sub="Agent time is time spent running; your time is time with an agent's page open and in front. Days are UTC.">
+<PageHead width="mid" title="Time" sub="Agent time is time spent running; your time is time with a job's page open and in front. Days are UTC.">
   {#snippet actions()}
     <select aria-label="Period" bind:value={days}>
       <option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
@@ -50,16 +50,16 @@
         </div>
       </Panel>
     {/each}
-    <Panel title="Delivery per ticket" hint="Cycle time runs from creating the agent to the pull request merged or closed. Rework counts auto-approvals you later asked changes on, on the same gate." flush>
-      {#if !data.tickets.length}<div class="cb"><p class="empty">No agents yet.</p></div>{:else}
+    <Panel title="Delivery per ticket" hint="Cycle time runs from creating the job to the pull request merged or closed. Rework counts auto-approvals you later asked changes on, on the same gate." flush>
+      {#if !data.tickets.length}<div class="cb"><p class="empty">No jobs yet.</p></div>{:else}
         <div class="tscroll">
           <table class="tbl">
-            <thead><tr><th>Ticket</th><th>Agent</th><th class="r">Cycle time</th><th class="r">Review rounds</th><th class="r">Auto-approved</th><th class="r">Rework</th></tr></thead>
+            <thead><tr><th>Ticket</th><th>Job</th><th class="r">Cycle time</th><th class="r">Review rounds</th><th class="r">Auto-approved</th><th class="r">Rework</th></tr></thead>
             <tbody>
-              {#each data.tickets as t (t.agent)}
+              {#each data.tickets as t (t.job)}
                 <tr>
                   <td class="mono">{t.ticket}</td>
-                  <td><a href={href(`/agent/${t.agent}`)}>{t.agent}</a></td>
+                  <td><a href={href(`/jobs/${t.job}`)}>{t.job}</a></td>
                   <td class="num r">{t.cycleMs === null ? 'open' : span(t.cycleMs)}</td>
                   <td class="num r">{t.reviewRounds}</td>
                   <td class="num r">{t.autoApprovals}</td>

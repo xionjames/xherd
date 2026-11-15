@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-vi.mock('./store.svelte', () => ({ agentByName: () => undefined }));
+vi.mock('./store.svelte', () => ({ jobByName: () => undefined }));
 vi.mock('./router.svelte', () => ({ go: () => {} }));
 import { addNotice, BLOCK_TEXT, browserBlock, notices, settle } from './notices.svelte';
-import type { Agent } from './types';
+import type { Job } from './types';
 
-const agent = (status: Agent['status'], gate?: Agent['gate']) =>
-  ({ id: 'A1', name: 'a', status, gate }) as Agent;
-const read = (kind: string) => notices.list.find((n) => n.agentId === 'A1' && n.kind === kind)!.read;
+const agent = (status: Job['status'], gate?: Job['gate']) =>
+  ({ id: 'A1', name: 'a', status, gate }) as Job;
+const read = (kind: string) => notices.list.find((n) => n.jobId === 'A1' && n.kind === kind)!.read;
 
 describe('settle', () => {
   it('marks read the notices whose wait is over, and only those', () => {
@@ -20,7 +20,7 @@ describe('settle', () => {
 
     settle(agent('running', gate)); // changes requested: running again
     expect(['gate', 'blocked', 'pr'].map(read)).toEqual([true, true, false]);
-    expect(notices.list.find((n) => n.agentId === 'B2')!.read).toBe(false);
+    expect(notices.list.find((n) => n.jobId === 'B2')!.read).toBe(false);
   });
 
   it('marks a gate notice read once the gate is approved', () => {

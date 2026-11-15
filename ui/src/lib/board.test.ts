@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { boardLane, laneOrder, todoLane } from './board';
-import type { Agent } from './types';
+import type { Job } from './types';
 
-const a = (over: Partial<Agent>): Agent =>
+const a = (over: Partial<Job>): Job =>
   ({ id: 'x', name: 'fix-login', branch: 'b', status: 'running', createdAt: 0, statusSince: 0, lastActivity: 0, repo: '/w/app', ...over });
 
 describe('board lanes', () => {

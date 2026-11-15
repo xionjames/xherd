@@ -10,16 +10,16 @@
   import { herdViews, pickView } from '../lib/herdViews';
   import { post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
 
-  const agents = $derived(app.state?.agents ?? []);
+  const agents = $derived(app.state?.jobs ?? []);
   const flows = $derived(app.state?.flows ?? []);
   const views = $derived(herdViews(app.state?.plugins));
   const view = $derived(pickView(route.query.get('layout'), app.state?.plugins));
   // The first view is the default and leaves `layout` out; the filter stays.
   const setLayout = (id: string) =>
     go('/', { f: route.query.get('f') ?? undefined, layout: id === views[0].id ? undefined : id });
-  const open = (a: Agent) => go(`/agent/${a.name}`);
+  const open = (a: Job) => go(`/jobs/${a.name}`);
 
   // The kill switch (R-032): no handoff notes, nothing new starts.
   const pausable = $derived(agents.filter((a) => ['queued', 'running', 'idle', 'blocked', 'waiting-input'].includes(a.status)).length);
@@ -27,9 +27,9 @@
   async function pauseAll() {
     confirmPause = false;
     try {
-      await post('/agents/pause-all');
+      await post('/jobs/pause-all');
     } catch (e) {
-      showError('Could not pause the agents', e);
+      showError('Could not pause the jobs', e);
     }
   }
 </script>
@@ -38,7 +38,7 @@
   {#snippet actions()}
     <Seg label="Layout" value={view.id} onchange={setLayout}
       options={views.map((v) => ({ value: v.id, label: v.label }))} />
-    {#if pausable}<button class="btn" onclick={() => (confirmPause = true)} title="Kill switch: pause every running and queued agent now">Pause all</button>{/if}
+    {#if pausable}<button class="btn" onclick={() => (confirmPause = true)} title="Kill switch: pause every running and queued job now">Pause all</button>{/if}
   {/snippet}
 </PageHead>
 
@@ -48,7 +48,7 @@
 {/key}
 
 {#if confirmPause}
-  <Dialog title="Pause all {pausable} agents?" onclose={() => (confirmPause = false)}>
+  <Dialog title="Pause all {pausable} jobs?" onclose={() => (confirmPause = false)}>
     <p>Their sessions end now, without a handoff note, and nothing queued starts. Resume each one when you want it back.</p>
     {#snippet actions()}
       <button class="btn ghost" onclick={() => (confirmPause = false)}>Keep them running</button>

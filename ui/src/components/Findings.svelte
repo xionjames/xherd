@@ -1,10 +1,10 @@
 <script lang="ts">
   // Findings of `review.md` with a colour per severity (R-114). The colour is
   // never the only signal: each severity also has a glyph and its name.
-  import type { Agent, Finding, Severity } from '../lib/types';
+  import type { Job, Finding, Severity } from '../lib/types';
   import { get } from '../lib/api';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   // Reload when the document or the tasks that fix findings change.
@@ -21,7 +21,7 @@
 
   $effect(() => {
     void key;
-    get<{ findings: Finding[]; error?: string }>(`/agents/${id}/findings`).then(
+    get<{ findings: Finding[]; error?: string }>(`/jobs/${id}/findings`).then(
       (r) => { findings = r.findings; error = r.error ?? null; },
       (e) => { findings = []; error = e.message; },
     );

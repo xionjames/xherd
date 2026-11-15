@@ -741,7 +741,7 @@ impl Actor {
             tracing::error!(agent = %self.job.name, %err, "agent not stored");
         }
         let _ = self.env.hub.send(Change::Job {
-            agent: Box::new(self.job.clone()),
+            job: Box::new(self.job.clone()),
         });
         if self.job.status != before {
             tracing::info!(agent = %self.job.name, from = %before, to = %self.job.status, "status");

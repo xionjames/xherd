@@ -73,8 +73,8 @@ fn launch(argv: &[String], dir: &str) -> Result<(), String> {
 
 fn agent(client: &Client, who: &str) -> Result<Value, String> {
     client
-        .call("GET", &format!("/agents/{who}"), None)
-        .map(|v| v["agent"].clone())
+        .call("GET", &format!("/jobs/{who}"), None)
+        .map(|v| v["job"].clone())
 }
 
 /// The xherd container's user id when the daemon runs in Docker (from

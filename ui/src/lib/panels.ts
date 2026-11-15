@@ -1,7 +1,7 @@
 // Panel registry (design §11): a panel type maps to a component. The agent
 // page renders the built-in view below; declarative pack views come later.
 import type { Component } from 'svelte';
-import type { Agent } from './types';
+import type { Job } from './types';
 import Documents from '../panels/Documents.svelte';
 import Tasks from '../panels/Tasks.svelte';
 import Commits from '../panels/Commits.svelte';
@@ -12,7 +12,7 @@ import TerminalPanel from '../panels/Terminal.svelte';
 import Memory from '../panels/Memory.svelte';
 import Ticket from '../panels/Ticket.svelte';
 
-export const PANELS: Record<string, Component<{ agent: Agent }>> = {
+export const PANELS: Record<string, Component<{ agent: Job }>> = {
   documents: Documents,
   tasks: Tasks,
   commits: Commits,
@@ -49,6 +49,6 @@ export const AGENT_VIEW: TabDef[] = [
 ];
 
 /** Tabs whose panel exists, filtered for flow `none`. */
-export function agentTabs(a: Agent): TabDef[] {
+export function agentTabs(a: Job): TabDef[] {
   return AGENT_VIEW.filter((t) => PANELS[t.panel] && (a.flow || t.noFlow));
 }

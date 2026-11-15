@@ -534,8 +534,8 @@ pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
         dir.join(".env").to_string_lossy().into_owned(),
     );
     let drained = dir.join("drained.json");
-    let live: Vec<String> = match client.call("GET", "/agents", None) {
-        Ok(v) => v["agents"]
+    let live: Vec<String> = match client.call("GET", "/jobs", None) {
+        Ok(v) => v["jobs"]
             .as_array()
             .into_iter()
             .flatten()
@@ -569,7 +569,7 @@ pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
         );
         let mut asked = Vec::new();
         for a in &live {
-            match client.call("POST", &format!("/agents/{a}/pause"), None) {
+            match client.call("POST", &format!("/jobs/{a}/pause"), None) {
                 Ok(_) => asked.push(a.as_str()),
                 Err(e) => eprintln!("  {a}: {e}"),
             }
@@ -584,10 +584,10 @@ pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
         while !pending.is_empty() && std::time::Instant::now() < deadline {
             pending.retain(|a| {
                 client
-                    .call("GET", &format!("/agents/{a}"), None)
+                    .call("GET", &format!("/jobs/{a}"), None)
                     .is_ok_and(|v| {
                         matches!(
-                            v["agent"]["status"].as_str().or(v["status"].as_str()),
+                            v["job"]["status"].as_str().or(v["status"].as_str()),
                             Some("running" | "waiting-input" | "idle")
                         )
                     })
@@ -602,7 +602,7 @@ pub fn update(client: &crate::Client, force: bool, pull: bool) -> i32 {
     }
     let resume = |live: &[String]| {
         for a in live {
-            match client.call("POST", &format!("/agents/{a}/resume"), None) {
+            match client.call("POST", &format!("/jobs/{a}/resume"), None) {
                 Ok(_) => println!("resumed {a}"),
                 Err(e) => eprintln!("  {a}: {e}"),
             }

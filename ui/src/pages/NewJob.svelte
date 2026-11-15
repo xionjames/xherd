@@ -1,12 +1,12 @@
 <script lang="ts">
-  // New agent (POST /agents): a name, the workflow, an optional ticket, the
+  // New agent (POST /jobs): a name, the workflow, an optional ticket, the
   // repository and instructions; the rest under "More options" (#114, #115).
   import { onMount } from 'svelte';
   import { get, post } from '../lib/api';
-  import { upsertAgent, app } from '../lib/store.svelte';
+  import { upsertJob, app } from '../lib/store.svelte';
   import { go, href } from '../lib/router.svelte';
   import { showError } from '../lib/errors.svelte';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
   import Seg from '../components/Seg.svelte';
@@ -135,18 +135,18 @@
     if (f.runtime) body.runtime = f.runtime;
     if (canModel && f.model.trim()) body.model = f.model.trim();
     try {
-      const r = await post<{ agent: Agent }>('/agents', body);
-      upsertAgent(r.agent);
-      go(`/agent/${r.agent.name}`);
+      const r = await post<{ job: Job }>('/jobs', body);
+      upsertJob(r.job);
+      go(`/jobs/${r.job.name}`);
     } catch (err) {
-      showError('Could not create the agent', err);
+      showError('Could not create the job', err);
     } finally {
       busy = false;
     }
   }
 </script>
 
-<PageHead width="narrow" title="New agent" sub="One agent, one worktree, one branch." />
+<PageHead width="narrow" title="New job" sub="One job, one worktree, one branch." />
 <form class="stack narrow" onsubmit={create}>
   <Panel>
     <div class="g2">
@@ -155,7 +155,7 @@
           oninput={() => (f.name = f.name.toLowerCase())} />
         {#if f.name && !nameOk}<span class="hint err">Lowercase letters, digits and -, up to 41.</span>
         {:else if f.name}<span class="hint">Branch <span class="mono">{branch}</span></span>
-        {:else}<span class="hint">Agent, session and worktree folder.</span>{/if}</label>
+        {:else}<span class="hint">Job, session and worktree folder.</span>{/if}</label>
       <div class="f">Workflow
         <Seg label="Workflow" value={f.flow} onchange={(v) => (f.flow = v)}
           options={[...flows, 'none'].map((fl) => ({ value: fl, label: fl === 'none' ? 'No workflow' : fl }))} /></div>

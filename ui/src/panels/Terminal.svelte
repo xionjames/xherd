@@ -2,12 +2,12 @@
   // `terminal` panel: the agent's tmux session through /ws/term/:id.
   import TermView from '../components/TermView.svelte';
   import Callout from '../components/Callout.svelte';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { post } from '../lib/api';
-  import { upsertAgent } from '../lib/store.svelte';
+  import { upsertJob } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Keyed on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   const live = $derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
@@ -25,7 +25,7 @@
   async function send(action: 'ask' | 'finish', body: object, label: string) {
     busy = true;
     try {
-      upsertAgent((await post<{ agent: Agent }>(`/agents/${id}/${action}`, body)).agent);
+      upsertJob((await post<{ job: Job }>(`/jobs/${id}/${action}`, body)).job);
       if (action === 'ask') { text = ''; queueMicrotask(grow); }
     } catch (e) { showError(label, e); }
     finally { busy = false; }

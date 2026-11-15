@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { needsYou, waitsAtGate } from './format';
-import type { Agent } from './types';
+import type { Job } from './types';
 
-const a = (over: Partial<Agent>): Agent => ({ id: 'x', name: 'x', branch: 'x', status: 'running', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
-const docs = { kind: 'docs', stage: 'design', role: 'design', files: [{ path: 'design.md' }] } as unknown as Agent['gate'];
+const a = (over: Partial<Job>): Job => ({ id: 'x', name: 'x', branch: 'x', status: 'running', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
+const docs = { kind: 'docs', stage: 'design', role: 'design', files: [{ path: 'design.md' }] } as unknown as Job['gate'];
 
 describe('waitsAtGate and needsYou (R4)', () => {
   it('an open gate waits for you', () => {

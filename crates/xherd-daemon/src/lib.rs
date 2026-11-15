@@ -568,7 +568,7 @@ impl Daemon {
         Ok(out)
     }
 
-    /// `GET /agents/:id/memory` (spec §16.6): the pending shared-memory
+    /// `GET /jobs/:id/memory` (spec §16.6): the pending shared-memory
     /// proposal with the proposed text, the repo's `AGENTS.md` in the
     /// worktree, and the `CLAUDE.md` an accept would write (`null` = left
     /// as it is). Read-only, outside the actor.
@@ -738,7 +738,7 @@ impl Daemon {
             Some("uncommitted") => {
                 let diff = git.diff_proposed(wd, &changed).await.map_err(git_err)?;
                 return Ok(serde_json::json!({
-                    "agent": a.name, "head": head, "view": "uncommitted", "files": changed,
+                    "job": a.name, "head": head, "view": "uncommitted", "files": changed,
                     "others": Vec::<String>::new(), "diff": diff,
                 }));
             }
@@ -775,7 +775,7 @@ impl Daemon {
                 files.sort();
                 files.dedup();
                 return Ok(serde_json::json!({
-                    "agent": a.name, "head": head, "view": "branch", "branch": format!("{base}...HEAD"),
+                    "job": a.name, "head": head, "view": "branch", "branch": format!("{base}...HEAD"),
                     "files": files, "others": Vec::<String>::new(), "diff": diff,
                 }));
             }
@@ -804,7 +804,7 @@ impl Daemon {
                     ),
                 };
                 return Ok(serde_json::json!({
-                    "agent": a.name, "head": head, "view": "commit", "commit": c,
+                    "job": a.name, "head": head, "view": "commit", "commit": c,
                     "files": files, "others": Vec::<String>::new(), "diff": diff,
                 }));
             }
@@ -830,7 +830,7 @@ impl Daemon {
                 .collect();
             let diff = git.diff(wd, Some(&range), &[]).await.map_err(git_err)?;
             return Ok(serde_json::json!({
-                "agent": a.name, "head": head, "branch": range, "files": files,
+                "job": a.name, "head": head, "branch": range, "files": files,
                 "others": changed, "diff": diff,
             }));
         }
@@ -846,7 +846,7 @@ impl Daemon {
         };
         let diff = git.diff_proposed(wd, &files).await.map_err(git_err)?;
         Ok(serde_json::json!({
-            "agent": a.name, "head": head, "commit": commit, "files": files,
+            "job": a.name, "head": head, "commit": commit, "files": files,
             "others": others, "diff": diff,
         }))
     }

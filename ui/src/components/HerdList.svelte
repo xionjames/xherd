@@ -10,18 +10,18 @@
   import { href } from '../lib/router.svelte';
   import { ago, repoName, shortBase } from '../lib/format';
   import { stageNow } from '../lib/flow';
-  import type { Agent, FlowInfo } from '../lib/types';
+  import type { Job, FlowInfo } from '../lib/types';
 
-  let { agents, flows, open }: { agents: Agent[]; flows: FlowInfo[]; open: (a: Agent) => void } = $props();
+  let { agents, flows, open }: { agents: Job[]; flows: FlowInfo[]; open: (a: Job) => void } = $props();
 </script>
 
 <HerdSummary {agents}>
-  {#snippet children(shown: Agent[])}
-    <Panel title="All agents" flush>
+  {#snippet children(shown: Job[])}
+    <Panel title="All jobs" flush>
       {#if shown.length}
         <div class="tscroll">
           <table class="tbl">
-            <thead><tr><th>Agent</th><th>Status</th><th>Stage</th><th class="hide-sm">Progress</th><th class="hide-sm">Tasks</th><th class="hide-sm">Branch</th><th class="r">Active</th></tr></thead>
+            <thead><tr><th>Job</th><th>Status</th><th>Stage</th><th class="hide-sm">Progress</th><th class="hide-sm">Tasks</th><th class="hide-sm">Branch</th><th class="r">Active</th></tr></thead>
             <tbody>
               {#each shown as a (a.id)}
                 <tr class="hov" onclick={() => open(a)}>
@@ -29,7 +29,7 @@
                     <div class="row" style="flex-wrap:nowrap">
                       <AgentDot agent={a} />
                       <div class="wrap-any">
-                        <a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
+                        <a class="mono nyname" href={href(`/jobs/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
                         <div class="hint">{repoName(a)} · {a.flow ?? 'no workflow'}</div>
                       </div>
                     </div>
@@ -52,7 +52,7 @@
         </div>
       {:else}
         <div class="cb">
-          <p class="empty">{#if agents.length}No agents match this filter.{:else}No agents yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.{/if}</p>
+          <p class="empty">{#if agents.length}No jobs match this filter.{:else}No jobs yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.{/if}</p>
         </div>
       {/if}
     </Panel>

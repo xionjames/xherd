@@ -1,4 +1,4 @@
-//! `xherd new` / `POST /agents` (spec §5.1–5.2): validate everything first,
+//! `xherd new` / `POST /jobs` (spec §5.1–5.2): validate everything first,
 //! then create the worktree and `.xherd/`, then register the agent. A failure
 //! after the worktree exists removes it again, so nothing is left behind.
 

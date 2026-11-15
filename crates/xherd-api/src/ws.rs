@@ -1,5 +1,5 @@
-//! `GET /ws`: the state stream (design §13.1). Every agent change from the
-//! daemon's hub is forwarded as `{"type": "agent", "agent": …}`; a client that
+//! `GET /ws`: the state stream (design §13.1). Every job change from the
+//! daemon's hub is forwarded as `{"type": "job", "job": …}`; a client that
 //! falls behind is closed and reloads `/state` on reconnect.
 
 use axum::extract::State;

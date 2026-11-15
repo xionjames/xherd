@@ -7,7 +7,7 @@
 // `ui/view-kit/xherd-view.js`.
 import { stageNow } from './flow';
 import { agentHue, needsYou, repoName } from './format';
-import type { Agent, FlowInfo, Gate, Status, Ticket } from './types';
+import type { Job, FlowInfo, Gate, Status, Ticket } from './types';
 
 export const VIEW_PROTOCOL = 1;
 
@@ -36,8 +36,8 @@ export interface ViewAgent {
   /** The agent's colour, a CSS `hsl(…)`. */
   hue: string;
   prUrl?: string;
-  prState?: Agent['prState'];
-  prCi?: Agent['prCi'];
+  prState?: Job['prState'];
+  prCi?: Job['prCi'];
 }
 
 export interface DataMessage {
@@ -53,7 +53,7 @@ export type ViewRequest = { kind: 'ready' } | { kind: 'open'; id: string };
 const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
 
 /** The projection of one agent; fields not listed here never reach a view. */
-export function project(a: Agent, flows: FlowInfo[]): ViewAgent {
+export function project(a: Job, flows: FlowInfo[]): ViewAgent {
   const now = stageNow(a, flows);
   const ticket = a.ticket ? { key: str(a.ticket.key), url: str(a.ticket.url) } : undefined;
   return strip({
@@ -85,7 +85,7 @@ function strip<T extends object>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
 }
 
-export function dataMessage(agents: Agent[], flows: FlowInfo[], theme: 'light' | 'dark'): DataMessage {
+export function dataMessage(agents: Job[], flows: FlowInfo[], theme: 'light' | 'dark'): DataMessage {
   return {
     xherdView: VIEW_PROTOCOL,
     kind: 'data',

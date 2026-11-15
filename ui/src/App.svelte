@@ -2,11 +2,11 @@
   import GlobalBar from './components/GlobalBar.svelte';
   import ErrorDialog from './components/ErrorDialog.svelte';
   import Herd from './pages/Herd.svelte';
-  import Agent from './pages/Agent.svelte';
+  import Job from './pages/Job.svelte';
   import Settings from './pages/Settings.svelte';
   import Setup from './pages/Setup.svelte';
   import Welcome from './pages/Welcome.svelte';
-  import NewAgent from './pages/NewAgent.svelte';
+  import NewJob from './pages/NewJob.svelte';
   import Attention from './pages/Attention.svelte';
   import Board from './pages/Board.svelte';
   import Time from './pages/Time.svelte';
@@ -20,8 +20,13 @@
   loadChecks().catch((e) => console.error('checks', e));
   loadConfig().catch((e) => console.error('config', e));
 
-  const agentId = $derived(route.path.match(/^\/agent\/([^/]+)/)?.[1]);
-  const agent = $derived(agentId ? app.state?.agents.find((a) => a.name === agentId || a.id === agentId) : undefined);
+  const jobId = $derived(route.path.match(/^\/jobs\/([^/]+)/)?.[1]);
+  const job = $derived(jobId ? app.state?.jobs.find((a) => a.name === jobId || a.id === jobId) : undefined);
+  // Old links: `#/agent/<name>` and `#/agents/<name>` open the job (issue #141).
+  $effect(() => {
+    const old = route.path.match(/^\/agents?\/([^/]+)$/)?.[1];
+    if (old) location.replace(`#/jobs/${old}${route.query.size ? `?${route.query}` : ''}`);
+  });
   // Until required checks pass, only Setup and Settings are open.
   const blocked = $derived(failingRequired().length > 0);
   const firstRun = $derived(setup.config?.config.welcomed === false);
@@ -52,13 +57,13 @@
     {:else if route.path === '/attention' || route.path === '/review'}
       <Attention />
     {:else if route.path === '/new'}
-      <NewAgent />
+      <NewJob />
     {:else if route.path === '/'}
       <Herd />
-    {:else if agentId && agent}
-      <Agent {agent} />
-    {:else if agentId}
-      <div class="stack"><p class="empty">No agent {agentId}. <a href="#/">Back to the herd</a>.</p></div>
+    {:else if jobId && job}
+      <Job agent={job} />
+    {:else if jobId}
+      <div class="stack"><p class="empty">No job {jobId}. <a href="#/">Back to the herd</a>.</p></div>
     {:else}
       <div class="stack"><p class="empty">Nothing here. <a href="#/">Back to the herd</a>.</p></div>
     {/if}

@@ -1,8 +1,8 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import type { Agent, FlowInfo } from '../lib/types';
+  import type { Job, FlowInfo } from '../lib/types';
   import { steps, stageLabel } from '../lib/flow';
-  let { agent, flow }: { agent: Agent; flow?: FlowInfo } = $props();
+  let { agent, flow }: { agent: Job; flow?: FlowInfo } = $props();
 </script>
 
 {#if flow}

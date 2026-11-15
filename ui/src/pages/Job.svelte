@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Agent page: your-call band, hero (name, meta, actions, progress), tabs of
+  // Job page: your-call band, hero (name, meta, actions, progress), tabs of
   // panels from the registry.
   import Icon from '../components/Icon.svelte';
   import TicketPill from '../components/TicketPill.svelte';
@@ -10,8 +10,8 @@
   import Dialog from '../components/Dialog.svelte';
   import Callout from '../components/Callout.svelte';
   import TicketPrompt from '../components/TicketPrompt.svelte';
-  import type { Agent } from '../lib/types';
-  import { app, upsertAgent } from '../lib/store.svelte';
+  import type { Job } from '../lib/types';
+  import { app, upsertJob } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
   import { flowOf, prGate } from '../lib/flow';
@@ -22,14 +22,14 @@
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
   // daemon every 30 s so the user's time on the agent is counted.
   const timeId = $derived(agent.id);
   $effect(() => {
     const id = timeId;
     const t = setInterval(() => {
-      if (document.visibilityState === 'visible' && document.hasFocus()) post(`/agents/${id}/user-time`, { ms: 30000 }).catch(() => {});
+      if (document.visibilityState === 'visible' && document.hasFocus()) post(`/jobs/${id}/user-time`, { ms: 30000 }).catch(() => {});
     }, 30000);
     return () => clearInterval(t);
   });
@@ -43,7 +43,7 @@
   async function toggleOpen() {
     openMenu = !openMenu;
     if (!openMenu) return;
-    try { targets = (await get<{ targets: Target[] }>(`/agents/${agent.id}/open-targets`)).targets; }
+    try { targets = (await get<{ targets: Target[] }>(`/jobs/${agent.id}/open-targets`)).targets; }
     catch (e) { openMenu = false; showError('Could not list editors', e); }
   }
 
@@ -79,13 +79,13 @@
   const finished = $derived(['done', 'cancelled'].includes(agent.status));
   async function setAutonomy(e: Event) {
     const level = (e.currentTarget as HTMLSelectElement).value;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/autonomy`, { level })).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/autonomy`, { level })).job); }
     catch (err) { showError('Could not change the autonomy', err); }
   }
 
   async function setMode(e: Event) {
     const mode = (e.currentTarget as HTMLSelectElement).value;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/mode`, { mode })).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/mode`, { mode })).job); }
     catch (err) { showError('Could not change the tool permissions', err); }
   }
 
@@ -93,13 +93,13 @@
   async function setModel(model: string) {
     if (!validModel(model)) { showError('Could not change the model', new Error('Letters, digits and . _ : / @ - [ ] only')); return; }
     if (model.trim() === (agent.model ?? '')) return;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/model`, { model: model.trim() })).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/model`, { model: model.trim() })).job); }
     catch (err) { showError('Could not change the model', err); }
   }
 
   async function act(action: string, label: string, body?: unknown) {
     menu = false;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`, body)).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/${action}`, body)).job); }
     catch (e) { showError(label, e); }
   }
 
@@ -181,7 +181,7 @@
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>
         {#if menu}
           <div class="pop" role="menu">
-            <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel agent…</button>
+            <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel job…</button>
             {#if canRemove}
               <button role="menuitem" class="btn ghost danger" onclick={() => { menu = false; confirmRemove = true; }}>Remove worktree…</button>
             {/if}
@@ -194,11 +194,11 @@
 </header>
 
 <div class="aview">
-  <nav class="vnav" aria-label="Agent">
+  <nav class="vnav" aria-label="Job">
     {#each tabs as t (t.id)}
       {@const b = badge(t.id)}
       <a class="vtb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
-        href={href(`/agent/${agent.name}`, { s: t.id })}>
+        href={href(`/jobs/${agent.name}`, { s: t.id })}>
         <Icon name={t.icon} />{t.label}{#if b?.n === '✋'}<span class="tc mark {b.tone}" title="Needs you"><Icon name="handSolid" size={16} solid /></span>{:else if b}<span class="tc {b.tone}">{b.n}</span>{/if}
       </a>
     {/each}

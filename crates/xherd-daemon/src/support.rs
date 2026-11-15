@@ -47,12 +47,12 @@ impl Clock for ManualClock {
     rename_all_fields = "camelCase"
 )]
 pub enum Change {
-    #[serde(rename = "agent")]
-    Job { agent: Box<Job> },
+    Job {
+        job: Box<Job>,
+    },
     /// `kind` (`gate`, `blocked`, `idle`…) tells which notification a new one
     /// replaces: one per agent and kind (spec §16.3).
     Notify {
-        #[serde(rename = "agentId")]
         job_id: String,
         kind: String,
         text: String,

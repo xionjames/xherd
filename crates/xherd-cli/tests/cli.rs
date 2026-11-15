@@ -83,7 +83,7 @@ fn hook_is_silent_and_queues_when_daemon_is_down() {
 
     let q = queue_lines(home.path());
     assert_eq!(q.len(), 2);
-    assert_eq!(q[0]["agentId"], "A1");
+    assert_eq!(q[0]["jobId"], "A1");
     assert_eq!(q[0]["event"], "user-prompt-submit");
     assert_eq!(q[0]["payload"]["session_id"], "s1");
     assert_eq!(q[1]["payload"]["raw"], "not json");
@@ -356,7 +356,7 @@ fn xap_exit_codes_without_daemon() {
         (q[0]["cmd"].as_str(), q[0]["args"]["id"].as_str()),
         (Some("task.done"), Some("T01"))
     );
-    assert_eq!(q[0]["agentId"], "A1");
+    assert_eq!(q[0]["jobId"], "A1");
     // Usage errors.
     let o = xherd(home.path(), wt.path(), &["task", "done", "T01"], &env, "");
     assert_eq!(o.status.code(), Some(64));

@@ -511,7 +511,7 @@ async fn worklog_books_running_time_and_user_time() {
     let row = &v["days"][0]["tickets"][0];
     assert!(row["agentMs"].as_u64().unwrap() >= 60_000);
     assert_eq!(row["userMs"], 30_000 + 120_000);
-    assert_eq!(v["tickets"][0]["agent"], "WL-1");
+    assert_eq!(v["tickets"][0]["job"], "WL-1");
     assert_eq!(v["tickets"][0]["cycleMs"], Value::Null);
 }
 

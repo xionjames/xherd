@@ -161,12 +161,12 @@ impl Supervisor {
         match by_key.as_slice() {
             [one] => Ok(one),
             [] => Err(ActionError {
-                code: "unknown_agent",
-                message: format!("no agent {who:?}"),
+                code: "unknown_job",
+                message: format!("no job {who:?}"),
             }),
             _ => Err(ActionError {
-                code: "ambiguous_agent",
-                message: format!("several agents for {who:?}; use the name"),
+                code: "ambiguous_job",
+                message: format!("several jobs for {who:?}; use the name"),
             }),
         }
     }
@@ -227,7 +227,7 @@ impl Supervisor {
                     let _ = e.tx.send(Msg::Xap(call, reply));
                 }
                 None => {
-                    let _ = reply.send(Err(refuse("unknown_agent", "no such agent")));
+                    let _ = reply.send(Err(refuse("unknown_job", "no such job")));
                 }
             },
             SupMsg::Tick(t) => {

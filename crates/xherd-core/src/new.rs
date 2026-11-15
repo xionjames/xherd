@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::Job;
 use crate::xap::{Refusal, refuse};
 
-/// `POST /api/v1/agents` body and `xherd new` input (R-001).
+/// `POST /api/v1/jobs` body and `xherd new` input (R-001).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NewJob {

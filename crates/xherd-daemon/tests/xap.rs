@@ -115,7 +115,7 @@ async fn setup_inner(
 }
 
 fn call(a: &Job, id: &str, cmd: &str, args: Value) -> XapCall {
-    serde_json::from_value(json!({"id": id, "agentId": a.id, "cmd": cmd, "args": args, "at": 1}))
+    serde_json::from_value(json!({"id": id, "jobId": a.id, "cmd": cmd, "args": args, "at": 1}))
         .unwrap()
 }
 
@@ -406,7 +406,7 @@ async fn refused_when_not_live_or_without_flow() {
         t.d.xap(call(&Job::new("x", 0), "c3", "ask", json!({"text": "?"})))
             .await
             .unwrap_err();
-    assert_eq!(e.code, "unknown_agent");
+    assert_eq!(e.code, "unknown_job");
 }
 
 #[tokio::test]
@@ -1018,7 +1018,7 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
 
     assert_eq!(
         t.d.diff("nobody", None, None).await.unwrap_err().code,
-        "unknown_agent"
+        "unknown_job"
     );
 }
 

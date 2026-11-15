@@ -11,7 +11,7 @@ use crate::job::Millis;
 pub struct XapCall {
     /// Client-generated id; replays are de-duplicated by it.
     pub id: String,
-    #[serde(rename = "agentId")]
+    #[serde(alias = "agentId")]
     pub job_id: String,
     #[serde(flatten)]
     pub cmd: XapCmd,

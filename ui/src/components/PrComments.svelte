@@ -2,14 +2,14 @@
   // The comments of the current PR round and what to do about each (R-306):
   // the agent proposes in its plan, the user decides here and sends the
   // decisions (approves the PR gate). Comment text is untrusted: plain text.
-  import type { Agent, Decision, PrComment, Verdict } from '../lib/types';
+  import type { Job, Decision, PrComment, Verdict } from '../lib/types';
   import { get, post, put } from '../lib/api';
-  import { upsertAgent } from '../lib/store.svelte';
+  import { upsertJob } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
   import { prGate } from '../lib/flow';
   import Seg from './Seg.svelte';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   // Reload when the plan is rewritten or the round moves on.
@@ -34,7 +34,7 @@
 
   $effect(() => {
     void key;
-    get<Round>(`/agents/${id}/pr-review`).then(
+    get<Round>(`/jobs/${id}/pr-review`).then(
       (r) => { round = r; overrides = { ...r.overrides }; error = null; },
       (e) => { round = null; error = e.message; },
     );
@@ -48,7 +48,7 @@
 
   async function save() {
     try {
-      await put(`/agents/${id}/pr-decisions`, { decisions: overrides });
+      await put(`/jobs/${id}/pr-decisions`, { decisions: overrides });
       error = null;
     } catch (e) {
       error = (e as Error).message;
@@ -75,8 +75,8 @@
   async function send() {
     sending = true;
     try {
-      const r = await post<{ agent: Agent }>(`/agents/${id}/approve`, { expect: {} });
-      upsertAgent(r.agent);
+      const r = await post<{ job: Job }>(`/jobs/${id}/approve`, { expect: {} });
+      upsertJob(r.job);
     } catch (e) {
       showError('Could not send the decisions', e);
     } finally {

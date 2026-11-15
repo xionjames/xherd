@@ -1,13 +1,13 @@
 <script lang="ts">
   import Panel from '../components/Panel.svelte';
-  import type { Agent, PrCheck, PrReviewer } from '../lib/types';
+  import type { Job, PrCheck, PrReviewer } from '../lib/types';
   import { agoText } from '../lib/format';
   import { conflictsAction } from '../lib/flow';
   import { post } from '../lib/api';
-  import { upsertAgent } from '../lib/store.svelte';
+  import { upsertJob } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
   import PrComments from '../components/PrComments.svelte';
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   // The check-now button (issue #131): poll the pull request on demand.
@@ -15,8 +15,8 @@
   async function checkNow() {
     checking = true;
     try {
-      const r = await post<{ agent: Agent }>(`/agents/${id}/pr-check`);
-      upsertAgent(r.agent);
+      const r = await post<{ job: Job }>(`/jobs/${id}/pr-check`);
+      upsertJob(r.job);
     } catch (e) {
       showError('Could not check the pull request', e);
     } finally {
@@ -29,8 +29,8 @@
   async function resolveConflicts() {
     resolving = true;
     try {
-      const r = await post<{ agent: Agent }>(`/agents/${id}/resolve-conflicts`);
-      upsertAgent(r.agent);
+      const r = await post<{ job: Job }>(`/jobs/${id}/resolve-conflicts`);
+      upsertJob(r.job);
     } catch (e) {
       showError('Could not start resolving the conflicts', e);
     } finally {

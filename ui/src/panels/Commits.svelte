@@ -1,9 +1,9 @@
 <script lang="ts">
   import Panel from '../components/Panel.svelte';
   // Commits of the agent: click one for its message, files and the diff.
-  import type { Agent, Commit } from '../lib/types';
+  import type { Job, Commit } from '../lib/types';
   import { href } from '../lib/router.svelte';
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   const TONE = { proposed: 'gate', approved: 'acc', done: 'live', dropped: '' };
   const GLYPH = { proposed: '✋', approved: '✓', done: '✓', dropped: '–' };
   let picked = $state<string | null>(null);
@@ -44,7 +44,7 @@
     <Panel label={selected.id}>
       {#snippet head()}
         <h2 class="grow wrap-any"><span class="mono muted">{selected.id}</span> {selected.subject}</h2>
-        <a class="btn sm" href={href(`/agent/${agent.name}`, { s: 'changes', view: 'commit', commit: selected.id })}>View the changes →</a>
+        <a class="btn sm" href={href(`/jobs/${agent.name}`, { s: 'changes', view: 'commit', commit: selected.id })}>View the changes →</a>
       {/snippet}
       <div>
         <span class="lbl">Commit message</span>

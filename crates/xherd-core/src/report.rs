@@ -67,7 +67,7 @@ impl ReportEvent {
 pub struct Report {
     /// Client-generated id; replays are de-duplicated by it.
     pub id: String,
-    #[serde(rename = "agentId")]
+    #[serde(alias = "agentId")]
     pub job_id: String,
     pub event: ReportEvent,
     #[serde(default)]

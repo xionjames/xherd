@@ -90,20 +90,20 @@ async fn auth_rules() {
 
     let (s, _) = call(
         remote.clone(),
-        get("/api/v1/agents").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     let (s, v) = call(
         local.clone(),
-        get("/api/v1/agents").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["agents"][0]["name"], "SC-1");
+    assert_eq!(v["jobs"][0]["name"], "SC-1");
 
     // Proxied requests are not local even from loopback.
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("x-forwarded-for", "1.2.3.4")
         .body(Body::empty())
         .unwrap();
@@ -127,7 +127,7 @@ async fn auth_rules() {
     assert_eq!(call(remote, req).await.0, StatusCode::UNAUTHORIZED);
     // Locally an unknown token (another install's) changes nothing; an
     // agent's token never becomes the user's.
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", "Bearer xh_other_install")
         .body(Body::empty())
         .unwrap();
@@ -141,7 +141,7 @@ async fn auth_rules() {
     )
     .await
     .unwrap();
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", format!("Bearer {agent_t}"))
         .body(Body::empty())
         .unwrap();
@@ -152,7 +152,7 @@ async fn auth_rules() {
     d2.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
     let gw =
         xherd_api::router(d2).layer(MockConnectInfo(SocketAddr::from(([172, 17, 0, 1], 5555))));
-    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    let req = get("/api/v1/jobs").body(Body::empty()).unwrap();
     assert_eq!(call(gw, req).await.0, StatusCode::OK);
 
     // There, loopback is where the agents are: no rights without a token,
@@ -162,9 +162,9 @@ async fn auth_rules() {
     d3.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
     let inside = xherd_api::router(d3.clone())
         .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
-    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    let req = get("/api/v1/jobs").body(Body::empty()).unwrap();
     assert_eq!(call(inside.clone(), req).await.0, StatusCode::UNAUTHORIZED);
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", "Bearer never-issued")
         .body(Body::empty())
         .unwrap();
@@ -173,7 +173,7 @@ async fn auth_rules() {
     let user_t = mint_token(&d3.store, TOKEN_USER, None, &[], 1)
         .await
         .unwrap();
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", format!("Bearer {user_t}"))
         .body(Body::empty())
         .unwrap();
@@ -203,7 +203,7 @@ async fn hooks_need_the_agents_own_token() {
     )
     .await
     .unwrap();
-    let body = json!({"id": "r1", "agentId": a.id, "event": "stop", "payload": {"message": "ok"}, "seq": 1, "at": 0});
+    let body = json!({"id": "r1", "jobId": a.id, "event": "stop", "payload": {"message": "ok"}, "seq": 1, "at": 0});
     let post = |tok: &str, b: &Value| {
         Request::post("/api/v1/hooks")
             .header("authorization", format!("Bearer {tok}"))
@@ -257,24 +257,24 @@ async fn agent_actions() {
     };
     let (s, v) = call(
         app.clone(),
-        post("/api/v1/agents/SC-1/send", Some(json!({"text": "hi"}))),
+        post("/api/v1/jobs/SC-1/send", Some(json!({"text": "hi"}))),
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    let (s, v) = call(app.clone(), post("/api/v1/agents/SC-1/pause", None)).await;
+    let (s, v) = call(app.clone(), post("/api/v1/jobs/SC-1/pause", None)).await;
     assert_eq!(
-        (s, v["agent"]["status"].clone()),
+        (s, v["job"]["status"].clone()),
         (StatusCode::OK, json!("paused"))
     );
-    let (s, v) = call(app.clone(), post("/api/v1/agents/SC-1/pause", None)).await;
+    let (s, v) = call(app.clone(), post("/api/v1/jobs/SC-1/pause", None)).await;
     assert_eq!(
         (s, v["code"].clone()),
         (StatusCode::CONFLICT, json!("not_allowed"))
     );
-    let (s, _) = call(app.clone(), post("/api/v1/agents/NOPE/pause", None)).await;
+    let (s, _) = call(app.clone(), post("/api/v1/jobs/NOPE/pause", None)).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     // Check now (issue #131): refused without a pull request URL.
-    let (s, v) = call(app.clone(), post("/api/v1/agents/SC-1/pr-check", None)).await;
+    let (s, v) = call(app.clone(), post("/api/v1/jobs/SC-1/pr-check", None)).await;
     assert_eq!(
         (s, v["code"].clone()),
         (StatusCode::CONFLICT, json!("no_pr"))
@@ -282,7 +282,7 @@ async fn agent_actions() {
     // Resolve conflicts (issue #139): refused without a pull request URL too.
     let (s, v) = call(
         app.clone(),
-        post("/api/v1/agents/SC-1/resolve-conflicts", None),
+        post("/api/v1/jobs/SC-1/resolve-conflicts", None),
     )
     .await;
     assert_eq!(
@@ -301,13 +301,13 @@ async fn agent_actions() {
     );
     let (s, v) = call(
         app.clone(),
-        get("/api/v1/agents/SC-1").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs/SC-1").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
     let (s, d) = call(
         app.clone(),
-        get("/api/v1/agents/SC-1/diff").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs/SC-1/diff").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(
@@ -349,7 +349,7 @@ async fn xap_endpoint() {
             .unwrap()
     };
     let ask =
-        json!({"id": "x1", "agentId": a.id, "cmd": "ask", "args": {"text": "which db?"}, "at": 0});
+        json!({"id": "x1", "jobId": a.id, "cmd": "ask", "args": {"text": "which db?"}, "at": 0});
 
     let (s, v) = call(app.clone(), post(&hooks_only, ask.to_string())).await;
     assert_eq!(
@@ -358,11 +358,11 @@ async fn xap_endpoint() {
     );
 
     let mut other = ask.clone();
-    other["agentId"] = json!("someone-else");
+    other["jobId"] = json!("someone-else");
     let (s, v) = call(app.clone(), post(&token, other.to_string())).await;
     assert_eq!(
         (s, v["code"].clone()),
-        (StatusCode::FORBIDDEN, json!("wrong_agent"))
+        (StatusCode::FORBIDDEN, json!("wrong_job"))
     );
 
     let (s, v) = call(app.clone(), post(&token, "{\"cmd\": 1}".into())).await;
@@ -376,7 +376,7 @@ async fn xap_endpoint() {
     assert_eq!(v["result"]["gate"]["kind"], "question");
 
     // The setup agent has no flow: stage calls are refused with 422.
-    let stage = json!({"id": "x2", "agentId": a.id, "cmd": "stage.enter", "args": {"stage": "spec"}, "at": 0});
+    let stage = json!({"id": "x2", "jobId": a.id, "cmd": "stage.enter", "args": {"stage": "spec"}, "at": 0});
     let (s, v) = call(app.clone(), post(&token, stage.to_string())).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
@@ -392,7 +392,7 @@ async fn create_agent_endpoint() {
     let app =
         xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
     let post = |body: Value| {
-        Request::post("/api/v1/agents")
+        Request::post("/api/v1/jobs")
             .header("host", "127.0.0.1:4740")
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
@@ -445,11 +445,7 @@ async fn create_agent_endpoint() {
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(
-        (
-            &v["agent"]["name"],
-            &v["agent"]["ticket"],
-            &v["agent"]["branch"]
-        ),
+        (&v["job"]["name"], &v["job"]["ticket"], &v["job"]["branch"]),
         (
             &json!("refund-retry"),
             &json!({"key": "SC-9"}),
@@ -473,7 +469,7 @@ async fn create_agent_endpoint() {
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(
-        (&v["agent"]["name"], &v["agent"]["branch"]),
+        (&v["job"]["name"], &v["job"]["branch"]),
         (&json!("sc-10"), &json!("SC-10"))
     );
     // A ticket URL no tracker reads is kept as a link, with no key.
@@ -484,7 +480,7 @@ async fn create_agent_endpoint() {
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(
-        (&v["agent"]["ticket"], &v["agent"]["branch"]),
+        (&v["job"]["ticket"], &v["job"]["branch"]),
         (&json!({"url": "https://example.org/t/1"}), &json!("linked"))
     );
 }
@@ -575,14 +571,14 @@ async fn websocket_streams_agent_changes() {
         loop {
             let m = ws.next().await.unwrap().unwrap();
             let v: Value = serde_json::from_str(m.to_text().unwrap()).unwrap();
-            if v["type"] == "agent" && v["agent"]["status"] == "paused" {
+            if v["type"] == "job" && v["job"]["status"] == "paused" {
                 return v;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(msg["agent"]["name"], "SC-1");
+    assert_eq!(msg["job"]["name"], "SC-1");
 }
 
 #[tokio::test]
@@ -783,7 +779,7 @@ async fn findings_endpoint_reads_review_md() {
     let local =
         xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
     let req = || {
-        get("/api/v1/agents/SC-2/findings")
+        get("/api/v1/jobs/SC-2/findings")
             .body(Body::empty())
             .unwrap()
     };
@@ -1022,7 +1018,7 @@ async fn opaque_origin_gets_no_rights() {
     let (_dir, d, _a) = setup_with(external_views).await;
     let local = xherd_api::router(d.clone())
         .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
-    for uri in ["/api/v1/state", "/api/v1/agents"] {
+    for uri in ["/api/v1/state", "/api/v1/jobs"] {
         let req = get(uri)
             .header("origin", "null")
             .body(Body::empty())
@@ -1065,7 +1061,7 @@ async fn companion_routes_are_gone() {
     let local = xherd_api::router(d.clone())
         .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
     // Now only the generic action route matches: no such action.
-    let req = Request::post("/api/v1/agents/SC-1/open")
+    let req = Request::post("/api/v1/jobs/SC-1/open")
         .header("host", "127.0.0.1:4740")
         .body(Body::empty())
         .unwrap();
@@ -1080,7 +1076,7 @@ async fn companion_routes_are_gone() {
     assert_eq!(call(local.clone(), req).await.0, StatusCode::NOT_FOUND);
 
     // The test agent has no worktree.
-    let req = get("/api/v1/agents/SC-1/open-targets")
+    let req = get("/api/v1/jobs/SC-1/open-targets")
         .body(Body::empty())
         .unwrap();
     let (s, v) = call(local, req).await;
@@ -1162,7 +1158,7 @@ async fn terminal_handler_reports_are_kept() {
     let targets = |app: axum::Router| async move {
         let (s, v) = call(
             app,
-            get("/api/v1/agents/SC-2/open-targets")
+            get("/api/v1/jobs/SC-2/open-targets")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1288,4 +1284,51 @@ async fn terminal_handler_install_is_native_only() {
     )
     .await;
     assert!(s.is_client_error(), "{s}");
+}
+
+/// R3: the old `/agents/…` routes answer `410 moved` for a job and `404`
+/// for anything else.
+#[tokio::test]
+async fn old_agent_routes_are_gone() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    for (method, uri, location) in [
+        ("GET", "/api/v1/agents", "/api/v1/jobs"),
+        ("POST", "/api/v1/agents", "/api/v1/jobs"),
+        ("POST", "/api/v1/agents/pause-all", "/api/v1/jobs/pause-all"),
+        ("GET", "/api/v1/agents/SC-1", "/api/v1/jobs/SC-1"),
+        (
+            "POST",
+            "/api/v1/agents/SC-1/pause",
+            "/api/v1/jobs/SC-1/pause",
+        ),
+        (
+            "GET",
+            "/api/v1/agents/SC-1/ticket-status",
+            "/api/v1/jobs/SC-1/ticket-status",
+        ),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "127.0.0.1:4740")
+            .body(Body::empty())
+            .unwrap();
+        let (s, v) = call(app.clone(), req).await;
+        assert_eq!(
+            (s, v["code"].clone(), v["location"].clone()),
+            (StatusCode::GONE, json!("moved"), json!(location)),
+            "{method} {uri}"
+        );
+    }
+    let (s, v) = call(
+        app,
+        get("/api/v1/agents/NOPE/diff").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_job"))
+    );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { stageLanes } from './stageLanes';
-import type { Agent, FlowInfo } from './types';
+import type { Job, FlowInfo } from './types';
 
 const st = (id: string, role: string, label?: string) => ({ id, role: role as never, class: 'routine', gate: true, label });
 const feature: FlowInfo = { pack: 'xherd', flow: 'feature', stages: [st('spec', 'spec'), st('tasks', 'tasks'), st('implement', 'implement')] };
@@ -10,7 +10,7 @@ const bugfix: FlowInfo = {
 };
 const flows = [feature, bugfix];
 let n = 0;
-const a = (over: Partial<Agent>): Agent => {
+const a = (over: Partial<Job>): Job => {
   n += 1;
   return { id: `a${n}`, name: `a${n}`, branch: 'b', status: 'running', createdAt: 0, statusSince: 0, lastActivity: 0, ...over };
 };
