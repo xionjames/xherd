@@ -90,6 +90,9 @@ pub struct Flow {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StageDef {
     pub id: String,
+    /// Name shown instead of the one derived from the id (1–40 characters).
+    #[serde(default)]
+    pub label: Option<String>,
     pub role: Role,
     pub class: Class,
     #[serde(default)]
@@ -258,11 +261,30 @@ impl StageDef {
     pub fn docs(&self) -> &[String] {
         self.gate.as_ref().map_or(&[], |g| &g.docs)
     }
+
+    /// Whether this stage's gate approves the task list: role `tasks`, or a
+    /// gate document named `tasks.md` (the file `tasks sync` reads).
+    pub fn gates_tasks(&self) -> bool {
+        self.role == Role::Tasks
+            || self
+                .docs()
+                .iter()
+                .any(|d| d.rsplit('/').next() == Some("tasks.md"))
+    }
 }
 
 impl Flow {
     pub fn stage(&self, id: &str) -> Option<&StageDef> {
         self.stages.iter().find(|s| s.id == id)
+    }
+
+    /// The stage a commit proposal belongs to: `current` when it has a commit
+    /// gate, else the first stage that has one.
+    pub fn commit_stage(&self, current: Option<&str>) -> Option<&StageDef> {
+        current
+            .and_then(|id| self.stage(id))
+            .filter(|s| s.is_commit_gate())
+            .or_else(|| self.stages.iter().find(|s| s.is_commit_gate()))
     }
 
     /// The stage after `id` in declaration order.
@@ -404,6 +426,15 @@ impl Pack {
                 }
                 if !seen.insert(s.id.as_str()) {
                     return Err(format!("{at}: duplicate stage id"));
+                }
+                if let Some(l) = &s.label
+                    && (l.trim().is_empty()
+                        || l.chars().count() > 40
+                        || l.chars().any(char::is_control))
+                {
+                    return Err(format!(
+                        "{at}: label must be 1 to 40 characters, no control characters"
+                    ));
                 }
                 if let Some(g) = &s.gate {
                     match (g.docs.is_empty(), g.kind) {
@@ -650,11 +681,76 @@ mod tests {
                 "placeholder",
                 "      - { id: a, role: spec, class: critical, next: [{ run: '{prefx}x' }] }\n",
             ),
+            (
+                "label",
+                "      - { id: a, label: '', role: spec, class: critical }\n",
+            ),
+            (
+                "label",
+                "      - { id: a, label: \"a\\tb\", role: spec, class: critical }\n",
+            ),
+            (
+                "label",
+                "      - { id: a, label: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, role: spec, class: critical }\n",
+            ),
         ];
         for (want, stages) in cases {
             let e = with(stages).unwrap_err();
             assert!(e.message.contains(want), "{want}: {e}");
         }
+    }
+
+    #[test]
+    fn stage_label() {
+        let p =
+            with("      - { id: implement, label: Fix, role: implement, class: code }\n").unwrap();
+        let f = p.flow("f").unwrap();
+        assert_eq!(f.stage("implement").unwrap().label.as_deref(), Some("Fix"));
+        assert!(feature().stages.iter().all(|s| s.label.is_none()));
+    }
+
+    #[test]
+    fn commit_stage_follows_the_current_stage() {
+        let p = with(concat!(
+            "      - { id: analysis, role: spec, class: critical, gate: { docs: [spec.md, tasks.md] } }\n",
+            "      - { id: reproduce, role: implement, class: code, gate: { kind: commit } }\n",
+            "      - { id: implement, role: implement, class: code, gate: { kind: commit } }\n",
+        ))
+        .unwrap();
+        let f = p.flow("f").unwrap();
+        let at = |cur| f.commit_stage(cur).map(|s| s.id.as_str());
+        assert_eq!(at(Some("implement")), Some("implement"));
+        assert_eq!(at(Some("reproduce")), Some("reproduce"));
+        assert_eq!(at(Some("analysis")), Some("reproduce"));
+        assert_eq!(at(Some("unknown")), Some("reproduce"));
+        assert_eq!(at(None), Some("reproduce"));
+        let feat = feature();
+        assert_eq!(
+            feat.commit_stage(Some("review")).map(|s| s.id.as_str()),
+            Some("implement")
+        );
+        let none = with("      - { id: a, role: spec, class: critical }\n").unwrap();
+        assert!(none.flow("f").unwrap().commit_stage(Some("a")).is_none());
+    }
+
+    #[test]
+    fn gates_tasks() {
+        let p = with(concat!(
+            "      - { id: analysis, role: spec, class: critical, gate: { docs: [spec.md, tasks.md] } }\n",
+            "      - { id: other, role: spec, class: critical, gate: { docs: [spec.md] } }\n",
+        ))
+        .unwrap();
+        let f = p.flow("f").unwrap();
+        assert!(f.stage("analysis").unwrap().gates_tasks());
+        assert!(!f.stage("other").unwrap().gates_tasks());
+        let feat = feature();
+        let gating: Vec<&str> = feat
+            .stages
+            .iter()
+            .filter(|s| s.gates_tasks())
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(gating, ["tasks"]);
     }
 
     #[test]
