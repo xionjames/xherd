@@ -33,5 +33,11 @@ pub use status::{Status, Trigger};
 /// The Cargo version: what compatibility checks and the store compare.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The version shown to people (see `build.rs`): the git tag of a release,
-/// `<tag>+<commits>.<hash>` in development.
+/// `<tag>+<commits>.<hash>` in development, `dev` for a build with neither
+/// git nor `XHERD_VERSION`.
 pub const BUILD_VERSION: &str = env!("XHERD_BUILD_VERSION");
+
+/// The build script's version rules, compiled here only to test them.
+#[cfg(test)]
+#[path = "../version.rs"]
+mod build_version;
