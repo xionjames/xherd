@@ -39,6 +39,40 @@ function rules(perm, key) {
   return (perm[key] = v === undefined ? {} : { "*": v });
 }
 
+// A command's template with its arguments, as opencode renders a command:
+// `$1…$n` (the highest takes the rest), `$ARGUMENTS`, else appended.
+function render(template, args) {
+  const words = (args.match(/(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi) ?? []).map((a) =>
+    a.replace(/^["']|["']$/g, ""),
+  );
+  const places = template.match(/\$(\d+)/g) ?? [];
+  const last = Math.max(0, ...places.map((p) => Number(p.slice(1))));
+  let text = template.replaceAll(/\$(\d+)/g, (_, n) => {
+    const i = Number(n) - 1;
+    if (i >= words.length) return "";
+    return Number(n) === last ? words.slice(i).join(" ") : words[i];
+  });
+  const named = template.includes("$ARGUMENTS");
+  text = text.replaceAll("$ARGUMENTS", () => args);
+  if (!places.length && !named && args) text += "\n\n" + args;
+  return text.trim();
+}
+
+// opencode's TUI may submit a slash command as plain text when its command
+// list is not loaded yet (a worktree's first start, #145): the model would
+// then never see the command. Put the command's text in its place.
+async function expand(client, parts) {
+  const part = parts.find((p) => p.type === "text");
+  const slash = part?.text?.match(/^\/(\S+)\s*([\s\S]*)$/);
+  if (!slash) return;
+  try {
+    const r = await client.command.list();
+    const cmd = (r?.data ?? []).find((c) => c.name === slash[1]);
+    if (typeof cmd?.template !== "string") return;
+    part.text = render(cmd.template, slash[2].trim());
+  } catch {}
+}
+
 export const XherdPlugin = async ({ client }) => {
   // The slash command a prompt came from, per session.
   const commands = new Map();
@@ -85,6 +119,7 @@ export const XherdPlugin = async ({ client }) => {
         .map((p) => p.text)
         .join("\n");
       const prompt = commands.get(input.sessionID) ?? text;
+      if (!commands.has(input.sessionID)) await expand(client, output.parts ?? []);
       commands.delete(input.sessionID);
       await hook("chat.message", { session_id: input.sessionID, prompt });
     },
