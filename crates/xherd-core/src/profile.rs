@@ -32,8 +32,10 @@ pub struct Profile {
     /// Kept for flows that need them; nothing reads them yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staging_branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hotfix_base: Option<String>,
+    /// The dropped hotfix flow's base: still read so profiles saved or
+    /// exported before keep loading, never written. Remove in a later release.
+    #[serde(default, rename = "hotfixBase", skip_serializing)]
+    pub dropped_hotfix_base: Option<String>,
     /// Default autonomy of new agents (R-109).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autonomy: Option<Autonomy>,
@@ -240,7 +242,7 @@ pub fn check(p: &mut Profile, others: &[&str]) -> Result<(), String> {
     p.matches = ms;
     check_branch("baseBranch", &p.base_branch)?;
     check_branch("stagingBranch", &p.staging_branch)?;
-    check_branch("hotfixBase", &p.hotfix_base)?;
+    p.dropped_hotfix_base = None;
     if let Some(a) = p.autonomy
         && !a.selectable()
     {
@@ -290,6 +292,17 @@ mod tests {
             matches: matches.iter().map(|s| s.to_string()).collect(),
             ..Profile::default()
         }
+    }
+
+    #[test]
+    fn a_profile_with_the_dropped_hotfix_base_still_loads_and_loses_it() {
+        let p: Profile = serde_json::from_str(
+            r#"{"id":"a","name":"a","match":["/w"],"hotfixBase":"release","stagingBranch":"staging"}"#,
+        )
+        .unwrap();
+        assert_eq!(p.staging_branch.as_deref(), Some("staging"));
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(!json.contains("hotfixBase"), "{json}");
     }
 
     #[test]

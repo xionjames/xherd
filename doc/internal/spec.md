@@ -98,7 +98,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 | **SDD** | Spec-driven development: a method that moves work through written documents and approvals before and while coding. |
 | **xherd** | xherd's built-in SDD. Commands `/xherd:*`. |
 | **Flow pack** | A versioned bundle that defines an SDD for xherd: manifest, prompts per runtime, optional schemas, parser and views. |
-| **Flow** | A path through a pack's stages (`feature`, `bugfix`, `hotfix`), or `none` (no SDD). |
+| **Flow** | A path through a pack's stages (`feature`, `bugfix`), or `none` (no SDD). |
 | **Stage / step role** | A pack's step (its own id) and the canonical role it maps to: `explore`, `spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`, `custom`. |
 | **Gate (✋)** | A point where the agent stops and waits for approval: documents, a proposed commit, PR triage, PR replies, or a question. |
 | **Autonomy** | `ask` / `important` / `never`: which gates xherd may approve by itself. |
@@ -248,7 +248,7 @@ Each stage has an **autonomy class**. The level decides which classes xherd may 
 | `critical` | wait | wait | approve | spec, ship |
 | `routine` | wait | approve | approve | design, tasks, review |
 | `code` | wait | approve | approve | commit |
-| `human-only` | wait | wait | wait | PR triage, PR replies, hotfix ship |
+| `human-only` | wait | wait | wait | PR triage, PR replies |
 
 | ID | Requirement |
 |---|---|
@@ -271,7 +271,7 @@ A gate waits for a human, with the reason shown, when any of these hold:
 | R-118 | A task's `verify:` command fails. |
 | R-119 | A blocking **stage hook** failed (§8.5). |
 | R-120 | **Run limits** reached: more than `maxAutoApprovalsInRow` (default 10) consecutive auto-approvals, more than `maxReviewLoops` (default 3) review→fix rounds, or the agent's token **budget** is used up. |
-| R-121 | The flow is `hotfix` and the stage is ship. |
+| R-121 | (Dropped: no `hotfix` flow. A hotfix is a `bugfix` agent on another base, and ship is `critical` in every flow.) |
 
 ## 7. xherd: the built-in SDD
 
@@ -281,7 +281,6 @@ xherd is xherd's own SDD, written for xherd: documents for each step, approval g
 
 - **feature**: spec ✋ → design ✋ (skippable) → tasks ✋ → implement (commit ✋ per task) → review ✋ → ship ✋ → PR rounds → done.
 - **bugfix**: analysis (investigation, root cause, fix approach, the reproduction test; `spec.md` and `tasks.md` under one gate) ✋ → reproduce (the failing test alone, its failing run as evidence; commit ✋) → fix (commit ✋ per task, each verified by the reproduction command) → review ✋ → ship ✋ → PR rounds → done.
-- **hotfix** (planned): like bugfix, based on the profile's `hotfixBase`; ship always waits for a human.
 - **PR rounds**: new comments are analysed into items (triage ✋, a decision per comment), fixes are implemented with commit gates, replies are drafted (replies ✋) and posted.
 
 Design may be skipped only when the change is small and local, has no data/API/config/dependency changes, touches nothing security- or concurrency-sensitive, and has one obvious approach. The spec states the decision; approving the spec approves the skip.
@@ -319,7 +318,7 @@ Documents live in the agent's spec folder (§7.5): `ticket.md`, `spec.md`, `desi
 | R-132 | Second opinion: the review step can run on a different runtime/model than implement (ordinary per-step configuration, §10.3). Settings suggests it when one runtime is used everywhere. |
 | R-133 | Task waves: tasks whose dependencies are all done form a wave, shown in the UI (parallel execution is roadmap). |
 | R-134 | Taxonomy: optional `projects:` and `tags:` in spec frontmatter, used as filters and PR labels. |
-| R-135 | Branch roles per profile: `baseBranch`, `stagingBranch`, `hotfixBase`. |
+| R-135 | Branch roles per profile: `baseBranch`, `stagingBranch`. |
 
 ### 7.5 Where documents live
 
@@ -615,7 +614,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 | R-1206 | `maxSessionMinutes` (default off): a session running longer is asked to hand off and is paused. |
 | R-1207 | Network: the daemon listens on loopback by default; LAN (phones) and remote hostnames are opt-in; other connections are dropped before HTTP. |
 | R-1208 | Audit: approvals (ledger), XAP calls, plugin installs/updates, settings changes and token rotations are recorded as events and kept for `eventRetentionDays` (default 90). |
-| R-1209 | Unattended mode (`never` autonomy) requires a one-time confirmation that lists what will happen without the user (draft PRs, no ticket updates), and is unavailable for `hotfix` flows. |
+| R-1209 | Unattended mode (`never` autonomy) requires a one-time confirmation that lists what will happen without the user (draft PRs, no ticket updates). |
 | R-1210 | `xherd security check` summarises the current exposure: network bindings, autonomy levels in use, tool permissions `all`, plugins without a pinned sha, branch-protection hints, budgets not set. |
 
 ## 14. Updates and migrations
@@ -684,7 +683,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 
 ### 16.1 Repo profiles
 
-Matched by remote URL, then path. Fields: name, colour, match; commands (run, test, build, lint, extras; each runs in its own tmux window from the agent page and can be stopped); extra instructions; untracked files (copy/symlink); base/staging/hotfix branches; default flow and pack; ticket prefix; autonomy, sensitive paths, max diff lines; tool permissions; runtime/model/driver per step; plugin setting overrides; stage hooks; toolchain and setup; spec folder mode; budgets. Export/import as JSON.
+Matched by remote URL, then path. Fields: name, colour, match; commands (run, test, build, lint, extras; each runs in its own tmux window from the agent page and can be stopped); extra instructions; untracked files (copy/symlink); base/staging branches; default flow and pack; ticket prefix; autonomy, sensitive paths, max diff lines; tool permissions; runtime/model/driver per step; plugin setting overrides; stage hooks; toolchain and setup; spec folder mode; budgets. Export/import as JSON.
 
 ### 16.2 TODOs
 

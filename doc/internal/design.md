@@ -298,10 +298,6 @@ flows:
       - { id: reproduce, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }] }
       - { id: implement, role: implement, label: Fix, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
       # review, ship, pr-review, pr as in feature
-  hotfix:                        # planned
-    extends: bugfix
-    baseBranch: hotfixBase
-    override: { ship: { class: human-only } }
 
 views: { … }                     # §11
 ```
@@ -607,7 +603,7 @@ Electron bundles one Chromium on every OS, so the UI behaves the same everywhere
 | Issue ledger; approvals with document hashes | Adopted (issue ledger, hash approvals). |
 | Pre/post closeout hooks (command, agent, builtin; blocking; artifacts) | Generalised to stage hooks for every role. |
 | Reviewer on a different model | Per-step runtime/model configuration. |
-| Branch roles and hotfix flow | Adopted. |
+| Branch roles and hotfix flow | Branch roles adopted; the hotfix flow dropped (a bugfix on another base; ship is critical everywhere). |
 | Git compare-and-swap id ledger | Not needed (ids are per agent). |
 | Committing SDD state | Opt-in only (repos may mix SDDs). |
 | Compiled sandbox policy with declared modes | Principle adopted: degraded protection is always stated, never silent. |
@@ -733,7 +729,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
     - [x] Findings in `review.md` as Markdown (`### F01: title` + `- severity:` / `location:` / `fixed:` / `left:`), parsed by `xherd_flow::review`; the review gate is refused when malformed and held while major or blocker findings are not fixed (R-114); the UI lists them with a colour per severity
     - [x] `maxAutoApprovalsInRow` (R-120): with autonomy
   - [x] Backups (R-1401, R-1403, R-1404, R-1405): `xherd backup create|verify|restore`, `GET/POST /backups`, Settings → Backups, a backup before `xherd docker update`; no secrets or logins (no `age`); restore remaps the workspace for another machine. Not done: scheduled backups and the destination command (R-1402), restore inside the container, migration backups (R-1405 second half)
-  - [x] Autonomy `ask` / `important` (R-109…R-111, R-121): `xherd_core::autonomy` policy table, per-agent level (`xherd new --autonomy`, `xherd autonomy`, agent page), auto-approval when the agent stops at a gate its class allows and no tripwire holds it; the `never` level exists in the table but is not selectable until v1.x
+  - [x] Autonomy `ask` / `important` (R-109…R-111): `xherd_core::autonomy` policy table, per-agent level (`xherd new --autonomy`, `xherd autonomy`, agent page), auto-approval when the agent stops at a gate its class allows and no tripwire holds it; the `never` level exists in the table but is not selectable until v1.x
   - [x] PR follow-up
     - [x] Polling of a watching agent's PR: status, checks, mergeable (R-303); CI and conflict notifications (R-305); merged or closed finishes the agent (R-307); shown in the Pull request panel
     - [x] Comments (R-304, R-1201): `pr-comments` host command, `pr-comments.json` with every body wrapped by `untrusted::wrap`, the agent queued with `/xherd:pr-review` in a fresh session, stage `pr-review` (gate on `pr-review.md`) then `/xherd:pr-apply`; flow `none` is only notified
@@ -757,7 +753,6 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
   - [x] Kanban: the Board with stages and tasks as work units (Pending / In progress / Done), TODOs and swimlanes (agent, repository, workflow); the Herd's By stage layout with agents in their flow's stage columns, one lane per workflow when several are shown (cards declared by packs and profiles, R-1101, come with profiles)
   - [x] `bugfix` flow (#142, branch `142-bugfix-flow-plugin`): analysis (`spec.md` + `tasks.md`, one gate) → reproduce (failing test, its commit) → fix → review → ship → PR rounds; stage `label`, several commit stages, `tasks.md` gated by any stage; *Tasks in this commit* with evidence in the Changes panel
-  - [ ] `hotfix` flow (like bugfix, from `hotfixBase`, ship human-only)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [x] Herd views as plugins (#108): kind `view`, sandboxed frame, protocol v1, view kit

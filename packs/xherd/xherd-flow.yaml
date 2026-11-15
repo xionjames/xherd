@@ -1,5 +1,5 @@
 # xherd, the built-in flow pack (spec §7, design §6.2).
-# Flows: feature and bugfix; hotfix comes later.
+# Flows: feature and bugfix.
 name: xherd
 version: 0.1.0
 protocol: 1
