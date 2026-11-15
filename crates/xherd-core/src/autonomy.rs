@@ -42,7 +42,8 @@ impl Autonomy {
             Autonomy::Ask => "ask. Every gate waits for the user's approval; stop at each gate.",
             Autonomy::Important => {
                 "important. xherd may approve design, tasks, review and commit gates by itself \
-                 when nothing needs a human; spec and ship gates always wait. Still stop at \
+                 when nothing needs a human; spec (or a bug's analysis) and ship gates always \
+                 wait. Still stop at \
                  every gate and mark anything doubtful with `--needs-human \"<why>\"`."
             }
             Autonomy::Never => {
