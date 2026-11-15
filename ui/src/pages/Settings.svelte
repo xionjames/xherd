@@ -169,8 +169,12 @@
         </div>
       </Panel>
       <Panel title="Desktop" hint="System notifications from the daemon itself, also when no browser tab is open.">
-        <label class="f chk"><input type="checkbox" checked={form.desktopNotifications === true} onchange={(e) => (form.desktopNotifications = e.currentTarget.checked)} /> Show system notifications</label>
-        <span class="hint">Uses <code>osascript</code> (macOS) or <code>notify-send</code> (Linux) on the machine running the daemon. Not available in the Docker image: there, use the browser or ntfy.</span>
+        {#if app.state?.sandbox}
+          <p class="muted">Not available in Docker: the daemon runs inside the container and cannot reach your desktop. Use the browser notifications (from the bell) or ntfy.</p>
+        {:else}
+          <label class="f chk"><input type="checkbox" checked={form.desktopNotifications === true} onchange={(e) => (form.desktopNotifications = e.currentTarget.checked)} /> Show system notifications</label>
+          <span class="hint">Uses <code>osascript</code> (macOS) or <code>notify-send</code> (Linux) on the machine running the daemon.</span>
+        {/if}
       </Panel>
       <Panel title="ntfy" hint="Also send them to your phone through an ntfy topic.">
         <label class="f">Server

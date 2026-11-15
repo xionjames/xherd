@@ -167,9 +167,9 @@ TODOs are reminders that are not agents. A TODO is due at a time, once or every 
 
 Every notification (a gate, a blocked agent, an idle one, a failure, a budget or limit, PR news, new PR comments, a due TODO) goes to the bell, and from there:
 
-- to the browser, once you allow it from the bell. A newer notice for the same agent and kind replaces the earlier one and alerts again (Chrome; Firefox and Safari replace it silently). Browsers only allow notifications on a secure page: open xherd at `http://localhost` or `http://127.0.0.1` (or over https), not at a LAN address over http. When they cannot be turned on, the bell says why;
+- to the browser, once you allow it from the bell. A newer notice for the same agent and kind replaces the earlier one and alerts again (Chrome; Firefox and Safari replace it silently). Browsers only allow notifications on a secure page: open xherd at `http://localhost` or `http://127.0.0.1` (or over https), not at a LAN address over http. When they cannot be turned on, the bell says why. Once on, the bell's **Send a test** shows one at once; if nothing appears, the operating system is holding it back (macOS: System Settings → Notifications → your browser, and Focus / Do Not Disturb), and if the browser refuses it, the bell shows its error;
 - to your phone through [ntfy](https://ntfy.sh): Settings → Notifications, server and topic. Messages carry agent names and reasons in plain text, never document or comment contents;
-- to the desktop (`osascript` on macOS, `notify-send` on Linux) with `desktopNotifications`, native installs only.
+- to the desktop (`osascript` on macOS, `notify-send` on Linux) with `desktopNotifications`, native installs only: in Docker the daemon cannot reach your desktop, so Settings does not offer it there; use the browser or ntfy.
 
 Settings → Notifications → *Which ones* mutes kinds everywhere. Automatic approvals send no notification: they are listed under **Needs attention** (*Approved by xherd*).
 

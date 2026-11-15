@@ -2,7 +2,7 @@
   import Icon from './Icon.svelte';
   import { ago } from '../lib/format';
   import { agentByName } from '../lib/store.svelte';
-  import { notices, unread, open as openNotice, markAllRead, clearAll, enableBrowser, disableBrowser, browserBlock, browserEnv, BLOCK_TEXT } from '../lib/notices.svelte';
+  import { notices, unread, open as openNotice, markAllRead, clearAll, enableBrowser, disableBrowser, testBrowser, browserBlock, browserEnv, BLOCK_TEXT } from '../lib/notices.svelte';
   let shown = $state(false);
   // Why browser notifications cannot be on (R5), looked at again each time the list opens.
   const why = $derived(shown ? (notices.why ?? browserBlock(browserEnv())) : null);
@@ -35,8 +35,11 @@
       </ul>
       <div class="foot">
         {#if why}<p class="muted why">{BLOCK_TEXT[why]}</p>{/if}
+        {#if notices.err}<p class="why">{notices.err}</p>{/if}
         {#if notices.browser && !why}
-          <button class="btn sm" onclick={disableBrowser}>Turn off browser notifications</button>
+          <p class="muted why">On. Nothing shows up? Check that the operating system lets this browser show notifications (macOS: System Settings → Notifications; also Focus / Do Not Disturb).</p>
+          <button class="btn sm" onclick={testBrowser}>Send a test</button>
+          <button class="btn ghost sm" onclick={disableBrowser}>Turn off</button>
         {:else}
           <button class="btn sm" onclick={enableBrowser} disabled={!!why}>Turn on browser notifications</button>
         {/if}

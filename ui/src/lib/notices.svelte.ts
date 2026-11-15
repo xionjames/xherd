@@ -10,10 +10,13 @@ export interface Notice { key: string; agentId: string; kind: string; text: stri
 const KEY = 'xherd.notify';
 const saved = (): boolean => { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } };
 
-export const notices = $state<{ list: Notice[]; browser: boolean; why: Block | null }>({
+export const notices = $state<{ list: Notice[]; browser: boolean; why: Block | null; err: string }>({
   list: [],
   browser: saved() && typeof Notification !== 'undefined' && Notification.permission === 'granted',
   why: null,
+  // The last error the browser gave when showing one, shown in the bell
+  // (a notification that fails is otherwise silent).
+  err: '',
 });
 
 export const unread = () => notices.list.filter((n) => !n.read).length;
@@ -49,13 +52,30 @@ export function addNotice(agentId: string, kind: string, text: string) {
   const n: Notice = { key, agentId, kind, text, at: Date.now(), read: false };
   notices.list = [n, ...notices.list.filter((x) => x.key !== key)].slice(0, 50);
   if (notices.browser && supported() && Notification.permission === 'granted') {
-    try {
-      // `tag` makes the browser replace an earlier one of the same agent and
-      // kind; `renotify` alerts again when it does (R4; missing from some DOM typings).
-      const note = new Notification('xherd', { body: text, tag: key, renotify: true } as NotificationOptions);
-      note.onclick = () => { window.focus(); open(n); };
-    } catch { /* some browsers only allow it from a service worker */ }
+    show(text, key, () => open(n));
   }
+}
+
+/** Shows one browser notification; a failure is kept in `notices.err`. */
+function show(body: string, tag: string, onclick: () => void) {
+  try {
+    // `tag` makes the browser replace an earlier one of the same agent and
+    // kind; `renotify` alerts again when it does (R4; missing from some DOM typings).
+    const note = new Notification('xherd', { body, tag, renotify: true } as NotificationOptions);
+    note.onclick = () => { window.focus(); onclick(); };
+    note.onshow = () => { notices.err = ''; };
+    note.onerror = () => { notices.err = 'The browser refused to show the notification.'; };
+  } catch (e) {
+    // Some browsers only allow it from a service worker (Chrome on Android).
+    notices.err = `The browser refused to show the notification: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
+/** Shows a test notification now (from the bell), so the whole path can be checked. */
+export function testBrowser() {
+  notices.why = browserBlock(browserEnv());
+  if (notices.why || Notification.permission !== 'granted') return;
+  show('Test: browser notifications work.', 'xherd:test', () => {});
 }
 
 export function open(n: Notice) {
