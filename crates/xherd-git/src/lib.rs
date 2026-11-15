@@ -14,6 +14,9 @@ pub enum GitError {
     Failed { args: String, stderr: String },
     #[error("git {args} timed out")]
     Timeout { args: String },
+    /// xherd itself declined the operation (the text says why).
+    #[error("{0}")]
+    Refused(String),
 }
 
 pub type Result<T> = std::result::Result<T, GitError>;
@@ -410,9 +413,20 @@ impl Git {
         res
     }
 
+    /// A merge is under way (`MERGE_HEAD` exists).
+    pub async fn merge_in_progress(&self, dir: &Path) -> bool {
+        self.run(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+            .await
+            .is_ok()
+    }
+
     /// Commit exactly `paths` (new, changed and deleted files, taken literally)
     /// with `message`, whatever else is staged; returns the new sha. Hooks run
     /// (never `--no-verify`), so a failing hook is an error with its output.
+    ///
+    /// During a merge git cannot commit only some paths, so the merge is
+    /// committed whole, and refused (R16) while a conflict is unresolved or
+    /// when the merge stages a file that is not in `paths`.
     pub async fn commit_paths(
         &self,
         dir: &Path,
@@ -422,6 +436,38 @@ impl Git {
         let lit = "--literal-pathspecs";
         let mut add = vec![lit, "add", "--all", "--"];
         add.extend(paths.iter().map(String::as_str));
+        if self.merge_in_progress(dir).await {
+            self.run(dir, &add).await?;
+            let lines = |s: String| -> Vec<String> {
+                s.lines()
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            };
+            let unmerged = lines(
+                self.run(dir, &["diff", "--name-only", "--diff-filter=U"])
+                    .await?,
+            );
+            if !unmerged.is_empty() {
+                return Err(GitError::Refused(format!(
+                    "unresolved conflicts in {}",
+                    unmerged.join(", ")
+                )));
+            }
+            let staged = lines(
+                self.run(dir, &["diff", "--cached", "--name-only", "HEAD"])
+                    .await?,
+            );
+            let extra: Vec<String> = staged.into_iter().filter(|s| !paths.contains(s)).collect();
+            if !extra.is_empty() {
+                return Err(GitError::Refused(format!(
+                    "the merge also changes {}: propose them too",
+                    extra.join(", ")
+                )));
+            }
+            self.run(dir, &["commit", "-m", message]).await?;
+            return self.rev_parse(dir, "HEAD").await;
+        }
         self.run(dir, &add).await?;
         let mut commit = vec![lit, "commit", "--only", "-m", message, "--"];
         commit.extend(paths.iter().map(String::as_str));
