@@ -27,7 +27,9 @@ pub struct NewAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     /// Absolute path of a local git repository, or a remote URL that xherd
-    /// clones into the workspace (R-001, R-605).
+    /// clones into the workspace (R-001, R-605). May be omitted (empty) when
+    /// the ticket is an issue URL that names its repository (#148).
+    #[serde(default)]
     pub repo: String,
     #[serde(default)]
     pub base: Option<String>,
@@ -178,6 +180,12 @@ pub fn check(req: &NewAgent) -> Result<Checked, Refusal> {
         ));
     }
     let repo = req.repo.trim();
+    if repo.is_empty() {
+        return Err(refuse(
+            "repo_required",
+            "repo is required: give a repository path or URL, or a ticket URL that names one",
+        ));
+    }
     if is_url(repo) {
         clone_path(std::path::Path::new("/"), repo)?;
     } else if !std::path::Path::new(repo).is_absolute() {
@@ -424,7 +432,13 @@ mod tests {
         r.repo = "https://github.com/../x".into();
         assert_eq!(code(r.clone()), "bad_repo_url");
         r.repo = "relative/dir".into();
-        assert_eq!(code(r), "not_a_repo");
+        assert_eq!(code(r.clone()), "not_a_repo");
+        r.repo = "  ".into();
+        assert_eq!(code(r.clone()), "repo_required");
+        r.repo = String::new();
+        assert_eq!(code(r), "repo_required");
+        let r: NewAgent = serde_json::from_str(r#"{"name":"x"}"#).unwrap();
+        assert!(r.repo.is_empty());
     }
 
     #[test]

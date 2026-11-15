@@ -173,9 +173,9 @@ impl From<ActionError> for ApiError {
             "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
             "usage" => StatusCode::BAD_REQUEST,
             "bad_ticket" | "bad_name" | "name_required" | "unknown_flow" | "prompt_required"
-            | "repo_url" | "not_a_repo" | "base_unresolved" | "runtime_unusable"
-            | "runtime_hooks" | "unknown_pack" | "unknown_runtime" | "bad_model"
-            | "model_unavailable" => StatusCode::UNPROCESSABLE_ENTITY,
+            | "repo_url" | "not_a_repo" | "repo_required" | "base_unresolved"
+            | "runtime_unusable" | "runtime_hooks" | "unknown_pack" | "unknown_runtime"
+            | "bad_model" | "model_unavailable" => StatusCode::UNPROCESSABLE_ENTITY,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
