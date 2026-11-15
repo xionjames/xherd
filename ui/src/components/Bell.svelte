@@ -2,8 +2,10 @@
   import Icon from './Icon.svelte';
   import { ago } from '../lib/format';
   import { agentByName } from '../lib/store.svelte';
-  import { notices, unread, open as openNotice, markAllRead, clearAll, enableBrowser, disableBrowser, supported, denied } from '../lib/notices.svelte';
+  import { notices, unread, open as openNotice, markAllRead, clearAll, enableBrowser, disableBrowser, browserBlock, browserEnv, BLOCK_TEXT } from '../lib/notices.svelte';
   let shown = $state(false);
+  // Why browser notifications cannot be on (R5), looked at again each time the list opens.
+  const why = $derived(shown ? (notices.why ?? browserBlock(browserEnv())) : null);
   const count = $derived(unread());
   const toggle = () => { shown = !shown; if (!shown) markAllRead(); };
   const label = $derived(count ? `Notifications, ${count} new` : 'Notifications');
@@ -32,13 +34,11 @@
         {/each}
       </ul>
       <div class="foot">
-        {#if supported()}
-          {#if notices.browser}
-            <button class="btn sm" onclick={disableBrowser}>Turn off browser notifications</button>
-          {:else}
-            <button class="btn sm" onclick={enableBrowser} disabled={denied()}
-              title={denied() ? 'Blocked in the browser settings for this site' : ''}>Turn on browser notifications</button>
-          {/if}
+        {#if why}<p class="muted why">{BLOCK_TEXT[why]}</p>{/if}
+        {#if notices.browser && !why}
+          <button class="btn sm" onclick={disableBrowser}>Turn off browser notifications</button>
+        {:else}
+          <button class="btn sm" onclick={enableBrowser} disabled={!!why}>Turn on browser notifications</button>
         {/if}
         <span class="grow"></span>
         {#if notices.list.length}<button class="btn ghost sm" onclick={clearAll}>Clear</button>{/if}
@@ -58,5 +58,6 @@
   .item:hover:not(:disabled) { background: var(--accent-wash); }
   .item:disabled { cursor: default; }
   .unread .item { font-weight: 600; }
-  .foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--fence-soft); }
+  .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--fence-soft); }
+  .why { flex-basis: 100%; margin: 0; font-size: 12px; }
 </style>

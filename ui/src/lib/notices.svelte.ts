@@ -10,14 +10,39 @@ export interface Notice { key: string; agentId: string; kind: string; text: stri
 const KEY = 'xherd.notify';
 const saved = (): boolean => { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } };
 
-export const notices = $state<{ list: Notice[]; browser: boolean }>({
+export const notices = $state<{ list: Notice[]; browser: boolean; why: Block | null }>({
   list: [],
   browser: saved() && typeof Notification !== 'undefined' && Notification.permission === 'granted',
+  why: null,
 });
 
 export const unread = () => notices.list.filter((n) => !n.read).length;
-export const supported = () => typeof Notification !== 'undefined';
-export const denied = () => supported() && Notification.permission === 'denied';
+const supported = () => typeof Notification !== 'undefined';
+
+/** Why browser notifications cannot be turned on (R5). */
+export type Block = 'insecure' | 'unsupported' | 'denied';
+export interface BrowserEnv { notification: boolean; secure: boolean; permission?: NotificationPermission }
+
+/** Pure. The insecure check comes first: some browsers hide `Notification` on http. */
+export function browserBlock(env: BrowserEnv): Block | null {
+  if (!env.secure) return 'insecure';
+  if (!env.notification) return 'unsupported';
+  if (env.permission === 'denied') return 'denied';
+  return null;
+}
+
+export const BLOCK_TEXT: Record<Block, string> = {
+  insecure: 'Browsers only allow notifications on a secure page: open xherd at http://localhost or http://127.0.0.1, or over https.',
+  denied: "Notifications are blocked for this site in the browser's settings.",
+  unsupported: 'This browser does not support notifications.',
+};
+
+/** This page's environment, for `browserBlock`. */
+export const browserEnv = (): BrowserEnv => ({
+  notification: supported(),
+  secure: typeof window === 'undefined' || window.isSecureContext !== false,
+  permission: supported() ? Notification.permission : undefined,
+});
 
 export function addNotice(agentId: string, kind: string, text: string) {
   const key = `${agentId}:${kind}`;
@@ -25,8 +50,9 @@ export function addNotice(agentId: string, kind: string, text: string) {
   notices.list = [n, ...notices.list.filter((x) => x.key !== key)].slice(0, 50);
   if (notices.browser && supported() && Notification.permission === 'granted') {
     try {
-      // `tag` makes the browser replace an earlier one of the same agent and kind.
-      const note = new Notification('xherd', { body: text, tag: key });
+      // `tag` makes the browser replace an earlier one of the same agent and
+      // kind; `renotify` alerts again when it does (R4; missing from some DOM typings).
+      const note = new Notification('xherd', { body: text, tag: key, renotify: true } as NotificationOptions);
       note.onclick = () => { window.focus(); open(n); };
     } catch { /* some browsers only allow it from a service worker */ }
   }
@@ -58,9 +84,11 @@ export const clearAll = () => { notices.list = []; };
 
 /** Asks for permission (call from a click) and turns browser notifications on. */
 export async function enableBrowser() {
-  if (!supported()) return;
+  notices.why = browserBlock(browserEnv());
+  if (notices.why) return;
   const p = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
   notices.browser = p === 'granted';
+  notices.why = browserBlock(browserEnv());
   try { localStorage.setItem(KEY, notices.browser ? '1' : '0'); } catch { /* private mode */ }
 }
 
