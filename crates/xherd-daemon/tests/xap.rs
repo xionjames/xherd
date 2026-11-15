@@ -3425,10 +3425,26 @@ async fn a_bugfix_agent_walks_analysis_reproduce_fix_and_review() {
     )
     .await
     .unwrap();
-    bugfix_commit(&t, "C02", "T02", "fix.txt", 4).await;
+    // A fix that also changes the reproduction test is held (review F02).
+    std::fs::write(t.wt.path().join("repro.txt"), "weakened\n").unwrap();
+    std::fs::write(t.wt.path().join("fix.txt"), "x\n").unwrap();
+    xap(
+        &t,
+        "p-C02",
+        "commit.propose",
+        json!({"id": "C02", "subject": "C02", "files": ["fix.txt", "repro.txt"], "tasks": ["T02"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 4).await;
     let a = get(&t).await;
     assert_eq!(a.stage.as_deref(), Some("implement"));
-    assert!(matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C02"));
+    assert!(
+        matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C02"
+            && c.needs_human.as_deref() == Some("outside the files: of T02: repro.txt")),
+        "{:?}",
+        a.gate
+    );
     act(&t, approve(None)).await.unwrap();
     assert_eq!(
         get(&t).await.next_prompt.as_deref(),

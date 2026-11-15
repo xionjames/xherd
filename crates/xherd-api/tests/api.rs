@@ -510,6 +510,26 @@ async fn cross_site_origin_is_refused() {
         .unwrap();
     assert_eq!(feature["stages"][0]["id"], "spec");
     assert_eq!(feature["stages"][0]["gate"], true);
+    let stages = feature["stages"].as_array().unwrap();
+    assert!(
+        stages.iter().all(|s| s.get("label").is_none()),
+        "{stages:?}"
+    );
+
+    let bugfix = v["flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["flow"] == "bugfix")
+        .expect("the bugfix flow is listed");
+    assert_eq!(bugfix["stages"][0]["id"], "analysis");
+    let fix = bugfix["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "implement")
+        .unwrap();
+    assert_eq!(fix["label"], "Fix");
 }
 
 #[tokio::test]
