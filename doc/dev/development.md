@@ -113,7 +113,7 @@ One commit per working piece, on a branch per piece of work; tests and clippy pa
 
 | Folder | For | Holds |
 |---|---|---|
-| `doc/user/` | People running xherd | Install, the user guide, Docker, security |
+| `doc/user/` | People running xherd | Install, the tour (screenshots), the user guide, Docker, security |
 | `doc/reference/` | Looking things up | CLI, configuration, HTTP API, XAP |
 | `doc/extend/` | Plugin, pack and SDD authors | Plugins, flow packs, SDD integration |
 | `doc/dev/` | People changing xherd | Running from source, this page, architecture |

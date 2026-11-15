@@ -5,6 +5,7 @@ What xherd is and what it looks like: the [project README](../README.md).
 ## Using xherd
 
 - [Getting started](user/getting-started.md): install a release (Docker recommended, or a Linux package), the first run, a first agent
+- [Tour](user/tour.md): every screen and the CLI, with mocked data
 - [Using xherd](user/guide.md): the screens, gates and reviews, autonomy, pull requests, tickets, TODOs, notifications, backups, the everyday CLI
 - [Docker](user/docker.md): how the container is laid out, its two users, git access, toolchains, operating it
 - [Security model](user/security.md): what xherd protects, what it does not, how to check your setup
