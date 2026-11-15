@@ -21,8 +21,12 @@ user left it). You record it, or fix it when git refused.
    `xherd ask "The formatter wants to change src/db.rs too: may I include it?"`
    and stop. Delete the error file once the commit exists.
 3. Get the sha with `git rev-parse HEAD` and check that
-   `git show --name-only --format= HEAD` lists the proposal's files.
+   `git show --name-only --format= --diff-merges=first-parent HEAD` lists the
+   proposal's files (for a merge commit, the files the merge brought in).
 4. Report it: `xherd commit done C01 --sha 3f2a9c1` (harmless when xherd
    already recorded it).
-5. Continue: follow the command in `{{path:next}}` (next task, or the review
-   when every task is done).
+5. If `HEAD` is a merge commit (`git rev-parse -q --verify HEAD^2` succeeds),
+   it merged the base branch: continue with step 9 of `{{path:conflicts}}`
+   (push and stop) instead.
+6. Otherwise continue: follow the command in `{{path:next}}` (next task, or
+   the review when every task is done).

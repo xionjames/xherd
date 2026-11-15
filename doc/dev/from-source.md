@@ -19,7 +19,7 @@ On macOS with Homebrew's keg-only rustup, put it on `PATH` first: `export PATH=/
 cd deploy/compose
 printf 'XHERD_WORKSPACE=%s/xherd\nXHERD_UID=%s\nXHERD_GID=%s\n' "$HOME" "$(id -u)" "$(id -g)" > .env
 mkdir -p ~/xherd
-docker compose up -d --build        # or: docker-compose up -d --build
+XHERD_VERSION=dev-$(git rev-parse --short HEAD) docker compose up -d --build   # or: docker-compose
 ```
 
 Open <http://127.0.0.1:4740/>. `.env` is gitignored; `.env.example` lists the variables:
@@ -30,11 +30,7 @@ Open <http://127.0.0.1:4740/>. `.env` is gitignored; `.env.example` lists the va
 
 The Dockerfile is multi-stage: the UI (pnpm), the daemon (cargo), and the runtime on Debian trixie with `git`, `tmux`, `gh`, `glab`, `socat`, `tini`, Node with Claude Code, opencode and Codex, `uv`, Go, and seeds of SDKMAN, nvm and rustup. Version pins are `ARG`s at the top of the runtime stage.
 
-After a change, rebuild and recreate with the same `docker compose up -d --build` (pause the agents first if you care about their running turns). `xherd docker doctor` and `xherd docker update` work only on the compose file in `~/.config/xherd` (`$XDG_CONFIG_HOME/xherd`), not on this one. The image has no `.git`, so it shows the Cargo version unless you pass the build argument:
-
-```sh
-docker compose build --build-arg XHERD_VERSION="$(git describe --tags --always)"
-```
+After a change, rebuild and recreate with the same command (pause the agents first if you care about their running turns). `xherd docker doctor` and `xherd docker update` work only on the compose file in `~/.config/xherd` (`$XDG_CONFIG_HOME/xherd`), not on this one. The image has no `.git`, so the version it shows is `XHERD_VERSION`, which `compose.yaml` passes to the build as a build argument; without it the image shows `dev`.
 
 To build the image alone:
 

@@ -28,7 +28,7 @@
   type Form = Record<string, string | boolean>;
   const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
   let form = $state<Form>({});
-  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['auto-approved', 'Something was approved for you'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
+  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
   function toggleKind(k: string, on: boolean) {
     const next = new Set(muted);
@@ -169,8 +169,12 @@
         </div>
       </Panel>
       <Panel title="Desktop" hint="System notifications from the daemon itself, also when no browser tab is open.">
-        <label class="f chk"><input type="checkbox" checked={form.desktopNotifications === true} onchange={(e) => (form.desktopNotifications = e.currentTarget.checked)} /> Show system notifications</label>
-        <span class="hint">Uses <code>osascript</code> (macOS) or <code>notify-send</code> (Linux) on the machine running the daemon. Not available in the Docker image: there, use the browser or ntfy.</span>
+        {#if app.state?.sandbox}
+          <p class="muted">Not available in Docker: the daemon runs inside the container and cannot reach your desktop. Use the browser notifications (from the bell) or ntfy.</p>
+        {:else}
+          <label class="f chk"><input type="checkbox" checked={form.desktopNotifications === true} onchange={(e) => (form.desktopNotifications = e.currentTarget.checked)} /> Show system notifications</label>
+          <span class="hint">Uses <code>osascript</code> (macOS) or <code>notify-send</code> (Linux) on the machine running the daemon.</span>
+        {/if}
       </Panel>
       <Panel title="ntfy" hint="Also send them to your phone through an ntfy topic.">
         <label class="f">Server

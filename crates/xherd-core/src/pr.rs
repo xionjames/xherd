@@ -79,6 +79,28 @@ pub struct Snapshot {
     pub base: Option<String>,
 }
 
+/// The remote-tracking ref of a pull request's base branch: the host's base
+/// when it gave one, else the agent's. `origin/<b>`, kept as is when it
+/// already starts with `origin/`. `None` when there is no base or the name is
+/// not plain (characters outside `[A-Za-z0-9._/-]`, a leading `-`, or `..`):
+/// the ref is typed into a terminal and passed to git.
+pub fn base_ref(host: Option<&str>, agent: Option<&str>) -> Option<String> {
+    let b = host.or(agent)?;
+    let plain = !b.is_empty()
+        && !b.starts_with('-')
+        && !b.contains("..")
+        && b.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '-'));
+    if !plain {
+        return None;
+    }
+    Some(if b.starts_with("origin/") {
+        b.to_string()
+    } else {
+        format!("origin/{b}")
+    })
+}
+
 /// Hidden marker xherd puts in the comments it posts, so it never reads its
 /// own replies as new comments (R-304).
 pub const MARKER: &str = "<!-- xherd -->";
@@ -219,6 +241,9 @@ impl Agent {
         self.pr_checks = s.checks.clone();
         self.pr_reviewers = s.reviewers.clone();
         self.pr_mergeable = Some(s.mergeable);
+        if s.base.is_some() {
+            self.pr_base = s.base.clone();
+        }
         if s.state != PrState::Open {
             out.push(Event::Finished(s.state));
             return out;
@@ -288,6 +313,35 @@ mod tests {
         assert_eq!(a.pr_checks, s.checks);
         assert_eq!(a.pr_reviewers, s.reviewers);
         assert_eq!(a.pr_mergeable, Some(Mergeable::Unknown));
+    }
+
+    #[test]
+    fn a_poll_keeps_the_hosts_base() {
+        let mut a = Agent::new("A", 1);
+        let mut s = snap(PrState::Open, Mergeable::Yes, &[]);
+        s.base = Some("develop".into());
+        a.apply_pr(&s);
+        assert_eq!(a.pr_base.as_deref(), Some("develop"));
+        s.base = None;
+        a.apply_pr(&s);
+        assert_eq!(a.pr_base.as_deref(), Some("develop"));
+    }
+
+    #[test]
+    fn base_ref_is_plain_and_prefixed() {
+        assert_eq!(
+            base_ref(Some("main"), Some("dev")).as_deref(),
+            Some("origin/main")
+        );
+        assert_eq!(base_ref(None, Some("dev")).as_deref(), Some("origin/dev"));
+        assert_eq!(
+            base_ref(None, Some("origin/rel/1.2")).as_deref(),
+            Some("origin/rel/1.2")
+        );
+        assert_eq!(base_ref(None, None), None);
+        for bad in ["", "-x", "a..b", "a b", "a;rm", "a$(x)", "a\nb", "ü"] {
+            assert_eq!(base_ref(Some(bad), None), None, "{bad:?}");
+        }
     }
 
     #[test]

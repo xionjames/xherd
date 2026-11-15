@@ -103,6 +103,9 @@ pub enum UserAction {
     /// Check the agent's pull request now (issue #131): the automatic poll
     /// without its guards, refused `no_pr` without a PR URL.
     CheckPr,
+    /// Merge the PR's base into its branch (#139, R14): a new session with
+    /// the pack's `conflicts` command.
+    ResolveConflicts,
     Get,
 }
 
@@ -466,6 +469,7 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         prompt_on_launch: false,
         resume_session: None,
         resume_unconfirmed: false,
+        notified_gate: None,
         auto_resumes: Vec::new(),
     };
     tokio::spawn(actor.run(rx));
@@ -514,6 +518,9 @@ struct Actor {
     /// The last start used a runtime resume and no `session-start` came yet:
     /// if the session dies again, the next resume starts a clean session.
     resume_unconfirmed: bool,
+    /// The gate the last `gate` notice was about (once per gate). In memory
+    /// only: after a restart the same gate may notify again.
+    notified_gate: Option<Gate>,
     /// When the daemon resumed this agent by itself (bounded, see above).
     auto_resumes: Vec<i64>,
 }
@@ -690,6 +697,29 @@ impl Actor {
         });
     }
 
+    /// Tell the user once that the agent waits at its gate (#133). Called
+    /// after a stop's auto-approval, so a gate autonomy approved is gone by
+    /// then and sends nothing. Never document or question text.
+    fn notify_gate(&mut self) {
+        if !matches!(self.agent.status, Status::WaitingInput | Status::Idle) {
+            return;
+        }
+        let Some(gate) = &self.agent.gate else {
+            return;
+        };
+        if self.notified_gate.as_ref() == Some(gate) {
+            return;
+        }
+        let mut text = format!("{}: {} waits for you", self.agent.name, gate.label());
+        if let Some(hold) = gate.hold() {
+            let hold = hold.split_whitespace().collect::<Vec<_>>().join(" ");
+            text.push_str(": ");
+            text.extend(hold.chars().take(160));
+        }
+        self.notified_gate = Some(gate.clone());
+        self.notify("gate", text);
+    }
+
     /// Persist and publish; tell the supervisor when the status moved.
     async fn commit(&mut self, before: Status) {
         self.agent.note_stage();
@@ -704,6 +734,9 @@ impl Actor {
         // user while the agent still runs.
         self.agent.auto_approve_pending = self.agent.status == Status::Running
             && matches!(self.auto_check(), AutoCheck::Approve { .. });
+        if self.agent.gate.is_none() {
+            self.notified_gate = None;
+        }
         if let Err(err) = self.env.store.put_agent(&self.agent).await {
             tracing::error!(agent = %self.agent.name, %err, "agent not stored");
         }
@@ -819,6 +852,7 @@ impl Actor {
                         continue;
                     }
                     self.try_auto_approve().await;
+                    self.notify_gate();
                     self.after_ship().await;
                 }
             }
@@ -1508,6 +1542,11 @@ impl Actor {
             .unwrap_or(st.max_diff_lines);
         hits.extend(tw::sensitive_summary(files, sensitive));
         if let Ok(wd) = self.workdir() {
+            // A merge commit (#139, R16): a human checks how the conflicts
+            // were resolved, so autonomy never approves it.
+            if self.env.git.merge_in_progress(&wd).await {
+                hits.push("merges the base branch: check the conflict resolution".to_string());
+            }
             match self.env.git.diff_proposed(&wd, files).await {
                 Ok(diff) => {
                     hits.extend(tw::summary(&tw::scan_diff(&diff)));
@@ -2082,6 +2121,10 @@ impl Actor {
                 self.check_pr()?;
                 "user.pr-check"
             }
+            UserAction::ResolveConflicts => {
+                self.resolve_conflicts().await?;
+                "user.resolve-conflicts"
+            }
             UserAction::SetMode { mode, launch } => {
                 if self.agent.permission_mode == Some(*mode) {
                     return Ok(());
@@ -2148,6 +2191,82 @@ impl Actor {
             at: now,
             was_watching: status == Status::Watching,
         });
+        Ok(())
+    }
+
+    /// Resolve conflicts (#139, R14): a clean session with the pack's
+    /// `conflicts` command, which merges the PR's base into the branch. The
+    /// base goes through `pr::base_ref`, since it is typed into the terminal.
+    async fn resolve_conflicts(&mut self) -> Result<(), ActionError> {
+        let name = self.agent.name.clone();
+        if self.agent.pr_url.is_none() {
+            return Err(refuse(
+                "no_pr",
+                format!("{name} has no pull request to update"),
+            ));
+        }
+        if self.agent.worktree_removed_at.is_some() {
+            return Err(refuse(
+                "worktree_removed",
+                format!("{name}'s worktree was removed"),
+            ));
+        }
+        let no_command = || {
+            refuse(
+                "not_allowed",
+                format!("{name}'s flow has no command to resolve conflicts"),
+            )
+        };
+        if !self
+            .agent
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))
+            .is_some_and(|p| p.commands.contains_key("conflicts"))
+        {
+            return Err(no_command());
+        }
+        let status = self.agent.status;
+        if next_status(status, Trigger::ResolveConflicts).is_none() {
+            return Err(refuse(
+                "not_allowed",
+                format!(
+                    "{name} is {status}: resolving conflicts needs an agent with no turn under way"
+                ),
+            ));
+        }
+        if self.agent.gate.is_some() {
+            return Err(refuse(
+                "not_allowed",
+                format!("{name} waits at a gate: decide the open gate first"),
+            ));
+        }
+        if self.agent.next_prompt.is_some() {
+            return Err(refuse(
+                "prompt_pending",
+                format!("{name} has a command waiting: resume it first"),
+            ));
+        }
+        let Some(base) =
+            xherd_core::pr::base_ref(self.agent.pr_base.as_deref(), self.agent.base.as_deref())
+        else {
+            return Err(refuse(
+                "not_allowed",
+                format!("the base branch of {name}'s pull request is unknown"),
+            ));
+        };
+        let Some(command) = self.pack_command_with("conflicts", &[("base", &base)]) else {
+            return Err(no_command());
+        };
+        if status == Status::Idle {
+            self.end_session().await;
+        }
+        self.agent.pause_requested_at = None;
+        self.agent.next_prompt = Some(command);
+        // A clean session: the merge needs no earlier conversation.
+        self.resume_session = None;
+        self.agent.ask_hold = None;
+        self.agent.fire(Trigger::ResolveConflicts, self.now());
         Ok(())
     }
 
@@ -2524,12 +2643,9 @@ impl Actor {
                     mine.needs_human = Some(why.clone());
                 }
                 self.agent.generation += 1;
+                // The caller's `notify_gate` says so, with `why` as the hold.
                 self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
                     .await;
-                self.notify(
-                    "gate",
-                    format!("{}: {label} waits for you: {why}", self.agent.name),
-                );
                 let status = self.agent.status;
                 self.commit(status).await;
                 return;
@@ -2539,34 +2655,26 @@ impl Actor {
         let before = self.agent.status;
         let reason =
             format!("autonomy {level}: {label} is a {class:?} gate and no tripwire held it");
-        match self
+        // No notice on success (#135): Needs attention lists it (R-111).
+        if let Err(e) = self
             .approve(Some(reason), &BTreeMap::new(), None, true)
             .await
         {
-            Ok(()) => {
-                self.notify(
-                    "auto-approved",
-                    format!(
-                        "{}: approved {label} automatically (autonomy {level}); see the log",
-                        self.agent.name
-                    ),
-                );
-            }
-            Err(e) => {
-                self.log(
-                    None,
-                    "auto-approval-failed",
-                    Some(json!({"gate": label, "error": e.message})),
-                )
-                .await;
-                self.notify(
-                    "error",
-                    format!(
-                        "{}: could not approve {label} automatically: {}",
-                        self.agent.name, e.message
-                    ),
-                );
-            }
+            self.log(
+                None,
+                "auto-approval-failed",
+                Some(json!({"gate": label, "error": e.message})),
+            )
+            .await;
+            self.notify(
+                "error",
+                format!(
+                    "{}: could not approve {label} automatically: {}",
+                    self.agent.name, e.message
+                ),
+            );
+            // That notice covers this gate: no `gate` notice for it too.
+            self.notified_gate = self.agent.gate.clone();
         }
         self.commit(before).await;
     }
@@ -2608,6 +2716,7 @@ impl Actor {
         // The agent learns the new level when its next session starts and
         // reads instructions.md; a running session keeps what it was told.
         self.try_auto_approve().await;
+        self.notify_gate();
         Ok(())
     }
 
@@ -3042,9 +3151,14 @@ impl Actor {
     /// The pack's command `key` (`resume`, `prReview`…) for the agent's
     /// runtime; `None` for flow `none` or a pack without it.
     fn pack_command(&self, key: &str) -> Option<String> {
+        self.pack_command_with(key, &[])
+    }
+
+    /// `pack_command` with template variables (`{base}`…) besides `{prefix}`.
+    fn pack_command_with(&self, key: &str, vars: &[(&str, &str)]) -> Option<String> {
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
         let runtime = self.runtime_name();
-        pack.command(runtime, pack.commands.get(key)?, &[])
+        pack.command(runtime, pack.commands.get(key)?, vars)
             .map_err(
                 |e| tracing::warn!(agent = %self.agent.name, key, error = %e, "no pack command"),
             )
@@ -3088,6 +3202,8 @@ impl Actor {
             }
         }
         let text = xherd_flow::approve::changes_message(&gate, comment);
+        // The revised gate may notify again, even if it comes back unchanged.
+        self.notified_gate = None;
         let parked = self.agent.status == Status::Parked;
         if parked {
             self.unpark_with(text).await;
@@ -3534,13 +3650,8 @@ async fn local_mergeable(
     agent_base: Option<&str>,
 ) -> xherd_core::pr::Mergeable {
     use xherd_core::pr::Mergeable;
-    let Some(base) = host_base.or(agent_base) else {
+    let Some(base) = xherd_core::pr::base_ref(host_base, agent_base) else {
         return Mergeable::Unknown;
-    };
-    let base = if base.starts_with("origin/") {
-        base.to_string()
-    } else {
-        format!("origin/{base}")
     };
     if let Err(e) = git.fetch(wd, "origin").await {
         tracing::warn!(error = %e, "fetch for the merge check failed");

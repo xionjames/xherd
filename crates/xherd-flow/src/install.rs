@@ -13,6 +13,10 @@ pub const BUILTIN_FILES: &[(&str, &str)] = &[
         include_str!("../../../packs/xherd/commands/commit.md"),
     ),
     (
+        "commands/conflicts.md",
+        include_str!("../../../packs/xherd/commands/conflicts.md"),
+    ),
+    (
         "commands/design.md",
         include_str!("../../../packs/xherd/commands/design.md"),
     ),

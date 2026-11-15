@@ -91,9 +91,11 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 ## Docker image
 
 ```sh
-docker build -f deploy/docker/Dockerfile -t ghcr.io/xionjames/xherd:dev .
-cd deploy/compose && docker compose up -d --build
+docker build -f deploy/docker/Dockerfile -t ghcr.io/xionjames/xherd:dev --build-arg XHERD_VERSION=dev-$(git rev-parse --short HEAD) .
+cd deploy/compose && XHERD_VERSION=dev-$(git rev-parse --short HEAD) docker compose up -d --build
 ```
+
+The image has no `.git`: `XHERD_VERSION` is the version it shows (`dev` without it).
 
 Inside the container, `XHERD_SANDBOX=1` enables toolchain installs and installs the xherd commands at every start. Tests never set `Options::sandbox`, so they cannot write into a real home.
 

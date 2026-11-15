@@ -66,3 +66,17 @@ export function stageNow(a: Agent, flows: FlowInfo[]): { name: string; waits?: s
     : 'a question';
   return { name, waits };
 }
+
+/** The Resolve conflicts button of the Pull request tab (#139): shown when an
+ *  open flow agent's PR conflicts with its base, usable when the agent has no
+ *  turn under way and no gate open (the daemon refuses otherwise). */
+export function conflictsAction(a: Agent): { show: boolean; enabled: boolean; why?: string } {
+  const merge = a.prMergeable ?? (a.prConflict ? 'no' : undefined);
+  const show = !!a.prUrl && !!a.flow && a.prState !== 'merged' && a.prState !== 'closed' && merge === 'no' && !a.worktreeRemovedAt;
+  if (!show) return { show, enabled: false };
+  if (a.gate) return { show, enabled: false, why: 'Decide the open gate first.' };
+  if (!['watching', 'paused', 'error', 'idle'].includes(a.status)) {
+    return { show, enabled: false, why: 'Wait until the agent stops.' };
+  }
+  return { show, enabled: true };
+}

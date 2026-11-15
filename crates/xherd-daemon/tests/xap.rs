@@ -2906,6 +2906,91 @@ async fn the_run_limit_holds_the_next_gate_and_a_human_approval_resets_it() {
     assert_eq!(get(&t).await.auto_in_row, 0);
 }
 
+// ---- Gate notices (#133) ----
+
+/// The texts of the notices of `kind` sent since `rx` subscribed.
+fn notices(
+    rx: &mut tokio::sync::broadcast::Receiver<xherd_daemon::support::Change>,
+    kind: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind: k, text, .. } = c
+            && k == kind
+        {
+            out.push(text);
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn a_gate_notifies_once_until_changes_are_requested() {
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    let said = notices(&mut rx, "gate");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].ends_with(": design waits for you"), "{said:?}");
+
+    // Another stop at the same gate, unchanged: nothing new.
+    stop(&t, 2).await;
+    assert!(notices(&mut rx, "gate").is_empty());
+
+    // After a change request the revised gate may notify again.
+    act(
+        &t,
+        UserAction::RequestChanges {
+            comment: "Shorter.".into(),
+        },
+    )
+    .await
+    .unwrap();
+    stop(&t, 3).await;
+    assert_eq!(notices(&mut rx, "gate").len(), 1);
+}
+
+#[tokio::test]
+async fn a_muted_gate_kind_sends_no_notice() {
+    let t = setup_config(json!({"freshSessions": true, "mutedNotifications": ["gate"]})).await;
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert!(get(&t).await.gate.is_some());
+    assert!(notices(&mut rx, "gate").is_empty());
+}
+
+/// #135: an automatic approval sends no notice of any kind.
+#[tokio::test]
+async fn an_auto_approved_gate_sends_no_notice() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert!(get(&t).await.gate.is_none(), "approved at the stop");
+    let mut kinds = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind, .. } = c {
+            kinds.push(kind);
+        }
+    }
+    assert!(kinds.is_empty(), "{kinds:?}");
+}
+
+#[tokio::test]
+async fn the_run_limit_sends_one_gate_notice_with_its_reason() {
+    let t = setup_config(json!({"freshSessions": true, "maxAutoApprovalsInRow": 1})).await;
+    act(&t, level("important")).await.unwrap();
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert!(notices(&mut rx, "gate").is_empty(), "auto-approved");
+
+    open_stop(&t, "c2", "tasks", "tasks.md", 2).await;
+    let said = notices(&mut rx, "gate");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("tasks waits for you: "), "{said:?}");
+    assert!(said[0].contains("maxAutoApprovalsInRow"), "{said:?}");
+}
+
 #[tokio::test]
 async fn changing_the_level_rewrites_instructions_and_approves_a_waiting_gate() {
     let t = setup().await;
@@ -3310,4 +3395,101 @@ async fn ask_hold_ends_when_the_session_is_lost() {
     assert!(a.ask_hold.is_none());
     let ev = t.d.store.events(&t.a.id, 50).await.unwrap();
     assert!(ev.iter().any(|e| e.kind == "session-lost"));
+}
+
+// ---- Resolve conflicts (#139) ------------------------------------------------
+
+#[tokio::test]
+async fn resolve_conflicts_needs_a_pr_and_no_turn_or_gate() {
+    let t = setup().await;
+    // No pull request URL yet.
+    let e = act(&t, UserAction::ResolveConflicts).await.unwrap_err();
+    assert_eq!(e.code, "no_pr");
+
+    // Running: the agent is mid-turn.
+    xap(
+        &t,
+        "c1",
+        "pr.opened",
+        json!({"url": "https://github.com/acme/app/pull/42"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(get(&t).await.status, Status::Running);
+    let e = act(&t, UserAction::ResolveConflicts).await.unwrap_err();
+    assert_eq!(e.code, "not_allowed");
+
+    // Paused at an open gate: decide it first.
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# Spec\n").unwrap();
+    xap(&t, "c2", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    let a = until(&t, |a| a.status == Status::Paused).await;
+    assert!(a.gate.is_some());
+    let e = act(&t, UserAction::ResolveConflicts).await.unwrap_err();
+    assert_eq!(e.code, "not_allowed");
+    assert!(
+        e.message.contains("decide the open gate first"),
+        "{}",
+        e.message
+    );
+}
+
+#[tokio::test]
+async fn resolve_conflicts_queues_a_clean_session_with_the_command() {
+    let t = setup().await;
+    watching(&t).await;
+    let a = act(&t, UserAction::ResolveConflicts).await.unwrap();
+    assert_eq!(
+        (a.status, a.next_prompt.as_deref()),
+        (Status::Queued, Some("/xherd:conflicts origin/main"))
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "user.resolve-conflicts"));
+    // A command waits now: a second click is refused.
+    assert_eq!(
+        act(&t, UserAction::ResolveConflicts)
+            .await
+            .unwrap_err()
+            .code,
+        "not_allowed"
+    );
+    until(&t, |a| a.status == Status::Running).await;
+    session_start(&t, 2).await;
+    assert!(
+        sends(&t)
+            .iter()
+            .any(|s| s.contains("/xherd:conflicts origin/main"))
+    );
+}
+
+#[tokio::test]
+async fn a_merge_proposal_is_held_for_a_human() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    std::fs::write(wt.join("a.txt"), "base\n").unwrap();
+    git(wt, &["add", "a.txt"]);
+    git(wt, &["commit", "-q", "-m", "a"]);
+    git(wt, &["checkout", "-q", "-b", "other"]);
+    std::fs::write(wt.join("a.txt"), "other\n").unwrap();
+    git(wt, &["commit", "-q", "-am", "other"]);
+    git(wt, &["checkout", "-q", "main"]);
+    std::fs::write(wt.join("a.txt"), "main\n").unwrap();
+    git(wt, &["commit", "-q", "-am", "main"]);
+    // Conflicts: git exits 1, MERGE_HEAD stays.
+    let merged = std::process::Command::new("git")
+        .args(["merge", "--no-ff", "--no-commit", "other"])
+        .current_dir(wt)
+        .output()
+        .unwrap();
+    assert!(!merged.status.success());
+    std::fs::write(wt.join("a.txt"), "both\n").unwrap();
+
+    let why = propose_reason(&t, "m1", &["a.txt"]).await;
+    assert!(
+        why.contains("merges the base branch: check the conflict resolution"),
+        "{why}"
+    );
 }
