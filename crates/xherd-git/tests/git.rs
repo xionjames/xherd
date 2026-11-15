@@ -339,6 +339,38 @@ async fn commit_paths_commits_a_resolved_merge() {
         .await
         .unwrap();
     assert_eq!(msg, "Merge main");
+    // What the merge brought into the branch, so `commit done` can match it.
+    let mut got = g.commit_files(d.path(), &sha).await.unwrap();
+    got.sort();
+    assert_eq!(got, files);
+}
+
+#[tokio::test]
+async fn a_merge_with_a_non_ascii_file_name_commits() {
+    let d = tempfile::tempdir().unwrap();
+    let g = conflicted_merge(d.path()).await;
+    g.run(d.path(), &["merge", "--abort"]).await.unwrap();
+    g.run(d.path(), &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    std::fs::write(d.path().join("ü n.txt"), "u\n").unwrap();
+    g.run(d.path(), &["add", "."]).await.unwrap();
+    g.run(d.path(), &["commit", "--quiet", "-m", "u"])
+        .await
+        .unwrap();
+    g.run(d.path(), &["checkout", "--quiet", "side"])
+        .await
+        .unwrap();
+    assert!(g.run(d.path(), &["merge", "main"]).await.is_err());
+    std::fs::write(d.path().join("a.txt"), "both\n").unwrap();
+    let files = ["a.txt", "b.txt", "ü n.txt"].map(String::from);
+    let sha = g
+        .commit_paths(d.path(), &files, "Merge main")
+        .await
+        .unwrap();
+    let mut got = g.commit_files(d.path(), &sha).await.unwrap();
+    got.sort();
+    assert_eq!(got, files);
 }
 
 #[tokio::test]

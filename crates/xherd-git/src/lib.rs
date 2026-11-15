@@ -438,14 +438,9 @@ impl Git {
         add.extend(paths.iter().map(String::as_str));
         if self.merge_in_progress(dir).await {
             self.run(dir, &add).await?;
-            let lines = |s: String| -> Vec<String> {
-                s.lines()
-                    .filter(|l| !l.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            };
-            let unmerged = lines(
-                self.run(dir, &["diff", "--name-only", "--diff-filter=U"])
+            let unmerged = nul_names(
+                &self
+                    .run(dir, &["diff", "-z", "--name-only", "--diff-filter=U"])
                     .await?,
             );
             if !unmerged.is_empty() {
@@ -454,8 +449,9 @@ impl Git {
                     unmerged.join(", ")
                 )));
             }
-            let staged = lines(
-                self.run(dir, &["diff", "--cached", "--name-only", "HEAD"])
+            let staged = nul_names(
+                &self
+                    .run(dir, &["diff", "-z", "--cached", "--name-only", "HEAD"])
                     .await?,
             );
             let extra: Vec<String> = staged.into_iter().filter(|s| !paths.contains(s)).collect();
@@ -475,22 +471,25 @@ impl Git {
         self.rev_parse(dir, "HEAD").await
     }
 
-    /// Files touched by one commit.
+    /// Files touched by one commit; a merge commit's are those it changes
+    /// against its first parent (what the merge brought into the branch).
     pub async fn commit_files(&self, dir: &Path, sha: &str) -> Result<Vec<String>> {
         let out = self
             .run(
                 dir,
                 &[
                     "diff-tree",
+                    "-z",
                     "--no-commit-id",
                     "--name-only",
                     "-r",
                     "--root",
+                    "--diff-merges=first-parent",
                     sha,
                 ],
             )
             .await?;
-        Ok(out.lines().map(str::to_string).collect())
+        Ok(nul_names(&out))
     }
 
     pub async fn is_ancestor(&self, dir: &Path, ancestor: &str, of: &str) -> bool {
@@ -637,6 +636,14 @@ impl Git {
                 stderr: e.to_string(),
             })
     }
+}
+
+/// Path names from a `-z` listing, unquoted as git stores them.
+fn nul_names(out: &str) -> Vec<String> {
+    out.split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn parse_worktrees(porcelain: &str) -> Vec<Worktree> {
