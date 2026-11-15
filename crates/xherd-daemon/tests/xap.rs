@@ -3443,6 +3443,40 @@ async fn a_bugfix_agent_walks_analysis_reproduce_fix_and_review() {
     assert!(a.tasks.iter().all(|t| t.status == TaskStatus::Done));
 }
 
+/// Review F03: only the task list of the analysis counts for `tasks sync`;
+/// an edited `spec.md` is left to `infer_gate` at the next stop.
+#[tokio::test]
+async fn an_edited_bug_analysis_does_not_refuse_tasks_sync() {
+    let t = setup_flow("bugfix").await;
+    bugfix_analysis(&t).await;
+    act(&t, approve(None)).await.unwrap();
+    xap(&t, "r1", "stage.enter", json!({"stage": "reproduce"}))
+        .await
+        .unwrap();
+    xap(&t, "r2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    bugfix_commit(&t, "C01", "T01", "repro.txt", 2).await;
+    assert!(matches!(&get(&t).await.gate, Some(Gate::Commit(_))));
+
+    let spec = t.wt.path().join(".xherd/spec");
+    std::fs::write(
+        spec.join("spec.md"),
+        "---\nflow: bugfix\n---\n# Bug, edited\n",
+    )
+    .unwrap();
+    xap(&t, "r3", "tasks.sync", json!({})).await.unwrap();
+
+    let tasks = std::fs::read_to_string(spec.join("tasks.md")).unwrap();
+    std::fs::write(
+        spec.join("tasks.md"),
+        format!("{tasks}\n## T03: More\n- status: todo\n- files: `more.txt`\n- depends: none\n"),
+    )
+    .unwrap();
+    let e = xap(&t, "r4", "tasks.sync", json!({})).await.unwrap_err();
+    assert_eq!(e.code, "tasks_approved");
+}
+
 #[tokio::test]
 async fn autonomy_never_approves_the_analysis_but_approves_a_bugfix_commit() {
     let t = setup_flow("bugfix").await;

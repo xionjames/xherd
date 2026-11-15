@@ -262,14 +262,20 @@ impl StageDef {
         self.gate.as_ref().map_or(&[], |g| &g.docs)
     }
 
+    /// The gate documents that are the task list: every document of a
+    /// `tasks`-role stage, else those named `tasks.md` (the file `tasks sync`
+    /// reads).
+    pub fn task_docs(&self) -> impl Iterator<Item = &String> {
+        let all = self.role == Role::Tasks;
+        self.docs()
+            .iter()
+            .filter(move |d| all || d.rsplit('/').next() == Some("tasks.md"))
+    }
+
     /// Whether this stage's gate approves the task list: role `tasks`, or a
-    /// gate document named `tasks.md` (the file `tasks sync` reads).
+    /// gate document named `tasks.md`.
     pub fn gates_tasks(&self) -> bool {
-        self.role == Role::Tasks
-            || self
-                .docs()
-                .iter()
-                .any(|d| d.rsplit('/').next() == Some("tasks.md"))
+        self.role == Role::Tasks || self.task_docs().next().is_some()
     }
 }
 
@@ -785,7 +791,12 @@ mod tests {
         let f = p.flow("f").unwrap();
         assert!(f.stage("analysis").unwrap().gates_tasks());
         assert!(!f.stage("other").unwrap().gates_tasks());
+        let docs: Vec<&String> = f.stage("analysis").unwrap().task_docs().collect();
+        assert_eq!(docs, ["tasks.md"]);
         let feat = feature();
+        let stage = feat.stage("tasks").unwrap();
+        let tasks: Vec<&String> = stage.task_docs().collect();
+        assert_eq!(tasks, stage.docs().iter().collect::<Vec<_>>());
         let gating: Vec<&str> = feat
             .stages
             .iter()

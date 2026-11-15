@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use xherd_core::Agent;
-use xherd_core::domain::{Gate, HashedFile, Role, Task, TaskStatus};
+use xherd_core::domain::{Gate, HashedFile, Task, TaskStatus};
 
 use crate::{Facts, Flow, Pack, frontmatter};
 
@@ -110,7 +110,7 @@ pub fn changes_message(gate: &Gate, comment: &str) -> String {
 }
 
 /// Hash of a gate document for approvals (R-104, R-107): the content hash,
-/// except that in the task list a stage gates ([`crate::StageDef::gates_tasks`]:
+/// except that in the task list a stage gates ([`crate::StageDef::task_docs`]:
 /// the documents of a `tasks`-role stage, the `tasks.md` of any other) the
 /// task progress lines do not count ([`crate::tasks::without_progress`]).
 /// `path` is canonical ([`crate::xap::doc_path`]).
@@ -118,12 +118,7 @@ pub fn doc_sha256(flow: Option<&Flow>, workdir: &Path, path: &str, bytes: &[u8])
     let tasks_doc = flow.is_some_and(|f| {
         f.stages
             .iter()
-            .filter(|s| s.gates_tasks())
-            .flat_map(|s| {
-                s.docs().iter().filter(move |d| {
-                    s.role == Role::Tasks || d.rsplit('/').next() == Some("tasks.md")
-                })
-            })
+            .flat_map(|s| s.task_docs())
             .any(|d| crate::xap::doc_path(d, workdir).is_ok_and(|p| p == path))
     });
     if !tasks_doc {

@@ -3117,11 +3117,11 @@ impl Actor {
         self.prepare_resume(true).await;
     }
 
-    /// A document of the stage that gates the tasks (`gates_tasks`: the tasks
-    /// stage, or the bugfix analysis over `spec.md` + `tasks.md`) was approved
-    /// and has changed since (task progress and fix tasks aside,
-    /// `doc_sha256`), while the agent is past that stage. In that stage the
-    /// agent rewrites it on purpose and declares the gate itself.
+    /// The approved task list (`task_docs`: the tasks stage's documents, or
+    /// the `tasks.md` of the bugfix analysis, not its `spec.md`) has changed
+    /// since (task progress and fix tasks aside, `doc_sha256`), while the
+    /// agent is past that stage. In that stage the agent rewrites it on
+    /// purpose and declares the gate itself.
     async fn approved_tasks_edited(&self, pack: Option<&Pack>) -> bool {
         let Some(flow) = pack.and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()))
         else {
@@ -3138,8 +3138,8 @@ impl Actor {
             .approved_files(&self.agent.id)
             .await
             .unwrap_or_default();
-        for s in flow.stages.iter().filter(|s| s.gates_tasks()) {
-            for d in s.docs() {
+        for s in &flow.stages {
+            for d in s.task_docs() {
                 let Ok(path) = xherd_flow::xap::doc_path(d, &wd) else {
                     continue;
                 };
