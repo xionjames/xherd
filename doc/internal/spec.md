@@ -46,7 +46,7 @@ Key properties:
 - **The SDD is pluggable**: xherd ships built in; other SDDs plug in as flow packs or by calling the xherd agent protocol (XAP) from their own commands.
 - **You stay in control** through gates, autonomy levels with tripwires, and an audit trail of what was approved.
 - **The human reads what matters**: the spec, the diff and the review findings are reviewed by the user, not summarised away — the honest answer to the review-fatigue and skill-erosion complaints around AI coding.
-- **Docker-first**, single Rust binary, MIT licensed.
+- **Docker-first**, single Rust binary, GPL-3.0-or-later licensed.
 
 ## 2. Goals, non-goals and MVP scope
 
@@ -828,5 +828,5 @@ The core (sessions, stages, gates, autonomy, per-step models, XAP, ledgers, view
 | D-13 | Git over HTTPS and SSH, per host, with guided setup and a doctor. |
 | D-14 | Desktop app in **Electron**, post-v1. |
 | D-15 | Default port **4740**. |
-| D-16 | **MIT** licence. |
+| D-16 | **GPL-3.0-or-later** licence (was MIT, #134). |
 | D-17 | Not pursued: agents controlling other agents, a combined view of several daemons, replacing tmux with another terminal server. |
