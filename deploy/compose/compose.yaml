@@ -3,16 +3,21 @@
 #   cd deploy/compose
 #   printf 'XHERD_WORKSPACE=%s/xherd\nXHERD_UID=%s\nXHERD_GID=%s\n' "$HOME" "$(id -u)" "$(id -g)" > .env
 #   mkdir -p ~/xherd
-#   docker compose up -d --build        # or: docker-compose up -d --build
+#   XHERD_VERSION=dev-$(git rev-parse --short HEAD) docker compose up -d --build
+#   # or: docker-compose up -d --build
 #
 # Then open http://127.0.0.1:4740/. Everything runs in the container; the
 # workspace is mounted at the same path, so your editor opens worktrees
 # directly. `xherd docker init` writes the same file for a published image.
+# The image has no .git: XHERD_VERSION is the version it shows (`dev` when
+# unset).
 services:
   xherd:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
+      args:
+        XHERD_VERSION: ${XHERD_VERSION:-}
     image: xherd:dev
     container_name: xherd
     restart: unless-stopped

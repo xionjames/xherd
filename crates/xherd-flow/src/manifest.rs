@@ -301,7 +301,7 @@ impl Flow {
 }
 
 /// Placeholders a command template may use.
-const COMMAND_VARS: [&str; 4] = ["prefix", "key", "prompt", "commit"];
+const COMMAND_VARS: [&str; 5] = ["prefix", "key", "prompt", "commit", "base"];
 
 fn ident_ok(s: &str) -> bool {
     !s.is_empty()

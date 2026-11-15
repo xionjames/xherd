@@ -105,6 +105,9 @@ pub enum Trigger {
     /// User finished an Ask session of an agent that was watching its PR
     /// (#121): back to watching. Other Finishes are a `Pause`.
     Finish,
+    /// User asked the agent to merge the base into its PR branch (#139):
+    /// a new session with the pack's `conflicts` command.
+    ResolveConflicts,
 }
 
 /// The lifecycle table. `None` means the trigger does not apply in that status.
@@ -133,6 +136,7 @@ pub fn next_status(from: Status, trigger: Trigger) -> Option<Status> {
             Some(S::Watching)
         }
         (T::PrComments, S::Watching) => Some(S::Queued),
+        (T::ResolveConflicts, S::Watching | S::Paused | S::Error | S::Idle) => Some(S::Queued),
         (T::PrFinished, S::Watching) => Some(S::Done),
         (T::SessionLost, s) if s.is_live() => Some(S::Error),
         (T::Cancel, s) if s.is_live() || matches!(s, S::Queued | S::Parked | S::Watching) => {
@@ -180,12 +184,31 @@ mod tests {
             (S::Idle, T::Finish, S::Watching),
             (S::WaitingInput, T::Finish, S::Watching),
             (S::Watching, T::PrComments, S::Queued),
+            (S::Watching, T::ResolveConflicts, S::Queued),
+            (S::Paused, T::ResolveConflicts, S::Queued),
+            (S::Error, T::ResolveConflicts, S::Queued),
+            (S::Idle, T::ResolveConflicts, S::Queued),
             (S::Watching, T::PrFinished, S::Done),
             (S::Running, T::SessionLost, S::Error),
             (S::Blocked, T::Cancel, S::Cancelled),
         ];
         for (from, t, to) in rows {
             assert_eq!(next_status(from, t), Some(to), "{from} --{t:?}-->");
+        }
+    }
+
+    #[test]
+    fn resolve_conflicts_needs_an_agent_without_a_turn() {
+        use Status as S;
+        for s in [
+            S::Running,
+            S::Blocked,
+            S::WaitingInput,
+            S::Parked,
+            S::Queued,
+            S::Done,
+        ] {
+            assert_eq!(next_status(s, Trigger::ResolveConflicts), None, "{s}");
         }
     }
 

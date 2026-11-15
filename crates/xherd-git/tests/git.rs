@@ -292,3 +292,110 @@ async fn commit_paths_takes_exactly_the_given_files() {
     assert!(e.to_string().contains("nope: formatter"), "{e}");
     assert_eq!(g.rev_parse(d.path(), "HEAD").await.unwrap(), sha);
 }
+
+/// A repo on `main` with a branch `side` whose `a.txt` conflicts with main's,
+/// and `side` checked out in the middle of `git merge main` (conflict in a.txt).
+async fn conflicted_merge(dir: &Path) -> Git {
+    let g = init_repo(dir).await;
+    g.run(dir, &["checkout", "--quiet", "-b", "side"])
+        .await
+        .unwrap();
+    std::fs::write(dir.join("a.txt"), "side\n").unwrap();
+    g.run(dir, &["commit", "--quiet", "-am", "side"])
+        .await
+        .unwrap();
+    g.run(dir, &["checkout", "--quiet", "main"]).await.unwrap();
+    std::fs::write(dir.join("a.txt"), "main\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "from main\n").unwrap();
+    g.run(dir, &["add", "."]).await.unwrap();
+    g.run(dir, &["commit", "--quiet", "-m", "main"])
+        .await
+        .unwrap();
+    g.run(dir, &["checkout", "--quiet", "side"]).await.unwrap();
+    assert!(!g.merge_in_progress(dir).await);
+    assert!(g.run(dir, &["merge", "main"]).await.is_err());
+    assert!(g.merge_in_progress(dir).await);
+    g
+}
+
+#[tokio::test]
+async fn commit_paths_commits_a_resolved_merge() {
+    let d = tempfile::tempdir().unwrap();
+    let g = conflicted_merge(d.path()).await;
+    std::fs::write(d.path().join("a.txt"), "both\n").unwrap();
+    let files = ["a.txt", "b.txt"].map(String::from);
+    let sha = g
+        .commit_paths(d.path(), &files, "Merge main")
+        .await
+        .unwrap();
+    assert!(!g.merge_in_progress(d.path()).await);
+    let parents = g
+        .run(d.path(), &["log", "-1", "--format=%P", &sha])
+        .await
+        .unwrap();
+    assert_eq!(parents.split(' ').count(), 2, "{parents}");
+    let msg = g
+        .run(d.path(), &["log", "-1", "--format=%B"])
+        .await
+        .unwrap();
+    assert_eq!(msg, "Merge main");
+    // What the merge brought into the branch, so `commit done` can match it.
+    let mut got = g.commit_files(d.path(), &sha).await.unwrap();
+    got.sort();
+    assert_eq!(got, files);
+}
+
+#[tokio::test]
+async fn a_merge_with_a_non_ascii_file_name_commits() {
+    let d = tempfile::tempdir().unwrap();
+    let g = conflicted_merge(d.path()).await;
+    g.run(d.path(), &["merge", "--abort"]).await.unwrap();
+    g.run(d.path(), &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    std::fs::write(d.path().join("ü n.txt"), "u\n").unwrap();
+    g.run(d.path(), &["add", "."]).await.unwrap();
+    g.run(d.path(), &["commit", "--quiet", "-m", "u"])
+        .await
+        .unwrap();
+    g.run(d.path(), &["checkout", "--quiet", "side"])
+        .await
+        .unwrap();
+    assert!(g.run(d.path(), &["merge", "main"]).await.is_err());
+    std::fs::write(d.path().join("a.txt"), "both\n").unwrap();
+    let files = ["a.txt", "b.txt", "ü n.txt"].map(String::from);
+    let sha = g
+        .commit_paths(d.path(), &files, "Merge main")
+        .await
+        .unwrap();
+    let mut got = g.commit_files(d.path(), &sha).await.unwrap();
+    got.sort();
+    assert_eq!(got, files);
+}
+
+#[tokio::test]
+async fn commit_paths_refuses_an_unresolved_or_wider_merge() {
+    let d = tempfile::tempdir().unwrap();
+    let g = conflicted_merge(d.path()).await;
+    let head = g.rev_parse(d.path(), "HEAD").await.unwrap();
+
+    // a.txt still conflicted and not proposed.
+    let e = g
+        .commit_paths(d.path(), &["b.txt".to_string()], "m")
+        .await
+        .unwrap_err();
+    assert_eq!(e.to_string(), "unresolved conflicts in a.txt");
+
+    // Resolved, but the merge also brings b.txt, which is not proposed.
+    std::fs::write(d.path().join("a.txt"), "both\n").unwrap();
+    let e = g
+        .commit_paths(d.path(), &["a.txt".to_string()], "m")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "the merge also changes b.txt: propose them too"
+    );
+    assert_eq!(g.rev_parse(d.path(), "HEAD").await.unwrap(), head);
+    assert!(g.merge_in_progress(d.path()).await);
+}

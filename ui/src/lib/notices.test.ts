@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 vi.mock('./store.svelte', () => ({ agentByName: () => undefined }));
 vi.mock('./router.svelte', () => ({ go: () => {} }));
-import { addNotice, notices, settle } from './notices.svelte';
+import { addNotice, BLOCK_TEXT, browserBlock, notices, settle } from './notices.svelte';
 import type { Agent } from './types';
 
 const agent = (status: Agent['status'], gate?: Agent['gate']) =>
@@ -30,5 +30,28 @@ describe('settle', () => {
     expect(read('gate')).toBe(false);
     settle(agent('waiting-input'));
     expect(read('gate')).toBe(true);
+  });
+});
+
+describe('browserBlock', () => {
+  const env = (secure: boolean, notification: boolean, permission?: NotificationPermission) =>
+    ({ secure, notification, permission });
+
+  it('says why browser notifications cannot be on, the insecure page first', () => {
+    expect(browserBlock(env(false, false))).toBe('insecure');
+    expect(browserBlock(env(false, true, 'denied'))).toBe('insecure');
+    expect(browserBlock(env(true, false))).toBe('unsupported');
+    expect(browserBlock(env(true, true, 'denied'))).toBe('denied');
+  });
+
+  it('is null on a secure page that may still ask or already may', () => {
+    expect(browserBlock(env(true, true, 'default'))).toBeNull();
+    expect(browserBlock(env(true, true, 'granted'))).toBeNull();
+  });
+
+  it('has a sentence for each reason, the insecure one naming localhost', () => {
+    expect(BLOCK_TEXT.insecure).toContain('127.0.0.1');
+    expect(BLOCK_TEXT.denied).toContain('blocked');
+    expect(BLOCK_TEXT.unsupported).toContain('does not support');
   });
 });

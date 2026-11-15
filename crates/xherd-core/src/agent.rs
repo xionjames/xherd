@@ -185,6 +185,9 @@ pub struct Agent {
     pub pr_reviewers: Vec<crate::pr::Reviewer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_mergeable: Option<crate::pr::Mergeable>,
+    /// The branch the pull request merges into, as the host last said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_base: Option<String>,
     /// Ids of the PR comments already handled or ignored (R-304).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pr_comments_seen: Vec<String>,
@@ -284,6 +287,7 @@ impl Agent {
             pr_checks: Vec::new(),
             pr_reviewers: Vec::new(),
             pr_mergeable: None,
+            pr_base: None,
         }
     }
 

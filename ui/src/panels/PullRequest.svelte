@@ -2,6 +2,7 @@
   import Panel from '../components/Panel.svelte';
   import type { Agent, PrCheck, PrReviewer } from '../lib/types';
   import { agoText } from '../lib/format';
+  import { conflictsAction } from '../lib/flow';
   import { post } from '../lib/api';
   import { upsertAgent } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -22,7 +23,21 @@
       checking = false;
     }
   }
-  const STATE_TONE = { open: 'acc', merged: 'done', closed: '' };
+  // Resolve conflicts (issue #139): a clean session merges the base branch in.
+  const conflicts = $derived(conflictsAction(agent));
+  let resolving = $state(false);
+  async function resolveConflicts() {
+    resolving = true;
+    try {
+      const r = await post<{ agent: Agent }>(`/agents/${id}/resolve-conflicts`);
+      upsertAgent(r.agent);
+    } catch (e) {
+      showError('Could not start resolving the conflicts', e);
+    } finally {
+      resolving = false;
+    }
+  }
+  const STATE_TONE ={ open: 'acc', merged: 'done', closed: '' };
   const STATE_GLYPH = { open: '●', merged: '✓', closed: '○' };
   const CI_TONE = { pending: '', failing: 'halt', passing: 'live' };
   const CI_GLYPH = { pending: '…', failing: '✕', passing: '✓' };
@@ -74,8 +89,12 @@
           {:else if open && merge === 'unknown'}<span class="pill">? conflicts unknown</span>{/if}
           {#if agent.prPolledAt}<span class="hint">checked {agoText(agent.prPolledAt)}</span>{/if}
         {/if}
+        {#if conflicts.show}
+          <button class="btn sm" disabled={resolving || !conflicts.enabled} title={conflicts.why} onclick={resolveConflicts}>Resolve conflicts</button>
+        {/if}
         <button class="btn sm" disabled={checking} onclick={checkNow}>↻ Check now</button>
       </p>
+      {#if conflicts.show && conflicts.why}<p class="hint">Resolve conflicts: {conflicts.why}</p>{/if}
       {#if !agent.prState && agent.status === 'watching'}
         <p class="empty">Waiting for the first check of the pull request.</p>
       {/if}

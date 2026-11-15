@@ -38,6 +38,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `xherd remove-worktree <agent>` | Delete a `done` or `cancelled` agent's worktree folder, with its uncommitted changes and `.xherd/` documents; the branch and the agent's record stay, and the agent can no longer be resumed |
 | `xherd talk <agent> "<text>"` | Ask a paused, parked, watching or failed agent something: starts a session with the text as its first prompt and keeps it open (no auto-approval, no move to watching) until `xherd finish` or until the agent does flow work. (`xherd ask` is the agents' question call) |
 | `xherd finish <agent>` | End a `talk` session: back to watching its PR when it was watching, else paused |
+| `xherd resolve-conflicts <agent>` | For an agent with a PR that conflicts with its base: a new session merges the base branch (`origin/<base>`) into the branch and resolves the conflicts; the merge commit is proposed and held for your approval, then the agent pushes. Only a `watching`, `paused`, `error` or `idle` agent with no open gate |
 | `xherd autonomy <agent> <ask\|important>` | Change what xherd may approve by itself (rewrites the agent's instructions and tries an auto-approval at once) |
 | `xherd mode <agent> <ask\|edits\|auto\|all>` | Change the agent's tool permissions; the running session keeps its mode, the next session start uses the new one. `all` only in the container |
 | `xherd model <agent> <model>` | Change the agent's model (`""` = the runtime's default); like `mode`, it applies from the next session start |

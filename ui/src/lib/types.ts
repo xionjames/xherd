@@ -130,6 +130,7 @@ export interface Agent {
   prReviewers?: PrReviewer[];
   /** Merges without conflicts (from the host, or worked out in the worktree when it does not say). */
   prMergeable?: 'yes' | 'no' | 'unknown';
+  prBase?: string;
   lastMessage?: string;
   /** Why the daemon blocked the agent (`git access`). */
   blockReason?: string;

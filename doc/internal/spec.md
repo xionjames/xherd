@@ -90,7 +90,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 | Term | Meaning |
 |---|---|
 | **Daemon** | The long-running xherd service: HTTP API, websockets, web UI, timers. Default port **4740**. |
-| **Agent** | One coding-agent run for one ticket: workspace (worktree + branch) + terminal session + runtime session(s). Named `<KEY>` or `<KEY>-<slug>`. |
+| **Agent** | One coding-agent run for one ticket: workspace (worktree + branch) + terminal session + runtime session(s). Named by a lowercase slug; its branch is `<KEY>-<name>` when it has a ticket key, else the name. |
 | **Runtime** | A coding-agent CLI described by a runtime plugin (`claude-code`, `codex`, `opencode`). |
 | **Driver** | How xherd talks to a runtime: `terminal` (CLI in tmux, live terminal; default) or `acp` (Agent Client Protocol). |
 | **ACP** | Agent Client Protocol: open JSON-RPC-over-stdio protocol between a client and a coding agent (prompts, streamed messages, tool calls, plans, permission requests). |
@@ -747,10 +747,14 @@ xherd stop | restart | status
 xherd service install|uninstall         systemd user unit / launchd agent
 xherd docker init|doctor|update         host: compose setup, checks, drained update
 xherd login [URL]                       pair this CLI with a daemon (host companion)
-xherd new <KEY> [--slug s] [--flow f] [--pack p] [--repo dir|url] [--base b]
-          [--runtime r] [--autonomy a] [--tool-permissions p] [--driver terminal|acp] ["prompt"]
+xherd new <NAME> [--ticket URL|KEY] [--flow f] [--pack p] [--repo dir|url] [--base b]
+          [--runtime r] [--model m] [--autonomy a] [--mode p] [--driver terminal|acp] ["prompt"]
 xherd ls | attach | open | shell | pause | resume | approve | cancel <agent>
 xherd changes <agent> "comment"         request changes at the open gate
+xherd talk <agent> "text" | finish <agent>   an ask session on a stopped agent, and its end
+xherd resolve-conflicts <agent>         merge the PR's base branch into the agent's branch
+xherd remove-worktree <agent>           delete a finished agent's worktree (cancel --remove-worktree too)
+xherd mode | model | autonomy <agent> … per-agent tool permissions, model, autonomy
 xherd pause --all                       kill switch
 xherd pair                              one-time pairing link
 xherd install [--runtime r | --all] [--pack p]

@@ -153,6 +153,8 @@ The **model** is the runtime's: leave it empty for the runtime's own default, pi
 Approving the ship gate tells the agent to push its branch and open a draft PR; xherd itself never pushes. The agent then goes to *watching*:
 
 - Every `prPollMinutes` (default 5) xherd reads the PR's state, checks, mergeability and reviewers. You are notified when checks start failing, pass again, or the branch conflicts with its base. A merged or closed PR finishes the agent (*done*).
+- **Check now** in the *Pull request* tab reads the PR at once, whatever the agent's state, instead of waiting for the next poll; the next automatic poll then waits a full interval.
+- When the PR conflicts with its base, the *Pull request* tab offers **Resolve conflicts** (also `xherd resolve-conflicts <agent>`): the agent, once it is stopped (watching, paused, idle or in error) with no gate open, starts a clean session that merges the base branch into its branch (never a rebase or force-push), resolves the conflicts, runs the tests and proposes the merge commit. That commit is always held for you, whatever the autonomy; once you approve it, the agent pushes the branch and goes back to watching.
 - New review comments start a **PR round**: the agent reads them (as untrusted text), decides per comment (fix, reply, skip) and stops at the `pr-review` gate. Its *Your call* band and ✋ point at the *Pull request* tab (the plan file is not listed under Spec while you decide): each comment shows the agent's choice, coloured on its edge (fix, reply, skip), and you can change any of them. **Send decisions to the agent** (at the bottom of the comments, or in the band) approves the round: it posts the replies, then the agent makes the fixes as tasks, pushes and goes back to watching.
 
 GitHub works through `gh`, GitLab through `glab`. Bitbucket has git access only, no pull request support yet. With no Git provider on, xherd neither looks up nor follows pull requests.
@@ -181,13 +183,13 @@ TODOs are reminders that are not agents. A TODO is due at a time, once or every 
 
 ## Notifications
 
-Every notification (a gate, a blocked agent, an idle one, a failure, a budget or limit, an automatic approval, PR news, new PR comments, a due TODO) goes to the bell, and from there:
+Every notification (a gate, a blocked agent, an idle one, a failure, a budget or limit, PR news, new PR comments, a due TODO) goes to the bell, and from there:
 
-- to the browser, once you allow it from the bell;
+- to the browser, once you allow it from the bell. A newer notice for the same agent and kind replaces the earlier one and alerts again (Chrome; Firefox and Safari replace it silently). Browsers only allow notifications on a secure page: open xherd at `http://localhost` or `http://127.0.0.1` (or over https), not at a LAN address over http. When they cannot be turned on, the bell says why. Once on, the bell's **Send a test** shows one at once; if nothing appears, the operating system is holding it back (macOS: System Settings → Notifications → your browser, and Focus / Do Not Disturb), and if the browser refuses it, the bell shows its error;
 - to your phone through [ntfy](https://ntfy.sh): Settings → Notifications, server and topic. Messages carry agent names and reasons in plain text, never document or comment contents;
-- to the desktop (`osascript` on macOS, `notify-send` on Linux) with `desktopNotifications`, native installs only.
+- to the desktop (`osascript` on macOS, `notify-send` on Linux) with `desktopNotifications`, native installs only: in Docker the daemon cannot reach your desktop, so Settings does not offer it there; use the browser or ntfy.
 
-Settings → Notifications → *Which ones* mutes kinds everywhere.
+Settings → Notifications → *Which ones* mutes kinds everywhere. Automatic approvals send no notification: they are listed under **Needs attention** (*Approved by xherd*).
 
 ## Opening the code
 

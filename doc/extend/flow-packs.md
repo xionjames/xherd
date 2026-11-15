@@ -11,7 +11,7 @@ install:
     prefix: "/xherd:"
     commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/xherd/{name}.md", format: command }
     args: "$ARGUMENTS"
-commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review" }
+commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review", conflicts: "{prefix}conflicts {base}" }
 flows:
   feature:
     start: "{prefix}feature {key} {prompt}"
@@ -28,7 +28,7 @@ Top-level fields:
 | `specDir` | Where the documents live (`private`: `.xherd/spec/` in the worktree, out of git) |
 | `private` | Files of the spec folder that are xherd's working files, not documents |
 | `install.<runtime>` | Per runtime: `prefix` (how a command is called: `/xherd:` for Claude Code, `/xherd/` for opencode, `$xherd-` for Codex), `commands` (`from` glob, `to` destination with `{name}`, `format` `command` or `skill`), `args` (how the runtime passes arguments), `slashEnters` (Enters needed to run a command from the completion list). An agent can use a runtime only if the pack has an entry for it |
-| `commands` | Named commands xherd sends itself: `resume`, `handoff`, `status`, `prReview` |
+| `commands` | Named commands xherd sends itself: `resume`, `handoff`, `status`, `prReview`, `conflicts` (sent by *Resolve conflicts*; `{base}` is the PR's base branch as `origin/<base>`; without it the action is refused) |
 | `flows` | Flows by name; each has `start` (the first command, with `{key}` and `{prompt}`) and `stages` |
 
 ## Stages

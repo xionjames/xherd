@@ -360,7 +360,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 | Area | Routes |
 |---|---|
 | Health and state | `GET /healthz` (no auth), `GET /state` (config, platform, client kind, version, agents, profiles, plugins, todos), `GET /checks`, `POST /checks/:id/fix` |
-| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
+| Agents | `GET/POST /agents`, `GET/DELETE /agents/:id`, `POST /agents/:id/{pause,resume,cancel,approve,request-changes,send,answer,ask,finish,resolve-conflicts,mode,model,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,notes,my-time,reviewed,viewed}`, `GET /agents/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /agents/pause-all` |
 | Reports and XAP | `POST /hooks`, `POST /xap` (agent tokens) |
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
 | Settings | `GET/PUT /config`, `GET/POST/PUT/DELETE /profiles…`, `GET /profiles/export`, `POST /profiles/import` |
@@ -743,6 +743,10 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Notifications: kinds on hub `Notify`, bell + browser notifications, ntfy (`ntfyServer`/`ntfyTopic`, live), per-kind filter (`mutedNotifications`), daemon-side desktop notifications (`desktopNotifications`); notifier plugins later
   - [x] Live config: saving settings applies them at once (`SettingsHandle`) except port, bind, concurrency, workspace, tmux socket and plugin settings; plugins switched off apply live
   - [x] Git access block (R-688): an auth failure blocks a live agent with reason `git access` and the band shows the doctor's first failure and fix
+  - [x] Agent names and optional tickets (#114, #115): `NewAgent.name`, `Agent.ticket {key?, url?}`, `Agent.branch`; `POST /tickets/resolve`
+  - [x] Ask sessions and Finish (#121), worktree removal (#123), auto-approval mark and Needs attention order (#120, #124, #127)
+  - [x] PR Check now (#131) and Resolve conflicts (#139: `UserAction::ResolveConflicts`, pack command `conflicts`, merge proposals always held)
+  - [x] Gate notices (#133) and no notices for automatic approvals (#135)
   - [ ] Phones
 - [ ] **v1.x**
   - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `agent.created` declared by profiles and pack `stageHooks`; kinds command, agent, builtin
@@ -756,6 +760,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] `hotfix` flow (like bugfix, from `hotfixBase`, ship human-only)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
+  - [x] Herd views as plugins (#108): kind `view`, sandboxed frame, protocol v1, view kit
   - [x] TODOs: reminders, once or repeating (`/todos`, 30 s tick, kind `todo`)
   - [x] TODO condition checks (spec §16.2): a headless read-only run of the runtime (`data.terminal.check`) answering `XHERD_RESULT {met, summary}`; met or unclear needs you, not met is rescheduled, failure is an error
   - [ ] Budgets per profile and a cost estimate (token budgets are global since M4)
