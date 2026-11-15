@@ -279,6 +279,16 @@ async fn agent_actions() {
         (s, v["code"].clone()),
         (StatusCode::CONFLICT, json!("no_pr"))
     );
+    // Resolve conflicts (issue #139): refused without a pull request URL too.
+    let (s, v) = call(
+        app.clone(),
+        post("/api/v1/agents/SC-1/resolve-conflicts", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("no_pr"))
+    );
     // Only refusals here: a real install writes to the user's runtime folder.
     let (s, v) = call(
         app.clone(),

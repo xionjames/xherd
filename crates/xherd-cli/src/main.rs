@@ -132,6 +132,8 @@ enum Cmd {
     Talk { agent: String, text: String },
     /// End a `talk`: back to watching its PR when it was watching, else paused.
     Finish { agent: String },
+    /// Have the agent merge its PR's base branch into its branch and resolve the conflicts (a new session; the merge commit waits for your approval).
+    ResolveConflicts { agent: String },
     /// Approve the agent's open gate (documents or commit) as they are now.
     Approve {
         agent: String,
@@ -425,6 +427,7 @@ fn main() -> ExitCode {
         }
         Cmd::Talk { agent, text } => action(&agent, "ask", Some(serde_json::json!({"text": text}))),
         Cmd::Finish { agent } => action(&agent, "finish", None),
+        Cmd::ResolveConflicts { agent } => action(&agent, "resolve-conflicts", None),
         Cmd::Approve { agent, reason } => action(
             &agent,
             "approve",
@@ -1044,6 +1047,13 @@ mod tests {
         let cli = Cli::try_parse_from(["xherd", "finish", "shop"]).unwrap();
         assert!(matches!(cli.cmd, Cmd::Finish { ref agent } if agent == "shop"));
         assert!(Cli::try_parse_from(["xherd", "talk", "shop"]).is_err());
+    }
+
+    #[test]
+    fn resolve_conflicts_parses() {
+        let cli = Cli::try_parse_from(["xherd", "resolve-conflicts", "shop"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::ResolveConflicts { ref agent } if agent == "shop"));
+        assert!(Cli::try_parse_from(["xherd", "resolve-conflicts"]).is_err());
     }
 
     #[test]
