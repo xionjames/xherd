@@ -10,7 +10,7 @@ use xherd_core::hash::content_sha256;
 use xherd_core::paths::Paths;
 use xherd_core::report::{Report, ReportEvent};
 use xherd_core::xap::{Refusal, XapCall};
-use xherd_core::{Agent, Status, queue};
+use xherd_core::{Job, Status, queue};
 use xherd_daemon::*;
 
 struct T {
@@ -18,7 +18,7 @@ struct T {
     wt: tempfile::TempDir,
     d: Daemon,
     drv: Arc<FakeDriver>,
-    a: Agent,
+    a: Job,
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -89,7 +89,7 @@ async fn setup_inner(
     }
     o.pr_poll = Some(Duration::from_millis(1));
     let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
-    let mut a = Agent::new("SC-1", 1);
+    let mut a = Job::new("SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(wt.path().to_string_lossy().into_owned());
     a.pack = Some("xherd".into());
@@ -98,7 +98,7 @@ async fn setup_inner(
     if let Some(p) = profile {
         a.profile = Some(d.create_profile(p).await.unwrap().id);
     }
-    let a = d.create_agent(a).await.unwrap();
+    let a = d.create_job(a).await.unwrap();
     for _ in 0..200 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -114,7 +114,7 @@ async fn setup_inner(
     }
 }
 
-fn call(a: &Agent, id: &str, cmd: &str, args: Value) -> XapCall {
+fn call(a: &Job, id: &str, cmd: &str, args: Value) -> XapCall {
     serde_json::from_value(json!({"id": id, "agentId": a.id, "cmd": cmd, "args": args, "at": 1}))
         .unwrap()
 }
@@ -126,7 +126,7 @@ async fn xap(t: &T, id: &str, cmd: &str, args: Value) -> Result<Value, Refusal> 
 async fn stop(t: &T, seq: u64) {
     let r = Report {
         id: format!("stop-{seq}"),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: Value::Null,
         seq,
@@ -135,7 +135,7 @@ async fn stop(t: &T, seq: u64) {
     t.d.report(r).await;
 }
 
-async fn act(t: &T, a: UserAction) -> Result<Agent, ActionError> {
+async fn act(t: &T, a: UserAction) -> Result<Job, ActionError> {
     t.d.action("SC-1", a).await
 }
 
@@ -147,7 +147,7 @@ fn sends(t: &T) -> Vec<String> {
         .collect()
 }
 
-async fn get(t: &T) -> Agent {
+async fn get(t: &T) -> Job {
     t.d.action("SC-1", UserAction::Get).await.unwrap()
 }
 
@@ -185,7 +185,7 @@ async fn gate_open_then_stop_waits_for_input() {
 
     let stop = Report {
         id: "s1".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: Value::Null,
         seq: 1,
@@ -388,9 +388,9 @@ async fn refused_when_not_live_or_without_flow() {
         .unwrap_err();
     assert_eq!(e.code, "not_live");
 
-    let mut b = Agent::new("SC-2", 2);
+    let mut b = Job::new("SC-2", 2);
     b.launch = Some(vec!["rt".into()]);
-    let b = t.d.create_agent(b).await.unwrap();
+    let b = t.d.create_job(b).await.unwrap();
     for _ in 0..200 {
         if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -403,7 +403,7 @@ async fn refused_when_not_live_or_without_flow() {
             .unwrap_err();
     assert_eq!(e.code, "no_flow");
     let e =
-        t.d.xap(call(&Agent::new("x", 0), "c3", "ask", json!({"text": "?"})))
+        t.d.xap(call(&Job::new("x", 0), "c3", "ask", json!({"text": "?"})))
             .await
             .unwrap_err();
     assert_eq!(e.code, "unknown_agent");
@@ -761,7 +761,7 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
     stop(&t, 1).await;
     let mut a = get(&t).await;
     a.status = Status::Parked;
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let a = d
@@ -783,7 +783,7 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
 async fn parked(t: &T) -> Daemon {
     let mut a = get(t).await;
     a.status = Status::Parked;
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     Daemon::start(t.d.paths.clone(), o).await.unwrap()
 }
@@ -853,7 +853,7 @@ async fn a_parked_question_is_answered_with_send() {
 async fn session_start(t: &T, seq: u64) {
     let r = Report {
         id: format!("start-{seq}"),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::SessionStart,
         payload: json!({"session_id": format!("s-{seq}")}),
         seq,
@@ -944,7 +944,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
     assert_eq!(sends(&t).len(), 2);
     let submit = Report {
         id: "submit-5".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::UserPromptSubmit,
         payload: json!({"prompt": "/xherd:design"}),
         seq: 5,
@@ -973,7 +973,7 @@ async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
     let mut a = get(&t).await;
     a.status = Status::Paused;
     a.next_prompt = Some("/xherd:pr-review".into());
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let a = d.action("SC-1", UserAction::Resume).await.unwrap();
@@ -1066,7 +1066,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     // Stopped with a question: still live, the user answers first.
     let ask = Report {
         id: "ask".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"message": "Update the ticket too?"}),
         seq: 3,
@@ -1079,7 +1079,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
         .unwrap();
     let typed = Report {
         id: "typed".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::UserPromptSubmit,
         payload: json!({"prompt": "no"}),
         seq: 4,
@@ -1090,7 +1090,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     // Nothing left to do: the session ends and the agent watches its PR (R-301).
     let done = Report {
         id: "done".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"message": "Draft PR opened."}),
         seq: 5,
@@ -1166,7 +1166,7 @@ async fn a_stop_with_a_background_task_running_keeps_the_session() {
     .unwrap();
     let busy = Report {
         id: "busy".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"background_tasks": [
             {"agent_type": "reviewer", "id": "a39", "status": "running", "type": "subagent"}
@@ -1183,7 +1183,7 @@ async fn a_stop_with_a_background_task_running_keeps_the_session() {
     // The reviewer is done: this stop ends the session.
     let done = Report {
         id: "done".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"background_tasks": [
             {"agent_type": "reviewer", "id": "a39", "status": "completed", "type": "subagent"}
@@ -1213,7 +1213,7 @@ fn fake_gh(dir: &Path, answer: &str) -> std::path::PathBuf {
     bin
 }
 
-async fn until(t: &T, what: impl Fn(&Agent) -> bool) -> Agent {
+async fn until(t: &T, what: impl Fn(&Job) -> bool) -> Job {
     for _ in 0..400 {
         let a = get(t).await;
         if what(&a) {
@@ -1379,14 +1379,14 @@ async fn visited_stages_show_skipped_ones_and_are_rebuilt_from_events() {
     // An agent saved before the field existed: rebuilt at the next start.
     let mut a = get(&t).await;
     a.visited_stages.clear();
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let mut seen = Vec::new();
     for _ in 0..100 {
         seen = d
             .store
-            .get_agent(&t.a.id)
+            .get_job(&t.a.id)
             .await
             .unwrap()
             .unwrap()
@@ -1572,7 +1572,7 @@ async fn task_done_runs_the_verify_command() {
     .unwrap();
     std::fs::write(wt.join("marker"), "").unwrap();
     xap(&t, "v0", "tasks.sync", json!({})).await.unwrap();
-    let task = |a: &Agent, id: &str| a.tasks.iter().find(|x| x.id == id).unwrap().clone();
+    let task = |a: &Job, id: &str| a.tasks.iter().find(|x| x.id == id).unwrap().clone();
 
     // Passing: runs in the worktree; the note and the run are both kept.
     xap(&t, "v1", "task.start", json!({"id": "T01"}))
@@ -1716,10 +1716,10 @@ async fn memory_is_not_checked_without_a_flow() {
     let t = setup().await;
     std::fs::remove_file(t.wt.path().join(".xherd/spec/memory.md")).unwrap();
     // Flow none is refused for its own reason, never as memory_invalid.
-    let mut a = Agent::new("SC-2", 2);
+    let mut a = Job::new("SC-2", 2);
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(t.wt.path().to_string_lossy().into_owned());
-    let a = t.d.create_agent(a).await.unwrap();
+    let a = t.d.create_job(a).await.unwrap();
     for _ in 0..200 {
         if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -2701,7 +2701,7 @@ async fn important_approves_a_routine_gate_and_records_it() {
 }
 
 /// Writes the gate document and opens the gate, without a stop.
-async fn open_running(t: &T, id: &str, stage: &str, file: &str, extra: Value) -> Agent {
+async fn open_running(t: &T, id: &str, stage: &str, file: &str, extra: Value) -> Job {
     std::fs::write(
         t.wt.path().join(".xherd/spec").join(file),
         format!("# {stage}\n"),
@@ -3197,13 +3197,13 @@ async fn a_dismissed_starter_agents_md_is_not_proposed_again() {
     let t = setup().await;
     let wt = t.wt.path();
     // A second agent of the same repository.
-    let mut b = Agent::new("SC-2", 1);
+    let mut b = Job::new("SC-2", 1);
     b.workdir = t.a.workdir.clone();
     b.pack = Some("xherd".into());
     b.flow = Some("feature".into());
     b.repo = Some(wt.to_string_lossy().into_owned());
     b.launch = Some(vec!["rt".into()]);
-    let b = t.d.create_agent(b).await.unwrap();
+    let b = t.d.create_job(b).await.unwrap();
     for _ in 0..200 {
         if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -3328,7 +3328,7 @@ async fn ask_then_finish_on_a_paused_agent_pauses_it_again() {
 #[tokio::test]
 async fn ask_refusals() {
     let t = setup().await;
-    let code = |r: Result<Agent, ActionError>| r.unwrap_err().code;
+    let code = |r: Result<Job, ActionError>| r.unwrap_err().code;
     let ask = |s: &str| UserAction::Ask { text: s.into() };
     // A live agent has a session: Send is the way.
     assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");

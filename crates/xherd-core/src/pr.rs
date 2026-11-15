@@ -1,12 +1,12 @@
 //! Pull-request follow-up (R-303, R-305, R-307, pure): what a poll of the host
 //! found, and what it means for the agent. The host plugin answers with a
-//! `Snapshot`; `Agent::apply_pr` keeps the last state and says what is new.
+//! `Snapshot`; `Job::apply_pr` keeps the last state and says what is new.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Agent;
+use crate::Job;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -216,7 +216,7 @@ impl Snapshot {
     }
 }
 
-impl Agent {
+impl Job {
     /// The comments of `all` not seen before and not written by xherd
     /// (R-304); they count as seen from now on. Comments xherd wrote are
     /// remembered too, so they stay out later.
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn a_poll_keeps_checks_reviewers_and_merge_state() {
-        let mut a = Agent::new("A", 1);
+        let mut a = Job::new("A", 1);
         let mut s = snap(PrState::Open, Mergeable::Unknown, &[("t", "pass")]);
         s.reviewers = vec![Reviewer {
             name: "bob".into(),
@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn a_poll_keeps_the_hosts_base() {
-        let mut a = Agent::new("A", 1);
+        let mut a = Job::new("A", 1);
         let mut s = snap(PrState::Open, Mergeable::Yes, &[]);
         s.base = Some("develop".into());
         a.apply_pr(&s);
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn failing_then_passing_notifies_once_each() {
-        let mut a = Agent::new("A", 1);
+        let mut a = Job::new("A", 1);
         let pass = snap(PrState::Open, Mergeable::Yes, &[("t", "pass")]);
         assert_eq!(a.apply_pr(&pass), [], "passing from the start is not news");
         let fail = snap(
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn conflict_is_said_once_until_it_clears() {
-        let mut a = Agent::new("A", 1);
+        let mut a = Job::new("A", 1);
         let bad = snap(PrState::Open, Mergeable::No, &[]);
         assert_eq!(a.apply_pr(&bad), [Event::Conflict]);
         assert_eq!(a.apply_pr(&bad), []);
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn comments_are_new_once_and_never_ours() {
-        let mut a = Agent::new("A", 1);
+        let mut a = Job::new("A", 1);
         let all = vec![
             comment("1", "please rename"),
             comment("2", &format!("done {MARKER}")),
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn merged_or_closed_finishes() {
-        let mut a = Agent::new("A", 1);
+        let mut a = Job::new("A", 1);
         let s = snap(PrState::Merged, Mergeable::Unknown, &[("t", "fail")]);
         assert_eq!(a.apply_pr(&s), [Event::Finished(PrState::Merged)]);
         assert_eq!(a.pr_state, Some(PrState::Merged));

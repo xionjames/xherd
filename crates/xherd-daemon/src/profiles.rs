@@ -132,7 +132,7 @@ impl Daemon {
     }
 
     /// The profile an agent was created on, if it still exists.
-    pub async fn profile_of(&self, a: &xherd_core::Agent) -> Option<Profile> {
+    pub async fn profile_of(&self, a: &xherd_core::Job) -> Option<Profile> {
         let id = a.profile.as_deref()?;
         self.store
             .list_profiles()

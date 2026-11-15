@@ -9,17 +9,17 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use xherd_core::paths::Paths;
-use xherd_core::{Agent, Status};
+use xherd_core::{Job, Status};
 use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER, mint_token};
 use xherd_daemon::*;
 
-async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
+async fn setup() -> (tempfile::TempDir, Daemon, Job) {
     setup_with(|_| {}).await
 }
 
 /// `setup`, with `prep` run on the data root before the daemon starts (to
 /// add external plugins).
-async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Agent) {
+async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Job) {
     let dir = tempfile::tempdir().unwrap();
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.scheduler = None;
@@ -47,9 +47,9 @@ async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Ag
     .unwrap();
     prep(&paths);
     let d = Daemon::start(paths, o).await.unwrap();
-    let mut a = Agent::new("SC-1", 1);
+    let mut a = Job::new("SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
-    let a = d.create_agent(a).await.unwrap();
+    let a = d.create_job(a).await.unwrap();
     for _ in 0..100 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -776,10 +776,10 @@ async fn findings_endpoint_reads_review_md() {
     let wt = dir.path().join("wt");
     let spec = wt.join(".xherd/spec");
     std::fs::create_dir_all(&spec).unwrap();
-    let mut b = Agent::new("SC-2", 2);
+    let mut b = Job::new("SC-2", 2);
     b.launch = Some(vec!["rt".into()]);
     b.workdir = Some(wt.to_string_lossy().into_owned());
-    d.create_agent(b).await.unwrap();
+    d.create_job(b).await.unwrap();
     let local =
         xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
     let req = || {
@@ -1156,9 +1156,9 @@ async fn terminal_handler_reports_are_kept() {
     assert_eq!(v["native"], json!(true));
 
     // An agent with a worktree: no Terminal entry before a report.
-    let mut a = Agent::new("SC-2", 2);
+    let mut a = Job::new("SC-2", 2);
     a.workdir = Some(format!("{}/app/sc-2", d.worktrees_root()));
-    d.create_agent(a).await.unwrap();
+    d.create_job(a).await.unwrap();
     let targets = |app: axum::Router| async move {
         let (s, v) = call(
             app,

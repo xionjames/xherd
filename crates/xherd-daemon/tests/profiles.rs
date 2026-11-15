@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use xherd_core::new::NewAgent;
+use xherd_core::new::NewJob;
 use xherd_core::paths::Paths;
 use xherd_daemon::*;
 
@@ -79,8 +79,8 @@ fn trusting(dir: &Path) -> String {
 }
 
 /// An agent named after its ticket key, lower-cased: its branch is the key.
-fn req(t: &T, key: &str) -> NewAgent {
-    NewAgent {
+fn req(t: &T, key: &str) -> NewJob {
+    NewJob {
         name: key.to_ascii_lowercase(),
         ticket: Some(key.into()),
         ticket_key: None,
@@ -194,7 +194,7 @@ async fn a_matching_profile_sets_base_autonomy_and_instructions() {
     p.instructions = Some("Use tabs.".into());
     let p = t.d.create_profile(p).await.unwrap();
 
-    let a = t.d.new_agent(req(&t, "P-1")).await.unwrap();
+    let a = t.d.new_job(req(&t, "P-1")).await.unwrap();
     assert_eq!(a.profile.as_deref(), Some(p.id.as_str()));
     assert_eq!(a.base.as_deref(), Some("develop"));
     assert_eq!(a.autonomy, xherd_core::autonomy::Autonomy::Important);
@@ -208,7 +208,7 @@ async fn a_matching_profile_sets_base_autonomy_and_instructions() {
     let mut r = req(&t, "P-2");
     r.base = Some("main".into());
     r.autonomy = Some(xherd_core::autonomy::Autonomy::Ask);
-    let b = t.d.new_agent(r).await.unwrap();
+    let b = t.d.new_job(r).await.unwrap();
     assert_eq!(b.base.as_deref(), Some("main"));
     assert_eq!(b.autonomy, xherd_core::autonomy::Autonomy::Ask);
 
@@ -226,7 +226,7 @@ async fn without_a_match_the_global_settings_apply() {
     t.d.create_profile(profile("Other", &["github.com/other/*"]))
         .await
         .unwrap();
-    let a = t.d.new_agent(req(&t, "N-1")).await.unwrap();
+    let a = t.d.new_job(req(&t, "N-1")).await.unwrap();
     assert_eq!(a.profile, None);
     assert_eq!(a.base.as_deref(), Some("main"));
 }

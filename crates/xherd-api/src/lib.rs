@@ -35,9 +35,9 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/ws/setup/{id}", get(term::setup_terminal))
         .route("/api/v1/state", get(state))
         .route("/api/v1/backups", get(backups).post(new_backup))
-        .route("/api/v1/agents", get(list_agents).post(new_agent))
+        .route("/api/v1/agents", get(list_jobs).post(new_job))
         .route("/api/v1/agents/pause-all", post(pause_all))
-        .route("/api/v1/agents/{id}", get(get_agent))
+        .route("/api/v1/agents/{id}", get(get_job))
         .route("/api/v1/agents/{id}/diff", get(diff))
         .route("/api/v1/agents/{id}/docs", get(docs))
         .route("/api/v1/agents/{id}/findings", get(findings))
@@ -307,7 +307,7 @@ impl FromRequestParts<Daemon> for User {
 
 /// An agent token: the agent it belongs to and its scopes.
 pub struct AgentAuth {
-    pub agent_id: String,
+    pub job_id: String,
     pub scopes: Vec<String>,
 }
 
@@ -344,7 +344,7 @@ impl FromRequestParts<Daemon> for AgentAuth {
             .map_err(ApiError::internal)?;
         match row {
             Some(r) if r.kind == TOKEN_AGENT && !r.revoked => Ok(AgentAuth {
-                agent_id: r.subject.unwrap_or_default(),
+                job_id: r.subject.unwrap_or_default(),
                 scopes: r.scopes,
             }),
             _ => Err(deny()),
@@ -361,7 +361,7 @@ async fn healthz() -> Json<Value> {
 }
 
 async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
-    let agents = d.store.list_agents().await.map_err(ApiError::internal)?;
+    let agents = d.store.list_jobs().await.map_err(ApiError::internal)?;
     let mut config = serde_json::to_value(&*d.config).map_err(ApiError::internal)?;
     if let Some(c) = config.as_object_mut() {
         c.remove("userToken");
@@ -435,18 +435,18 @@ fn flows(d: &Daemon) -> Vec<Value> {
         .collect()
 }
 
-async fn list_agents(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
-    let agents = d.store.list_agents().await.map_err(ApiError::internal)?;
+async fn list_jobs(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    let agents = d.store.list_jobs().await.map_err(ApiError::internal)?;
     Ok(Json(json!({"agents": agents})))
 }
 
-/// Create an agent (spec §5.1). Body: `NewAgent`, unknown fields refused.
-async fn new_agent(
+/// Create an agent (spec §5.1). Body: `NewJob`, unknown fields refused.
+async fn new_job(
     _: User,
     State(d): State<Daemon>,
-    Json(req): Json<xherd_core::new::NewAgent>,
+    Json(req): Json<xherd_core::new::NewJob>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    let agent = d.new_agent(req).await?;
+    let agent = d.new_job(req).await?;
     Ok((StatusCode::CREATED, Json(json!({"agent": agent}))))
 }
 
@@ -674,22 +674,23 @@ async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         .into_iter()
         .map(|e| {
             let p = e.payload.unwrap_or_default();
-            let seen = seen.contains(&seen_id(&e.agent_id, e.at, p["gate"].as_str().unwrap_or("")));
-            json!({"agentId": e.agent_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"], "seen": seen})
+            let seen = seen.contains(&seen_id(&e.job_id, e.at, p["gate"].as_str().unwrap_or("")));
+            json!({"agentId": e.job_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"], "seen": seen})
         })
         .collect();
     Ok(Json(json!({"reviews": items})))
 }
 
 /// The event id that records an auto-approval as seen (one per item).
-fn seen_id(agent_id: &str, at: i64, gate: &str) -> String {
-    format!("seen:{agent_id}:{at}:{gate}")
+fn seen_id(job_id: &str, at: i64, gate: &str) -> String {
+    format!("seen:{job_id}:{at}:{gate}")
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SeenItem {
-    agent_id: String,
+    #[serde(rename = "agentId")]
+    job_id: String,
     at: i64,
     gate: String,
 }
@@ -711,8 +712,8 @@ async fn reviews_seen(
     for i in b.items.iter().take(500) {
         d.store
             .insert_event(xherd_store::Event {
-                id: seen_id(&i.agent_id, i.at, &i.gate),
-                agent_id: i.agent_id.clone(),
+                id: seen_id(&i.job_id, i.at, &i.gate),
+                job_id: i.job_id.clone(),
                 kind: "review-seen".into(),
                 payload: None,
                 at: now,
@@ -1094,7 +1095,7 @@ async fn git_credential(
     }
 }
 
-async fn get_agent(
+async fn get_job(
     _: User,
     State(d): State<Daemon>,
     Path(id): Path<String>,
@@ -1338,7 +1339,7 @@ async fn hooks(
     Json(r): Json<Report>,
 ) -> ApiResult<Json<Value>> {
     auth.require(SCOPE_HOOKS)?;
-    if r.agent_id != auth.agent_id {
+    if r.job_id != auth.job_id {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "wrong_agent",
@@ -1377,7 +1378,7 @@ async fn xap(auth: AgentAuth, State(d): State<Daemon>, body: axum::body::Bytes) 
             );
         }
     };
-    if call.agent_id != auth.agent_id {
+    if call.job_id != auth.job_id {
         return fail(
             StatusCode::FORBIDDEN,
             "wrong_agent",

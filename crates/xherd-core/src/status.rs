@@ -1,4 +1,4 @@
-//! Agent statuses and the lifecycle table (spec §5.3).
+//! Job statuses and the lifecycle table (spec §5.3).
 
 use serde::{Deserialize, Serialize};
 

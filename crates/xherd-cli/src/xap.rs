@@ -317,7 +317,7 @@ pub fn run(cmd: XapCmd, json: bool) -> i32 {
     let report_only = cmd.is_report_only();
     let call = XapCall {
         id: xherd_core::new_id(),
-        agent_id: target.agent_id,
+        job_id: target.job_id,
         cmd,
         at: xherd_core::now_ms(),
     };

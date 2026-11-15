@@ -1,12 +1,12 @@
-//! `Daemon::new_agent` against a real temp git repo (R-001..R-005c).
+//! `Daemon::new_job` against a real temp git repo (R-001..R-005c).
 
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use xherd_core::new::NewAgent;
+use xherd_core::new::NewJob;
 use xherd_core::paths::Paths;
-use xherd_core::{Agent, Status};
+use xherd_core::{Job, Status};
 use xherd_daemon::*;
 
 struct T {
@@ -85,8 +85,8 @@ fn trusting(dir: &Path) -> String {
 }
 
 /// An agent named after its ticket key, lower-cased: its branch is the key.
-fn req(t: &T, key: &str) -> NewAgent {
-    NewAgent {
+fn req(t: &T, key: &str) -> NewJob {
+    NewJob {
         name: key.to_ascii_lowercase(),
         ticket: Some(key.into()),
         ticket_key: None,
@@ -116,7 +116,7 @@ async fn creates_worktree_and_private_folder() {
     let t = setup().await;
     let mut r = req(&t, "sc-1");
     r.name = "login".into();
-    let a: Agent = t.d.new_agent(r).await.unwrap();
+    let a: Job = t.d.new_job(r).await.unwrap();
     assert_eq!(
         (a.name.as_str(), a.ticket_key(), a.branch.as_str()),
         ("login", Some("SC-1"), "SC-1-login")
@@ -169,11 +169,11 @@ async fn creates_worktree_and_private_folder() {
 #[tokio::test]
 async fn refusals_leave_nothing_behind() {
     let t = setup().await;
-    let code = |r: Result<Agent, ActionError>| r.unwrap_err().code;
+    let code = |r: Result<Job, ActionError>| r.unwrap_err().code;
 
     let mut r = req(&t, "SC-2");
     r.base = Some("nope".into());
-    assert_eq!(code(t.d.new_agent(r).await), "base_unresolved");
+    assert_eq!(code(t.d.new_job(r).await), "base_unresolved");
     assert!(
         !t.ws
             .path()
@@ -193,16 +193,16 @@ async fn refusals_leave_nothing_behind() {
 
     let mut r = req(&t, "SC-2");
     r.flow = Some("bug".into());
-    assert_eq!(code(t.d.new_agent(r).await), "unknown_flow");
+    assert_eq!(code(t.d.new_job(r).await), "unknown_flow");
     let mut r = req(&t, "SC-2");
     r.repo = t.ws.path().to_string_lossy().into_owned();
-    assert_eq!(code(t.d.new_agent(r).await), "not_a_repo");
+    assert_eq!(code(t.d.new_job(r).await), "not_a_repo");
 
-    t.d.new_agent(req(&t, "SC-2")).await.unwrap();
-    assert_eq!(code(t.d.new_agent(req(&t, "SC-2")).await), "name_taken");
+    t.d.new_job(req(&t, "SC-2")).await.unwrap();
+    assert_eq!(code(t.d.new_job(req(&t, "SC-2")).await), "name_taken");
 
     assert!(git(t.repo.path(), &["branch", "SC-3"]).status.success());
-    assert_eq!(code(t.d.new_agent(req(&t, "SC-3")).await), "branch_exists");
+    assert_eq!(code(t.d.new_job(req(&t, "SC-3")).await), "branch_exists");
 }
 
 #[tokio::test]
@@ -210,7 +210,7 @@ async fn a_bugfix_agent_starts_with_the_bugfix_command() {
     let t = setup().await;
     let mut r = req(&t, "SC-5");
     r.flow = Some("bugfix".into());
-    let a = t.d.new_agent(r).await.unwrap();
+    let a = t.d.new_job(r).await.unwrap();
     assert_eq!(
         (a.pack.as_deref(), a.flow.as_deref()),
         (Some("xherd"), Some("bugfix"))
@@ -241,7 +241,7 @@ async fn flow_none_and_origin_base() {
     let mut r = req(&t, "SC-4");
     r.repo = c.to_string_lossy().into_owned();
     r.flow = Some("none".into());
-    let a = t.d.new_agent(r).await.unwrap();
+    let a = t.d.new_job(r).await.unwrap();
     assert_eq!(a.base.as_deref(), Some("origin/main"));
     assert_eq!((a.pack, a.flow), (None, None));
     assert_eq!(a.next_prompt.as_deref(), Some("add login"));
@@ -255,7 +255,7 @@ async fn starts_claude_code_with_hooks() {
             .join("worktrees")
             .join(repo_name(&t))
             .join("sc-5");
-    let a = t.d.new_agent(req(&t, "SC-5")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-5")).await.unwrap();
     // The default mode (accept edits) is passed explicitly, never the runtime's own default.
     assert_eq!(
         a.launch.as_deref().map(|l| l.join(" ")).as_deref(),
@@ -310,10 +310,10 @@ async fn permission_mode_from_the_request_and_changed_later() {
     let t = setup().await;
     let mut r = req(&t, "SC-8");
     r.permission_mode = Some(PermissionMode::All);
-    assert_eq!(t.d.new_agent(r).await.unwrap_err().code, "mode_unavailable");
+    assert_eq!(t.d.new_job(r).await.unwrap_err().code, "mode_unavailable");
     let mut r = req(&t, "SC-8");
     r.permission_mode = Some(PermissionMode::Ask);
-    let a = t.d.new_agent(r).await.unwrap();
+    let a = t.d.new_job(r).await.unwrap();
     assert_eq!(a.permission_mode, Some(PermissionMode::Ask));
     assert_eq!(
         a.launch.as_deref().map(|l| l.join(" ")).as_deref(),
@@ -341,8 +341,8 @@ async fn permission_mode_from_the_request_and_changed_later() {
 #[tokio::test]
 async fn the_model_comes_from_the_request_then_the_profile_then_settings() {
     let t = setup().await;
-    let line = |a: &Agent| a.launch.as_deref().map(|l| l.join(" ")).unwrap();
-    let a = t.d.new_agent(req(&t, "SC-31")).await.unwrap();
+    let line = |a: &Job| a.launch.as_deref().map(|l| l.join(" ")).unwrap();
+    let a = t.d.new_job(req(&t, "SC-31")).await.unwrap();
     assert_eq!(a.model, None);
     assert_eq!(line(&a), "claude --permission-mode acceptEdits");
 
@@ -353,7 +353,7 @@ async fn the_model_comes_from_the_request_then_the_profile_then_settings() {
         .unwrap(),
     );
     assert!(saved.is_ok(), "{:?}", saved.err().map(|e| e.message));
-    let a = t.d.new_agent(req(&t, "SC-32")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-32")).await.unwrap();
     assert_eq!(a.model.as_deref(), Some("haiku"), "setting");
     assert_eq!(
         line(&a),
@@ -367,17 +367,17 @@ async fn the_model_comes_from_the_request_then_the_profile_then_settings() {
     }))
     .unwrap();
     t.d.create_profile(p).await.unwrap();
-    let a = t.d.new_agent(req(&t, "SC-33")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-33")).await.unwrap();
     assert_eq!(a.model.as_deref(), Some("sonnet"), "profile");
 
     let mut r = req(&t, "SC-34");
     r.model = Some(" opus ".into());
-    let a = t.d.new_agent(r).await.unwrap();
+    let a = t.d.new_job(r).await.unwrap();
     assert_eq!(a.model.as_deref(), Some("opus"), "request");
 
     let mut r = req(&t, "SC-35");
     r.model = Some("--evil".into());
-    assert_eq!(t.d.new_agent(r).await.unwrap_err().code, "bad_model");
+    assert_eq!(t.d.new_job(r).await.unwrap_err().code, "bad_model");
 
     use xherd_core::permission::PermissionMode;
     t.d.set_permission_mode("SC-34", PermissionMode::Ask)
@@ -466,7 +466,7 @@ async fn version_files_wrap_the_launch_in_the_toolchain_step() {
             .status
             .success()
     );
-    t.d.new_agent(req(&t, "SC-7")).await.unwrap();
+    t.d.new_job(req(&t, "SC-7")).await.unwrap();
     let wt =
         t.ws.path()
             .join("worktrees")
@@ -502,7 +502,7 @@ async fn trusts_each_new_worktree_in_the_runtime_file() {
         r#"{"userID": "u", "projects": {"/elsewhere": {"x": 1}}}"#,
     )
     .unwrap();
-    let a = t.d.new_agent(req(&t, "SC-8")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-8")).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&trust).unwrap()).unwrap();
     assert_eq!(v["userID"], "u");
     assert_eq!(v["projects"]["/elsewhere"]["x"], 1);
@@ -513,7 +513,7 @@ async fn trusts_each_new_worktree_in_the_runtime_file() {
 
     // A trust file that is not JSON is never overwritten: creation refuses.
     std::fs::write(&trust, "{oops").unwrap();
-    let e = t.d.new_agent(req(&t, "SC-9")).await.unwrap_err();
+    let e = t.d.new_job(req(&t, "SC-9")).await.unwrap_err();
     assert_eq!(e.code, "runtime_trust");
     assert_eq!(std::fs::read_to_string(&trust).unwrap(), "{oops");
     assert!(
@@ -558,7 +558,7 @@ async fn refuses_without_a_runtime_plugin() {
         .status()
         .unwrap();
     assert!(git.success());
-    let r = NewAgent {
+    let r = NewJob {
         name: "sc-6".into(),
         ticket: None,
         ticket_key: None,
@@ -572,7 +572,7 @@ async fn refuses_without_a_runtime_plugin() {
         runtime: None,
         model: None,
     };
-    assert_eq!(d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
+    assert_eq!(d.new_job(r).await.unwrap_err().code, "runtime_unusable");
 }
 
 #[tokio::test]
@@ -613,7 +613,7 @@ async fn url_uses_and_fetches_xherds_clone() {
 
     let mut r = req(&t, "SC-7");
     r.repo = "git@git.example.com:acme/app".into();
-    let a = t.d.new_agent(r).await.unwrap();
+    let a = t.d.new_job(r).await.unwrap();
     assert_eq!(a.repo.as_deref(), Some(clone.to_string_lossy().as_ref()));
     assert!(t.ws.path().join("worktrees/app/sc-7").is_dir());
 
@@ -636,7 +636,7 @@ async fn opencode_agents_get_its_plugin_file_and_mode() {
     let t = setup().await;
     let mut r = req(&t, "SC-20");
     r.runtime = Some("opencode".into());
-    let a = t.d.new_agent(r).await.unwrap();
+    let a = t.d.new_job(r).await.unwrap();
     assert_eq!(a.runtime.as_deref(), Some("opencode"));
     assert_eq!(
         a.next_prompt.as_deref(),
@@ -660,14 +660,14 @@ async fn opencode_agents_get_its_plugin_file_and_mode() {
 #[tokio::test]
 async fn the_runtime_comes_from_the_request_then_the_profile_then_settings() {
     let t = setup().await;
-    let a = t.d.new_agent(req(&t, "SC-21")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-21")).await.unwrap();
     assert_eq!(a.runtime.as_deref(), Some("claude-code"), "setting default");
 
     let saved = t.d.save_config(
         serde_json::from_value(serde_json::json!({"defaultRuntime": "opencode"})).unwrap(),
     );
     assert!(saved.is_ok(), "{:?}", saved.err().map(|e| e.message));
-    let a = t.d.new_agent(req(&t, "SC-22")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-22")).await.unwrap();
     assert_eq!(a.runtime.as_deref(), Some("opencode"), "changed setting");
 
     let p: xherd_core::profile::Profile = serde_json::from_value(serde_json::json!({
@@ -677,19 +677,19 @@ async fn the_runtime_comes_from_the_request_then_the_profile_then_settings() {
     }))
     .unwrap();
     t.d.create_profile(p).await.unwrap();
-    let a = t.d.new_agent(req(&t, "SC-23")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-23")).await.unwrap();
     assert_eq!(a.runtime.as_deref(), Some("claude-code"), "profile");
 
     let mut r = req(&t, "SC-24");
     r.runtime = Some("opencode".into());
     assert_eq!(
-        t.d.new_agent(r).await.unwrap().runtime.as_deref(),
+        t.d.new_job(r).await.unwrap().runtime.as_deref(),
         Some("opencode")
     );
 
     let mut r = req(&t, "SC-25");
     r.runtime = Some("github".into());
-    assert_eq!(t.d.new_agent(r).await.unwrap_err().code, "runtime_unusable");
+    assert_eq!(t.d.new_job(r).await.unwrap_err().code, "runtime_unusable");
     let bad = t.d.save_config(
         serde_json::from_value(serde_json::json!({"defaultRuntime": "nope"})).unwrap(),
     );
@@ -704,7 +704,7 @@ async fn a_ticket_url_names_the_branch() {
     let mut r = req(&t, "x");
     r.name = "fix-login".into();
     r.ticket = Some("https://github.com/acme/api/issues/12".into());
-    let a = t.d.new_agent(r).await.unwrap();
+    let a = t.d.new_job(r).await.unwrap();
     assert_eq!(a.ticket_key(), Some("#12"));
     assert_eq!(a.branch, "12-fix-login");
     assert_eq!(
@@ -741,7 +741,7 @@ async fn a_ticket_url_names_the_branch() {
 #[tokio::test]
 async fn cancel_can_remove_the_worktree_and_keeps_the_branch() {
     let t = setup().await;
-    let a = t.d.new_agent(req(&t, "SC-7")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-7")).await.unwrap();
     let wt = std::path::PathBuf::from(a.workdir.clone().unwrap());
     assert!(wt.is_dir());
     let a =
@@ -788,7 +788,7 @@ async fn cancel_can_remove_the_worktree_and_keeps_the_branch() {
 #[tokio::test]
 async fn remove_worktree_only_once_the_agent_is_finished() {
     let t = setup().await;
-    let a = t.d.new_agent(req(&t, "SC-8")).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-8")).await.unwrap();
     let wt = std::path::PathBuf::from(a.workdir.clone().unwrap());
     let err =
         t.d.action("SC-8", UserAction::RemoveWorktree)

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use xherd_core::Agent;
+use xherd_core::Job;
 use xherd_core::domain::{Gate, HashedFile, Task, TaskStatus};
 
 use crate::{Facts, Flow, Pack, frontmatter};
@@ -51,7 +51,7 @@ pub fn spec_dir(workdir: &Path) -> PathBuf {
 /// runtime, with the Enters it needs. `None`: nothing to hand on.
 pub fn next_command(
     pack: &Pack,
-    a: &Agent,
+    a: &Job,
     gate: &Gate,
     facts: &dyn Facts,
     auto: bool,
@@ -201,8 +201,8 @@ mod tests {
         }
     }
 
-    fn agent() -> Agent {
-        let mut a = Agent::new("SC-1", 0);
+    fn agent() -> Job {
+        let mut a = Job::new("SC-1", 0);
         a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         a
@@ -277,7 +277,7 @@ mod tests {
         let p = crate::xap::tests::two_commit_stages();
         let mut a = agent();
         a.flow = Some("f".into());
-        let n = |a: &Agent| next_command(&p, a, &commit(), &F(false), false).unwrap();
+        let n = |a: &Job| next_command(&p, a, &commit(), &F(false), false).unwrap();
         a.stage = Some("reproduce".into());
         assert_eq!(n(&a), Some(("/t:commit C02".into(), 1)));
         a.stage = Some("implement".into());

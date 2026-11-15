@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rusqlite_migration::{M, Migrations};
 use serde_json::Value;
-use xherd_core::{Agent, Millis};
+use xherd_core::{Job, Millis};
 
 mod schema;
 
@@ -32,7 +32,7 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
-type Job = Box<dyn FnOnce(&mut Connection) + Send>;
+type WriteFn = Box<dyn FnOnce(&mut Connection) + Send>;
 
 /// Event kinds that are records, not history: `prune_events` keeps them.
 /// `ticket-comment` says a summary was posted on the agent's ticket, which
@@ -44,7 +44,7 @@ pub const KEPT_EVENTS: &[&str] = &["ticket-comment"];
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub id: String,
-    pub agent_id: String,
+    pub job_id: String,
     pub kind: String,
     pub payload: Option<Value>,
     pub at: Millis,
@@ -53,7 +53,7 @@ pub struct Event {
 /// One row of the `approvals` table (design §3.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Approval {
-    pub agent_id: String,
+    pub job_id: String,
     pub file: String,
     pub sha256: String,
     pub at: Millis,
@@ -73,7 +73,7 @@ pub struct TokenRow {
 
 #[derive(Clone)]
 pub struct Store {
-    writer: std::sync::mpsc::Sender<Job>,
+    writer: std::sync::mpsc::Sender<WriteFn>,
     readers: Arc<Mutex<Vec<Connection>>>,
     path: PathBuf,
 }
@@ -146,7 +146,7 @@ impl Store {
             tracing::info!(from = current, applied = pending, "database migrated");
         }
 
-        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        let (tx, rx) = std::sync::mpsc::channel::<WriteFn>();
         std::thread::Builder::new()
             .name("xherd-store-writer".into())
             .spawn(move || {
@@ -233,7 +233,7 @@ impl Store {
 
     // ---- agents ------------------------------------------------------------
 
-    pub async fn put_agent(&self, a: &Agent) -> Result<()> {
+    pub async fn put_job(&self, a: &Job) -> Result<()> {
         let data = serde_json::to_string(a)?;
         let (id, name, status, created) = (
             a.id.clone(),
@@ -252,34 +252,34 @@ impl Store {
         .await
     }
 
-    pub async fn get_agent(&self, id: &str) -> Result<Option<Agent>> {
+    pub async fn get_job(&self, id: &str) -> Result<Option<Job>> {
         let id = id.to_string();
         self.read(move |c| {
             let data: Option<String> = c
                 .query_row("SELECT data FROM agents WHERE id = ?1", [id], |r| r.get(0))
                 .optional()?;
             Ok(data
-                .map(|d| serde_json::from_str::<Agent>(&d))
+                .map(|d| serde_json::from_str::<Job>(&d))
                 .transpose()?
-                .map(Agent::upgrade))
+                .map(Job::upgrade))
         })
         .await
     }
 
-    pub async fn list_agents(&self) -> Result<Vec<Agent>> {
+    pub async fn list_jobs(&self) -> Result<Vec<Job>> {
         self.read(|c| {
             let mut st = c.prepare("SELECT data FROM agents ORDER BY created_at, id")?;
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
             let mut out = Vec::new();
             for d in rows {
-                out.push(serde_json::from_str::<Agent>(&d?)?.upgrade());
+                out.push(serde_json::from_str::<Job>(&d?)?.upgrade());
             }
             Ok(out)
         })
         .await
     }
 
-    pub async fn delete_agent(&self, id: &str) -> Result<()> {
+    pub async fn delete_job(&self, id: &str) -> Result<()> {
         let id = id.to_string();
         self.write(move |c| {
             let tx = c.transaction()?;
@@ -296,8 +296,8 @@ impl Store {
     // ---- approvals -----------------------------------------------------------
 
     /// The ledger approves `file` at exactly this content (R-107).
-    pub async fn approved(&self, agent_id: &str, file: &str, sha256: &str) -> Result<bool> {
-        let (a, f, h) = (agent_id.to_string(), file.to_string(), sha256.to_string());
+    pub async fn approved(&self, job_id: &str, file: &str, sha256: &str) -> Result<bool> {
+        let (a, f, h) = (job_id.to_string(), file.to_string(), sha256.to_string());
         self.read(move |c| {
             Ok(c.query_row(
                 "SELECT 1 FROM approvals WHERE agent_id = ?1 AND file = ?2 AND sha256 = ?3",
@@ -316,9 +316,7 @@ impl Store {
             c.execute(
                 "INSERT OR IGNORE INTO approvals (agent_id, file, sha256, at, actor, auto, reason)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    r.agent_id, r.file, r.sha256, r.at, r.actor, r.auto, r.reason
-                ],
+                params![r.job_id, r.file, r.sha256, r.at, r.actor, r.auto, r.reason],
             )?;
             Ok(())
         })
@@ -326,8 +324,8 @@ impl Store {
     }
 
     /// Files with at least one approval for this agent.
-    pub async fn approved_files(&self, agent_id: &str) -> Result<BTreeSet<String>> {
-        let a = agent_id.to_string();
+    pub async fn approved_files(&self, job_id: &str) -> Result<BTreeSet<String>> {
+        let a = job_id.to_string();
         self.read(move |c| {
             let mut st = c.prepare("SELECT DISTINCT file FROM approvals WHERE agent_id = ?1")?;
             let rows = st.query_map([a], |r| r.get::<_, String>(0))?;
@@ -365,8 +363,8 @@ impl Store {
     }
 
     /// The text the user approved last, for "changed since you reviewed".
-    pub async fn put_reviewed(&self, agent_id: &str, file: &str, text: &str) -> Result<()> {
-        let (a, f, t) = (agent_id.to_string(), file.to_string(), text.to_string());
+    pub async fn put_reviewed(&self, job_id: &str, file: &str, text: &str) -> Result<()> {
+        let (a, f, t) = (job_id.to_string(), file.to_string(), text.to_string());
         self.write(move |c| {
             c.execute(
                 "INSERT INTO reviewed (agent_id, file, text) VALUES (?1, ?2, ?3)
@@ -378,8 +376,8 @@ impl Store {
         .await
     }
 
-    pub async fn reviewed(&self, agent_id: &str, file: &str) -> Result<Option<String>> {
-        let (a, f) = (agent_id.to_string(), file.to_string());
+    pub async fn reviewed(&self, job_id: &str, file: &str) -> Result<Option<String>> {
+        let (a, f) = (job_id.to_string(), file.to_string());
         self.read(move |c| {
             Ok(c.query_row(
                 "SELECT text FROM reviewed WHERE agent_id = ?1 AND file = ?2",
@@ -396,12 +394,12 @@ impl Store {
     /// `None` removes the mark.
     pub async fn put_viewed(
         &self,
-        agent_id: &str,
+        job_id: &str,
         path: &str,
         fingerprint: Option<&str>,
     ) -> Result<()> {
         let (a, p, f) = (
-            agent_id.to_string(),
+            job_id.to_string(),
             path.to_string(),
             fingerprint.map(str::to_string),
         );
@@ -423,11 +421,8 @@ impl Store {
     }
 
     /// Path → fingerprint of every file the user marked viewed.
-    pub async fn viewed(
-        &self,
-        agent_id: &str,
-    ) -> Result<std::collections::BTreeMap<String, String>> {
-        let a = agent_id.to_string();
+    pub async fn viewed(&self, job_id: &str) -> Result<std::collections::BTreeMap<String, String>> {
+        let a = job_id.to_string();
         self.read(move |c| {
             let mut st =
                 c.prepare("SELECT path, fingerprint FROM diff_viewed WHERE agent_id = ?1")?;
@@ -567,9 +562,9 @@ impl Store {
             })?;
             let mut out = Vec::new();
             for row in rows {
-                let (id, agent_id, kind, payload, at) = row?;
+                let (id, job_id, kind, payload, at) = row?;
                 let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
-                out.push(Event { id, agent_id, kind, payload, at });
+                out.push(Event { id, job_id, kind, payload, at });
             }
             Ok(out)
         })
@@ -659,7 +654,7 @@ impl Store {
         self.write(move |c| {
             let n = c.execute(
                 "INSERT OR IGNORE INTO events (id, agent_id, kind, payload, at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![e.id, e.agent_id, e.kind, payload, e.at],
+                params![e.id, e.job_id, e.kind, payload, e.at],
             )?;
             Ok(n == 1)
         })
@@ -678,7 +673,7 @@ impl Store {
         .await
     }
 
-    /// `agent_id|at|gate` of every auto-approval marked seen (events of kind
+    /// `job_id|at|gate` of every auto-approval marked seen (events of kind
     /// `review-seen`, pruned with the approvals themselves).
     pub async fn reviews_seen(&self) -> Result<std::collections::HashSet<String>> {
         self.read(|c| {
@@ -690,8 +685,8 @@ impl Store {
     }
 
     /// Most recent first.
-    pub async fn events(&self, agent_id: &str, limit: usize) -> Result<Vec<Event>> {
-        let id = agent_id.to_string();
+    pub async fn events(&self, job_id: &str, limit: usize) -> Result<Vec<Event>> {
+        let id = job_id.to_string();
         self.read(move |c| {
             let mut st = c.prepare(
                 "SELECT id, agent_id, kind, payload, at FROM events WHERE agent_id = ?1 ORDER BY at DESC, id DESC LIMIT ?2",
@@ -701,9 +696,9 @@ impl Store {
             })?;
             let mut out = Vec::new();
             for row in rows {
-                let (id, agent_id, kind, payload, at) = row?;
+                let (id, job_id, kind, payload, at) = row?;
                 let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
-                out.push(Event { id, agent_id, kind, payload, at });
+                out.push(Event { id, job_id, kind, payload, at });
             }
             Ok(out)
         })
@@ -730,11 +725,11 @@ impl Store {
             })?;
             let mut out = Vec::new();
             for row in rows {
-                let (id, agent_id, kind, payload, at) = row?;
+                let (id, job_id, kind, payload, at) = row?;
                 let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
                 out.push(Event {
                     id,
-                    agent_id,
+                    job_id,
                     kind,
                     payload,
                     at,
@@ -760,9 +755,9 @@ impl Store {
         .await
     }
 
-    /// Whether agent `agent_id` has an event of `kind`.
-    pub async fn agent_has_event(&self, agent_id: &str, kind: &str) -> Result<bool> {
-        let (a, k) = (agent_id.to_string(), kind.to_string());
+    /// Whether agent `job_id` has an event of `kind`.
+    pub async fn agent_has_event(&self, job_id: &str, kind: &str) -> Result<bool> {
+        let (a, k) = (job_id.to_string(), kind.to_string());
         self.read(move |c| {
             Ok(c.query_row(
                 "SELECT EXISTS(SELECT 1 FROM events WHERE agent_id = ?1 AND kind = ?2)",
@@ -890,14 +885,14 @@ mod tests {
     #[tokio::test]
     async fn agent_roundtrip_and_update() {
         let (_d, s) = open();
-        let mut a = Agent::new("SC-1", 1);
-        s.put_agent(&a).await.unwrap();
+        let mut a = Job::new("SC-1", 1);
+        s.put_job(&a).await.unwrap();
         a.status = Status::Running;
-        s.put_agent(&a).await.unwrap();
-        assert_eq!(s.get_agent(&a.id).await.unwrap(), Some(a.clone()));
-        assert_eq!(s.list_agents().await.unwrap().len(), 1);
-        s.delete_agent(&a.id).await.unwrap();
-        assert_eq!(s.get_agent(&a.id).await.unwrap(), None);
+        s.put_job(&a).await.unwrap();
+        assert_eq!(s.get_job(&a.id).await.unwrap(), Some(a.clone()));
+        assert_eq!(s.list_jobs().await.unwrap().len(), 1);
+        s.delete_job(&a.id).await.unwrap();
+        assert_eq!(s.get_job(&a.id).await.unwrap(), None);
     }
 
     #[tokio::test]
@@ -905,7 +900,7 @@ mod tests {
         let (_d, s) = open();
         let e = Event {
             id: "e1".into(),
-            agent_id: "a".into(),
+            job_id: "a".into(),
             kind: "report.stop".into(),
             payload: None,
             at: 10,
@@ -915,7 +910,7 @@ mod tests {
         assert!(s.event_exists("e1").await.unwrap());
         s.insert_event(Event {
             id: "e2".into(),
-            agent_id: "a".into(),
+            job_id: "a".into(),
             kind: "k".into(),
             payload: Some(serde_json::json!({"x": 1})),
             at: 20,
@@ -930,7 +925,7 @@ mod tests {
         // A record kind outlives the retention period.
         s.insert_event(Event {
             id: "e3".into(),
-            agent_id: "a".into(),
+            job_id: "a".into(),
             kind: "ticket-comment".into(),
             payload: None,
             at: 5,

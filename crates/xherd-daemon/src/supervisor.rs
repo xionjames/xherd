@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use xherd_core::report::{Origin, Report};
 use xherd_core::xap::{Refusal, XapCall, refuse};
-use xherd_core::{Agent, Millis, Status};
+use xherd_core::{Job, Millis, Status};
 
 use crate::actor::{
     self, ActionError, AgentTx, Env, Msg, ReportResult, SupEvent, TickKind, UserAction,
@@ -19,13 +19,13 @@ pub const PORT_RANGE_START: u16 = 41000;
 pub const PORT_BLOCK: u16 = 10;
 
 pub enum SupMsg {
-    Create(Box<Agent>, oneshot::Sender<Result<Agent, ActionError>>),
+    Create(Box<Job>, oneshot::Sender<Result<Job, ActionError>>),
     Report(Report, Origin, oneshot::Sender<Option<ReportResult>>),
     /// `who` is an agent id, a name, or a unique ticket key.
     User(
         String,
         UserAction,
-        oneshot::Sender<Result<Agent, ActionError>>,
+        oneshot::Sender<Result<Job, ActionError>>,
     ),
     Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
@@ -46,7 +46,7 @@ fn gone() -> ActionError {
 }
 
 impl SupervisorHandle {
-    pub async fn create(&self, a: Agent) -> Result<Agent, ActionError> {
+    pub async fn create(&self, a: Job) -> Result<Job, ActionError> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(SupMsg::Create(Box::new(a), tx))
@@ -61,7 +61,7 @@ impl SupervisorHandle {
         rx.await.ok().flatten()
     }
 
-    pub async fn action(&self, who: &str, a: UserAction) -> Result<Agent, ActionError> {
+    pub async fn action(&self, who: &str, a: UserAction) -> Result<Job, ActionError> {
         let (tx, rx) = oneshot::channel();
         self.tx
             .send(SupMsg::User(who.to_string(), a, tx))
@@ -103,7 +103,7 @@ struct Supervisor {
 }
 
 /// Spawn the supervisor with existing agents (from the store).
-pub fn spawn(agents: Vec<Agent>, max_live: usize, mut env: Env) -> SupervisorHandle {
+pub fn spawn(agents: Vec<Job>, max_live: usize, mut env: Env) -> SupervisorHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<SupMsg>();
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<SupEvent>();
     env.sup = ev_tx;
@@ -133,7 +133,7 @@ pub fn spawn(agents: Vec<Agent>, max_live: usize, mut env: Env) -> SupervisorHan
 }
 
 impl Supervisor {
-    fn register(&mut self, a: Agent) {
+    fn register(&mut self, a: Job) {
         let entry = Entry {
             tx: actor::spawn(a.clone(), self.env.clone()),
             name: a.name.clone(),
@@ -181,7 +181,7 @@ impl Supervisor {
                     }));
                     return;
                 }
-                if let Err(e) = self.env.store.put_agent(&a).await {
+                if let Err(e) = self.env.store.put_job(&a).await {
                     let _ = reply.send(Err(ActionError {
                         code: "store",
                         message: e.to_string(),
@@ -192,7 +192,7 @@ impl Supervisor {
                 let _ = reply.send(Ok(*a));
                 self.fill_slots();
             }
-            SupMsg::Report(r, origin, reply) => match self.agents.get(&r.agent_id) {
+            SupMsg::Report(r, origin, reply) => match self.agents.get(&r.job_id) {
                 Some(e) => {
                     let (tx, rx) = oneshot::channel();
                     let _ = e.tx.send(Msg::Report(r, origin, Some(tx)));
@@ -201,7 +201,7 @@ impl Supervisor {
                     });
                 }
                 None => {
-                    tracing::warn!(agent = %r.agent_id, event = r.event.as_str(), "report for unknown agent");
+                    tracing::warn!(agent = %r.job_id, event = r.event.as_str(), "report for unknown agent");
                     let _ = reply.send(None);
                 }
             },
@@ -222,7 +222,7 @@ impl Supervisor {
                     }
                 }
             }
-            SupMsg::Xap(call, reply) => match self.agents.get(&call.agent_id) {
+            SupMsg::Xap(call, reply) => match self.agents.get(&call.job_id) {
                 Some(e) => {
                     let _ = e.tx.send(Msg::Xap(call, reply));
                 }

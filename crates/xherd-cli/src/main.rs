@@ -61,7 +61,7 @@ enum Cmd {
     Status,
     /// Create an agent: worktree, branch and `.xherd/`.
     New {
-        /// Agent name: lowercase letters, digits and `-` (also the tmux session and worktree folder).
+        /// Job name: lowercase letters, digits and `-` (also the tmux session and worktree folder).
         name: String,
         /// Ticket: an issue URL or a key (PAY-412, #12). Its key prefixes the branch.
         #[arg(long)]
@@ -385,9 +385,9 @@ fn main() -> ExitCode {
             runtime,
             model,
             prompt,
-        } => new_agent(
+        } => new_job(
             repo,
-            xherd_core::new::NewAgent {
+            xherd_core::new::NewJob {
                 name,
                 ticket,
                 ticket_key: None,
@@ -869,7 +869,7 @@ fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
     }
 }
 
-fn new_agent(repo: Option<String>, mut req: xherd_core::new::NewAgent) -> i32 {
+fn new_job(repo: Option<String>, mut req: xherd_core::new::NewJob) -> i32 {
     // The daemon has its own working directory: send an absolute path.
     let repo = match repo {
         Some(r) if r.contains("://") || r.starts_with("git@") => r,

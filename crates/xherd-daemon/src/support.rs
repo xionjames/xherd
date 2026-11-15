@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
-use xherd_core::{Agent, Millis};
+use xherd_core::{Job, Millis};
 use xherd_store::Store;
 
 pub trait Clock: Send + Sync + 'static {
@@ -47,13 +47,13 @@ impl Clock for ManualClock {
     rename_all_fields = "camelCase"
 )]
 pub enum Change {
-    Agent {
-        agent: Box<Agent>,
-    },
+    #[serde(rename = "agent")]
+    Job { agent: Box<Job> },
     /// `kind` (`gate`, `blocked`, `idle`…) tells which notification a new one
     /// replaces: one per agent and kind (spec §16.3).
     Notify {
-        agent_id: String,
+        #[serde(rename = "agentId")]
+        job_id: String,
         kind: String,
         text: String,
     },

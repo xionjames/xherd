@@ -163,7 +163,7 @@ mod tests {
     fn rep(n: u64) -> Queued {
         Queued::Report(Report {
             id: format!("r{n}"),
-            agent_id: "a".into(),
+            job_id: "a".into(),
             event: ReportEvent::Stop,
             payload: serde_json::Value::Null,
             seq: n,

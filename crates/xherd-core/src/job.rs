@@ -57,7 +57,7 @@ pub struct AskHold {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Agent {
+pub struct Job {
     pub id: String,
     /// A lowercase slug (#114): the tmux session, the worktree folder and
     /// what the UI shows. Unique.
@@ -225,10 +225,10 @@ pub struct Agent {
     pub auto_approve_pending: bool,
 }
 
-impl Agent {
+impl Job {
     /// A new agent with no ticket; its branch is its name.
-    pub fn new(name: &str, now: Millis) -> Agent {
-        Agent {
+    pub fn new(name: &str, now: Millis) -> Job {
+        Job {
             id: new_id(),
             name: name.to_string(),
             ticket: None,
@@ -293,7 +293,7 @@ impl Agent {
 
     /// An agent as stored before #114: the ticket key moves into `ticket`
     /// and the branch was the name. Run on every agent read from the store.
-    pub fn upgrade(mut self) -> Agent {
+    pub fn upgrade(mut self) -> Job {
         if let Some(k) = self.legacy_ticket_key.take()
             && self.ticket.is_none()
             && !k.is_empty()
@@ -366,11 +366,11 @@ mod tests {
 
     #[test]
     fn an_agent_stored_before_names_keeps_its_ticket_and_branch() {
-        let mut v = serde_json::to_value(Agent::new("SC-1-login", 1)).unwrap();
+        let mut v = serde_json::to_value(Job::new("SC-1-login", 1)).unwrap();
         let o = v.as_object_mut().unwrap();
         o.remove("branch");
         o.insert("ticketKey".into(), "SC-1".into());
-        let a: Agent = serde_json::from_value(v).unwrap();
+        let a: Job = serde_json::from_value(v).unwrap();
         let a = a.upgrade();
         assert_eq!(a.branch, "SC-1-login");
         assert_eq!(a.ticket_key(), Some("SC-1"));
@@ -379,7 +379,7 @@ mod tests {
         assert!(out.get("ticketKey").is_none());
         assert_eq!(out["ticket"], serde_json::json!({"key": "SC-1"}));
 
-        let plain = Agent::new("refund-retry", 1).upgrade();
+        let plain = Job::new("refund-retry", 1).upgrade();
         assert_eq!(
             (plain.ticket_ref(), plain.work_item()),
             ("", "refund-retry")
@@ -388,15 +388,15 @@ mod tests {
 
     #[test]
     fn ask_hold_and_worktree_fields_are_camel_case_and_optional() {
-        let mut v = serde_json::to_value(Agent::new("x", 1)).unwrap();
+        let mut v = serde_json::to_value(Job::new("x", 1)).unwrap();
         let o = v.as_object_mut().unwrap();
         assert_eq!(o.get("autoApprovePending"), Some(&false.into()));
         assert!(o.get("askHold").is_none() && o.get("worktreeRemovedAt").is_none());
         o.remove("autoApprovePending");
-        let old: Agent = serde_json::from_value(v).unwrap();
+        let old: Job = serde_json::from_value(v).unwrap();
         assert!(old.ask_hold.is_none() && !old.auto_approve_pending);
 
-        let mut a = Agent::new("x", 1);
+        let mut a = Job::new("x", 1);
         a.ask_hold = Some(AskHold {
             at: 7,
             was_watching: true,
@@ -408,6 +408,6 @@ mod tests {
             serde_json::json!({"at": 7, "wasWatching": true})
         );
         assert_eq!(out["worktreeRemovedAt"], 9);
-        assert_eq!(serde_json::from_value::<Agent>(out).unwrap(), a);
+        assert_eq!(serde_json::from_value::<Job>(out).unwrap(), a);
     }
 }

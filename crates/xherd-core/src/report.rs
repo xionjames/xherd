@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent::{Agent, Millis};
+use crate::job::{Job, Millis};
 use crate::status::{Status, Trigger};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -67,7 +67,8 @@ impl ReportEvent {
 pub struct Report {
     /// Client-generated id; replays are de-duplicated by it.
     pub id: String,
-    pub agent_id: String,
+    #[serde(rename = "agentId")]
+    pub job_id: String,
     pub event: ReportEvent,
     #[serde(default)]
     pub payload: Value,
@@ -79,7 +80,7 @@ pub struct Report {
 /// and never make a real report stale (R-009).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    Agent,
+    Job,
     Daemon,
 }
 
@@ -136,9 +137,9 @@ pub fn background_running(payload: &Value) -> usize {
 }
 
 /// Apply one report to the agent. Pure: the caller persists and runs effects.
-pub fn apply_report(agent: &mut Agent, r: &Report, origin: Origin, now: Millis) -> Outcome {
+pub fn apply_report(agent: &mut Job, r: &Report, origin: Origin, now: Millis) -> Outcome {
     match origin {
-        Origin::Agent => {
+        Origin::Job => {
             if r.seq <= agent.last_seq {
                 return Outcome::Stale;
             }
@@ -165,7 +166,7 @@ pub fn apply_report(agent: &mut Agent, r: &Report, origin: Origin, now: Millis) 
     }
 
     // R-016: session, activity time. Token usage is computed after stop (AfterStop).
-    if origin == Origin::Agent {
+    if origin == Origin::Job {
         if let Some(s) = str_field(&r.payload, &["session_id", "session", "sessionId"]) {
             agent.session = Some(s.to_string());
         }
@@ -201,14 +202,14 @@ pub fn apply_report(agent: &mut Agent, r: &Report, origin: Origin, now: Millis) 
         // come mid-turn. Stopped at a gate, the agent stays approvable.
         E::Notification if matches!(agent.status, Status::WaitingInput | Status::Idle) => {}
         E::Notification | E::Blocked => {
-            if origin == Origin::Agent || agent.status != Status::Blocked {
+            if origin == Origin::Job || agent.status != Status::Blocked {
                 let was_blocked = agent.status == Status::Blocked;
                 agent.fire(Trigger::Blocked, now);
                 if !was_blocked {
                     agent.screen_blocked = origin == Origin::Daemon;
                     let msg = str_field(&r.payload, &["message"]).unwrap_or("needs attention");
                     effects.push(Effect::Notify(format!("{} is blocked: {msg}", agent.name)));
-                } else if origin == Origin::Agent {
+                } else if origin == Origin::Job {
                     agent.screen_blocked = false;
                 }
             }
@@ -254,8 +255,8 @@ mod tests {
         assert_eq!(background_running(&json!({"background_tasks": "odd"})), 0);
     }
 
-    fn running() -> Agent {
-        let mut a = Agent::new("SC-1", 0);
+    fn running() -> Job {
+        let mut a = Job::new("SC-1", 0);
         a.fire(Trigger::SlotFree, 0);
         a
     }
@@ -263,7 +264,7 @@ mod tests {
     fn rep(event: ReportEvent, seq: u64, payload: Value) -> Report {
         Report {
             id: format!("r{seq}"),
-            agent_id: "x".into(),
+            job_id: "x".into(),
             event,
             payload,
             seq,
@@ -288,21 +289,21 @@ mod tests {
         apply_report(
             &mut a,
             &rep(ReportEvent::Stop, 5, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             1,
         );
         assert_eq!(a.status, Status::Idle);
         let out = apply_report(
             &mut a,
             &rep(ReportEvent::Working, 5, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             2,
         );
         assert_eq!(out, Outcome::Stale);
         let out = apply_report(
             &mut a,
             &rep(ReportEvent::Working, 4, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             2,
         );
         assert_eq!(out, Outcome::Stale);
@@ -323,7 +324,7 @@ mod tests {
         let out = apply_report(
             &mut a,
             &rep(ReportEvent::Working, 1, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             2,
         );
         assert!(matches!(
@@ -342,7 +343,7 @@ mod tests {
         apply_report(
             &mut a,
             &rep(ReportEvent::Stop, 1, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             1,
         );
         assert_eq!(a.status, Status::WaitingInput);
@@ -350,7 +351,7 @@ mod tests {
         let out = apply_report(
             &mut a,
             &rep(ReportEvent::Notification, 2, idle),
-            Origin::Agent,
+            Origin::Job,
             2,
         );
         assert_eq!(a.status, Status::WaitingInput);
@@ -359,7 +360,7 @@ mod tests {
         apply_report(
             &mut a,
             &rep(ReportEvent::Blocked, 3, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             3,
         );
         assert_eq!(a.status, Status::Blocked);
@@ -371,7 +372,7 @@ mod tests {
         apply_report(
             &mut a,
             &rep(ReportEvent::Notification, 1, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             1,
         );
         assert_eq!(a.status, Status::Blocked);
@@ -392,7 +393,7 @@ mod tests {
         let out = apply_report(
             &mut a,
             &rep(ReportEvent::SessionStart, 1, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             2,
         );
         assert_eq!(out, Outcome::Dormant);
@@ -410,7 +411,7 @@ mod tests {
                 1,
                 json!({"message": "Postgres or SQLite?"}),
             ),
-            Origin::Agent,
+            Origin::Job,
             1,
         );
         assert!(matches!(
@@ -432,7 +433,7 @@ mod tests {
                 1,
                 json!({"session_id": "s-1", "resumeCmd": "claude -r s-1"}),
             ),
-            Origin::Agent,
+            Origin::Job,
             1,
         );
         assert_eq!(a.session.as_deref(), Some("s-1"));
@@ -440,7 +441,7 @@ mod tests {
         apply_report(
             &mut a,
             &rep(ReportEvent::Release, 2, Value::Null),
-            Origin::Agent,
+            Origin::Job,
             2,
         );
         assert_eq!(a.session, None);
@@ -458,7 +459,7 @@ mod tests {
                 1,
                 json!({"prompt": "/xherd:next"}),
             ),
-            Origin::Agent,
+            Origin::Job,
             1,
         );
         let Outcome::Applied { effects, .. } = out else {
@@ -494,7 +495,7 @@ mod tests {
             let initial = a.status;
             for (i, (ev, seq, daemon)) in steps.into_iter().enumerate() {
                 let before = (a.last_seq, a.last_daemon_seq);
-                let origin = if daemon { Origin::Daemon } else { Origin::Agent };
+                let origin = if daemon { Origin::Daemon } else { Origin::Job };
                 apply_report(&mut a, &rep(ev, seq, Value::Null), origin, i as i64);
                 prop_assert!(a.last_seq >= before.0 && a.last_daemon_seq >= before.1);
                 if start_live {

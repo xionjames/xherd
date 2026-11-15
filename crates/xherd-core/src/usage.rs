@@ -5,7 +5,7 @@
 //! cumulative per session, so a measurement that is skipped or dropped is
 //! caught up by the next one.
 
-use crate::{Agent, Millis};
+use crate::{Job, Millis};
 
 /// `YYYY-MM-DD` (UTC) of a time in ms.
 pub fn day(ms: Millis) -> String {
@@ -45,7 +45,7 @@ pub fn level(used: u64, budget: u64) -> Level {
     }
 }
 
-impl Agent {
+impl Job {
     /// All tokens this agent used so far.
     pub fn tokens_total(&self) -> u64 {
         self.tokens_base + self.tokens_session
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn usage_is_cumulative_per_session() {
-        let mut a = Agent::new("A", 1);
+        let mut a = Job::new("A", 1);
         assert_eq!(a.record_usage("s1", 100), 100);
         assert_eq!(a.record_usage("s1", 250), 150);
         assert_eq!(a.record_usage("s1", 200), 0, "never goes backwards");

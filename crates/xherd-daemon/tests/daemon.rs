@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use xherd_core::paths::Paths;
 use xherd_core::report::{Report, ReportEvent};
-use xherd_core::{Agent, Status, queue};
+use xherd_core::{Job, Status, queue};
 use xherd_daemon::*;
 
 struct T {
@@ -42,17 +42,17 @@ async fn daemon(max: usize) -> T {
     daemon_with(tempfile::tempdir().unwrap(), max, |_| {}).await
 }
 
-fn agent(name: &str, created: i64) -> Agent {
-    let mut a = Agent::new(name, created);
+fn agent(name: &str, created: i64) -> Job {
+    let mut a = Job::new(name, created);
     a.workdir = Some("/tmp".into());
     a.launch = Some(vec!["fake-runtime".into(), "--go".into()]);
     a
 }
 
-fn rep(a: &Agent, id: &str, event: ReportEvent, seq: u64, payload: Value) -> Report {
+fn rep(a: &Job, id: &str, event: ReportEvent, seq: u64, payload: Value) -> Report {
     Report {
         id: id.into(),
-        agent_id: a.id.clone(),
+        job_id: a.id.clone(),
         event,
         payload,
         seq,
@@ -77,12 +77,12 @@ async fn wait_status(d: &Daemon, who: &str, want: Status) {
 #[tokio::test]
 async fn slots_queue_and_start_order() {
     let t = daemon(1).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
-    let b = t.d.create_agent(agent("SC-2", 2)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
+    let b = t.d.create_job(agent("SC-2", 2)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     assert_eq!(status(&t.d, "SC-2").await, Status::Queued);
     assert!(
-        t.d.create_agent(agent("SC-1", 3)).await.is_err(),
+        t.d.create_job(agent("SC-1", 3)).await.is_err(),
         "names are unique"
     );
 
@@ -114,8 +114,8 @@ async fn slots_queue_and_start_order() {
 #[tokio::test]
 async fn pause_all_stops_everything_and_starts_nothing() {
     let t = daemon(1).await;
-    t.d.create_agent(agent("SC-1", 1)).await.unwrap();
-    t.d.create_agent(agent("SC-2", 2)).await.unwrap();
+    t.d.create_job(agent("SC-1", 1)).await.unwrap();
+    t.d.create_job(agent("SC-2", 2)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     assert_eq!(status(&t.d, "SC-2").await, Status::Queued);
 
@@ -136,14 +136,14 @@ async fn pause_all_stops_everything_and_starts_nothing() {
 async fn failed_start_is_an_error_and_frees_the_slot() {
     let t = daemon(1).await;
     t.drv.fail_start.store(true, Ordering::SeqCst);
-    t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Error).await;
     t.drv.fail_start.store(false, Ordering::SeqCst);
     let mut no_launch = agent("SC-2", 2);
     no_launch.launch = None;
-    t.d.create_agent(no_launch).await.unwrap();
+    t.d.create_job(no_launch).await.unwrap();
     wait_status(&t.d, "SC-2", Status::Error).await;
-    t.d.create_agent(agent("SC-3", 3)).await.unwrap();
+    t.d.create_job(agent("SC-3", 3)).await.unwrap();
     wait_status(&t.d, "SC-3", Status::Running).await;
 }
 
@@ -154,7 +154,7 @@ async fn first_prompt_is_typed_once_the_session_is_ready() {
     a.pack = Some("xherd".into());
     a.flow = Some("feature".into());
     a.next_prompt = Some("/xherd:feature SC-1 add login".into());
-    let a = t.d.create_agent(a).await.unwrap();
+    let a = t.d.create_job(a).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     assert_eq!(t.drv.calls(), vec!["start SC-1 fake-runtime --go"]);
 
@@ -184,7 +184,7 @@ async fn first_prompt_is_typed_once_the_session_is_ready() {
 #[tokio::test]
 async fn reports_sequence_dedupe_and_unknown_agents() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
 
     let stop = rep(&a, "r2", ReportEvent::Stop, 2, json!({"message": "done"}));
@@ -195,7 +195,7 @@ async fn reports_sequence_dedupe_and_unknown_agents() {
     assert_eq!(t.d.report(old).await, Some(ReportResult::Stale));
     assert_eq!(status(&t.d, "SC-1").await, Status::Idle);
 
-    let ghost = Agent::new("NOPE-1", 0);
+    let ghost = Job::new("NOPE-1", 0);
     assert_eq!(
         t.d.report(rep(&ghost, "x", ReportEvent::Stop, 1, Value::Null))
             .await,
@@ -228,7 +228,7 @@ async fn reports_sequence_dedupe_and_unknown_agents() {
     assert_eq!(err.code, "agent_blocked");
 
     // Persisted, and reloaded the same after a restart of the actor's view.
-    let stored = t.d.store.get_agent(&a.id).await.unwrap().unwrap();
+    let stored = t.d.store.get_job(&a.id).await.unwrap().unwrap();
     assert_eq!(stored.last_seq, 4);
     assert_eq!(stored.status, Status::Blocked);
 }
@@ -236,7 +236,7 @@ async fn reports_sequence_dedupe_and_unknown_agents() {
 #[tokio::test]
 async fn reports_after_pause_do_not_revive() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     t.d.action("SC-1", UserAction::Pause).await.unwrap();
     let r = rep(&a, "late", ReportEvent::SessionStart, 9, Value::Null);
@@ -247,7 +247,7 @@ async fn reports_after_pause_do_not_revive() {
 #[tokio::test]
 async fn reconcile_marks_lost_sessions() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     t.d.reconcile().await;
     assert_eq!(status(&t.d, "SC-1").await, Status::Running);
@@ -285,7 +285,7 @@ async fn reconcile_marks_lost_sessions() {
 #[tokio::test]
 async fn a_restart_resumes_a_running_agent_instead_of_failing_it() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     // The container restarted: the session is gone.
     t.drv.alive.lock().unwrap().clear();
@@ -319,8 +319,8 @@ async fn a_restart_resumes_a_running_agent_instead_of_failing_it() {
 #[tokio::test]
 async fn idle_alert_once_and_parking() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
-    let b = t.d.create_agent(agent("SC-2", 2)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
+    let b = t.d.create_job(agent("SC-2", 2)).await.unwrap();
     wait_status(&t.d, "SC-2", Status::Running).await;
     t.d.report(rep(
         &a,
@@ -377,7 +377,7 @@ async fn idle_alert_once_and_parking() {
 async fn delivery_is_retried_once_when_not_acknowledged() {
     let dir = tempfile::tempdir().unwrap();
     let t = daemon_with(dir, 4, |o| o.delivery_ack = Duration::from_millis(250)).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     t.d.report(rep(&a, "a1", ReportEvent::Stop, 1, Value::Null))
         .await;
@@ -431,7 +431,7 @@ async fn screen_rules_block_and_unblock() {
     let dir = tempfile::tempdir().unwrap();
     let rules = xherd_term::ScreenRules::new(&["Do you want to proceed\\?"], 5).unwrap();
     let t = daemon_with(dir, 4, |o| o.screen_rules = Some(rules)).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
 
     *t.drv.screen.lock().unwrap() = "Bash(rm -rf build)\nDo you want to proceed?\n1. Yes".into();
@@ -450,7 +450,7 @@ async fn screen_rules_block_and_unblock() {
 #[tokio::test]
 async fn git_auth_failure_on_screen_blocks_with_reason() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("GA-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("GA-1", 1)).await.unwrap();
     wait_status(&t.d, "GA-1", Status::Running).await;
 
     *t.drv.screen.lock().unwrap() =
@@ -477,7 +477,7 @@ async fn git_auth_failure_on_screen_blocks_with_reason() {
 #[tokio::test]
 async fn a_stopped_agents_screen_is_not_scanned_for_git_failures() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("GA-2", 1)).await.unwrap();
+    let a = t.d.create_job(agent("GA-2", 1)).await.unwrap();
     wait_status(&t.d, "GA-2", Status::Running).await;
     let r = rep(&a, "s1", ReportEvent::Stop, 1, Value::Null);
     assert_eq!(t.d.report(r).await, Some(ReportResult::Applied));
@@ -494,7 +494,7 @@ async fn a_stopped_agents_screen_is_not_scanned_for_git_failures() {
 #[tokio::test]
 async fn worklog_books_running_time_and_user_time() {
     let t = daemon(4).await;
-    t.d.create_agent(agent("WL-1", 1)).await.unwrap();
+    t.d.create_job(agent("WL-1", 1)).await.unwrap();
     wait_status(&t.d, "WL-1", Status::Running).await;
 
     // The first flush only starts the clock; the next books the span.
@@ -675,7 +675,7 @@ async fn todo_conditions_are_checked_and_decide_what_happens() {
 #[tokio::test]
 async fn queued_reports_are_replayed_on_start() {
     let t = daemon(4).await;
-    let a = t.d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = t.d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&t.d, "SC-1", Status::Running).await;
     // The daemon goes away; hooks queue their reports meanwhile.
     let q = t.d.paths.hook_queue();
@@ -722,7 +722,7 @@ async fn a_session_over_the_limit_is_paused() {
     let clock = Arc::new(ManualClock::new(1_000_000));
     let o = Options::new(Arc::new(FakeDriver::default()), clock.clone());
     let d = Daemon::start(paths, o).await.unwrap();
-    d.create_agent(agent("SC-1", 1)).await.unwrap();
+    d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&d, "SC-1", Status::Running).await;
 
     clock.advance(29 * 60_000);
@@ -758,7 +758,7 @@ async fn token_budget_warns_then_pauses_at_a_stop() {
         .unwrap();
     rt.data["terminal"]["resume"]["transcripts"] = projects.to_string_lossy().into();
     let d = Daemon::start(paths, o).await.unwrap();
-    let a = d.create_agent(agent("SC-1", 1)).await.unwrap();
+    let a = d.create_job(agent("SC-1", 1)).await.unwrap();
     wait_status(&d, "SC-1", Status::Running).await;
     let line =
         |n: u64| format!("{{\"message\":{{\"id\":\"m\",\"usage\":{{\"output_tokens\":{n}}}}}}}\n");

@@ -27,11 +27,11 @@ pub fn rework(approvals: &[Event], requests: &[Event]) -> BTreeMap<String, (u32,
         }
         let gate = p.and_then(|p| p["gate"].as_str()).unwrap_or("");
         let redone = requests.iter().any(|r| {
-            r.agent_id == a.agent_id
+            r.job_id == a.job_id
                 && r.at >= a.at
                 && r.payload.as_ref().and_then(|p| p["gate"].as_str()) == Some(gate)
         });
-        let e = out.entry(a.agent_id.clone()).or_default();
+        let e = out.entry(a.job_id.clone()).or_default();
         e.0 += 1;
         e.1 += u32::from(redone);
     }
@@ -50,7 +50,7 @@ impl Daemon {
             return;
         }
         let ms = ((now - last).max(0) as u64).min(MAX_SPAN_MS);
-        let Ok(agents) = self.store.list_agents().await else {
+        let Ok(agents) = self.store.list_jobs().await else {
             return;
         };
         for a in agents.iter().filter(|a| a.status == Status::Running) {
@@ -118,7 +118,7 @@ impl Daemon {
             .await
             .map_err(io)?;
         let rw = rework(&approvals, &requests);
-        let agents = self.store.list_agents().await.map_err(io)?;
+        let agents = self.store.list_jobs().await.map_err(io)?;
         let tickets: Vec<Value> = agents
             .iter()
             .map(|a| {
@@ -146,7 +146,7 @@ mod tests {
     fn ev(agent: &str, kind: &str, at: i64, gate: &str, auto: bool) -> Event {
         Event {
             id: format!("{kind}{at}"),
-            agent_id: agent.into(),
+            job_id: agent.into(),
             kind: kind.into(),
             payload: Some(json!({"gate": gate, "auto": auto})),
             at,

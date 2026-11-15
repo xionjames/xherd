@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use xherd_core::paths::Paths;
-use xherd_core::{Agent, Status};
+use xherd_core::{Job, Status};
 use xherd_daemon::backup::{self, RestoreOptions};
 use xherd_git::Git;
 use xherd_store::Store;
@@ -69,12 +69,12 @@ async fn backup_and_restore_on_another_machine() {
     .unwrap();
     std::fs::write(p1.secrets(), r#"{"git":{"token":"nope"}}"#).unwrap();
     let store = Store::open(&p1.db(), &p1.backups()).unwrap();
-    let mut a = Agent::new("ag1", 1);
+    let mut a = Job::new("ag1", 1);
     a.status = Status::Running;
     a.workdir = Some(wt1.to_string_lossy().into_owned());
     a.repo = Some(repo1.to_string_lossy().into_owned());
     a.base = Some("origin/main".into());
-    store.put_agent(&a).await.unwrap();
+    store.put_job(&a).await.unwrap();
 
     let dest = t.join("out");
     let made = backup::create(&p1, &ws1, &store, &g, &dest, "manual", 1_000_000)
@@ -124,7 +124,7 @@ async fn backup_and_restore_on_another_machine() {
     );
 
     let s2 = Store::open(&p2.db(), &p2.backups()).unwrap();
-    let back = s2.get_agent(&a.id).await.unwrap().unwrap();
+    let back = s2.get_job(&a.id).await.unwrap().unwrap();
     assert_eq!(back.status, Status::Paused);
     assert_eq!(back.workdir.as_deref(), Some(wt2.to_str().unwrap()));
     assert_eq!(

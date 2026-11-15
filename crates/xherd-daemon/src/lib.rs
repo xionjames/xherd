@@ -9,7 +9,7 @@ use xherd_core::paths::Paths;
 use xherd_core::queue::Queued;
 use xherd_core::report::{Origin, Report};
 use xherd_core::xap::{Refusal, XapCall};
-use xherd_core::{Agent, Status, queue};
+use xherd_core::{Job, Status, queue};
 use xherd_flow::Pack;
 use xherd_plugin::Registry;
 use xherd_store::Store;
@@ -39,7 +39,7 @@ pub mod worklog;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
 pub use create::{Resumer, RuntimeKit, TrustWriter};
-pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
+pub use driver::{Driver, FakeDriver, JobCtx, TerminalDriver};
 pub use supervisor::SupervisorHandle;
 pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
 
@@ -288,7 +288,7 @@ impl Daemon {
             toolchains: Arc::new(toolchains),
             runtimes,
         };
-        let agents = store.list_agents().await?;
+        let agents = store.list_jobs().await?;
         let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
 
         let d = Daemon {
@@ -336,13 +336,13 @@ impl Daemon {
         Ok(d)
     }
 
-    pub async fn create_agent(&self, a: Agent) -> Result<Agent, ActionError> {
+    pub async fn create_job(&self, a: Job) -> Result<Job, ActionError> {
         self.sup.create(a).await
     }
 
     /// Route a report from an agent. `None` = unknown agent.
     pub async fn report(&self, r: Report) -> Option<ReportResult> {
-        self.sup.report(r, Origin::Agent).await
+        self.sup.report(r, Origin::Job).await
     }
 
     /// Route an XAP call from an agent (design §6.5).
@@ -350,7 +350,7 @@ impl Daemon {
         self.sup.xap(call).await
     }
 
-    pub async fn action(&self, who: &str, a: UserAction) -> Result<Agent, ActionError> {
+    pub async fn action(&self, who: &str, a: UserAction) -> Result<Job, ActionError> {
         self.sup.action(who, a).await
     }
 
@@ -360,7 +360,7 @@ impl Daemon {
         &self,
         who: &str,
         mode: xherd_core::permission::PermissionMode,
-    ) -> Result<Agent, ActionError> {
+    ) -> Result<Job, ActionError> {
         let a = self.action(who, UserAction::Get).await?;
         let launch = self.agent_launch(&a, mode, a.model.as_deref())?;
         self.action(who, UserAction::SetMode { mode, launch }).await
@@ -369,7 +369,7 @@ impl Daemon {
     /// Change an agent's model (issue #112; `None` or empty = the runtime's
     /// default). Like the mode, the running session keeps its model and the
     /// next start uses the new one.
-    pub async fn set_model(&self, who: &str, model: Option<&str>) -> Result<Agent, ActionError> {
+    pub async fn set_model(&self, who: &str, model: Option<&str>) -> Result<Job, ActionError> {
         let model = create::clean_model(model)?;
         let a = self.action(who, UserAction::Get).await?;
         let mode = a.permission_mode.unwrap_or_default();
@@ -443,7 +443,7 @@ impl Daemon {
     /// An agent's launch argv rebuilt for a mode and model.
     fn agent_launch(
         &self,
-        a: &Agent,
+        a: &Job,
         mode: xherd_core::permission::PermissionMode,
         model: Option<&str>,
     ) -> Result<Vec<String>, ActionError> {
@@ -466,7 +466,7 @@ impl Daemon {
     /// The kill switch (R-032): pause every live agent now, without asking
     /// for handoff notes. Returns the names paused.
     pub async fn pause_all(&self) -> Result<Vec<String>, ActionError> {
-        let agents = self.store.list_agents().await.map_err(|e| ActionError {
+        let agents = self.store.list_jobs().await.map_err(|e| ActionError {
             code: "store",
             message: e.to_string(),
         })?;
@@ -883,7 +883,7 @@ impl Daemon {
     /// Re-read approval ledgers of agents with a workspace: rows missing from
     /// the database are added, so the file wins (design §3.4).
     async fn import_ledgers(&self) {
-        let Ok(agents) = self.store.list_agents().await else {
+        let Ok(agents) = self.store.list_jobs().await else {
             return;
         };
         for a in agents {
@@ -908,7 +908,7 @@ impl Daemon {
                     continue;
                 };
                 let row = xherd_store::Approval {
-                    agent_id: a.id.clone(),
+                    job_id: a.id.clone(),
                     file: file.into(),
                     sha256: sha.into(),
                     at: v["at"].as_i64().unwrap_or(0),
@@ -948,7 +948,7 @@ impl Daemon {
     }
 }
 
-pub(crate) fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
+pub(crate) fn workdir_of(a: &Job) -> Result<&std::path::Path, ActionError> {
     if a.worktree_removed_at.is_some() {
         return Err(ActionError {
             code: "worktree_removed",

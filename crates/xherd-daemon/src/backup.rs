@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use xherd_core::paths::{Paths, write_atomic};
-use xherd_core::{Agent, Millis, Status};
+use xherd_core::{Job, Millis, Status};
 use xherd_git::Git;
 use xherd_store::Store;
 
@@ -248,7 +248,7 @@ async fn fill_stage(
     }
 
     let mut entries = Vec::new();
-    let agents = store.list_agents().await.map_err(|e| e.to_string())?;
+    let agents = store.list_jobs().await.map_err(|e| e.to_string())?;
     for a in agents
         .iter()
         .filter(|a| !matches!(a.status, Status::Done | Status::Cancelled))
@@ -285,7 +285,7 @@ async fn fill_stage(
 
 async fn backup_agent(
     git: &Git,
-    a: &Agent,
+    a: &Job,
     stage: &Path,
     warnings: &mut Vec<String>,
 ) -> Result<Option<AgentEntry>> {
@@ -577,7 +577,7 @@ async fn restore_from(
 
     let store = Store::open(&paths.db(), &paths.backups()).map_err(|e| e.to_string())?;
     for e in &m.agents {
-        let Some(mut a) = store.get_agent(&e.id).await.map_err(|e| e.to_string())? else {
+        let Some(mut a) = store.get_job(&e.id).await.map_err(|e| e.to_string())? else {
             out.warnings
                 .push(format!("{}: not in the database", e.name));
             continue;
@@ -589,7 +589,7 @@ async fn restore_from(
             a.status_since = now;
         }
         a.pause_requested_at = None;
-        store.put_agent(&a).await.map_err(|e| e.to_string())?;
+        store.put_job(&a).await.map_err(|e| e.to_string())?;
         if let Err(w) = restore_agent(
             git,
             e,
@@ -609,7 +609,7 @@ async fn restore_from(
 async fn restore_agent(
     git: &Git,
     e: &AgentEntry,
-    a: &Agent,
+    a: &Job,
     adir: &Path,
     warnings: &mut Vec<String>,
 ) -> Result<()> {

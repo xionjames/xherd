@@ -196,7 +196,7 @@ impl Daemon {
         use xherd_core::Status;
         let levels: Vec<Autonomy> = self
             .store
-            .list_agents()
+            .list_jobs()
             .await
             .unwrap_or_default()
             .iter()

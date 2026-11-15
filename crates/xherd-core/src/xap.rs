@@ -3,15 +3,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::Millis;
 use crate::domain::Role;
+use crate::job::Millis;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XapCall {
     /// Client-generated id; replays are de-duplicated by it.
     pub id: String,
-    pub agent_id: String,
+    #[serde(rename = "agentId")]
+    pub job_id: String,
     #[serde(flatten)]
     pub cmd: XapCmd,
     pub at: Millis,

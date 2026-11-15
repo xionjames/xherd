@@ -61,7 +61,7 @@ struct Resolved {
     host: Arc<xherd_plugin::host::Host>,
 }
 
-fn no_tracker(a: &xherd_core::agent::Agent) -> ActionError {
+fn no_tracker(a: &xherd_core::job::Job) -> ActionError {
     ActionError {
         code: "no_tracker",
         message: match a.ticket_ref() {
@@ -164,7 +164,7 @@ impl Daemon {
     async fn resolve_ticket(
         &self,
         who: &str,
-    ) -> Result<(xherd_core::agent::Agent, Option<Resolved>), ActionError> {
+    ) -> Result<(xherd_core::job::Job, Option<Resolved>), ActionError> {
         let a = self.action(who, crate::actor::UserAction::Get).await?;
         // Once the worktree is removed, the main checkout has the same
         // `origin`, so the ticket can still be read and commented on (R14).
@@ -283,7 +283,7 @@ impl Daemon {
             })?;
         let event = xherd_store::Event {
             id: xherd_core::new_id(),
-            agent_id: a.id.clone(),
+            job_id: a.id.clone(),
             kind: "ticket-comment".into(),
             payload: Some(json!({
                 "tracker": r.tracker,

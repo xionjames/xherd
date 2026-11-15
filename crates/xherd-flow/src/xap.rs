@@ -6,7 +6,7 @@ use std::path::Path;
 
 use xherd_core::domain::{Commit, CommitStatus, Gate, HashedFile, Role, TaskStatus};
 use xherd_core::xap::{Refusal, XapCmd, refuse};
-use xherd_core::{Agent, Millis};
+use xherd_core::{Job, Millis};
 
 use crate::{Flow, Pack};
 
@@ -121,7 +121,7 @@ pub enum Observed {
     Verify(Option<VerifyFact>),
 }
 
-pub fn flow_of<'a>(a: &Agent, pack: Option<&'a Pack>) -> Result<&'a Flow, Refusal> {
+pub fn flow_of<'a>(a: &Job, pack: Option<&'a Pack>) -> Result<&'a Flow, Refusal> {
     let no = || {
         refuse(
             "no_flow",
@@ -139,7 +139,7 @@ pub fn flow_of<'a>(a: &Agent, pack: Option<&'a Pack>) -> Result<&'a Flow, Refusa
 /// The documents a `gate.open` covers, canonicalised: the given `--doc`s and
 /// `--artifact`s, else the stage's declared documents.
 pub fn gate_docs(
-    a: &Agent,
+    a: &Job,
     pack: Option<&Pack>,
     cmd: &XapCmd,
     workdir: &Path,
@@ -188,11 +188,11 @@ pub fn gate_docs(
     Ok(out)
 }
 
-fn flow_name(a: &Agent) -> &str {
+fn flow_name(a: &Job) -> &str {
     a.flow.as_deref().unwrap_or("none")
 }
 
-fn open_commit(a: &Agent) -> Option<&Commit> {
+fn open_commit(a: &Job) -> Option<&Commit> {
     a.commits
         .iter()
         .find(|c| matches!(c.status, CommitStatus::Proposed | CommitStatus::Approved))
@@ -221,7 +221,7 @@ fn extra_questions(in_docs: &[String], given: &[String]) -> Vec<String> {
 /// Validate and apply one call. Returns whether the agent changed; `Ok(false)`
 /// means "already in that state" (still exit 0, xap.md §1.4).
 pub fn apply(
-    a: &mut Agent,
+    a: &mut Job,
     pack: Option<&Pack>,
     cmd: &XapCmd,
     obs: Observed,
@@ -707,7 +707,7 @@ pub fn apply(
             if reason.trim().is_empty() {
                 return Err(refuse("usage", "a memory proposal needs a --reason"));
             }
-            a.memory_proposal = Some(xherd_core::agent::MemoryProposal {
+            a.memory_proposal = Some(xherd_core::job::MemoryProposal {
                 file: f.to_string(),
                 reason: reason.trim().to_string(),
                 at: now,
@@ -758,7 +758,7 @@ fn verify_failed(v: &VerifyFact) -> Refusal {
     )
 }
 
-fn task_index(a: &Agent, id: &str) -> Result<usize, Refusal> {
+fn task_index(a: &Job, id: &str) -> Result<usize, Refusal> {
     a.tasks.iter().position(|t| t.id == id).ok_or_else(|| {
         refuse(
             "task_unknown",
@@ -767,7 +767,7 @@ fn task_index(a: &Agent, id: &str) -> Result<usize, Refusal> {
     })
 }
 
-fn commit_index(a: &Agent, id: &str) -> Result<usize, Refusal> {
+fn commit_index(a: &Job, id: &str) -> Result<usize, Refusal> {
     a.commits
         .iter()
         .position(|c| c.id == id)
@@ -779,8 +779,8 @@ pub(crate) mod tests {
     use super::*;
     use xherd_core::domain::{Role, Task};
 
-    fn agent() -> Agent {
-        let mut a = Agent::new("SC-1", 0);
+    fn agent() -> Job {
+        let mut a = Job::new("SC-1", 0);
         a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         a
@@ -888,7 +888,7 @@ pub(crate) mod tests {
             "no_docs_gate"
         );
         assert_eq!(
-            gate_docs(&Agent::new("x", 0), None, &gate_open("spec"), wt)
+            gate_docs(&Job::new("x", 0), None, &gate_open("spec"), wt)
                 .unwrap_err()
                 .code,
             "no_flow"
@@ -1301,7 +1301,7 @@ pub(crate) mod tests {
         let mut a = agent();
         a.flow = Some("f".into());
         // Settle the open proposal as the approval would.
-        let done = |a: &mut Agent, id: &str| {
+        let done = |a: &mut Job, id: &str| {
             let c = a.commits.iter_mut().find(|c| c.id == id).unwrap();
             c.status = CommitStatus::Done;
             a.gate = None;

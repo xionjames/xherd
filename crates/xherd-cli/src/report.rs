@@ -14,7 +14,7 @@ pub const DEFAULT_URL: &str = "http://127.0.0.1:4740";
 const STDIN_LIMIT: u64 = 1024 * 1024;
 
 pub struct Target {
-    pub agent_id: String,
+    pub job_id: String,
     /// The agent's `.xherd/` folder, when found (sequence counter lives there).
     pub xherd_dir: Option<PathBuf>,
 }
@@ -31,12 +31,12 @@ pub fn find_agent() -> Option<Target> {
         let v: Value = serde_json::from_slice(&std::fs::read(x.join("agent.json")).ok()?).ok()?;
         v.get("id")?.as_str().map(str::to_string)
     });
-    let agent_id = std::env::var("XHERD_AGENT_ID")
+    let job_id = std::env::var("XHERD_AGENT_ID")
         .ok()
         .filter(|s| !s.is_empty())
         .or(from_file)?;
     Some(Target {
-        agent_id,
+        job_id,
         xherd_dir: found,
     })
 }
@@ -124,7 +124,7 @@ pub fn deliver(r: &Report) -> Delivered {
 fn build(t: &Target, event: ReportEvent, payload: Value, seq: Option<u64>) -> Report {
     Report {
         id: xherd_core::new_id(),
-        agent_id: t.agent_id.clone(),
+        job_id: t.job_id.clone(),
         event,
         payload,
         seq: seq.unwrap_or_else(|| next_seq(t.xherd_dir.as_deref())),

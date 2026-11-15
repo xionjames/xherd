@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::Millis;
+use crate::job::Millis;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]

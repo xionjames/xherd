@@ -180,9 +180,9 @@ fn end_to_end_replay_and_live_hooks() {
                 &home.path().join("backups"),
             )
             .unwrap();
-            let mut a = xherd_core::Agent::new("SC-1", 1);
+            let mut a = xherd_core::Job::new("SC-1", 1);
             a.status = xherd_core::Status::Running;
-            store.put_agent(&a).await.unwrap();
+            store.put_job(&a).await.unwrap();
             store
                 .insert_token(
                     "t1",

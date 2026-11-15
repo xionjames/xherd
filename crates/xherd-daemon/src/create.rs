@@ -4,11 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
-use xherd_core::new::{self, FLOW_NONE, NewAgent};
+use xherd_core::new::{self, FLOW_NONE, NewJob};
 use xherd_core::paths::write_atomic;
 use xherd_core::permission::PermissionMode;
 use xherd_core::xap::Refusal;
-use xherd_core::{Agent, Status};
+use xherd_core::{Job, Status};
 use xherd_git::Git;
 use xherd_plugin::runtime::{self, Terminal};
 
@@ -68,7 +68,7 @@ fn repo_dir_name(repo: &Path) -> String {
 
 impl Daemon {
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
-    pub async fn new_agent(&self, req: NewAgent) -> Result<Agent, ActionError> {
+    pub async fn new_job(&self, req: NewJob) -> Result<Job, ActionError> {
         let c = new::check(&req)?;
         if req.autonomy.is_some_and(|a| !a.selectable()) {
             return Err(refuse(
@@ -126,7 +126,7 @@ impl Daemon {
         let launch = mode_launch(&rt, mode, model.as_deref(), self.sandbox)?;
         let agents = self
             .store
-            .list_agents()
+            .list_jobs()
             .await
             .map_err(|e| refuse("store", e.to_string()))?;
         if agents.iter().any(|a| a.name == c.name) {
@@ -177,7 +177,7 @@ impl Daemon {
             .await
             .map_err(|e| refuse("git", e.to_string()))?;
 
-        let mut a = Agent::new(&c.name, self.clock.now());
+        let mut a = Job::new(&c.name, self.clock.now());
         a.ticket = ticket;
         a.branch = branch.clone();
         a.autonomy = autonomy;
@@ -214,7 +214,7 @@ impl Daemon {
 
         let res = async {
             self.prepare_worktree(&a).await?;
-            self.create_agent(a).await
+            self.create_job(a).await
         }
         .await;
         if res.is_err() {
@@ -233,7 +233,7 @@ impl Daemon {
     /// trust entry, `.xherd/` (R-005c), the pre-push guard (R-1204) and the
     /// runtime's hook file (R-005b). Idempotent; also finishes a worktree that
     /// a restore created (`repair_restored`).
-    pub(crate) async fn prepare_worktree(&self, a: &Agent) -> Result<(), ActionError> {
+    pub(crate) async fn prepare_worktree(&self, a: &Job) -> Result<(), ActionError> {
         let workdir = PathBuf::from(
             a.workdir
                 .as_deref()
@@ -297,7 +297,7 @@ impl Daemon {
     /// A worktree a backup restore recreated has no `.xherd/agent.json` (it is
     /// not in the backup): finish it like a new agent's, once, at daemon start.
     pub(crate) async fn repair_restored(&self) {
-        let Ok(agents) = self.store.list_agents().await else {
+        let Ok(agents) = self.store.list_jobs().await else {
             return;
         };
         for a in agents {
@@ -551,7 +551,7 @@ const SHARED_DIR_MODE: u32 = 0o2775;
 async fn prepare_xherd_dir(
     git: &Git,
     workdir: &Path,
-    a: &Agent,
+    a: &Job,
     repo_instructions: Option<&str>,
 ) -> Result<(), ActionError> {
     let io = |p: &Path, e: std::io::Error| refuse("io", format!("{}: {e}", p.display()));
