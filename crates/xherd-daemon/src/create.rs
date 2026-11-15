@@ -68,7 +68,15 @@ fn repo_dir_name(repo: &Path) -> String {
 
 impl Daemon {
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
-    pub async fn new_agent(&self, req: NewAgent) -> Result<Agent, ActionError> {
+    pub async fn new_agent(&self, mut req: NewAgent) -> Result<Agent, ActionError> {
+        // No repository given: the one a ticket URL names (#148). An explicit
+        // repository always wins; without either, `check` refuses.
+        if req.repo.trim().is_empty()
+            && let Some(Ok(Some(input))) = req.ticket.as_deref().map(new::parse_ticket)
+            && let Some(url) = self.ticket_repo(&input)
+        {
+            req.repo = url;
+        }
         let c = new::check(&req)?;
         if req.autonomy.is_some_and(|a| !a.selectable()) {
             return Err(refuse(
