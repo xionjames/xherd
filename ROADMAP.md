@@ -28,6 +28,11 @@ by theme; update it together with them.
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [x] Plugin secrets from the UI (write-only, live)
 - [ ] Plugin install from the UI
+- [x] Herd views as plugins (#108): plugin kind `view`, a sandboxed frame with protocol v1 and the view kit; built-in `herd-tiles` as the example
+- [x] Agent names (#114, #115): a lowercase name, an optional ticket (issue URL or key) that prefixes the branch; New agent form with More options
+- [x] Needs attention and the agent page (#120, #122, #124, #127, #128): the ✋ count is only what waits for you, *Approved by xherd* folded last; a gate autonomy will approve is not shown as waiting; one-row header; a file list in Changes
+- [x] Gate notices (#133, #135): one notice per gate with what it waits on, none for automatic approvals; the bell says why browser notifications cannot be on, and can send a test
+- [ ] Check in real browsers: the bell's texts and re-alerts, the header and file-list layouts (light, dark, phone), the Resolve conflicts button
 
 ## M3 Docker-first
 
@@ -57,6 +62,8 @@ by theme; update it together with them.
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
 - [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)
 - [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the agent's until guardrails)
+- [x] Ask (#121): `xherd talk` / the Ask box gives a stopped agent a session with your text, held open (no auto-approval, no move to watching) until Finish or flow work
+- [x] Remove a finished agent's worktree (#123): `xherd remove-worktree`, `cancel --remove-worktree`; the branch and record stay
 - [x] Per-agent tool-permission mode (R-002a): New agent form / `xherd new --mode`, repo profile, Settings default; changed live on the agent page or `xherd mode` (applies from the next session start); `all` only in the container
 
 ## Context and flow quality
@@ -95,12 +102,16 @@ by theme; update it together with them.
 - [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel with each check (link to the run), the reviewers and their review state, and a local merge check when the host does not say (#75)
 - [x] PR comments into the agent (R-304): new comments saved wrapped as untrusted data, agent queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
 - [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
+- [x] PR *Check now* (#131): `POST /agents/{id}/pr-check` and a button in the Pull request tab
+- [x] Resolve conflicts (#139): `xherd resolve-conflicts`, the pack's `conflicts` command merges the base (never a rebase), the merge commit is always held for a human
+- [ ] Run a whole Resolve conflicts round against a real PR
 - [x] `pr-template` (R-153): templates looked up on entering the ship stage, `pr-templates.json` read by the `ship` prompt
 - [ ] Stage hooks (R-401…R-404), including `pr.merged` (R-307): v1.x, with profiles / pack `stageHooks`
 - [x] Notifications: typed (one per agent and kind), the bell and browser notifications in the UI, ntfy from Settings → Notifications
 - [x] Per-kind notification filter (`mutedNotifications`) and daemon-side desktop notifications (`desktopNotifications`: `osascript` / `notify-send`, native installs)
 - [ ] Notifier plugins, replacing an earlier ntfy message, Windows desktop notifications
 - [x] GitHub Actions (#41): CI on main and PRs; a `v*` tag on main releases Linux binaries (static musl, `.tar.gz`/`.deb`/`.rpm`) and the multi-arch image `ghcr.io/xionjames/xherd`
+- [x] GPL-3.0-or-later licence (#134); builds without git or `XHERD_VERSION` show `dev` (#137)
 - [ ] macOS binaries (x86_64 + arm64, `macos-14` runners) and a Homebrew tap (`xionjames/homebrew-tap`, formula updated by the release with a `HOMEBREW_TAP_TOKEN` secret, depends on git and tmux); a signed, notarized `.pkg` only with an Apple Developer account
 - [ ] Rest of R-1313: signatures (cosign), SBOMs, install script, Homebrew tap; Docker smoke and migration tests in CI
 
