@@ -60,7 +60,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 ## Conventions
 
 - Workspace lints: `unsafe_code = "forbid"`; clippy `all` is a warning. CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, the tests, the UI check/test/build and an image build on pushes to main and PRs into main; run the same checks before pushing.
-- External commands only through `xherd_core::exec::run`. Exceptions: the interactive tmux client of the browser terminal (`xherd_term::pty`), processes that replace the CLI (`toolchain exec`, `attach`, `shell`, `init` → daemon), and long-lived helpers (`socat`, apps launched by `open`/`companion`).
+- External commands only through `xherd_core::exec::run`. Exceptions: the interactive tmux client of the browser terminal (`xherd_term::pty`), processes that replace the CLI (`toolchain exec`, `attach`, `shell`, `init` → daemon), and long-lived helpers (`socat`, apps launched by `open`).
 - Agent state changes only inside the agent's actor, through pure functions in `xherd-core`. Slow work returns as `WorkDone` tagged with the generation.
 - `xherd hook` and `xherd report` must never print to stdout or exit non-zero, and must not start tokio. `hook` is handled before clap, inside `catch_unwind`.
 - JSON on the wire and in files is camelCase; enum values are kebab-case.

@@ -1,147 +1,203 @@
 //! Open in… (spec §12.6, design §8.7): editor URLs that work because the
-//! workspace has the same path on the host (R-701), the Dev Containers entry
-//! (R-702), and requests for the host companion (R-704). The companion polls
-//! the daemon as the local user, so nothing listens on the host. It runs its
-//! own apps, the built-in terminal (R-707), and user commands from Settings
-//! only after the user confirmed each argv on the host (R-706).
+//! workspace has the same path on the host (R-701), the Dev Containers
+//! entry (R-702), the user's own links (R-706) and the `xherd-term://` link
+//! a handler on the user's computer opens in a terminal (R-707). Every entry
+//! is a link the browser opens; nothing on the host listens for the daemon.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
-use serde::Serialize;
-use tokio::sync::Notify;
+use serde::{Deserialize, Serialize};
+use xherd_core::config::{OpenIn, OpenLink};
+use xherd_core::paths::write_atomic;
 
 use crate::{ActionError, Daemon, UserAction};
 
-/// A companion that has not polled for this long is gone.
-const COMPANION_TTL: Duration = Duration::from_secs(60);
+/// Version of the link handler and its installer; bumped whenever either
+/// script changes, so the UI offers an update.
+pub const HANDLER_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
     pub id: String,
     pub label: String,
-    /// `url`: a link the browser opens; `companion`: `POST /agents/:id/open`.
+    /// Always `url` (a link the browser opens); kept for the UI and later kinds.
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct OpenRequest {
-    pub app: String,
-    pub dir: String,
-    /// The agent's name, for the terminal and `{agent}`.
-    pub agent: String,
-    /// `app: "terminal"`: which terminal app (unset = the host's default).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub terminal: Option<String>,
-    /// `app: "cmd:<id>"`: the user command, run only once confirmed on the host.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub argv: Option<Vec<String>>,
-}
-
-/// Request kinds a companion understands beyond its own apps.
-pub const TERMINAL: &str = "terminal";
-pub const COMMANDS: &str = "commands";
-
-/// What a polling companion offers.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct Offer {
-    pub apps: Vec<String>,
-    pub features: Vec<String>,
-    /// Terminal apps installed on the companion's computer, its default first
-    /// (R-707); empty from an older companion.
+/// What the installed handler reported (`<data>/terminal-handler.json`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandlerRecord {
+    pub version: u32,
+    /// The xherd build that rendered the installer.
+    pub xherd: String,
+    /// `mac` or `linux`.
+    pub os: String,
+    /// Installed terminals, the desktop's default first.
     pub terminals: Vec<String>,
+    /// The worktrees root the handler accepts.
+    pub root: String,
+    pub at: i64,
 }
 
-#[derive(Default)]
-struct State {
-    offer: Offer,
-    seen: Option<Instant>,
-    queue: VecDeque<OpenRequest>,
+/// What the installer reports (`POST /open-in/terminal-handler`): a record,
+/// or `{"installed": false}` after an uninstall.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum HandlerReport {
+    Removed {
+        installed: bool,
+    },
+    Installed {
+        version: u32,
+        xherd: String,
+        os: String,
+        terminals: Vec<String>,
+        root: String,
+    },
 }
 
-/// Shared between the API handlers and the companion's long poll.
-#[derive(Clone, Default)]
-pub struct Companion {
-    state: Arc<Mutex<State>>,
-    wake: Arc<Notify>,
-}
-
-impl Companion {
-    /// What the companion offers, `None` when none is polling.
-    pub fn offer(&self) -> Option<Offer> {
-        let s = self.state.lock().unwrap();
-        match s.seen {
-            Some(t) if t.elapsed() < COMPANION_TTL => Some(s.offer.clone()),
-            _ => None,
-        }
-    }
-
-    /// The companion's long poll: records its offer, returns the next request
-    /// or `None` after `wait`.
-    pub async fn next(&self, offer: Offer, wait: Duration) -> Option<OpenRequest> {
-        let deadline = tokio::time::Instant::now() + wait;
-        loop {
-            let notified = self.wake.notified();
-            {
-                let mut s = self.state.lock().unwrap();
-                s.offer = offer.clone();
-                s.seen = Some(Instant::now());
-                if let Some(r) = s.queue.pop_front() {
-                    return Some(r);
+impl HandlerReport {
+    /// Checks the report and turns it into the record to keep (`None`:
+    /// remove it). `at` is now.
+    pub fn into_record(self, at: i64) -> Result<Option<HandlerRecord>, String> {
+        match self {
+            HandlerReport::Removed { installed: false } => Ok(None),
+            HandlerReport::Removed { installed: true } => {
+                Err("an installed handler reports its version".into())
+            }
+            HandlerReport::Installed {
+                version,
+                xherd,
+                os,
+                terminals,
+                root,
+            } => {
+                let plain = |what: &str, v: &str| {
+                    if v.is_empty() || v.len() > 4096 || v.chars().any(char::is_control) {
+                        Err(format!("bad {what}"))
+                    } else {
+                        Ok(())
+                    }
+                };
+                if version < 1 {
+                    return Err("bad version".into());
                 }
-            }
-            if tokio::time::timeout_at(deadline, notified).await.is_err() {
-                return None;
+                plain("xherd", &xherd)?;
+                plain("root", &root)?;
+                if os != "mac" && os != "linux" {
+                    return Err("os must be mac or linux".into());
+                }
+                if terminals.len() > 16
+                    || terminals
+                        .iter()
+                        .any(|t| !xherd_core::config::TERMINAL_APPS.contains(&t.as_str()))
+                {
+                    return Err("unknown terminal".into());
+                }
+                Ok(Some(HandlerRecord {
+                    version,
+                    xherd,
+                    os,
+                    terminals,
+                    root,
+                    at,
+                }))
             }
         }
     }
+}
 
-    fn push(&self, r: OpenRequest) {
-        let mut s = self.state.lock().unwrap();
-        // Older requests are stale by the time a companion comes back.
-        if s.queue.len() >= 8 {
-            s.queue.pop_front();
+/// The link handler (`xherd-open-terminal`), shipped inside the installer.
+pub const HANDLER_SH: &str = include_str!("terminal-handler.sh");
+/// The installer template that `handler_script` renders.
+pub const INSTALL_SH: &str = include_str!("terminal-install.sh");
+
+/// The installer for this computer: `root` (the worktrees folder the handler
+/// accepts) and `report_url` (where it reports, `http://host:port`) are baked
+/// into single-quoted shell literals, the AppleScript and the report's JSON,
+/// so a value with a quote, `\`, `$`, a backquote or a control character is
+/// refused.
+pub fn handler_script(root: &str, report_url: &str) -> Result<String, String> {
+    let plain = |what: &str, v: &str| {
+        if v.is_empty()
+            || v.chars()
+                .any(|c| c.is_control() || matches!(c, '\'' | '"' | '\\' | '$' | '`'))
+        {
+            Err(format!(
+                "the {what} has a character the handler cannot carry"
+            ))
+        } else {
+            Ok(())
         }
-        s.queue.push_back(r);
-        drop(s);
-        self.wake.notify_one();
+    };
+    plain("worktrees folder", root)?;
+    if !root.starts_with('/') {
+        return Err("the worktrees folder is not an absolute path".into());
+    }
+    plain("report address", report_url)?;
+    if !(report_url.starts_with("http://") || report_url.starts_with("https://"))
+        || report_url.contains(char::is_whitespace)
+    {
+        return Err("the report address is not an http address".into());
+    }
+    plain("xherd version", xherd_core::BUILD_VERSION)?;
+    let root = root.trim_end_matches('/');
+    let root = if root.is_empty() { "/" } else { root };
+    // Values first, then the handler, so nothing in it is ever replaced.
+    let script = INSTALL_SH
+        .replace("@ROOT@", root)
+        .replace("@REPORT_URL@", report_url.trim_end_matches('/'))
+        .replace("@VERSION@", &HANDLER_VERSION.to_string())
+        .replace("@XHERD@", xherd_core::BUILD_VERSION);
+    let handler = format!("{}\n", HANDLER_SH.trim_end_matches('\n'));
+    Ok(script.replacen("@HANDLER@\n", &handler, 1))
+}
+
+/// Percent-encodes every byte but the unreserved ones; `keep_slash` keeps `/`.
+fn pct(s: &str, keep_slash: bool) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            b'/' if keep_slash => "/".into(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// A path for a URL: each segment encoded, `/` kept.
+pub fn pct_path(s: &str) -> String {
+    pct(s, true)
+}
+
+/// A query value or a single segment: `/` encoded too.
+pub fn pct_all(s: &str) -> String {
+    pct(s, false)
+}
+
+fn link(id: &str, label: &str, u: String) -> Target {
+    Target {
+        id: id.into(),
+        label: label.into(),
+        kind: "url",
+        url: Some(u),
     }
 }
 
 /// URL-scheme entries for a folder (R-701), and Dev Containers in the
 /// container (R-702, `container`: its id, the hostname).
 pub fn url_targets(dir: &str, container: Option<&str>) -> Vec<Target> {
-    let enc: String = dir
-        .split('/')
-        .map(|seg| {
-            seg.bytes()
-                .map(|b| match b {
-                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                        (b as char).to_string()
-                    }
-                    _ => format!("%{b:02X}"),
-                })
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    let url = |id: &str, label: &str, u: String| Target {
-        id: id.into(),
-        label: label.into(),
-        kind: "url",
-        url: Some(u),
-    };
+    let enc = pct_path(dir);
     let mut out = vec![
-        url("vscode", "VS Code", format!("vscode://file{enc}")),
-        url("cursor", "Cursor", format!("cursor://file{enc}")),
-        url("zed", "Zed", format!("zed://file{enc}")),
+        link("vscode", "VS Code", format!("vscode://file{enc}")),
+        link("cursor", "Cursor", format!("cursor://file{enc}")),
+        link("zed", "Zed", format!("zed://file{enc}")),
     ];
     if let Some(c) = container.filter(|c| !c.is_empty()) {
-        out.push(url(
+        out.push(link(
             "devcontainer",
             "VS Code, inside the xherd container",
             format!(
@@ -153,20 +209,62 @@ pub fn url_targets(dir: &str, container: Option<&str>) -> Vec<Target> {
     out
 }
 
+/// The `xherd-term://` link (R-707), with the chosen terminal when one is set.
+pub fn terminal_link(dir: &str, terminal: Option<&str>) -> Target {
+    let mut u = format!("xherd-term://open?dir={}", pct_path(dir));
+    if let Some(t) = terminal.filter(|t| !t.is_empty()) {
+        u.push_str("&terminal=");
+        u.push_str(&pct_all(t));
+    }
+    link("terminal", "Terminal", u)
+}
+
+/// The user's links (R-706), `{dir}` and `{agent}` replaced, encoded.
+pub fn user_links(dir: &str, agent: &str, links: &[OpenLink]) -> Vec<Target> {
+    let (dir, agent) = (pct_path(dir), pct_all(agent));
+    links
+        .iter()
+        .map(|l| {
+            link(
+                &format!("link:{}", l.id),
+                &l.label,
+                l.url.replace("{dir}", &dir).replace("{agent}", &agent),
+            )
+        })
+        .collect()
+}
+
+/// Every entry for an agent's worktree: editors, the terminal (only once a
+/// handler reported, R-707), the user's links, minus the hidden ids.
+pub fn agent_targets(
+    dir: &str,
+    agent: &str,
+    container: Option<&str>,
+    cfg: &OpenIn,
+    handler: bool,
+) -> Vec<Target> {
+    let mut out = url_targets(dir, container);
+    if handler {
+        out.push(terminal_link(dir, cfg.terminal.as_deref()));
+    }
+    out.extend(user_links(dir, agent, &cfg.links));
+    out.retain(|t| !cfg.hidden.contains(&t.id));
+    out
+}
+
 impl Daemon {
     /// `GET /agents/:id/open-targets`: what works for this agent from a
     /// local browser (R-671), minus what Settings hides (R-706).
     pub async fn open_targets(&self, who: &str) -> Result<Vec<Target>, ActionError> {
         let a = self.action(who, UserAction::Get).await?;
         let dir = crate::workdir_of(&a)?.to_string_lossy().into_owned();
-        let cfg = self.live_config().open_in;
-        let mut out = url_targets(&dir, self.container().as_deref());
-        out.extend(companion_targets(
-            self.companion.offer().as_ref(),
-            &cfg.commands,
-        ));
-        out.retain(|t| !cfg.hidden.contains(&t.id));
-        Ok(out)
+        Ok(agent_targets(
+            &dir,
+            &a.name,
+            self.container().as_deref(),
+            &self.live_config().open_in,
+            self.handler_record().is_some(),
+        ))
     }
 
     /// The container id (its hostname), in the container only (R-702).
@@ -177,103 +275,109 @@ impl Daemon {
             .map(|h| h.trim().to_string())
     }
 
+    /// The installed handler's last report, if any (a file that does not
+    /// parse counts as none).
+    pub fn handler_record(&self) -> Option<HandlerRecord> {
+        let bytes = std::fs::read(self.paths.terminal_handler()).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Stores the handler's report, or removes it (`None`: uninstalled).
+    pub fn record_handler(&self, rec: Option<&HandlerRecord>) -> std::io::Result<()> {
+        let path = self.paths.terminal_handler();
+        match rec {
+            Some(r) => write_atomic(
+                &path,
+                &serde_json::to_vec_pretty(r).map_err(std::io::Error::other)?,
+                Some(0o600),
+            ),
+            None => match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            },
+        }
+    }
+
+    /// The worktrees root the handler must accept, from the live config.
+    pub fn worktrees_root(&self) -> String {
+        self.live_config()
+            .workspace_root()
+            .join("worktrees")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// `POST /open-in/terminal-handler/install` (native only): runs the
+    /// installer as the user the daemon runs as, reporting to this daemon on
+    /// loopback. Returns whether it succeeded and the end of its output.
+    pub async fn install_terminal_handler(
+        &self,
+        uninstall: bool,
+    ) -> Result<(bool, String), ActionError> {
+        if self.sandbox {
+            return Err(ActionError {
+                code: "native_only",
+                message: "xherd runs in a container: run the command from Settings → Open in \
+                          on your computer"
+                    .into(),
+            });
+        }
+        let report = format!("http://127.0.0.1:{}", self.config.port);
+        let script = handler_script(&self.worktrees_root(), &report).map_err(|m| ActionError {
+            code: "bad_config",
+            message: m,
+        })?;
+        let op = if uninstall { "uninstall" } else { "install" };
+        let mut cmd = xherd_core::exec::Cmd::new(["sh", "-s", op])
+            .stdin(script)
+            .timeout(std::time::Duration::from_secs(60));
+        // Not in the allowlist, but xdg-mime and terminal detection read them.
+        for k in [
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "TERMINAL",
+            "XDG_CURRENT_DESKTOP",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+        ] {
+            if let Ok(v) = std::env::var(k) {
+                cmd = cmd.env(k, v);
+            }
+        }
+        let out = xherd_core::exec::run(cmd).await.map_err(|e| ActionError {
+            code: "io",
+            message: format!("could not run the installer: {e}"),
+        })?;
+        let text = format!("{}{}", out.stdout_str(), out.stderr);
+        let lines: Vec<&str> = text.lines().collect();
+        let tail = lines[lines.len().saturating_sub(20)..].join("\n");
+        Ok((out.success(), tail))
+    }
+
     /// `GET /open-in`, for Settings → Open in: the link entries this daemon
-    /// offers and what the companion offers right now.
+    /// offers and the handler's state.
     pub fn open_in_view(&self) -> serde_json::Value {
         let links: Vec<_> = url_targets("/", self.container().as_deref())
             .into_iter()
             .map(|t| serde_json::json!({"id": t.id, "label": t.label}))
             .collect();
-        serde_json::json!({"links": links, "companion": self.companion.offer()})
+        let rec = self.handler_record();
+        let update = rec.as_ref().is_some_and(|r| r.version < HANDLER_VERSION);
+        let moved = rec
+            .as_ref()
+            .is_some_and(|r| r.root != self.worktrees_root());
+        serde_json::json!({
+            "links": links,
+            "native": !self.sandbox,
+            "handler": {
+                "shipped": HANDLER_VERSION,
+                "installed": rec,
+                "updateAvailable": update,
+                "rootChanged": moved,
+            },
+        })
     }
-
-    /// `POST /agents/:id/open`: hand the folder to the companion (R-704,
-    /// R-706, R-707).
-    pub async fn open_with_companion(&self, who: &str, app: &str) -> Result<(), ActionError> {
-        let none = |what: &str| ActionError {
-            code: "no_companion",
-            message: format!(
-                "no companion offers {what}; run `xherd companion` on this computer (an up-to-date one for the terminal and your commands)"
-            ),
-        };
-        let offer = self.companion.offer().ok_or_else(|| none(app))?;
-        let has = |f: &str| offer.features.iter().any(|x| x == f);
-        let cfg = self.live_config().open_in;
-        let (terminal, argv) = if app == TERMINAL {
-            if !has(TERMINAL) {
-                return Err(none("the terminal"));
-            }
-            (cfg.terminal, None)
-        } else if let Some(id) = app.strip_prefix("cmd:") {
-            let c = cfg
-                .commands
-                .iter()
-                .find(|c| c.id == id)
-                .ok_or_else(|| ActionError {
-                    code: "not_found",
-                    message: format!("no Open-in command {id}"),
-                })?;
-            if !has(COMMANDS) {
-                return Err(none(&c.label));
-            }
-            (None, Some(c.argv.clone()))
-        } else if let Some(name) = app.strip_prefix("companion:")
-            && offer.apps.iter().any(|a| a == name)
-        {
-            (None, None)
-        } else {
-            return Err(none(app));
-        };
-        // The companion knows its own apps by their plain name.
-        let app = app.strip_prefix("companion:").unwrap_or(app);
-        let a = self.action(who, UserAction::Get).await?;
-        let dir = crate::workdir_of(&a)?.to_string_lossy().into_owned();
-        self.companion.push(OpenRequest {
-            app: app.into(),
-            dir,
-            agent: a.name,
-            terminal,
-            argv,
-        });
-        Ok(())
-    }
-}
-
-/// The companion's entries: the terminal, its own apps and the user commands
-/// it can run (an older companion offers only its apps).
-fn companion_targets(
-    offer: Option<&Offer>,
-    commands: &[xherd_core::config::OpenCommand],
-) -> Vec<Target> {
-    let Some(o) = offer else { return Vec::new() };
-    let entry = |id: String, label: String| Target {
-        id,
-        label,
-        kind: "companion",
-        url: None,
-    };
-    let has = |f: &str| o.features.iter().any(|x| x == f);
-    let mut out = Vec::new();
-    if has(TERMINAL) {
-        out.push(entry(
-            TERMINAL.into(),
-            "Terminal (shell in the worktree)".into(),
-        ));
-    }
-    out.extend(o.apps.iter().map(|app| {
-        entry(
-            format!("companion:{app}"),
-            format!("{app} (on this computer)"),
-        )
-    }));
-    if has(COMMANDS) {
-        out.extend(
-            commands
-                .iter()
-                .map(|c| entry(format!("cmd:{}", c.id), c.label.clone())),
-        );
-    }
-    out
 }
 
 #[cfg(test)]
@@ -296,57 +400,152 @@ mod tests {
     }
 
     #[test]
-    fn companion_entries_follow_what_it_offers() {
-        let cmds = [xherd_core::config::OpenCommand {
-            id: "idea".into(),
-            label: "IDEA".into(),
-            argv: vec!["idea".into(), "{dir}".into()],
-        }];
-        assert!(companion_targets(None, &cmds).is_empty());
-        let old = Offer {
-            apps: vec!["code".into()],
-            features: vec![],
-            ..Default::default()
-        };
-        let ids = |o: &Offer| -> Vec<String> {
-            companion_targets(Some(o), &cmds)
-                .into_iter()
-                .map(|t| t.id)
-                .collect()
-        };
-        assert_eq!(ids(&old), ["companion:code"]);
-        let new = Offer {
-            apps: vec!["code".into()],
-            features: vec![TERMINAL.into(), COMMANDS.into()],
-            ..Default::default()
-        };
-        assert_eq!(ids(&new), ["terminal", "companion:code", "cmd:idea"]);
+    fn terminal_link_encodes_the_folder() {
+        let t = terminal_link("/home/u/x herd/wt/a#b&c/é", Some("kitty"));
+        assert_eq!(t.id, "terminal");
+        assert_eq!(t.kind, "url");
+        assert_eq!(
+            t.url.as_deref(),
+            Some("xherd-term://open?dir=/home/u/x%20herd/wt/a%23b%26c/%C3%A9&terminal=kitty")
+        );
+        let t = terminal_link("/w/app/fix", None);
+        assert_eq!(t.url.as_deref(), Some("xherd-term://open?dir=/w/app/fix"));
+        let t = terminal_link("/w/app/fix", Some(""));
+        assert_eq!(t.url.as_deref(), Some("xherd-term://open?dir=/w/app/fix"));
     }
 
-    #[tokio::test]
-    async fn companion_queue() {
-        let c = Companion::default();
-        assert!(c.offer().is_none());
-        let offer = Offer {
-            apps: vec!["idea".into()],
-            features: vec![],
-            ..Default::default()
+    #[test]
+    fn user_links_replace_dir_and_agent() {
+        let links = [OpenLink {
+            id: "idea".into(),
+            label: "IntelliJ IDEA".into(),
+            url: "idea://open?file={dir}&name={agent}&again={dir}".into(),
+        }];
+        let t = user_links("/w/my app/a&b", "x/y z", &links);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].id, "link:idea");
+        assert_eq!(t[0].label, "IntelliJ IDEA");
+        assert_eq!(
+            t[0].url.as_deref(),
+            Some("idea://open?file=/w/my%20app/a%26b&name=x%2Fy%20z&again=/w/my%20app/a%26b")
+        );
+    }
+
+    #[test]
+    fn terminal_only_with_a_record_and_hidden_ids_go() {
+        let ids = |t: Vec<Target>| t.into_iter().map(|t| t.id).collect::<Vec<_>>();
+        let mut cfg = OpenIn {
+            links: vec![OpenLink {
+                id: "idea".into(),
+                label: "IDEA".into(),
+                url: "idea://open?file={dir}".into(),
+            }],
+            ..OpenIn::default()
         };
-        assert_eq!(c.next(offer.clone(), Duration::from_millis(10)).await, None);
-        assert_eq!(c.offer(), Some(offer.clone()));
-        let waiter = {
-            let c = c.clone();
-            tokio::spawn(async move { c.next(offer, Duration::from_secs(5)).await })
+        assert_eq!(
+            ids(agent_targets("/w/a/b", "b", None, &cfg, false)),
+            ["vscode", "cursor", "zed", "link:idea"]
+        );
+        assert_eq!(
+            ids(agent_targets("/w/a/b", "b", None, &cfg, true)),
+            ["vscode", "cursor", "zed", "terminal", "link:idea"]
+        );
+        cfg.hidden = vec!["zed".into(), "terminal".into(), "link:idea".into()];
+        assert_eq!(
+            ids(agent_targets("/w/a/b", "b", None, &cfg, true)),
+            ["vscode", "cursor"]
+        );
+    }
+
+    #[test]
+    fn pct_keeps_or_encodes_the_slash() {
+        assert_eq!(pct_path("/a b/c"), "/a%20b/c");
+        assert_eq!(pct_all("/a b/c"), "%2Fa%20b%2Fc");
+        assert_eq!(pct_all("A-z_0.9~"), "A-z_0.9~");
+    }
+
+    #[test]
+    fn record_round_trips_as_camel_case() {
+        let r = HandlerRecord {
+            version: 1,
+            xherd: "0.3.0".into(),
+            os: "linux".into(),
+            terminals: vec!["konsole".into()],
+            root: "/w/worktrees".into(),
+            at: 5,
         };
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let r = OpenRequest {
-            app: "idea".into(),
-            dir: "/w".into(),
-            agent: "SC-1".into(),
-            terminal: None,
-            argv: None,
-        };
-        c.push(r.clone());
-        assert_eq!(waiter.await.unwrap(), Some(r));
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["terminals"][0], "konsole");
+        assert_eq!(serde_json::from_value::<HandlerRecord>(v).unwrap(), r);
+    }
+
+    /// A change to either script must bump `HANDLER_VERSION` (so installed
+    /// handlers are offered the update) and then update these hashes.
+    #[test]
+    fn handler_version_is_pinned_to_the_scripts() {
+        use sha2::{Digest, Sha256};
+        let sha = |s: &str| hex::encode(Sha256::digest(s.as_bytes()));
+        assert_eq!(
+            (HANDLER_VERSION, sha(HANDLER_SH), sha(INSTALL_SH)),
+            (
+                1,
+                "6235be7359183ae7050b788df7cc07cb1c723fe98b7c0a35c7009287758473cf".to_string(),
+                "c827fca1d327bdcd6f3b0d6ba17bb501a77467570441ca9d17efd92ac9d21050".to_string()
+            ),
+            "a script changed: bump HANDLER_VERSION and update the pinned hashes"
+        );
+    }
+
+    /// The installer's quoted heredoc ends at this line; the handler must not
+    /// contain it.
+    const HEREDOC_END: &str = "XHERD_HANDLER_EOF";
+
+    #[test]
+    fn the_handler_never_ends_the_heredoc() {
+        assert!(!HANDLER_SH.contains(HEREDOC_END));
+        assert_eq!(INSTALL_SH.matches(HEREDOC_END).count(), 2);
+        assert_eq!(INSTALL_SH.matches("\n@HANDLER@\n").count(), 1);
+    }
+
+    #[test]
+    fn handler_script_bakes_in_plain_values() {
+        let s = handler_script("/home/me/x herd/worktrees/", "http://127.0.0.1:4740").unwrap();
+        assert!(s.contains("\nroot='/home/me/x herd/worktrees'\n"));
+        assert!(s.contains("\nreport_url='http://127.0.0.1:4740'\n"));
+        assert!(s.contains(&format!("\nhandler_version='{HANDLER_VERSION}'\n")));
+        assert!(s.contains(HANDLER_SH));
+        // The handler's own text is not touched by the replacements.
+        let rest = s.replace(HANDLER_SH, "");
+        for p in [
+            "@ROOT@",
+            "@REPORT_URL@",
+            "@VERSION@",
+            "@XHERD@",
+            "@HANDLER@",
+        ] {
+            assert!(!rest.contains(p), "{p} left");
+        }
+    }
+
+    #[test]
+    fn handler_script_refuses_what_breaks_the_quoting() {
+        let url = "http://127.0.0.1:4740";
+        for root in [
+            "/a'b", "/a\"b", "/a\\b", "/a$b", "/a`b`", "/a\nb", "/a\tb", "/a\u{7f}", "", "rel",
+        ] {
+            assert!(handler_script(root, url).is_err(), "{root:?}");
+        }
+        for url in [
+            "http://h'",
+            "http://h$(x)",
+            "http://h\n",
+            "http://h x",
+            "ftp://h",
+            "h:1",
+            "",
+        ] {
+            assert!(handler_script("/w", url).is_err(), "{url:?}");
+        }
+        assert!(handler_script("/w", "https://[::1]:4740/").is_ok());
     }
 }

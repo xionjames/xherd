@@ -36,6 +36,7 @@ xherd runs coding agents that can read, write and execute. This page says what i
 - The daemon binds `127.0.0.1` natively. In the container it binds `0.0.0.0` inside, and compose publishes the port on the host's `127.0.0.1` only; `xherd docker doctor` checks that.
 - Local rights (the local browser, the CLI) come from the peer address plus a local or absent `Origin`. In the container loopback is where the agents are, so only the gateway the published port arrives from counts as local, and the CLI there needs its token.
 - Changing `bind` to a non-loopback address makes the daemon reachable from the network. Requests from other machines do not get the local user's rights, but the daemon is not built to face a network. `xherd security check` warns about it.
+- Open in → Terminal uses the `xherd-term://` link handler you install on your computer. Any web page can fire that link; your browser asks first (unless you chose "Always allow" for a site), and the handler opens only a folder that is itself an agent worktree under xherd's worktrees folder (no subfolder, no symlink leading elsewhere), runs nothing taken from the link, and starts a plain shell there. That shell's own start-up (a git prompt, `direnv`) then runs in a folder an agent wrote, as when you `cd` there yourself. Nothing on your computer runs a command sent by the daemon: every Open-in entry is a link.
 
 ## Two users in the container
 

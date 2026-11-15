@@ -561,7 +561,7 @@ Supported: Docker Desktop (reference), and OrbStack, Colima, Podman Desktop, Ran
 | Local apps via URL schemes | ✓ | ✓ | – | – |
 | VS Code Remote-SSH / JetBrains Gateway | – | – | ✓ (SSH to host) | via SSH sidecar (**verify**) |
 | Dev Containers attach | ✓ | – | via Docker context over SSH (**verify**) | – |
-| Host commands (companion) | ✓ | ✓ | – | – |
+| Terminal on the user's computer (link handler) | ✓ | ✓ | – | – |
 
 | ID | Requirement |
 |---|---|
@@ -576,10 +576,10 @@ Supported: Docker Desktop (reference), and OrbStack, Colima, Podman Desktop, Ran
 | R-701 | URL-scheme entries (no host software): `vscode://file/{dir}`, `cursor://file/{dir}`, JetBrains Toolbox and Zed URLs (**verify** formats). |
 | R-702 | Dev Containers entry: open the worktree inside the xherd container (`vscode://vscode-remote/attached-container+<hex>{dir}`). |
 | R-703 | Host companion (`xherd` on the host, client mode): `xherd attach <agent>` (over the daemon's terminal websocket), `xherd open <agent> [--app NAME]`, `xherd shell <agent>`, `xherd login [URL]`. |
-| R-704 | Optional host bridge (`xherd companion`, later built into the desktop app): runs only the configured Open-in commands with `{dir}` substituted, for requests authenticated by the daemon. |
+| R-704 | *Removed* (issue #129): the host bridge `xherd companion` is gone. Every Open-in entry is a link the browser opens; the terminal is opened by the link handler of R-707. |
 | R-705 | VS Code in the browser (openvscode-server) inside the container, for remote devices. |
-| R-706 | Settings → Open in manages the entries: show or hide each one (links, companion apps, the terminal) and add **user commands** (a label and an argv with `{dir}`). The companion runs a user command only after the user confirms that exact argv **on the host**, once (it asks in its own terminal and remembers the argv's hash); a changed argv asks again, and a companion that cannot ask refuses it. Commands in the host's `open.json` and the known editors need no confirmation: the host already chose them. |
-| R-707 | **Open in terminal** is built in: the companion opens a native terminal window (macOS Terminal, iTerm or Ghostty; on Linux the desktop's default terminal among the known ones installed, e.g. Ghostty, Konsole, GNOME Terminal, kitty, then `x-terminal-emulator`) running `xherd shell <agent>`, a shell in the agent's worktree (inside the container in Docker mode). The command is part of the xherd binary, so it needs no confirmation; Settings only chooses the terminal app from that fixed list. |
+| R-706 | Settings → Open in manages the entries: show or hide each one (links, the terminal) and add **user links** (`openIn.links`: a label and a URL with `{dir}` and `{agent}`, replaced percent-encoded). User links are for local apps only: the URL must start with a scheme, and web and browser-internal schemes (`http`, `https`, `ws`, `wss`, `ftp`, `javascript`, `data`, `vbscript`, `blob`, `file`, `about`, `xherd-term`) are refused. The user commands of earlier versions (`openIn.commands`) are dropped by a config migration and named once in Settings (`openIn.droppedCommands`) until dismissed. |
+| R-707 | **Open in terminal** opens the user's own terminal app in the agent's worktree, on the user's computer, through the link `xherd-term://open?dir=<dir>&terminal=<id>`. A handler script (`xherd-open-terminal`, POSIX `sh`, nothing kept running) is registered once for that scheme, for the current user: natively by `xherd terminal-handler install` or the Install button, in Docker by `curl -fsSL <origin>/api/v1/open-in/terminal-handler.sh \| sh` on the host (no `xherd` needed there). The handler opens only a folder that is itself an agent worktree (`<worktrees root>/<repo>/<agent>`, also after resolving symlinks, with a `.git` file and `.xherd/`), never runs anything taken from the URL, and uses the chosen terminal (macOS Terminal, iTerm or Ghostty; on Linux the desktop's default among the known ones, else `x-terminal-emulator`) with the folder as its working directory. The install reports to the daemon, which lists the Terminal entry only while it has a recorded install and offers an update when the handler it ships is newer or the worktrees root moved. macOS is checked by dry run only (**verify**). |
 
 ## 13. Guardrails and security
 
@@ -763,7 +763,7 @@ xherd hook <event> | report …           status reporting (silent)
 xherd gate|stage|tasks|task|commit|pr|handoff|ask|issue|memory …   XAP (xap.md)
 xherd mcp                               XAP as an MCP stdio server
 xherd credential                        git credential helper
-xherd companion                         host bridge for Open-in commands
+xherd terminal-handler install|uninstall   register the xherd-term:// link (Open in terminal)
 ```
 
 `<agent>` is a name or a unique ticket key.

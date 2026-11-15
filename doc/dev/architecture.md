@@ -74,7 +74,7 @@ flowchart TD
 | `xherd-git` | Worktrees, diffs of proposed files, commits, bundles, the push guard. |
 | `xherd-api` | axum routes under `/api/v1`, `/ws` change feed, terminal websockets, authentication, the embedded UI. |
 | `xherd-daemon` | Supervisor, actors, scheduler, agent creation, pack install, settings, git access, repo profiles, TODOs and condition checks, the work log, notifications (bell, ntfy, desktop), backups, Open in, the runner client, the glue. |
-| `xherd-cli` | The `xherd` binary: daemon, container entrypoint (`init`) and `runner`, Docker commands, user commands, backups, runtime hooks, XAP calls, credential helper, pre-push guard, toolchain launcher, the Open-in companion. |
+| `xherd-cli` | The `xherd` binary: daemon, container entrypoint (`init`) and `runner`, Docker commands, user commands, backups, runtime hooks, XAP calls, credential helper, pre-push guard, toolchain launcher, the terminal handler install (`terminal-handler`). |
 
 ## One actor per agent
 

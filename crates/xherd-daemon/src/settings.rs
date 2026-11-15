@@ -82,10 +82,51 @@ fn valid_scope(s: &str) -> bool {
     host_ok && owner_ok
 }
 
-/// Settings → Open in (R-706): command ids are plain and unique, since they
-/// become entry ids (`cmd:<id>`); every argv names a program.
+/// Schemes a user link may not use (R-706): web pages and script or file
+/// URLs are not "open in an app", and `xherd-term` is the handler's own.
+const REFUSED_LINK_SCHEMES: &[&str] = &[
+    "http",
+    "https",
+    "ws",
+    "wss",
+    "ftp",
+    "javascript",
+    "data",
+    "vbscript",
+    "blob",
+    "file",
+    "about",
+    "xherd-term",
+];
+
+/// A user link URL: at most 2048 bytes, no whitespace or control
+/// characters, a scheme (`^[a-z][a-z0-9+.-]*:`, any case) that is not refused.
+fn link_url_error(url: &str) -> Option<&'static str> {
+    if url.len() > 2048 {
+        return Some("is over 2048 bytes");
+    }
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Some("has whitespace or control characters");
+    }
+    let scheme = url.split_once(':').map(|(s, _)| s).unwrap_or("");
+    let valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'));
+    if !valid {
+        return Some("needs a scheme, like idea://");
+    }
+    REFUSED_LINK_SCHEMES
+        .contains(&scheme.to_ascii_lowercase().as_str())
+        .then_some("uses a scheme that is not allowed for app links")
+}
+
+/// Settings → Open in (R-706): link ids are plain and unique, since they
+/// become entry ids (`link:<id>`); every link has a label and an allowed URL.
+/// `droppedCommands` can only shrink: a client may dismiss, never add.
 fn check_open_in(
     mut o: xherd_core::config::OpenIn,
+    old: &xherd_core::config::OpenIn,
 ) -> Result<xherd_core::config::OpenIn, ActionError> {
     use xherd_core::config::TERMINAL_APPS;
     if let Some(t) = &o.terminal
@@ -97,25 +138,32 @@ fn check_open_in(
         )));
     }
     o.hidden.retain(|h| !h.trim().is_empty());
+    if o.dropped_commands
+        .iter()
+        .any(|d| !old.dropped_commands.contains(d))
+    {
+        return Err(bad("openIn.droppedCommands can only be cleared"));
+    }
     let mut ids = std::collections::BTreeSet::new();
-    for c in &mut o.commands {
-        c.label = c.label.trim().to_string();
-        let plain = !c.id.is_empty()
-            && c.id.len() <= 40
-            && c.id
+    for l in &mut o.links {
+        l.label = l.label.trim().to_string();
+        l.url = l.url.trim().to_string();
+        let plain = !l.id.is_empty()
+            && l.id.len() <= 40
+            && l.id
                 .chars()
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-');
-        if !plain || !ids.insert(c.id.clone()) {
+        if !plain || !ids.insert(l.id.clone()) {
             return Err(bad(format!(
-                "openIn command id {:?}: lower-case letters, digits and -, unique",
-                c.id
+                "openIn link id {:?}: lower-case letters, digits and -, unique",
+                l.id
             )));
         }
-        if c.label.is_empty() || c.argv.first().is_none_or(|a| a.trim().is_empty()) {
-            return Err(bad(format!(
-                "openIn command {}: a label and a program are needed",
-                c.id
-            )));
+        if l.label.is_empty() {
+            return Err(bad(format!("openIn link {}: a label is needed", l.id)));
+        }
+        if let Some(e) = link_url_error(&l.url) {
+            return Err(bad(format!("openIn link {}: the URL {e}", l.id)));
         }
     }
     Ok(o)
@@ -188,7 +236,7 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             xherd_core::model::clean_map(m).map_err(|e| bad(format!("runtimeModels: {e}")))?;
     }
     if let Some(o) = p.open_in {
-        c.open_in = check_open_in(o)?;
+        c.open_in = check_open_in(o, &c.open_in)?;
     }
     if let Some(n) = p.max_auto_approvals_in_row {
         c.max_auto_approvals_in_row = n;
@@ -495,27 +543,83 @@ mod tests {
         assert_eq!(apply(&mut c, p).unwrap_err().code, "bad_config");
     }
 
+    fn open_in_patch(v: Value) -> ConfigPatch {
+        serde_json::from_value(json!({"openIn": v})).unwrap()
+    }
+
+    fn link(url: &str) -> Value {
+        json!({"links": [{"id": "a", "label": "A", "url": url}]})
+    }
+
     #[test]
-    fn open_in_is_checked() {
+    fn open_in_links_are_checked() {
         let mut c = Config::default();
-        let ok = |v: Value| serde_json::from_value::<ConfigPatch>(json!({"openIn": v})).unwrap();
         apply(
             &mut c,
-            ok(json!({"hidden": ["zed", " "], "terminal": "iterm",
-                      "commands": [{"id": "idea", "label": " IDEA ", "argv": ["idea", "{dir}"]}]})),
+            open_in_patch(json!({"hidden": ["zed", " "], "terminal": "iterm",
+                "links": [{"id": "idea", "label": " IDEA ", "url": " idea://open?file={dir} "},
+                          {"id": "jb", "label": "Toolbox", "url": "jetbrains://idea/navigate?path={dir}"}]})),
         )
         .unwrap();
         assert_eq!(c.open_in.hidden, ["zed"]);
-        assert_eq!(c.open_in.commands[0].label, "IDEA");
+        assert_eq!(c.open_in.links[0].label, "IDEA");
+        assert_eq!(c.open_in.links[0].url, "idea://open?file={dir}");
         for bad in [
             json!({"terminal": "st"}),
-            json!({"commands": [{"id": "Idea", "label": "x", "argv": ["idea"]}]}),
-            json!({"commands": [{"id": "a", "label": "x", "argv": ["a"]}, {"id": "a", "label": "y", "argv": ["b"]}]}),
-            json!({"commands": [{"id": "a", "label": "x", "argv": []}]}),
-            json!({"commands": [{"id": "a", "label": "", "argv": ["a"]}]}),
+            json!({"links": [{"id": "Idea", "label": "x", "url": "idea://x"}]}),
+            json!({"links": [{"id": "a", "label": "x", "url": "a://x"}, {"id": "a", "label": "y", "url": "b://y"}]}),
+            json!({"links": [{"id": "a", "label": " ", "url": "a://x"}]}),
         ] {
-            assert_eq!(apply(&mut c, ok(bad)).unwrap_err().code, "bad_config");
+            assert_eq!(
+                apply(&mut c, open_in_patch(bad)).unwrap_err().code,
+                "bad_config"
+            );
         }
+        let extra =
+            json!({"openIn": {"links": [{"id": "a", "label": "x", "url": "a://x", "argv": []}]}});
+        assert!(serde_json::from_value::<ConfigPatch>(extra).is_err());
+    }
+
+    #[test]
+    fn open_in_link_urls_are_checked() {
+        let mut c = Config::default();
+        for scheme in super::REFUSED_LINK_SCHEMES {
+            for s in [scheme.to_string(), scheme.to_uppercase()] {
+                let url = format!("{s}://example.com/{{dir}}");
+                let err = apply(&mut c, open_in_patch(link(&url))).unwrap_err();
+                assert_eq!(err.code, "bad_config", "{url}");
+            }
+        }
+        let long = format!("idea://{}", "x".repeat(2048));
+        for url in [
+            "idea",
+            "/open?file={dir}",
+            "1idea://x",
+            "id ea://x",
+            "idea://open?file={dir} x",
+            "idea://x\ty",
+            "idea://x\u{7}",
+            "",
+            &long,
+        ] {
+            let err = apply(&mut c, open_in_patch(link(url))).unwrap_err();
+            assert_eq!(err.code, "bad_config", "{url:?}");
+        }
+        apply(&mut c, open_in_patch(link("Vs-Code+x.1://open"))).unwrap();
+    }
+
+    #[test]
+    fn dropped_commands_can_only_shrink() {
+        let mut c = Config::default();
+        c.open_in.dropped_commands = vec!["Fork".into(), "Tower".into()];
+        let grow = open_in_patch(json!({"droppedCommands": ["Fork", "Other"]}));
+        assert_eq!(apply(&mut c, grow).unwrap_err().code, "bad_config");
+        apply(&mut c, open_in_patch(json!({"droppedCommands": ["Tower"]}))).unwrap();
+        assert_eq!(c.open_in.dropped_commands, ["Tower"]);
+        apply(&mut c, open_in_patch(json!({}))).unwrap();
+        assert!(c.open_in.dropped_commands.is_empty());
+        let back = open_in_patch(json!({"droppedCommands": ["Tower"]}));
+        assert_eq!(apply(&mut c, back).unwrap_err().code, "bad_config");
     }
 
     #[test]

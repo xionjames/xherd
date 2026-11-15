@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::paths::write_atomic;
 
-pub const CONFIG_SCHEMA_VERSION: u32 = 2;
+pub const CONFIG_SCHEMA_VERSION: u32 = 3;
 
 /// The runtime of agents created before they named one, and the default
 /// `defaultRuntime`.
@@ -191,8 +191,7 @@ impl Default for Config {
 }
 
 /// Settings → Open in (R-706, R-707): entries left out of the menu, the
-/// terminal app the companion opens, and user commands, which the companion
-/// runs only after the user confirms each argv on the host.
+/// terminal the `xherd-term` link handler opens, and the user's own links.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OpenIn {
@@ -201,21 +200,25 @@ pub struct OpenIn {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<OpenCommand>,
+    pub links: Vec<OpenLink>,
+    /// Labels of the schema 2 commands the migration removed, shown in
+    /// Settings until the user dismisses them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dropped_commands: Vec<String>,
 }
 
+/// A user link (R-706): a URL the browser opens, with `{dir}` and `{agent}`
+/// replaced (percent-encoded).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OpenCommand {
+pub struct OpenLink {
     pub id: String,
     pub label: String,
-    /// `{dir}` and `{agent}` are replaced.
-    pub argv: Vec<String>,
+    pub url: String,
 }
 
-/// Terminal apps the companion knows how to open (R-707): macOS's `terminal`
-/// and `iterm`, `ghostty` on both, the rest on Linux (the companion's
-/// `UNIX_TERMINALS`).
+/// Terminal apps the `xherd-term` link handler knows how to open (R-707):
+/// macOS's `terminal` and `iterm`, `ghostty` on both, the rest on Linux.
 pub const TERMINAL_APPS: &[&str] = &[
     "terminal",
     "iterm",
@@ -291,7 +294,7 @@ fn both_protocols() -> Vec<String> {
 
 /// Migrations from version N to N+1, applied to the raw JSON. Index 0 = 0 → 1.
 type Migration = fn(&mut Map<String, Value>);
-const MIGRATIONS: &[Migration] = &[|_v0| {}, git_hosts_to_providers];
+const MIGRATIONS: &[Migration] = &[|_v0| {}, git_hosts_to_providers, open_in_commands_to_links];
 
 /// 1 → 2 (R-693): a host's `gh` / `glab` credential becomes the provider
 /// credential bound to `github` / `gitlab`; `xherd` and `none` stay.
@@ -307,6 +310,31 @@ fn git_hosts_to_providers(m: &mut Map<String, Value>) {
         };
         h.insert("credential".into(), "provider".into());
         h.insert("provider".into(), provider.into());
+    }
+}
+
+/// 2 → 3 (R-706): the companion's commands are gone. Their labels stay in
+/// `droppedCommands` so Settings can say so, and the menu ids that named
+/// companion entries (`cmd:*`, `companion:*`) leave `hidden`.
+fn open_in_commands_to_links(m: &mut Map<String, Value>) {
+    let Some(Value::Object(o)) = m.get_mut("openIn") else {
+        return;
+    };
+    if let Some(Value::Array(cmds)) = o.remove("commands") {
+        let labels: Vec<Value> = cmds
+            .iter()
+            .filter_map(|c| c.get("label").and_then(Value::as_str))
+            .map(Value::from)
+            .collect();
+        if !labels.is_empty() {
+            o.insert("droppedCommands".into(), labels.into());
+        }
+    }
+    if let Some(Value::Array(hidden)) = o.get_mut("hidden") {
+        hidden.retain(|h| {
+            h.as_str()
+                .is_none_or(|h| !h.starts_with("cmd:") && !h.starts_with("companion:"))
+        });
     }
 }
 
@@ -540,6 +568,34 @@ mod tests {
         assert_eq!(
             (h[3].credential, h[3].provider.as_deref()),
             (Credential::None, None)
+        );
+    }
+
+    /// R-706: schema 2 commands become dropped labels, their menu ids go.
+    #[test]
+    fn open_in_commands_are_dropped() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("config.json");
+        std::fs::write(
+            &f,
+            r#"{"schemaVersion": 2, "futureThing": 1, "openIn": {"terminal": "kitty",
+                "hidden": ["cmd:x", "companion:idea", "zed"],
+                "commands": [{"id": "x", "label": "Fork", "argv": ["fork", "{dir}"]}]}}"#,
+        )
+        .unwrap();
+        let (c, migrated) = Config::load(&f).unwrap();
+        assert!(migrated);
+        let o = &c.open_in;
+        assert!(o.links.is_empty());
+        assert_eq!(o.dropped_commands, ["Fork"]);
+        assert_eq!(o.hidden, ["zed"]);
+        assert_eq!(o.terminal.as_deref(), Some("kitty"));
+        c.save(&f).unwrap();
+        let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
+        assert!(v["openIn"].get("commands").is_none());
+        assert_eq!(
+            (v["schemaVersion"].as_u64(), v["futureThing"].as_u64()),
+            (Some(3), Some(1))
         );
     }
 
