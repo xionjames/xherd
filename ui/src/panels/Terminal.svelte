@@ -1,21 +1,78 @@
 <script lang="ts">
   // `terminal` panel: the agent's tmux session through /ws/term/:id.
   import TermView from '../components/TermView.svelte';
+  import Callout from '../components/Callout.svelte';
   import type { Agent } from '../lib/types';
+  import { post } from '../lib/api';
+  import { upsertAgent } from '../lib/store.svelte';
+  import { showError } from '../lib/errors.svelte';
 
   let { agent }: { agent: Agent } = $props();
   // Keyed on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   const live = $derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
+  // Ask (R5): an agent without a session that can be resumed takes a question.
+  const askable = $derived(['paused', 'parked', 'watching', 'error'].includes(agent.status) && !agent.worktreeRemovedAt);
+
+  let text = $state('');
+  let busy = $state(false);
+  let box = $state<HTMLTextAreaElement>();
+  function grow() {
+    if (!box) return;
+    box.style.height = 'auto';
+    box.style.height = `${box.scrollHeight}px`;
+  }
+  async function send(action: 'ask' | 'finish', body: object, label: string) {
+    busy = true;
+    try {
+      upsertAgent((await post<{ agent: Agent }>(`/agents/${id}/${action}`, body)).agent);
+      if (action === 'ask') { text = ''; queueMicrotask(grow); }
+    } catch (e) { showError(label, e); }
+    finally { busy = false; }
+  }
+  function ask(e: SubmitEvent) {
+    e.preventDefault();
+    if (text.trim() && !busy) send('ask', { text }, 'Could not ask the agent');
+  }
+  function key(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      (e.currentTarget as HTMLTextAreaElement).form?.requestSubmit();
+    }
+  }
 </script>
 
 <div class="stack">
+  {#if agent.askHold}
+    <Callout tone="info">
+      <div class="row" style="justify-content:space-between">
+        <span>Asked by you: the session stays open until you finish.</span>
+        <button class="btn sm" disabled={busy} onclick={() => send('finish', {}, 'Could not finish')}>Finish</button>
+      </div>
+    </Callout>
+  {/if}
   {#if live}
     <TermView path={`/ws/term/${id}`} title={agent.name}
       hint={`tmux session ${agent.name}; leaving this page detaches, the agent keeps running.`} />
+  {:else if askable}
+    <form class="card ask" onsubmit={ask}>
+      <label for="ask-text">No session: the agent is {agent.status}. Ask it something; it continues its last conversation and stays until you finish.</label>
+      <div class="row">
+        <textarea id="ask-text" rows="1" bind:this={box} bind:value={text} oninput={grow} onkeydown={key}
+          placeholder="Why did the check fail?" disabled={busy}></textarea>
+        <button class="btn primary" type="submit" disabled={busy || !text.trim()}>Ask</button>
+      </div>
+      <span class="hint">Enter sends, Shift+Enter starts a new line.</span>
+    </form>
   {:else}
     <section class="term" aria-label="Terminal">
-      <div class="scr c-dim">No session: the agent is {agent.status}. Resume it to get a terminal.</div>
+      <div class="scr c-dim">No session: the agent is {agent.status}.{agent.status === 'queued' ? ' It starts when a slot is free.' : ''}</div>
     </section>
   {/if}
 </div>
+
+<style>
+  .ask { display: flex; flex-direction: column; gap: 8px; padding: 16px; }
+  .ask .row { align-items: flex-end; flex-wrap: nowrap; }
+  .ask textarea { flex: 1; resize: none; max-height: 40vh; overflow-y: auto; }
+</style>

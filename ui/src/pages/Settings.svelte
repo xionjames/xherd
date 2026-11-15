@@ -96,7 +96,7 @@
       <dl class="kv">
         <dt>Version</dt><dd class="mono">{app.state?.buildVersion}</dd>
         <dt>Runs</dt><dd>{#if app.state?.sandbox}In the Docker container{:else}Natively on {app.state?.platform}{/if}</dd>
-        <dt>License</dt><dd>MIT</dd>
+        <dt>License</dt><dd>GPL-3.0-or-later</dd>
       </dl>
       <p class="hint">A release shows its tag (<span class="mono">0.2.0</span>); a development build shows the last tag, the commits since it and the commit hash (<span class="mono">0.2.0+3.abc1234</span>), with <span class="mono">dirty</span> for uncommitted changes.</p>
     </Panel>

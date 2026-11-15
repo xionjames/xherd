@@ -8,13 +8,14 @@
   import StatusPill from '../components/StatusPill.svelte';
   import YourCallBand from '../components/YourCallBand.svelte';
   import Dialog from '../components/Dialog.svelte';
+  import Callout from '../components/Callout.svelte';
   import TicketPrompt from '../components/TicketPrompt.svelte';
   import type { Agent } from '../lib/types';
   import { app, upsertAgent } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
   import { flowOf, prGate } from '../lib/flow';
-  import { agoText, needsYou, repoName, shortBase } from '../lib/format';
+  import { agoText, needsYou, repoName, shortBase, waitsAtGate } from '../lib/format';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { MODE_HINT, modes } from '../lib/modes';
@@ -61,7 +62,8 @@
   const live = $derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
 
   function badge(id: string): { n: string | number; tone: string } | undefined {
-    const g = agent.gate;
+    // A gate autonomy will approve at the stop gets no ✋ (R4).
+    const g = waitsAtGate(agent) ? agent.gate : undefined;
     if (id === 'spec' && g?.kind === 'docs' && !prGate(g)) return { n: '✋', tone: 'g' };
     if (id === 'pr' && prGate(g)) return { n: '✋', tone: 'g' };
     if (id === 'changes' && g?.kind === 'commit') return { n: '✋', tone: 'g' };
@@ -95,11 +97,18 @@
     catch (err) { showError('Could not change the model', err); }
   }
 
-  async function act(action: string, label: string) {
+  async function act(action: string, label: string, body?: unknown) {
     menu = false;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`)).agent); }
+    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`, body)).agent); }
     catch (e) { showError(label, e); }
   }
+
+  // Worktree removal (R12–R14): by hand only, the branch and record stay.
+  let removeWithCancel = $state(false);
+  let confirmRemove = $state(false);
+  const removed = $derived(agent.worktreeRemovedAt != null);
+  const canRemove = $derived(finished && !removed && !!agent.workdir);
+  function openCancel() { menu = false; removeWithCancel = false; confirmCancel = true; }
 </script>
 
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
@@ -114,40 +123,47 @@
       </div>
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
-        {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
-        <span>{agent.runtime ?? 'claude-code'}</span>
-        {#if canModel}
-          {#key agent.model}
-            <label class="row model" style="gap:6px;flex-wrap:nowrap" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume).">model
-              <ModelInput runtime={agent.runtime ?? 'claude-code'} value={agent.model ?? ''} disabled={finished} onchange={setModel} /></label>
-          {/key}
-        {:else if agent.model}<span class="mono">{agent.model}</span>{/if}
-        {#if agent.flow && agent.flow !== 'none'}
-          <label class="row" style="gap:6px;flex-wrap:nowrap">autonomy
-            <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
-              <option value="ask">ask</option><option value="important">important</option>
-            </select></label>
-        {/if}
-        {#if agent.permissionMode}
-          <label class="row" style="gap:6px;flex-wrap:nowrap" title={`${MODE_HINT[agent.permissionMode]} A change applies from the next session start (approved gate, resume).`}>tools
-            <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
-              {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
-            </select></label>
-        {/if}
-        <span>started {agoText(agent.createdAt)}</span>
-        <span>active {agoText(agent.lastActivity)}</span>
+        <div class="hfacts">
+          {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
+          <span>{agent.runtime ?? 'claude-code'}</span>
+          {#if !canModel && agent.model}<span class="mono">{agent.model}</span>{/if}
+          <span>started {agoText(agent.createdAt)}</span>
+          <span>active {agoText(agent.lastActivity)}</span>
+        </div>
+        <div class="hctl">
+          {#if canModel}
+            {#key agent.model}
+              <label class="hfield" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume)."><span>model</span>
+                <ModelInput inline runtime={agent.runtime ?? 'claude-code'} value={agent.model ?? ''} placeholder="default" disabled={finished} onchange={setModel} /></label>
+            {/key}
+          {/if}
+          {#if agent.flow && agent.flow !== 'none'}
+            <label class="hfield"><span>autonomy</span>
+              <select aria-label="Autonomy" value={agent.autonomy ?? 'ask'} disabled={finished} onchange={setAutonomy}>
+                <option value="ask">ask</option><option value="important">important</option>
+              </select></label>
+          {/if}
+          {#if agent.permissionMode}
+            <label class="hfield" title={`${MODE_HINT[agent.permissionMode]} A change applies from the next session start (approved gate, resume).`}><span>tools</span>
+              <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
+                {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
+              </select></label>
+          {/if}
+        </div>
       </div>
     </div>
     <div class="row">
       <StatusPill {agent} />
-      {#if agent.status === 'paused' || agent.status === 'parked' || agent.status === 'error' || agent.status === 'watching'}
+      {#if agent.askHold}
+        <button class="btn" title="End the session you started with Ask" onclick={() => act('finish', 'Could not finish')}><Icon name="pause" />Finish</button>
+      {:else if agent.status === 'paused' || agent.status === 'parked' || agent.status === 'error' || agent.status === 'watching'}
         <button class="btn" onclick={() => act('resume', 'Could not resume')}><Icon name="play" />Resume</button>
       {:else if live && agent.pauseRequestedAt}
         <button class="btn" disabled title="Waiting for the agent to write its handoff note"><Icon name="pause" />Pausing…</button>
       {:else if live}
         <button class="btn" onclick={() => act('pause', 'Could not pause')}><Icon name="pause" />Pause</button>
       {/if}
-      {#if agent.workdir}
+      {#if agent.workdir && !removed}
         <div class="anchor">
           <button class="btn" aria-haspopup="menu" aria-expanded={openMenu} onclick={toggleOpen}>Open worktree in…</button>
           {#if openMenu}
@@ -165,8 +181,10 @@
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>
         {#if menu}
           <div class="pop" role="menu">
-            <button role="menuitem" class="btn ghost danger" disabled={agent.status === 'cancelled' || agent.status === 'done'}
-              onclick={() => { menu = false; confirmCancel = true; }}>Cancel agent…</button>
+            <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel agent…</button>
+            {#if canRemove}
+              <button role="menuitem" class="btn ghost danger" onclick={() => { menu = false; confirmRemove = true; }}>Remove worktree…</button>
+            {/if}
           </div>
         {/if}
       </div>
@@ -186,18 +204,38 @@
     {/each}
   </nav>
   <div class="apanel">
-    {#if Panel}
+    {#if removed && tab?.worktree}
+      <Callout tone="plain">The worktree was removed {agoText(agent.worktreeRemovedAt ?? 0)}. The branch <span class="mono">{agent.branch}</span> is kept.</Callout>
+    {:else if Panel}
       {#key agent.id}<Panel {agent} />{/key}
     {/if}
   </div>
 </div>
 
+{#snippet removeWarning()}
+  Uncommitted changes and the spec documents in <span class="mono">.xherd/</span> are deleted. The branch <span class="mono">{agent.branch}</span> and the agent's record are kept.
+{/snippet}
+
 {#if confirmCancel}
   <Dialog title="Cancel {agent.name}?" onclose={() => (confirmCancel = false)}>
-    <p>The agent's session ends and it will not run again. Its worktree and branch stay.</p>
+    <p>The agent's session ends and it will not run again. Its branch stays{removeWithCancel ? '' : ', and so does its worktree'}.</p>
+    {#if agent.workdir && !removed}
+      <label class="f chk"><input type="checkbox" bind:checked={removeWithCancel} /> Also remove the worktree</label>
+      {#if removeWithCancel}<p class="hint">{@render removeWarning()}</p>{/if}
+    {/if}
     {#snippet actions()}
       <button class="btn ghost" onclick={() => (confirmCancel = false)}>Keep it</button>
-      <button class="btn danger" onclick={() => { confirmCancel = false; act('cancel', 'Could not cancel'); }}>Cancel agent</button>
+      <button class="btn danger" onclick={() => { confirmCancel = false; act('cancel', 'Could not cancel', removeWithCancel ? { removeWorktree: true } : undefined); }}>Cancel agent</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if confirmRemove}
+  <Dialog title="Remove the worktree of {agent.name}?" onclose={() => (confirmRemove = false)}>
+    <p>{@render removeWarning()}</p>
+    {#snippet actions()}
+      <button class="btn ghost" onclick={() => (confirmRemove = false)}>Keep it</button>
+      <button class="btn danger" onclick={() => { confirmRemove = false; act('remove-worktree', 'Could not remove the worktree'); }}>Remove worktree</button>
     {/snippet}
   </Dialog>
 {/if}
@@ -205,7 +243,4 @@
 <style>
   .anchor { position: relative; }
   .mpad { padding: 6px 10px; }
-  /* ModelInput's wrapper may shrink to nothing in this row; size it, not the select inside. */
-  .model :global(.mi) { flex: none; width: auto; }
-  .model :global(select), .model :global(input) { flex: none; width: 18ch; }
 </style>

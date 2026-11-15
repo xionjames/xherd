@@ -43,6 +43,18 @@ pub struct Ticket {
     pub url: Option<String>,
 }
 
+/// A session the user started with Ask (#121): held open while the
+/// agent only answers, until flow work, an approval, a change request,
+/// Finish, or the end of the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskHold {
+    pub at: Millis,
+    /// The agent was `watching` its PR before the Ask: Finish returns it there.
+    #[serde(default)]
+    pub was_watching: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Agent {
@@ -196,6 +208,18 @@ pub struct Agent {
     /// Gates approved automatically since a human last approved one (R-120).
     #[serde(default)]
     pub auto_in_row: u32,
+    /// An Ask session held open (#121).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ask_hold: Option<AskHold>,
+    /// When the user removed the worktree (#123); the branch and the record
+    /// stay, nothing reads the folder any more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_removed_at: Option<Millis>,
+    /// The open gate will be approved by xherd at the next stop (autonomy,
+    /// #127). Derived by the actor on every persist; stored only because the
+    /// agent JSON is what the UI reads.
+    #[serde(default)]
+    pub auto_approve_pending: bool,
 }
 
 impl Agent {
@@ -247,6 +271,9 @@ impl Agent {
             permission_mode: None,
             model: None,
             auto_in_row: 0,
+            ask_hold: None,
+            worktree_removed_at: None,
+            auto_approve_pending: false,
             review_rounds: 0,
             pr_state: None,
             pr_comments_seen: Vec::new(),
@@ -353,5 +380,30 @@ mod tests {
             (plain.ticket_ref(), plain.work_item()),
             ("", "refund-retry")
         );
+    }
+
+    #[test]
+    fn ask_hold_and_worktree_fields_are_camel_case_and_optional() {
+        let mut v = serde_json::to_value(Agent::new("x", 1)).unwrap();
+        let o = v.as_object_mut().unwrap();
+        assert_eq!(o.get("autoApprovePending"), Some(&false.into()));
+        assert!(o.get("askHold").is_none() && o.get("worktreeRemovedAt").is_none());
+        o.remove("autoApprovePending");
+        let old: Agent = serde_json::from_value(v).unwrap();
+        assert!(old.ask_hold.is_none() && !old.auto_approve_pending);
+
+        let mut a = Agent::new("x", 1);
+        a.ask_hold = Some(AskHold {
+            at: 7,
+            was_watching: true,
+        });
+        a.worktree_removed_at = Some(9);
+        let out = serde_json::to_value(&a).unwrap();
+        assert_eq!(
+            out["askHold"],
+            serde_json::json!({"at": 7, "wasWatching": true})
+        );
+        assert_eq!(out["worktreeRemovedAt"], 9);
+        assert_eq!(serde_json::from_value::<Agent>(out).unwrap(), a);
     }
 }

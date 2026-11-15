@@ -273,6 +273,12 @@ async fn agent_actions() {
     );
     let (s, _) = call(app.clone(), post("/api/v1/agents/NOPE/pause", None)).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+    // Check now (issue #131): refused without a pull request URL.
+    let (s, v) = call(app.clone(), post("/api/v1/agents/SC-1/pr-check", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("no_pr"))
+    );
     // Only refusals here: a real install writes to the user's runtime folder.
     let (s, v) = call(
         app.clone(),

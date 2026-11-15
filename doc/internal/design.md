@@ -786,7 +786,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D19 | Git over HTTPS and SSH per host with guided setup and doctor | Accepted |
 | D20 | Desktop app in Electron, post-v1 | Accepted |
 | D21 | Drained updates and backups before updates/migrations | Accepted |
-| D22 | MIT licence | Accepted |
+| D22 | GPL-3.0-or-later licence (was MIT, #134) | Accepted |
 | D23 | Every step is a new session fed by `memory.md` (state, decisions, code map) and the approved documents, never by conversation history; the session stays open while a gate waits so change requests keep their context | Accepted |
 | D24 | Git hosts are bound to a provider (a `host` plugin) that supplies the API, the credential helper, the login, the doctor's API checks and its own install; transport stays in core per hostname; issues stay with trackers (revises D19, R-689…R-693) | Proposed |
 

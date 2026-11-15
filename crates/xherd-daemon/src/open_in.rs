@@ -257,10 +257,7 @@ impl Daemon {
     /// local browser (R-671), minus what Settings hides (R-706).
     pub async fn open_targets(&self, who: &str) -> Result<Vec<Target>, ActionError> {
         let a = self.action(who, UserAction::Get).await?;
-        let dir = a.workdir.ok_or_else(|| ActionError {
-            code: "no_workspace",
-            message: format!("{} has no worktree", a.name),
-        })?;
+        let dir = crate::workdir_of(&a)?.to_string_lossy().into_owned();
         Ok(agent_targets(
             &dir,
             &a.name,

@@ -14,7 +14,7 @@ description: |-
   Runs, watches and steers many coding agents, each in its own git worktree
   and tmux session, with approval gates.
 homepage: https://github.com/xionjames/xherd
-license: MIT
+license: GPL-3.0-or-later
 depends:
   - git
   - tmux (>= 3.3)

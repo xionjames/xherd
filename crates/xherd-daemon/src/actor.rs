@@ -47,10 +47,23 @@ pub enum UserAction {
     /// pause that still waits for one.
     PauseNow,
     Resume,
-    Cancel,
+    /// `remove_worktree`: once cancelled, also remove the worktree (R12).
+    Cancel {
+        remove_worktree: bool,
+    },
+    /// Remove a `done` or `cancelled` agent's worktree (R13, R14).
+    RemoveWorktree,
     Send {
         text: String,
     },
+    /// Resume a session-less agent with a question (#121, R5–R7): the
+    /// session is held open until the agent does flow work or the user
+    /// finishes it.
+    Ask {
+        text: String,
+    },
+    /// End an Ask session (R9): back to `watching`, else `paused`.
+    Finish,
     /// Approve the open gate and hand on the next command (R-104).
     Approve {
         reason: Option<String>,
@@ -87,6 +100,9 @@ pub enum UserAction {
         text: Option<String>,
     },
     MemoryDismiss,
+    /// Check the agent's pull request now (issue #131): the automatic poll
+    /// without its guards, refused `no_pr` without a PR URL.
+    CheckPr,
     Get,
 }
 
@@ -456,6 +472,21 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
     tx
 }
 
+/// What autonomy would do with the open gate (`Actor::auto_check`).
+enum AutoCheck {
+    /// Not autonomy's to approve: level `ask`, an Ask hold, no gate, a class
+    /// the level does not allow.
+    No,
+    /// A tripwire or open questions hold it: (gate label, why).
+    Held(String, String),
+    /// The run limit is reached: (gate label, why).
+    Limit(String, String),
+    Approve {
+        label: String,
+        class: xherd_core::domain::Class,
+    },
+}
+
 struct Actor {
     agent: Agent,
     env: Env,
@@ -665,6 +696,14 @@ impl Actor {
         if !self.agent.status.is_live() {
             self.agent.pause_requested_at = None;
         }
+        // Every end of the session ends an Ask hold (queued = still starting).
+        if !self.agent.status.is_live() && self.agent.status != Status::Queued {
+            self.agent.ask_hold = None;
+        }
+        // R4: a gate autonomy will approve at the stop does not wait for the
+        // user while the agent still runs.
+        self.agent.auto_approve_pending = self.agent.status == Status::Running
+            && matches!(self.auto_check(), AutoCheck::Approve { .. });
         if let Err(err) = self.env.store.put_agent(&self.agent).await {
             tracing::error!(agent = %self.agent.name, %err, "agent not stored");
         }
@@ -774,6 +813,11 @@ impl Actor {
                             .await;
                         continue;
                     }
+                    // R7: an Ask session stays open while the agent only
+                    // answers; flow work ends the hold.
+                    if self.agent.ask_hold.is_some() {
+                        continue;
+                    }
                     self.try_auto_approve().await;
                     self.after_ship().await;
                 }
@@ -852,6 +896,38 @@ impl Actor {
         };
         // Set here so a slow host is not asked again by the next tick.
         self.agent.pr_polled_at = Some(now);
+        self.spawn_pr_poll(host, wd, url);
+    }
+
+    /// The user's check-now button (issue #131): the same snapshot, local
+    /// mergeability, comments and `on_pr_poll` handling as the automatic
+    /// poll (R2), with only `pr_url`, a workdir and a host required (R3).
+    fn check_pr(&mut self) -> Result<(), ActionError> {
+        let Some(url) = self.agent.pr_url.clone() else {
+            return Err(refuse(
+                "no_pr",
+                format!("{} has no pull request to check", self.agent.name),
+            ));
+        };
+        let (Some(host), Ok(wd)) = (self.host(), self.workdir()) else {
+            return Err(refuse(
+                "no_pr",
+                format!(
+                    "no host plugin to check the pull request of {}",
+                    self.agent.name
+                ),
+            ));
+        };
+        // Set here so a slow host is not asked twice and the next scheduled
+        // poll waits a full interval from it.
+        self.agent.pr_polled_at = Some(self.now());
+        self.spawn_pr_poll(host, wd, url);
+        Ok(())
+    }
+
+    /// Ask the host for the PR snapshot and comments (slow: spawned, back as
+    /// `WorkResult::PrPoll`, which `on_pr_poll` applies).
+    fn spawn_pr_poll(&mut self, host: Arc<xherd_plugin::host::Host>, wd: PathBuf, url: String) {
         let (tx, generation) = (self.tx.clone(), self.agent.generation);
         let (git, agent_base) = (self.env.git.clone(), self.agent.base.clone());
         tokio::spawn(async move {
@@ -1233,7 +1309,13 @@ impl Actor {
         {
             self.fetch_templates();
         }
-        if changed {
+        // R8: flow work after an Ask ends its hold.
+        let hold_ended = call.cmd.is_flow_work() && self.agent.ask_hold.take().is_some();
+        if hold_ended {
+            self.log(None, "ask-hold-ended", Some(json!({"by": call.cmd.name()})))
+                .await;
+        }
+        if changed || hold_ended {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
@@ -1563,6 +1645,12 @@ impl Actor {
     }
 
     fn workdir(&self) -> Result<PathBuf, Refusal> {
+        if self.agent.worktree_removed_at.is_some() {
+            return Err(refusal(
+                "worktree_removed",
+                format!("{}'s worktree was removed", self.agent.name),
+            ));
+        }
         self.agent
             .workdir
             .as_ref()
@@ -1805,6 +1893,7 @@ impl Actor {
     async fn on_user(&mut self, action: UserAction) -> Result<(), ActionError> {
         let before = self.agent.status;
         let now = self.now();
+        let mut payload = None;
         let kind = match &action {
             UserAction::Get => return Ok(()),
             UserAction::Start { port_base } => {
@@ -1839,16 +1928,22 @@ impl Actor {
                 "user.pause-all"
             }
             UserAction::Resume => {
+                if self.agent.worktree_removed_at.is_some() {
+                    return Err(refuse(
+                        "worktree_removed",
+                        format!("{}'s worktree was removed", self.agent.name),
+                    ));
+                }
                 if self.agent.fire(Trigger::Resume, now).is_none() {
                     return Err(refuse(
                         "not_allowed",
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
-                self.prepare_resume().await;
+                self.prepare_resume(true).await;
                 "user.resume"
             }
-            UserAction::Cancel => {
+            UserAction::Cancel { remove_worktree } => {
                 if next_status(self.agent.status, Trigger::Cancel).is_some() {
                     if self.agent.status.is_live() {
                         self.end_session().await;
@@ -1861,7 +1956,46 @@ impl Actor {
                         format!("{} is {}", self.agent.name, self.agent.status),
                     ));
                 }
+                if *remove_worktree {
+                    // The cancel stands whatever the removal does.
+                    self.log(None, "user.cancel", None).await;
+                    self.commit(before).await;
+                    let before = self.agent.status;
+                    if let Err(e) = self.remove_worktree().await {
+                        self.log(
+                            None,
+                            "worktree-remove-failed",
+                            Some(json!({"error": e.message})),
+                        )
+                        .await;
+                        self.notify(
+                            "error",
+                            format!(
+                                "{} was cancelled, but its worktree could not be removed: {}",
+                                self.agent.name, e.message
+                            ),
+                        );
+                    }
+                    self.commit(before).await;
+                    return Ok(());
+                }
                 "user.cancel"
+            }
+            UserAction::RemoveWorktree => {
+                if !matches!(self.agent.status, Status::Done | Status::Cancelled) {
+                    return Err(refuse(
+                        "not_allowed",
+                        format!(
+                            "{} is {}: only a done or cancelled agent's worktree can be removed",
+                            self.agent.name, self.agent.status
+                        ),
+                    ));
+                }
+                if self.agent.worktree_removed_at.is_some() {
+                    return Ok(());
+                }
+                self.remove_worktree().await?;
+                "user.remove-worktree"
             }
             UserAction::Send { text } => {
                 if self.agent.status == Status::Parked {
@@ -1880,6 +2014,34 @@ impl Actor {
                     "user.send"
                 }
             }
+            UserAction::Ask { text } => {
+                self.ask(text).await?;
+                payload = Some(json!({"chars": text.trim().chars().count()}));
+                "user.ask"
+            }
+            UserAction::Finish => {
+                let Some(hold) = self.agent.ask_hold.take() else {
+                    return Err(refuse(
+                        "not_asked",
+                        format!("{} has no Ask session to finish", self.agent.name),
+                    ));
+                };
+                if self.agent.status.is_live() {
+                    self.end_session().await;
+                }
+                self.agent.pause_requested_at = None;
+                // Still queued, the Ask text was never delivered: drop it so
+                // a later Resume types the pack's `resume` command and a new
+                // Ask is not refused `prompt_pending`.
+                self.agent.next_prompt = None;
+                let trigger = if hold.was_watching && self.agent.pr_url.is_some() {
+                    Trigger::Finish
+                } else {
+                    Trigger::Pause
+                };
+                self.agent.fire(trigger, now);
+                "user.finish"
+            }
             UserAction::Approve {
                 reason,
                 expect,
@@ -1887,10 +2049,13 @@ impl Actor {
             } => {
                 self.approve(reason.clone(), expect, message.clone(), false)
                     .await?;
+                // The user moved the flow on: an Ask session ends (R8).
+                self.agent.ask_hold = None;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
                 self.request_changes(comment).await?;
+                self.agent.ask_hold = None;
                 "user.request-changes"
             }
             UserAction::SetAutonomy { level } => {
@@ -1913,6 +2078,10 @@ impl Actor {
                 }
                 "user.memory-dismiss"
             }
+            UserAction::CheckPr => {
+                self.check_pr()?;
+                "user.pr-check"
+            }
             UserAction::SetMode { mode, launch } => {
                 if self.agent.permission_mode == Some(*mode) {
                     return Ok(());
@@ -1930,8 +2099,86 @@ impl Actor {
                 "user.model"
             }
         };
-        self.log(None, kind, None).await;
+        self.log(None, kind, payload).await;
         self.commit(before).await;
+        Ok(())
+    }
+
+    /// Ask (#121, R5–R7): resume an agent that has no session with the
+    /// user's text as its first prompt, continuing the last conversation, and
+    /// hold the session open (no auto-approval, no move to watching) until the
+    /// agent does flow work, the user decides a gate, or finishes it.
+    async fn ask(&mut self, text: &str) -> Result<(), ActionError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(refuse("usage", "say what to ask"));
+        }
+        if self.agent.worktree_removed_at.is_some() {
+            return Err(refuse(
+                "worktree_removed",
+                format!("{}'s worktree was removed", self.agent.name),
+            ));
+        }
+        let status = self.agent.status;
+        if !matches!(
+            status,
+            Status::Paused | Status::Parked | Status::Watching | Status::Error
+        ) {
+            return Err(refuse(
+                "not_allowed",
+                format!(
+                    "{} is {status}: Ask needs an agent with no session",
+                    self.agent.name
+                ),
+            ));
+        }
+        // A command waits (after an approval, say): Resume delivers it; Ask
+        // would replace it.
+        if self.agent.next_prompt.is_some() {
+            return Err(refuse(
+                "prompt_pending",
+                format!("{} has a command waiting: resume it first", self.agent.name),
+            ));
+        }
+        let now = self.now();
+        self.agent.next_prompt = Some(text.to_string());
+        self.agent.fire(Trigger::Resume, now);
+        self.prepare_resume(false).await;
+        self.agent.ask_hold = Some(xherd_core::agent::AskHold {
+            at: now,
+            was_watching: status == Status::Watching,
+        });
+        Ok(())
+    }
+
+    /// Remove the agent's worktree (R14): `git worktree remove --force` as the
+    /// agents' user, or `git worktree prune` when the folder is already gone.
+    /// The branch, `workdir` and the record stay. Inline: the user waits.
+    async fn remove_worktree(&mut self) -> Result<(), ActionError> {
+        let (Some(wd), Some(repo)) = (self.agent.workdir.clone(), self.agent.repo.clone()) else {
+            return Err(refuse(
+                "no_workspace",
+                format!("{} has no worktree", self.agent.name),
+            ));
+        };
+        let (wd, repo) = (PathBuf::from(wd), PathBuf::from(repo));
+        let res = if wd.exists() {
+            self.env.git.worktree_remove(&repo, &wd, true).await
+        } else {
+            self.env
+                .git
+                .run(&repo, &["worktree", "prune"])
+                .await
+                .map(drop)
+        };
+        res.map_err(|e| refuse("git", e.to_string()))?;
+        self.agent.worktree_removed_at = Some(self.now());
+        self.log(
+            None,
+            "worktree-removed",
+            Some(json!({"path": wd.to_string_lossy()})),
+        )
+        .await;
         Ok(())
     }
 
@@ -2195,31 +2442,27 @@ impl Actor {
         })
     }
 
-    /// Auto-approval (R-110, R-111): when the agent stops at a gate its class
-    /// allows at the agent's autonomy level, approve it unless a tripwire
-    /// holds it. The tripwires that look at the work (secrets, sensitive
-    /// paths, diff size, scope, `verify:`, review findings) ran when the gate
-    /// was opened and left `needs_human`; the run limit is checked here. This
-    /// runs inline in the actor on the stop itself, so the gate cannot change
-    /// meanwhile and a user message queued behind it is handled afterwards.
-    async fn try_auto_approve(&mut self) {
+    /// What autonomy would do with the open gate at a stop (R-110, R-121),
+    /// whatever the status: callers check it (`try_auto_approve` at a stop,
+    /// the mark in `commit()` while running). Reads the agent, the pack and
+    /// the settings snapshot only.
+    fn auto_check(&self) -> AutoCheck {
         use xherd_core::autonomy::{may_auto_approve, run_limit};
-        let level = self.agent.autonomy;
-        if level == xherd_core::autonomy::Autonomy::Ask
-            || !matches!(self.agent.status, Status::WaitingInput | Status::Idle)
+        if self.agent.autonomy == xherd_core::autonomy::Autonomy::Ask
+            || self.agent.ask_hold.is_some()
         {
-            return;
+            return AutoCheck::No;
         }
-        let Some(gate) = self.agent.gate.clone() else {
-            return;
+        let Some(gate) = &self.agent.gate else {
+            return AutoCheck::No;
         };
-        let Some(class) = self.gate_class(&gate) else {
-            return;
+        let Some(class) = self.gate_class(gate) else {
+            return AutoCheck::No;
         };
-        if !may_auto_approve(level, class) {
-            return;
+        if !may_auto_approve(self.agent.autonomy, class) {
+            return AutoCheck::No;
         }
-        let (label, held) = match &gate {
+        let (label, held) = match gate {
             Gate::Docs {
                 stage,
                 needs_human,
@@ -2234,40 +2477,65 @@ impl Actor {
                 }),
             ),
             Gate::Commit(c) => (format!("commit {}", c.id), c.needs_human.clone()),
-            _ => return,
+            _ => return AutoCheck::No,
         };
-        if held.is_some() {
-            // Already shown as "Held:"; nothing more to say.
-            self.log(None, "auto-held", Some(json!({"gate": label, "why": held})))
-                .await;
-            return;
+        if let Some(held) = held {
+            return AutoCheck::Held(label, held);
         }
         if let Some(why) = run_limit(
             self.agent.auto_in_row,
             self.env.settings.get().max_auto_approvals_in_row,
         ) {
-            // Make the reason visible on the gate, and say so once.
-            match &mut self.agent.gate {
-                Some(Gate::Docs { needs_human, .. }) => *needs_human = Some(why.clone()),
-                Some(Gate::Commit(c)) => c.needs_human = Some(why.clone()),
-                _ => {}
-            }
-            if let Some(Gate::Commit(c)) = &self.agent.gate
-                && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
-            {
-                mine.needs_human = Some(why.clone());
-            }
-            self.agent.generation += 1;
-            self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
-                .await;
-            self.notify(
-                "gate",
-                format!("{}: {label} waits for you: {why}", self.agent.name),
-            );
-            let status = self.agent.status;
-            self.commit(status).await;
+            return AutoCheck::Limit(label, why);
+        }
+        AutoCheck::Approve { label, class }
+    }
+
+    /// Auto-approval (R-110, R-111): when the agent stops at a gate its class
+    /// allows at the agent's autonomy level, approve it unless a tripwire
+    /// holds it. The tripwires that look at the work (secrets, sensitive
+    /// paths, diff size, scope, `verify:`, review findings) ran when the gate
+    /// was opened and left `needs_human`; the run limit is checked here. This
+    /// runs inline in the actor on the stop itself, so the gate cannot change
+    /// meanwhile and a user message queued behind it is handled afterwards.
+    async fn try_auto_approve(&mut self) {
+        if !matches!(self.agent.status, Status::WaitingInput | Status::Idle) {
             return;
         }
+        let level = self.agent.autonomy;
+        let (label, class) = match self.auto_check() {
+            AutoCheck::No => return,
+            AutoCheck::Held(label, held) => {
+                // Already shown as "Held:"; nothing more to say.
+                self.log(None, "auto-held", Some(json!({"gate": label, "why": held})))
+                    .await;
+                return;
+            }
+            AutoCheck::Limit(label, why) => {
+                // Make the reason visible on the gate, and say so once.
+                match &mut self.agent.gate {
+                    Some(Gate::Docs { needs_human, .. }) => *needs_human = Some(why.clone()),
+                    Some(Gate::Commit(c)) => c.needs_human = Some(why.clone()),
+                    _ => {}
+                }
+                if let Some(Gate::Commit(c)) = &self.agent.gate
+                    && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
+                {
+                    mine.needs_human = Some(why.clone());
+                }
+                self.agent.generation += 1;
+                self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
+                    .await;
+                self.notify(
+                    "gate",
+                    format!("{}: {label} waits for you: {why}", self.agent.name),
+                );
+                let status = self.agent.status;
+                self.commit(status).await;
+                return;
+            }
+            AutoCheck::Approve { label, class } => (label, class),
+        };
         let before = self.agent.status;
         let reason =
             format!("autonomy {level}: {label} is a {class:?} gate and no tripwire held it");
@@ -2731,13 +2999,17 @@ impl Actor {
         self.commit(before).await;
     }
 
-    async fn prepare_resume(&mut self) {
+    /// `after_handoff_fresh`: a handoff note starts a fresh session from it
+    /// (R-027), using the note up; Ask passes false, keeping the note and
+    /// continuing the last conversation, since its question needs the context.
+    async fn prepare_resume(&mut self, after_handoff_fresh: bool) {
         if self.agent.next_prompt.is_none() {
             self.agent.next_prompt = self.resume_command();
         }
         // After a handoff the next session starts fresh from the note (R-027).
-        let handed_off =
-            self.agent.handoff_at.take().is_some() && self.env.settings.get().fresh_sessions;
+        let handed_off = after_handoff_fresh
+            && self.agent.handoff_at.take().is_some()
+            && self.env.settings.get().fresh_sessions;
         let resume = self.runtime_kit().and_then(|k| k.resume.clone());
         self.resume_session = match (&resume, &self.agent.session) {
             (Some(r), Some(id))
@@ -2842,7 +3114,7 @@ impl Actor {
     async fn unpark_with(&mut self, text: String) {
         self.agent.next_prompt = Some(text);
         self.agent.fire(Trigger::Unpark, self.now());
-        self.prepare_resume().await;
+        self.prepare_resume(true).await;
     }
 
     /// The flow's tasks document was approved and has changed since (task
@@ -2993,11 +3265,15 @@ impl Actor {
                         );
                     } else {
                         self.agent.fire(Trigger::SessionLost, now);
+                        // Every end of the session ends an Ask hold, also
+                        // when it is resumed at once below (no `commit()`
+                        // sees the error status in between).
+                        self.agent.ask_hold = None;
                         self.log(None, "session-lost", None).await;
                         if recover {
                             // Same as Resume: a new session reloads the state.
                             self.agent.fire(Trigger::Resume, now);
-                            self.prepare_resume().await;
+                            self.prepare_resume(true).await;
                             self.notify(
                                 "recovery",
                                 format!("{}: xherd restarted; resuming", self.agent.name),
@@ -3012,7 +3288,7 @@ impl Actor {
                             if self.auto_resumes.len() < AUTO_RESUMES {
                                 self.auto_resumes.push(now);
                                 self.agent.fire(Trigger::Resume, now);
-                                self.prepare_resume().await;
+                                self.prepare_resume(true).await;
                                 self.log(
                                     None,
                                     "auto-resume",

@@ -289,7 +289,13 @@ async fn backup_agent(
     stage: &Path,
     warnings: &mut Vec<String>,
 ) -> Result<Option<AgentEntry>> {
-    let Some(wt) = a.workdir.as_deref().map(PathBuf::from) else {
+    // A removed worktree (R14) has nothing to save but its record.
+    let Some(wt) = a
+        .workdir
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|_| a.worktree_removed_at.is_none())
+    else {
         return Ok(None);
     };
     if !wt.is_dir() {
@@ -607,6 +613,9 @@ async fn restore_agent(
     adir: &Path,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    if a.worktree_removed_at.is_some() {
+        return Ok(());
+    }
     let (Some(wt), Some(repo)) = (
         a.workdir.as_deref().map(PathBuf::from),
         a.repo.as_deref().map(PathBuf::from),
