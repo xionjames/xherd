@@ -466,6 +466,7 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         prompt_on_launch: false,
         resume_session: None,
         resume_unconfirmed: false,
+        notified_gate: None,
         auto_resumes: Vec::new(),
     };
     tokio::spawn(actor.run(rx));
@@ -514,6 +515,9 @@ struct Actor {
     /// The last start used a runtime resume and no `session-start` came yet:
     /// if the session dies again, the next resume starts a clean session.
     resume_unconfirmed: bool,
+    /// The gate the last `gate` notice was about (once per gate). In memory
+    /// only: after a restart the same gate may notify again.
+    notified_gate: Option<Gate>,
     /// When the daemon resumed this agent by itself (bounded, see above).
     auto_resumes: Vec<i64>,
 }
@@ -690,6 +694,29 @@ impl Actor {
         });
     }
 
+    /// Tell the user once that the agent waits at its gate (#133). Called
+    /// after a stop's auto-approval, so a gate autonomy approved is gone by
+    /// then and sends nothing. Never document or question text.
+    fn notify_gate(&mut self) {
+        if !matches!(self.agent.status, Status::WaitingInput | Status::Idle) {
+            return;
+        }
+        let Some(gate) = &self.agent.gate else {
+            return;
+        };
+        if self.notified_gate.as_ref() == Some(gate) {
+            return;
+        }
+        let mut text = format!("{}: {} waits for you", self.agent.name, gate.label());
+        if let Some(hold) = gate.hold() {
+            let hold = hold.split_whitespace().collect::<Vec<_>>().join(" ");
+            text.push_str(": ");
+            text.extend(hold.chars().take(160));
+        }
+        self.notified_gate = Some(gate.clone());
+        self.notify("gate", text);
+    }
+
     /// Persist and publish; tell the supervisor when the status moved.
     async fn commit(&mut self, before: Status) {
         self.agent.note_stage();
@@ -704,6 +731,9 @@ impl Actor {
         // user while the agent still runs.
         self.agent.auto_approve_pending = self.agent.status == Status::Running
             && matches!(self.auto_check(), AutoCheck::Approve { .. });
+        if self.agent.gate.is_none() {
+            self.notified_gate = None;
+        }
         if let Err(err) = self.env.store.put_agent(&self.agent).await {
             tracing::error!(agent = %self.agent.name, %err, "agent not stored");
         }
@@ -819,6 +849,7 @@ impl Actor {
                         continue;
                     }
                     self.try_auto_approve().await;
+                    self.notify_gate();
                     self.after_ship().await;
                 }
             }
@@ -2524,12 +2555,9 @@ impl Actor {
                     mine.needs_human = Some(why.clone());
                 }
                 self.agent.generation += 1;
+                // The caller's `notify_gate` says so, with `why` as the hold.
                 self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
                     .await;
-                self.notify(
-                    "gate",
-                    format!("{}: {label} waits for you: {why}", self.agent.name),
-                );
                 let status = self.agent.status;
                 self.commit(status).await;
                 return;
@@ -2566,6 +2594,8 @@ impl Actor {
                         self.agent.name, e.message
                     ),
                 );
+                // That notice covers this gate: no `gate` notice for it too.
+                self.notified_gate = self.agent.gate.clone();
             }
         }
         self.commit(before).await;
@@ -2608,6 +2638,7 @@ impl Actor {
         // The agent learns the new level when its next session starts and
         // reads instructions.md; a running session keeps what it was told.
         self.try_auto_approve().await;
+        self.notify_gate();
         Ok(())
     }
 
@@ -3088,6 +3119,8 @@ impl Actor {
             }
         }
         let text = xherd_flow::approve::changes_message(&gate, comment);
+        // The revised gate may notify again, even if it comes back unchanged.
+        self.notified_gate = None;
         let parked = self.agent.status == Status::Parked;
         if parked {
             self.unpark_with(text).await;

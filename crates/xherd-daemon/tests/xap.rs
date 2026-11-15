@@ -2906,6 +2906,74 @@ async fn the_run_limit_holds_the_next_gate_and_a_human_approval_resets_it() {
     assert_eq!(get(&t).await.auto_in_row, 0);
 }
 
+// ---- Gate notices (#133) ----
+
+/// The texts of the notices of `kind` sent since `rx` subscribed.
+fn notices(
+    rx: &mut tokio::sync::broadcast::Receiver<xherd_daemon::support::Change>,
+    kind: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind: k, text, .. } = c
+            && k == kind
+        {
+            out.push(text);
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn a_gate_notifies_once_until_changes_are_requested() {
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    let said = notices(&mut rx, "gate");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].ends_with(": design waits for you"), "{said:?}");
+
+    // Another stop at the same gate, unchanged: nothing new.
+    stop(&t, 2).await;
+    assert!(notices(&mut rx, "gate").is_empty());
+
+    // After a change request the revised gate may notify again.
+    act(
+        &t,
+        UserAction::RequestChanges {
+            comment: "Shorter.".into(),
+        },
+    )
+    .await
+    .unwrap();
+    stop(&t, 3).await;
+    assert_eq!(notices(&mut rx, "gate").len(), 1);
+}
+
+#[tokio::test]
+async fn a_muted_gate_kind_sends_no_notice() {
+    let t = setup_config(json!({"freshSessions": true, "mutedNotifications": ["gate"]})).await;
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert!(get(&t).await.gate.is_some());
+    assert!(notices(&mut rx, "gate").is_empty());
+}
+
+#[tokio::test]
+async fn the_run_limit_sends_one_gate_notice_with_its_reason() {
+    let t = setup_config(json!({"freshSessions": true, "maxAutoApprovalsInRow": 1})).await;
+    act(&t, level("important")).await.unwrap();
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert!(notices(&mut rx, "gate").is_empty(), "auto-approved");
+
+    open_stop(&t, "c2", "tasks", "tasks.md", 2).await;
+    let said = notices(&mut rx, "gate");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(said[0].contains("tasks waits for you: "), "{said:?}");
+    assert!(said[0].contains("maxAutoApprovalsInRow"), "{said:?}");
+}
+
 #[tokio::test]
 async fn changing_the_level_rewrites_instructions_and_approves_a_waiting_gate() {
     let t = setup().await;
