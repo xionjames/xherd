@@ -5,7 +5,9 @@
   // place of the implement stage. Fix tasks from a review or the PR carry a
   // tag; a pending task names the tasks it waits on. Where an agent waits for
   // you the card is outlined. Read-only. Filters and swimlanes live in the URL:
-  // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=none|agent|repo`.
+  // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=none|agent|repo|flow`.
+  // A flow with several implement-role stages (bugfix: Reproduce, Fix) shows
+  // its task list once, in place of the first.
   import PageHead from '../components/PageHead.svelte';
   import Seg from '../components/Seg.svelte';
   import { app } from '../lib/store.svelte';
@@ -13,6 +15,7 @@
   import { get } from '../lib/api';
   import { flowOf, steps, stageLabel } from '../lib/flow';
   import { agentHue, agoText, needsYou, repoName, waitsAtGate } from '../lib/format';
+  import { LANES, TODO_LANE, boardLane, laneOrder, todoLane } from '../lib/board';
   import type { Agent, StageInfo, Task } from '../lib/types';
 
   type Todo = { id: string; title: string; due: number; status: 'open' | 'checking' | 'due' | 'done' | 'error'; condition?: string; completedAt?: number };
@@ -22,7 +25,7 @@
     | { kind: 'task'; key: string; lane: string; col: Col; agent: Agent; task: Task; needs: boolean }
     | { kind: 'todo'; key: string; lane: string; col: Col; todo: Todo; needs: boolean };
 
-  const lanes = $derived((['agent', 'repo'] as const).find((l) => l === route.query.get('lanes')) ?? 'none');
+  const lanes = $derived(LANES.find((l) => l === route.query.get('lanes')) ?? 'none');
   const only = $derived(route.query.get('agent') ?? '');
   const repo = $derived(route.query.get('repo') ?? '');
   const needsOnly = $derived(route.query.get('needs') === '1');
@@ -62,7 +65,7 @@
   const everyone = $derived((app.state?.agents ?? []).filter((a) => a.status !== 'cancelled'));
   const repos = $derived([...new Set(everyone.map(repoName))].sort());
   const shown = $derived(everyone.filter((a) => (!only || a.name === only) && (!repo || repoName(a) === repo) && (finished || only || !isFinished(a))));
-  const laneOf = (a: Agent) => (lanes === 'repo' ? repoName(a) : lanes === 'agent' ? a.name : '');
+  const laneOf = (a: Agent) => boardLane(a, lanes);
 
   /** The agent tab that shows a stage's work. */
   function stageTab(s: StageInfo): string {
@@ -84,13 +87,19 @@
     const gateTasks = a.gate?.kind === 'commit' ? a.gate.tasks : [];
     const out: Card[] = [];
     let nextShown = false;
+    let tasksShown = false;
+    const atTasks = flow.stages.find((s) => s.id === a.stage)?.role === 'implement';
     for (const { stage, state } of steps(a, flow)) {
       const current = stage.id === a.stage;
       if (stage.role === 'implement' && tasks.length) {
-        // The task list replaces the implement stage. A commit gate marks its
-        // tasks; any other wait at this stage marks the tasks being worked on.
+        // The task list replaces the first implement stage; a later one
+        // (bugfix: Fix after Reproduce) works on the same tasks and gets no
+        // card. A commit gate marks its tasks; any other wait at such a stage
+        // marks the tasks being worked on.
+        if (tasksShown) continue;
+        tasksShown = true;
         for (const t of tasks) {
-          const needs = current && waits && (gateTasks.length ? gateTasks.includes(t.id) : t.status === 'doing');
+          const needs = atTasks && waits && (gateTasks.length ? gateTasks.includes(t.id) : t.status === 'doing');
           out.push({ kind: 'task', key: `${a.id}/${t.id}`, lane, col: TASK_COL[t.status], agent: a, task: t, needs });
         }
         continue;
@@ -121,7 +130,7 @@
       for (const t of todos) {
         if (t.status === 'done' && !finished && now - (t.completedAt ?? 0) > DAY) continue;
         const needs = t.status === 'due' || t.status === 'error';
-        out.push({ kind: 'todo', key: `todo:${t.id}`, lane: lanes === 'none' ? '' : 'TODOs', col: TODO_COL[t.status], todo: t, needs });
+        out.push({ kind: 'todo', key: `todo:${t.id}`, lane: todoLane(lanes), col: TODO_COL[t.status], todo: t, needs });
       }
     }
     return out.filter((c) => !needsOnly || c.needs);
@@ -134,7 +143,7 @@
   }
   const filtered = $derived(!!(only || repo || needsOnly));
   const active = $derived([needsOnly, finished, !!only, !!repo].filter(Boolean).length);
-  const laneNames = $derived([...new Set(cards.map((c) => c.lane))].sort((a, b) => (a === 'TODOs' ? 1 : b === 'TODOs' ? -1 : a.localeCompare(b))));
+  const laneNames = $derived(laneOrder(cards.map((c) => c.lane)));
 </script>
 
 <PageHead title="Board">
@@ -147,7 +156,7 @@
       <label class="f chk"><input type="checkbox" checked={finished} onchange={(e) => go({ finished: e.currentTarget.checked ? '1' : undefined })} /> Finished</label>
     </span>
     <select aria-label="Swimlanes" value={lanes} onchange={(e) => go({ lanes: e.currentTarget.value === 'none' ? undefined : e.currentTarget.value })}>
-      <option value="none">No swimlanes</option><option value="agent">Lanes by agent</option><option value="repo">Lanes by repository</option>
+      <option value="none">No swimlanes</option><option value="agent">Lanes by agent</option><option value="repo">Lanes by repository</option><option value="flow">Lanes by workflow</option>
     </select>
     <select aria-label="Agent" value={only} onchange={(e) => go({ agent: e.currentTarget.value || undefined })}>
       <option value="">All agents</option>
@@ -179,7 +188,7 @@
   {:else}
     {#each laneNames as lane (lane)}
       <section class="lane" aria-label={lane || 'Board'}>
-        {#if lane}<h2 class="lh">{#if lanes === 'agent' && lane !== 'TODOs'}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
+        {#if lane}<h2 class="lh">{#if lanes === 'agent' && lane !== TODO_LANE}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
         <div class="cols" data-show={phoneCol}>
           {#each COLS as [col, name] (col)}
             {@const list = cards.filter((c) => c.lane === lane && c.col === col)}
