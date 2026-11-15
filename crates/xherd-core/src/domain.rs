@@ -219,6 +219,35 @@ impl Gate {
             Gate::Question { .. } => 3,
         }
     }
+
+    /// Short name of the gate for notices: the stage id, `commit C01`,
+    /// `a question` or `PR comments`. Never carries question or document text.
+    pub fn label(&self) -> String {
+        match self {
+            Gate::Docs { stage, .. } => stage.clone(),
+            Gate::Commit(c) => format!("commit {}", c.id),
+            Gate::PrTriage { .. } | Gate::PrReplies { .. } => "PR comments".into(),
+            Gate::Question { .. } => "a question".into(),
+        }
+    }
+
+    /// Why the gate is held for a human: its `needs_human`, else for a docs
+    /// gate with open questions a fixed text (never the questions themselves).
+    pub fn hold(&self) -> Option<String> {
+        match self {
+            Gate::Docs {
+                needs_human,
+                questions,
+                asked,
+                ..
+            } => needs_human.clone().or_else(|| {
+                (!questions.is_empty() || !asked.is_empty())
+                    .then(|| "the document has open questions".into())
+            }),
+            Gate::Commit(c) => c.needs_human.clone(),
+            Gate::PrTriage { .. } | Gate::PrReplies { .. } | Gate::Question { .. } => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -245,5 +274,66 @@ mod tests {
             needs_human: None,
         });
         assert!(c.priority() < g.priority());
+    }
+
+    fn docs(needs_human: Option<&str>, questions: &[&str], asked: &[&str]) -> Gate {
+        Gate::Docs {
+            stage: "spec".into(),
+            role: Role::Spec,
+            files: vec![],
+            next: None,
+            needs_human: needs_human.map(Into::into),
+            questions: questions.iter().map(|s| s.to_string()).collect(),
+            asked: asked.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn commit(needs_human: Option<&str>) -> Gate {
+        Gate::Commit(Commit {
+            id: "C01".into(),
+            subject: "s".into(),
+            message: None,
+            files: vec![],
+            status: CommitStatus::Proposed,
+            tasks: vec![],
+            sha: None,
+            needs_human: needs_human.map(Into::into),
+        })
+    }
+
+    #[test]
+    fn gate_label() {
+        assert_eq!(docs(None, &[], &[]).label(), "spec");
+        assert_eq!(commit(None).label(), "commit C01");
+        assert_eq!(Gate::PrTriage { count: 2 }.label(), "PR comments");
+        assert_eq!(Gate::PrReplies { count: 1 }.label(), "PR comments");
+        let q = Gate::Question {
+            text: "secret question?".into(),
+        };
+        assert_eq!(q.label(), "a question");
+    }
+
+    #[test]
+    fn gate_hold() {
+        assert_eq!(docs(None, &[], &[]).hold(), None);
+        assert_eq!(
+            docs(Some("touches auth"), &["which db?"], &[])
+                .hold()
+                .as_deref(),
+            Some("touches auth")
+        );
+        let open = Some("the document has open questions");
+        assert_eq!(docs(None, &["which db?"], &[]).hold().as_deref(), open);
+        assert_eq!(docs(None, &[], &["which db?"]).hold().as_deref(), open);
+        assert!(
+            !docs(None, &["which db?"], &[])
+                .hold()
+                .unwrap()
+                .contains("db")
+        );
+        assert_eq!(commit(None).hold(), None);
+        assert_eq!(commit(Some("secret")).hold().as_deref(), Some("secret"));
+        assert_eq!(Gate::PrTriage { count: 1 }.hold(), None);
+        assert_eq!(Gate::Question { text: "q".into() }.hold(), None);
     }
 }
