@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prGate, stageLabel, stageNow, steps } from './flow';
+import { conflictsAction, prGate, stageLabel, stageNow, steps } from './flow';
 import type { Agent, FlowInfo } from './types';
 
 describe('steps', () => {
@@ -76,5 +76,33 @@ describe('prGate', () => {
     expect(prGate(docs('ship'))).toBe(false);
     expect(prGate({ kind: 'question', text: '?' })).toBe(false);
     expect(prGate(undefined)).toBe(false);
+  });
+});
+
+describe('conflictsAction', () => {
+  const a = (over: Partial<Agent>): Agent => ({
+    id: 'x', name: 'x', branch: 'x', status: 'watching', createdAt: 0, statusSince: 0, lastActivity: 0,
+    flow: 'feature', prUrl: 'https://github.com/o/r/pull/1', prState: 'open', prMergeable: 'no', ...over,
+  });
+  it('shows for a conflicting PR of a flow agent', () => {
+    expect(conflictsAction(a({}))).toEqual({ show: true, enabled: true });
+    expect(conflictsAction(a({ prMergeable: undefined, prConflict: true })).show).toBe(true);
+  });
+  it('hides without a PR, without a conflict, for flow none or a finished PR', () => {
+    expect(conflictsAction(a({ prUrl: undefined })).show).toBe(false);
+    expect(conflictsAction(a({ prMergeable: 'yes' })).show).toBe(false);
+    expect(conflictsAction(a({ prMergeable: 'unknown' })).show).toBe(false);
+    expect(conflictsAction(a({ flow: undefined })).show).toBe(false);
+    expect(conflictsAction(a({ prState: 'merged' })).show).toBe(false);
+    expect(conflictsAction(a({ worktreeRemovedAt: 1 })).show).toBe(false);
+  });
+  it('is enabled for stopped agents with no gate only', () => {
+    for (const status of ['watching', 'paused', 'error', 'idle'] as const) {
+      expect(conflictsAction(a({ status })).enabled).toBe(true);
+    }
+    const running = conflictsAction(a({ status: 'running' }));
+    expect(running).toEqual({ show: true, enabled: false, why: 'Wait until the agent stops.' });
+    const gated = conflictsAction(a({ status: 'idle', gate: { kind: 'question', text: '?' } }));
+    expect(gated).toEqual({ show: true, enabled: false, why: 'Decide the open gate first.' });
   });
 });
