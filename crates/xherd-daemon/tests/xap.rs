@@ -3396,3 +3396,100 @@ async fn ask_hold_ends_when_the_session_is_lost() {
     let ev = t.d.store.events(&t.a.id, 50).await.unwrap();
     assert!(ev.iter().any(|e| e.kind == "session-lost"));
 }
+
+// ---- Resolve conflicts (#139) ------------------------------------------------
+
+#[tokio::test]
+async fn resolve_conflicts_needs_a_pr_and_no_turn_or_gate() {
+    let t = setup().await;
+    // No pull request URL yet.
+    let e = act(&t, UserAction::ResolveConflicts).await.unwrap_err();
+    assert_eq!(e.code, "no_pr");
+
+    // Running: the agent is mid-turn.
+    xap(
+        &t,
+        "c1",
+        "pr.opened",
+        json!({"url": "https://github.com/acme/app/pull/42"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(get(&t).await.status, Status::Running);
+    let e = act(&t, UserAction::ResolveConflicts).await.unwrap_err();
+    assert_eq!(e.code, "not_allowed");
+
+    // Paused at an open gate: decide it first.
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# Spec\n").unwrap();
+    xap(&t, "c2", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(&t, 1).await;
+    act(&t, UserAction::PauseNow).await.unwrap();
+    let a = until(&t, |a| a.status == Status::Paused).await;
+    assert!(a.gate.is_some());
+    let e = act(&t, UserAction::ResolveConflicts).await.unwrap_err();
+    assert_eq!(e.code, "not_allowed");
+    assert!(
+        e.message.contains("decide the open gate first"),
+        "{}",
+        e.message
+    );
+}
+
+#[tokio::test]
+async fn resolve_conflicts_queues_a_clean_session_with_the_command() {
+    let t = setup().await;
+    watching(&t).await;
+    let a = act(&t, UserAction::ResolveConflicts).await.unwrap();
+    assert_eq!(
+        (a.status, a.next_prompt.as_deref()),
+        (Status::Queued, Some("/xherd:conflicts origin/main"))
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "user.resolve-conflicts"));
+    // A command waits now: a second click is refused.
+    assert_eq!(
+        act(&t, UserAction::ResolveConflicts)
+            .await
+            .unwrap_err()
+            .code,
+        "not_allowed"
+    );
+    until(&t, |a| a.status == Status::Running).await;
+    session_start(&t, 2).await;
+    assert!(
+        sends(&t)
+            .iter()
+            .any(|s| s.contains("/xherd:conflicts origin/main"))
+    );
+}
+
+#[tokio::test]
+async fn a_merge_proposal_is_held_for_a_human() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    std::fs::write(wt.join("a.txt"), "base\n").unwrap();
+    git(wt, &["add", "a.txt"]);
+    git(wt, &["commit", "-q", "-m", "a"]);
+    git(wt, &["checkout", "-q", "-b", "other"]);
+    std::fs::write(wt.join("a.txt"), "other\n").unwrap();
+    git(wt, &["commit", "-q", "-am", "other"]);
+    git(wt, &["checkout", "-q", "main"]);
+    std::fs::write(wt.join("a.txt"), "main\n").unwrap();
+    git(wt, &["commit", "-q", "-am", "main"]);
+    // Conflicts: git exits 1, MERGE_HEAD stays.
+    let merged = std::process::Command::new("git")
+        .args(["merge", "--no-ff", "--no-commit", "other"])
+        .current_dir(wt)
+        .output()
+        .unwrap();
+    assert!(!merged.status.success());
+    std::fs::write(wt.join("a.txt"), "both\n").unwrap();
+
+    let why = propose_reason(&t, "m1", &["a.txt"]).await;
+    assert!(
+        why.contains("merges the base branch: check the conflict resolution"),
+        "{why}"
+    );
+}

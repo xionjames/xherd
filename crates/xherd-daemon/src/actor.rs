@@ -103,6 +103,9 @@ pub enum UserAction {
     /// Check the agent's pull request now (issue #131): the automatic poll
     /// without its guards, refused `no_pr` without a PR URL.
     CheckPr,
+    /// Merge the PR's base into its branch (#139, R14): a new session with
+    /// the pack's `conflicts` command.
+    ResolveConflicts,
     Get,
 }
 
@@ -1539,6 +1542,11 @@ impl Actor {
             .unwrap_or(st.max_diff_lines);
         hits.extend(tw::sensitive_summary(files, sensitive));
         if let Ok(wd) = self.workdir() {
+            // A merge commit (#139, R16): a human checks how the conflicts
+            // were resolved, so autonomy never approves it.
+            if self.env.git.merge_in_progress(&wd).await {
+                hits.push("merges the base branch: check the conflict resolution".to_string());
+            }
             match self.env.git.diff_proposed(&wd, files).await {
                 Ok(diff) => {
                     hits.extend(tw::summary(&tw::scan_diff(&diff)));
@@ -2113,6 +2121,10 @@ impl Actor {
                 self.check_pr()?;
                 "user.pr-check"
             }
+            UserAction::ResolveConflicts => {
+                self.resolve_conflicts().await?;
+                "user.resolve-conflicts"
+            }
             UserAction::SetMode { mode, launch } => {
                 if self.agent.permission_mode == Some(*mode) {
                     return Ok(());
@@ -2179,6 +2191,82 @@ impl Actor {
             at: now,
             was_watching: status == Status::Watching,
         });
+        Ok(())
+    }
+
+    /// Resolve conflicts (#139, R14): a clean session with the pack's
+    /// `conflicts` command, which merges the PR's base into the branch. The
+    /// base goes through `pr::base_ref`, since it is typed into the terminal.
+    async fn resolve_conflicts(&mut self) -> Result<(), ActionError> {
+        let name = self.agent.name.clone();
+        if self.agent.pr_url.is_none() {
+            return Err(refuse(
+                "no_pr",
+                format!("{name} has no pull request to update"),
+            ));
+        }
+        if self.agent.worktree_removed_at.is_some() {
+            return Err(refuse(
+                "worktree_removed",
+                format!("{name}'s worktree was removed"),
+            ));
+        }
+        let no_command = || {
+            refuse(
+                "not_allowed",
+                format!("{name}'s flow has no command to resolve conflicts"),
+            )
+        };
+        if !self
+            .agent
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))
+            .is_some_and(|p| p.commands.contains_key("conflicts"))
+        {
+            return Err(no_command());
+        }
+        let status = self.agent.status;
+        if next_status(status, Trigger::ResolveConflicts).is_none() {
+            return Err(refuse(
+                "not_allowed",
+                format!(
+                    "{name} is {status}: resolving conflicts needs an agent with no turn under way"
+                ),
+            ));
+        }
+        if self.agent.gate.is_some() {
+            return Err(refuse(
+                "not_allowed",
+                format!("{name} waits at a gate: decide the open gate first"),
+            ));
+        }
+        if self.agent.next_prompt.is_some() {
+            return Err(refuse(
+                "prompt_pending",
+                format!("{name} has a command waiting: resume it first"),
+            ));
+        }
+        let Some(base) =
+            xherd_core::pr::base_ref(self.agent.pr_base.as_deref(), self.agent.base.as_deref())
+        else {
+            return Err(refuse(
+                "not_allowed",
+                format!("the base branch of {name}'s pull request is unknown"),
+            ));
+        };
+        let Some(command) = self.pack_command_with("conflicts", &[("base", &base)]) else {
+            return Err(no_command());
+        };
+        if status == Status::Idle {
+            self.end_session().await;
+        }
+        self.agent.pause_requested_at = None;
+        self.agent.next_prompt = Some(command);
+        // A clean session: the merge needs no earlier conversation.
+        self.resume_session = None;
+        self.agent.ask_hold = None;
+        self.agent.fire(Trigger::ResolveConflicts, self.now());
         Ok(())
     }
 
@@ -3063,9 +3151,14 @@ impl Actor {
     /// The pack's command `key` (`resume`, `prReview`…) for the agent's
     /// runtime; `None` for flow `none` or a pack without it.
     fn pack_command(&self, key: &str) -> Option<String> {
+        self.pack_command_with(key, &[])
+    }
+
+    /// `pack_command` with template variables (`{base}`…) besides `{prefix}`.
+    fn pack_command_with(&self, key: &str, vars: &[(&str, &str)]) -> Option<String> {
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
         let runtime = self.runtime_name();
-        pack.command(runtime, pack.commands.get(key)?, &[])
+        pack.command(runtime, pack.commands.get(key)?, vars)
             .map_err(
                 |e| tracing::warn!(agent = %self.agent.name, key, error = %e, "no pack command"),
             )
