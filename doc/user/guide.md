@@ -164,13 +164,13 @@ TODOs are reminders that are not agents. A TODO is due at a time, once or every 
 
 ## Notifications
 
-Every notification (a gate, a blocked agent, an idle one, a failure, a budget or limit, an automatic approval, PR news, new PR comments, a due TODO) goes to the bell, and from there:
+Every notification (a gate, a blocked agent, an idle one, a failure, a budget or limit, PR news, new PR comments, a due TODO) goes to the bell, and from there:
 
 - to the browser, once you allow it from the bell;
 - to your phone through [ntfy](https://ntfy.sh): Settings → Notifications, server and topic. Messages carry agent names and reasons in plain text, never document or comment contents;
 - to the desktop (`osascript` on macOS, `notify-send` on Linux) with `desktopNotifications`, native installs only.
 
-Settings → Notifications → *Which ones* mutes kinds everywhere.
+Settings → Notifications → *Which ones* mutes kinds everywhere. Automatic approvals send no notification: they are listed under **Needs attention** (*Approved by xherd*).
 
 ## Opening the code
 

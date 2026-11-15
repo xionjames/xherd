@@ -2567,36 +2567,26 @@ impl Actor {
         let before = self.agent.status;
         let reason =
             format!("autonomy {level}: {label} is a {class:?} gate and no tripwire held it");
-        match self
+        // No notice on success (#135): Needs attention lists it (R-111).
+        if let Err(e) = self
             .approve(Some(reason), &BTreeMap::new(), None, true)
             .await
         {
-            Ok(()) => {
-                self.notify(
-                    "auto-approved",
-                    format!(
-                        "{}: approved {label} automatically (autonomy {level}); see the log",
-                        self.agent.name
-                    ),
-                );
-            }
-            Err(e) => {
-                self.log(
-                    None,
-                    "auto-approval-failed",
-                    Some(json!({"gate": label, "error": e.message})),
-                )
-                .await;
-                self.notify(
-                    "error",
-                    format!(
-                        "{}: could not approve {label} automatically: {}",
-                        self.agent.name, e.message
-                    ),
-                );
-                // That notice covers this gate: no `gate` notice for it too.
-                self.notified_gate = self.agent.gate.clone();
-            }
+            self.log(
+                None,
+                "auto-approval-failed",
+                Some(json!({"gate": label, "error": e.message})),
+            )
+            .await;
+            self.notify(
+                "error",
+                format!(
+                    "{}: could not approve {label} automatically: {}",
+                    self.agent.name, e.message
+                ),
+            );
+            // That notice covers this gate: no `gate` notice for it too.
+            self.notified_gate = self.agent.gate.clone();
         }
         self.commit(before).await;
     }

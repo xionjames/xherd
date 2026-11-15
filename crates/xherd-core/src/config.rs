@@ -320,7 +320,6 @@ pub const NOTIFY_KINDS: &[&str] = &[
     "recovery",
     "budget",
     "limit",
-    "auto-approved",
     "pr",
     "pr-comments",
     "todo",
@@ -395,8 +394,12 @@ impl Config {
             m(&mut map);
         }
         map.insert("schemaVersion".into(), CONFIG_SCHEMA_VERSION.into());
-        let cfg = serde_json::from_value(Value::Object(map))
+        let mut cfg: Config = serde_json::from_value(Value::Object(map))
             .map_err(|source| ConfigError::Json { path: p, source })?;
+        // A kind that no longer exists (`auto-approved`, #135) is dropped, so
+        // saving Settings is not refused over it.
+        cfg.muted_notifications
+            .retain(|k| NOTIFY_KINDS.contains(&k.as_str()));
         Ok((cfg, migrated))
     }
 
@@ -541,6 +544,16 @@ mod tests {
             (h[3].credential, h[3].provider.as_deref()),
             (Credential::None, None)
         );
+    }
+
+    /// #135: the `auto-approved` kind is gone; a saved mute of it is dropped.
+    #[test]
+    fn unknown_muted_kinds_are_dropped() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("config.json");
+        std::fs::write(&f, r#"{"mutedNotifications": ["auto-approved", "gate"]}"#).unwrap();
+        let (c, _) = Config::load(&f).unwrap();
+        assert_eq!(c.muted_notifications, ["gate"]);
     }
 
     #[test]

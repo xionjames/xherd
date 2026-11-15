@@ -2959,6 +2959,23 @@ async fn a_muted_gate_kind_sends_no_notice() {
     assert!(notices(&mut rx, "gate").is_empty());
 }
 
+/// #135: an automatic approval sends no notice of any kind.
+#[tokio::test]
+async fn an_auto_approved_gate_sends_no_notice() {
+    let t = setup().await;
+    act(&t, level("important")).await.unwrap();
+    let mut rx = t.d.hub.subscribe();
+    open_stop(&t, "c1", "design", "design.md", 1).await;
+    assert!(get(&t).await.gate.is_none(), "approved at the stop");
+    let mut kinds = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind, .. } = c {
+            kinds.push(kind);
+        }
+    }
+    assert!(kinds.is_empty(), "{kinds:?}");
+}
+
 #[tokio::test]
 async fn the_run_limit_sends_one_gate_notice_with_its_reason() {
     let t = setup_config(json!({"freshSessions": true, "maxAutoApprovalsInRow": 1})).await;
