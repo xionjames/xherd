@@ -93,7 +93,7 @@ Because paths are identical, `xherd open <agent>` or the UI's Open in menu start
 | Logs | `docker logs xherd` (JSON on stderr; `XHERD_LOG=debug` for more) |
 | Restart | `docker restart xherd`: agents waiting at a gate are parked, the others resumed |
 
-When building from the repository instead of a published image, rebuild with `docker compose up -d --build`. The image has no `.git`, so its version shows the Cargo version unless you pass `--build-arg XHERD_VERSION="$(git describe --tags --always)"` to the build.
+When building from the repository instead of a published image, rebuild with `XHERD_VERSION=dev-$(git rev-parse --short HEAD) docker compose up -d --build`. The image has no `.git`, so the version it shows is `XHERD_VERSION` (passed to the build by `deploy/compose/compose.yaml`), or `dev` without it.
 
 ## Known limits
 
