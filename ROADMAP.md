@@ -32,8 +32,9 @@ by theme; update it together with them.
 ## M3 Docker-first
 
 - [x] Image with version managers, `xherd init`, `docker init/doctor/update`, toolchain resolution
-- [x] Open-in (URL schemes, Dev Containers, companion)
-- [x] Settings → Open in (R-706, R-707): hide entries, a built-in terminal entry (shell in the worktree, terminal app chosen), your own commands, run by the companion only after you confirm each argv on your computer
+- [x] Open-in (URL schemes, Dev Containers)
+- [x] Settings → Open in (R-706, R-707): hide entries, your own links, Open in terminal (your terminal app in the worktree) through the `xherd-term://` link handler installed once per computer, no companion (#129)
+- [ ] Check the terminal handler on a real Mac (osacompile app, `open -a`, Ghostty's working directory) and on Linux desktops in Chrome and Firefox
 - [x] Git access setup and doctor
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
 - [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`

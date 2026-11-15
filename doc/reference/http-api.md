@@ -56,7 +56,7 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 | `GET /agents/{id}/pr-review`, `PUT /agents/{id}/pr-decisions` | The PR comments of the current round with the agent's decisions, and your overrides |
 | `GET /agents/{id}/ticket`, `GET /agents/{id}/ticket-status`, `GET /agents/{id}/ticket-summary`, `POST /agents/{id}/ticket-comment {body}` | Read the agent's ticket, whether a summary was posted, a drafted summary, and posting your text |
 | `GET /agents/{id}/git-access` | The git doctor's first failure for the agent's host, for a `git access` block |
-| `GET /agents/{id}/open-targets`, `POST /agents/{id}/open {app}` | The Open in menu, and opening one entry |
+| `GET /agents/{id}/open-targets` | The Open in menu: links the browser opens (`{id, label, kind: "url", url}`), the Terminal link only while a terminal handler install is recorded, your links, minus `openIn.hidden`. `no_workspace` for an agent without a worktree |
 | `POST /agents/{id}/user-time {ms}` | Time you spent on the agent page (Time page) |
 
 ### Repositories and profiles
@@ -90,8 +90,10 @@ All paths are under `/api/v1`. `{id}` is an agent id or name.
 | `GET /plugins/{name}/view/{path}` | A file of an enabled [Herd view plugin](../extend/plugins.md#herd-view-plugins) (404 for any other plugin, a hidden or `..` path, or a file outside its folder; 413 over 16 MiB). No authentication. Served with `Content-Security-Policy: sandbox allow-scripts; …` (sources limited to the plugin's files and the view kit, no `connect-src`), `X-Content-Type-Options: nosniff`, `Cache-Control: no-cache`, `Referrer-Policy: no-referrer`, `Access-Control-Allow-Origin: *` |
 | `GET /view-kit/{file}` | The view kit: `xherd-view.js` (protocol v1 for views) and `xherd.css` (design tokens and component classes). No authentication; same headers |
 | `GET /toolchains`, `GET /toolchains/installed`, `GET /toolchains/{tool}/versions`, `POST /toolchains/install` | Toolchain tools, installed versions, installable versions (container), installing one |
-| `GET /open-in` | Settings → Open in: links, the companion's apps and terminals |
-| `GET /companion/next` | Long poll used by `xherd companion` |
+| `GET /open-in` | Settings → Open in: `{links, native, handler: {shipped, installed, updateAvailable, rootChanged}}`; `installed` is the recorded terminal handler install (`version`, `xherd`, `os`, `terminals` found there, default first, `root`, `at`) or `null` |
+| `GET /open-in/terminal-handler.sh` | The terminal handler's installer (`text/plain`), with the worktrees folder and a report address `http://<Host>` baked in; run on your computer as `curl -fsSL <origin>/api/v1/open-in/terminal-handler.sh \| sh` (`\| sh -s uninstall` to remove). `bad_host` for an odd `Host` |
+| `POST /open-in/terminal-handler` | What the installer reports: `{version, xherd, os, terminals, root}` after an install, `{installed: false}` after an uninstall; kept in `<data>/terminal-handler.json`. `bad_report` when a value is out of shape |
+| `POST /open-in/terminal-handler/install {uninstall?}` | A native daemon runs the installer itself, as you; answers `{ok, output}` (the installer's last lines). `native_only` in the container |
 
 ### Terminals (WebSocket)
 

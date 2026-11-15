@@ -172,7 +172,13 @@ Settings → Notifications → *Which ones* mutes kinds everywhere.
 
 ## Opening the code
 
-**Open in** on the agent page opens the worktree in VS Code, Cursor or Zed (and Dev Containers when xherd runs in Docker), or a terminal on your computer. The terminal and your own commands (Settings → Open in) go through `xherd companion`, a small process you run on your computer: it asks you once to confirm each command before running it. From a terminal, `xherd attach`, `xherd shell` and `xherd open` do the same.
+**Open worktree in…** on the agent page opens the worktree in VS Code, Cursor or Zed (and Dev Containers when xherd runs in Docker), in a terminal on your computer, or through your own links. Every entry is a link your browser opens; worktrees have the same path on your computer and in the container, so they open your local apps on your local files.
+
+**Terminal** opens your own terminal app with the worktree as its folder, so you can build and run the app there. It needs a one-time setup on each computer, in Settings → Open in → *Terminal on this computer*: natively the **Install** button (or `xherd terminal-handler install`); in Docker the `curl … | sh` command shown there, run in a terminal on your computer (no `xherd` needed on it). That registers the `xherd-term://` link for you and keeps nothing running; the entry shows in the menu once the install has told xherd. Choose the terminal app there too (otherwise your desktop's default). Your browser asks before opening each link; Chrome's "Always allow" removes the prompt for that site. When Settings says *Update*, run the install again. On macOS this is not checked on a real Mac yet.
+
+**Your links** (Settings → Open in) add entries for apps with their own URL scheme, for example `idea://open?file={dir}`: `{dir}` is the worktree and `{agent}` the agent's name. Web links (`http`, `https`…) are refused. The commands of older versions were removed; Settings names them once.
+
+From a terminal, `xherd attach`, `xherd shell` and `xherd open` still work.
 
 ## Backups
 
