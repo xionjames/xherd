@@ -363,6 +363,14 @@ pub fn issue_project(url: &str) -> Option<(String, String)> {
     (!project.split('/').any(|p| p.starts_with('.'))).then_some((host, project))
 }
 
+/// The repository an issue URL belongs to, as a clone URL without `.git`
+/// (`https://github.com/acme/api`). `None` for a URL that is not an issue
+/// of a repository (a Jira `/browse/KEY`, `http://`, odd path parts).
+pub fn repo_url(url: &str) -> Option<String> {
+    let (host, project) = issue_project(url)?;
+    Some(format!("https://{host}/{project}"))
+}
+
 /// `gh`'s `-R HOST/OWNER/REPO` for a GitHub issue URL.
 fn github_repo(url: Option<&str>) -> Option<String> {
     let (host, project) = issue_project(url?)?;
@@ -783,6 +791,28 @@ esac"#,
             calls.contains("projects/g%2Fp/issues/3/notes?sort=asc"),
             "{calls}"
         );
+    }
+
+    #[test]
+    fn repo_url_is_the_clone_url_of_an_issue_url() {
+        assert_eq!(
+            repo_url("https://github.com/acme/api/issues/12").as_deref(),
+            Some("https://github.com/acme/api")
+        );
+        assert_eq!(
+            repo_url("https://github.com/acme/api/issues/12?x=1#c").as_deref(),
+            Some("https://github.com/acme/api")
+        );
+        assert_eq!(
+            repo_url("https://gl.test/g/sub/p/-/issues/7").as_deref(),
+            Some("https://gl.test/g/sub/p")
+        );
+        assert_eq!(repo_url("http://github.com/a/b/issues/1"), None);
+        assert_eq!(repo_url("https://acme.atlassian.net/browse/SC-12"), None);
+        assert_eq!(repo_url("SC-12"), None);
+        assert_eq!(repo_url("#12"), None);
+        assert_eq!(repo_url("https://gl.test/../x/-/issues/7"), None);
+        assert_eq!(repo_url("https://github.com/.hid/api/issues/1"), None);
     }
 
     #[cfg(unix)]
