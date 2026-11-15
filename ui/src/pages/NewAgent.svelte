@@ -14,6 +14,7 @@
   import { runtimes, runtimeLabel } from '../lib/runtimes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
+  import { nextRepo } from '../lib/repoFromTicket';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
   let f = $state({ name: '', ticket: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
@@ -23,20 +24,30 @@
 
   // Ticket: a key or an issue URL; the daemon says which tracker reads it
   // and the key a URL stands for (POST /tickets/resolve).
-  type TicketFound = { key: string | null; url: string | null; tracker: string | null };
+  type TicketFound = { key: string | null; url: string | null; tracker: string | null; repo: string | null };
   let tk = $state<{ input: string; data: TicketFound | null; error: string | null }>({ input: '', data: null, error: null });
   const ticketIn = $derived(f.ticket.trim());
   const ticketBad = $derived(tk.input === ticketIn && tk.error !== null);
   async function resolveTicket() {
     const want = ticketIn;
-    if (!want) { tk = { input: '', data: null, error: null }; return; }
+    if (!want) { tk = { input: '', data: null, error: null }; useTicketRepo(null); return; }
     tk = { input: want, data: null, error: null };
     try {
       const d = await post<TicketFound>('/tickets/resolve', repo.data ? { ticket: want, repo: repo.data.path } : { ticket: want });
-      if (tk.input === want) tk.data = d;
+      if (tk.input === want) { tk.data = d; useTicketRepo(d.repo); }
     } catch (e) {
       if (tk.input === want) tk.error = e instanceof Error ? e.message : String(e);
     }
+  }
+  // The repository the ticket names fills the field until the user types
+  // their own (#148); `filled` is what we put there last.
+  let filled = $state<string | null>(null);
+  function useTicketRepo(ticketRepo: string | null) {
+    const n = nextRepo({ typed: f.repo, filled, ticketRepo });
+    filled = n.filled;
+    if (n.repo === f.repo) return;
+    f.repo = n.repo;
+    if (n.repo.trim()) resolve();
   }
   // Same rule as the daemon's `new::branch_name`: the ticket key (without
   // `#`) prefixes the name, unless the name already starts with it.
@@ -171,7 +182,7 @@
       {:else}<span class="hint">An issue URL or a key. Its key starts the branch name.</span>{/if}</label>
     <div class="g2">
       <label class="f">Repository: URL or local path
-        <input class="mono" bind:value={f.repo} list="known-repos" required onchange={resolve}
+        <input class="mono" bind:value={f.repo} list="known-repos" required={!(tk.input === ticketIn && tk.data?.repo)} onchange={resolve}
           placeholder="https://github.com/acme/payments-api or /Users/you/xherd/payments-api" />
         <datalist id="known-repos">{#each known as k (k.path)}<option value={k.path}></option>{/each}</datalist>
         {#if repo.busy && repo.input === input}
@@ -179,7 +190,7 @@
         {:else if repoBad}
           <span class="hint err">✕ {repo.error}</span>
         {:else if repo.data && repo.input === input}
-          <span class="hint wrap-any">✓ <span class="mono">{repo.data.path}</span>{repo.data.cloned ? ' (cloned now)' : ''}</span>
+          <span class="hint wrap-any">✓ <span class="mono">{repo.data.path}</span>{repo.data.cloned ? ' (cloned now)' : ''}{filled !== null && f.repo === filled ? ' · ✓ from the ticket' : ''}</span>
           {#if repo.data.warning}<span class="hint wrap-any">⚠ {repo.data.warning}</span>{/if}
         {:else}
           <span class="hint">A URL is cloned into the workspace once and fetched before each new agent.</span>
