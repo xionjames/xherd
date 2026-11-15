@@ -94,4 +94,4 @@ Start with **[Getting started](doc/user/getting-started.md)** (install with Dock
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0-or-later](LICENSE)
