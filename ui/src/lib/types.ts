@@ -148,7 +148,8 @@ export interface Agent {
   autoApprovePending?: boolean;
 }
 
-export interface StageInfo { id: string; role: Role; class: string; gate: boolean }
+/** `label`: the pack's own name for the stage ("Fix"), when it sets one. */
+export interface StageInfo { id: string; role: Role; class: string; gate: boolean; label?: string }
 export interface FlowInfo { pack: string; flow: string; stages: StageInfo[] }
 
 export interface PluginInfo {

@@ -44,6 +44,10 @@ describe('stageLabel', () => {
     expect(stageLabel(st('pr-review', 'pr'))).toBe('PR Review');
     expect(stageLabel(st('security_scan', 'review'))).toBe('Security Scan');
   });
+  it('prefers the label the pack sets', () => {
+    expect(stageLabel({ ...st('implement', 'implement'), label: 'Fix' })).toBe('Fix');
+    expect(stageLabel(st('reproduce', 'implement'))).toBe('Reproduce');
+  });
 });
 
 describe('stageNow', () => {
