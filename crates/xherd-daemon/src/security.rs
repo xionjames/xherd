@@ -48,7 +48,7 @@ fn budget_text(n: u64) -> String {
 fn autonomy_finding(c: &Config, levels: &[Autonomy]) -> Finding {
     let count = |l: Autonomy| levels.iter().filter(|x| **x == l).count();
     let detail = format!(
-        "new agents start at {}; active agents: {} ask, {} important, {} never; important still waits at spec and ship, and any tripwire holds a gate",
+        "new agents start at {}; active agents: {} ask, {} important, {} never; important still waits at spec (or a bug's analysis) and ship, and any tripwire holds a gate",
         c.autonomy,
         count(Autonomy::Ask),
         count(Autonomy::Important),

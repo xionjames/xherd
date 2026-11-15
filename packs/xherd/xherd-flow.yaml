@@ -1,5 +1,5 @@
 # xherd, the built-in flow pack (spec §7, design §6.2).
-# v0: the feature flow only; bug and hotfix come later.
+# Flows: feature and bugfix; hotfix comes later.
 name: xherd
 version: 0.1.0
 protocol: 1
@@ -48,6 +48,20 @@ flows:
       - { id: design, role: design, class: routine, gate: { docs: [design.md] }, next: [{ run: "{prefix}tasks" }] }
       - { id: tasks, role: tasks, class: routine, gate: { docs: [tasks.md] }, next: [{ run: "{prefix}next" }] }
       - { id: implement, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
+      - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: ship, role: ship, class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: pr-review, role: pr, class: human-only, gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
+      - { id: pr, role: pr, class: human-only }
+  # A bug: one analysis gate over the bug's spec.md and its short task list,
+  # a commit with the failing reproduction test, then the fix (its id stays
+  # `implement`, the stage next.md and review.md enter) and the feature
+  # flow's review, ship and PR rounds.
+  bugfix:
+    start: "{prefix}bugfix {key} {prompt}"
+    stages:
+      - { id: analysis, role: spec, class: critical, gate: { docs: [spec.md, tasks.md] }, next: [{ run: "{prefix}reproduce" }] }
+      - { id: reproduce, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }] }
+      - { id: implement, role: implement, label: Fix, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
       - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
       - { id: ship, role: ship, class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
       - { id: pr-review, role: pr, class: human-only, gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }

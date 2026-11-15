@@ -565,7 +565,7 @@ pub fn apply(
                     format!("the {stage} gate is still open; wait for its approval"),
                 ));
             }
-            if let Some(s) = flow.stages.iter().find(|s| s.is_commit_gate()) {
+            if let Some(s) = flow.commit_stage(a.stage.as_deref()) {
                 a.stage = Some(s.id.clone());
             }
             a.gate = Some(Gate::Commit(proposal.clone()));
@@ -775,7 +775,7 @@ fn commit_index(a: &Agent, id: &str) -> Result<usize, Refusal> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use xherd_core::domain::{Role, Task};
 
@@ -1279,6 +1279,74 @@ mod tests {
             )),
             "commit_id_used"
         );
+    }
+
+    /// A flow with two commit stages, the first gate over spec.md + tasks.md.
+    pub(crate) fn two_commit_stages() -> Pack {
+        Pack::parse(concat!(
+            "name: t\nversion: 1.0.0\nprotocol: 1\n",
+            "install: { claude-code: { prefix: '/t:' } }\n",
+            "flows:\n  f:\n    start: '{prefix}go'\n    stages:\n",
+            "      - { id: analysis, role: spec, class: critical, gate: { docs: [spec.md, tasks.md] }, next: [{ run: '{prefix}repro' }] }\n",
+            "      - { id: reproduce, role: implement, class: code, gate: { kind: commit }, next: [{ run: '{prefix}commit {commit}' }] }\n",
+            "      - { id: implement, role: implement, class: code, gate: { kind: commit }, next: [{ run: '{prefix}fix {commit}' }] }\n",
+            "      - { id: review, role: review, class: routine, gate: { docs: [review.md] } }\n",
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn commit_propose_stays_in_the_current_commit_stage() {
+        let p = two_commit_stages();
+        let mut a = agent();
+        a.flow = Some("f".into());
+        // Settle the open proposal as the approval would.
+        let done = |a: &mut Agent, id: &str| {
+            let c = a.commits.iter_mut().find(|c| c.id == id).unwrap();
+            c.status = CommitStatus::Done;
+            a.gate = None;
+        };
+        // From a stage without a commit gate: the first commit stage.
+        a.stage = Some("analysis".into());
+        assert!(
+            apply(
+                &mut a,
+                Some(&p),
+                &propose("C01", &["t.rs"], &[]),
+                Observed::Nothing,
+                0
+            )
+            .unwrap()
+        );
+        assert_eq!(a.stage.as_deref(), Some("reproduce"));
+        done(&mut a, "C01");
+        // In the second commit stage: it stays there.
+        a.stage = Some("implement".into());
+        assert!(
+            apply(
+                &mut a,
+                Some(&p),
+                &propose("C02", &["a.rs"], &[]),
+                Observed::Nothing,
+                0
+            )
+            .unwrap()
+        );
+        assert_eq!(a.stage.as_deref(), Some("implement"));
+        done(&mut a, "C02");
+        // In the first one: it stays there too.
+        a.stage = Some("reproduce".into());
+        assert!(
+            apply(
+                &mut a,
+                Some(&p),
+                &propose("C03", &["t.rs"], &[]),
+                Observed::Nothing,
+                0
+            )
+            .unwrap()
+        );
+        assert_eq!(a.stage.as_deref(), Some("reproduce"));
     }
 
     #[test]

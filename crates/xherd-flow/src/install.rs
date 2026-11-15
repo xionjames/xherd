@@ -9,6 +9,10 @@ use crate::Pack;
 pub const BUILTIN_FILES: &[(&str, &str)] = &[
     ("FORMAT.md", include_str!("../../../packs/xherd/FORMAT.md")),
     (
+        "commands/bugfix.md",
+        include_str!("../../../packs/xherd/commands/bugfix.md"),
+    ),
+    (
         "commands/commit.md",
         include_str!("../../../packs/xherd/commands/commit.md"),
     ),
@@ -39,6 +43,10 @@ pub const BUILTIN_FILES: &[(&str, &str)] = &[
     (
         "commands/pr-review.md",
         include_str!("../../../packs/xherd/commands/pr-review.md"),
+    ),
+    (
+        "commands/reproduce.md",
+        include_str!("../../../packs/xherd/commands/reproduce.md"),
     ),
     (
         "commands/resume.md",

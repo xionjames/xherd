@@ -2549,7 +2549,7 @@ impl Actor {
         let flow = pack.flow(flow_name)?;
         let stage = match gate {
             Gate::Docs { stage, .. } => flow.stage(stage)?,
-            Gate::Commit(_) => flow.stages.iter().find(|s| s.role == Role::Implement)?,
+            Gate::Commit(_) => flow.commit_stage(self.agent.stage.as_deref())?,
             _ => return None,
         };
         let human_only =
@@ -3233,19 +3233,19 @@ impl Actor {
         self.prepare_resume(true).await;
     }
 
-    /// The flow's tasks document was approved and has changed since (task
-    /// progress and fix tasks aside, `doc_sha256`), while the agent is past the
-    /// tasks stage. In the tasks stage the agent rewrites it on purpose and
-    /// declares the gate itself.
+    /// The approved task list (`task_docs`: the tasks stage's documents, or
+    /// the `tasks.md` of the bugfix analysis, not its `spec.md`) has changed
+    /// since (task progress and fix tasks aside, `doc_sha256`), while the
+    /// agent is past that stage. In that stage the agent rewrites it on
+    /// purpose and declares the gate itself.
     async fn approved_tasks_edited(&self, pack: Option<&Pack>) -> bool {
-        use xherd_core::domain::Role;
         let Some(flow) = pack.and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()))
         else {
             return false;
         };
         let Ok(wd) = self.workdir() else { return false };
         let stage = self.agent.stage.as_deref().and_then(|s| flow.stage(s));
-        if stage.is_some_and(|s| s.role == Role::Tasks) {
+        if stage.is_some_and(|s| s.gates_tasks()) {
             return false;
         }
         let ever = self
@@ -3254,8 +3254,8 @@ impl Actor {
             .approved_files(&self.agent.id)
             .await
             .unwrap_or_default();
-        for s in flow.stages.iter().filter(|s| s.role == Role::Tasks) {
-            for d in s.docs() {
+        for s in &flow.stages {
+            for d in s.task_docs() {
                 let Ok(path) = xherd_flow::xap::doc_path(d, &wd) else {
                     continue;
                 };

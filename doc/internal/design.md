@@ -291,11 +291,15 @@ flows:
       - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
       - { id: ship,   role: ship,   class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
       - { id: pr,     role: pr,     class: human-only, rounds: { triage: "{prefix}pr-review", apply: "{prefix}pr-apply", fetch: "{prefix}pr-fetch", post: "{prefix}pr-post" } }
-  bug:
-    start: "{prefix}bug {key} {prompt}"
-    stages: [spec, tasks, implement, review, ship, pr]
-  hotfix:
-    extends: bug
+  bugfix:
+    start: "{prefix}bugfix {key} {prompt}"
+    stages:
+      - { id: analysis, role: spec, class: critical, gate: { docs: [spec.md, tasks.md] }, next: [{ run: "{prefix}reproduce" }] }
+      - { id: reproduce, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }] }
+      - { id: implement, role: implement, label: Fix, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
+      # review, ship, pr-review, pr as in feature
+  hotfix:                        # planned
+    extends: bugfix
     baseBranch: hotfixBase
     override: { ship: { class: human-only } }
 
@@ -303,6 +307,8 @@ views: { … }                     # §11
 ```
 
 Conditions (`when`) are a fixed vocabulary: `frontmatter`, `fileExists`, `allTasksDone`, `setting`.
+
+A stage may carry a `label` (shown in the UI instead of the name made from its `id`; 1–40 characters), so the bugfix fix stage keeps the id `implement` that the shared prompts enter. The task list is gated wherever a stage's role is `tasks` or its `gate.docs` lists `tasks.md` (`StageDef::gates_tasks`, used by `doc_sha256` and the approved-tasks check). A flow may have several commit-gate stages: a proposal belongs to the current stage when it gates commits, else to the first that does (`Flow::commit_stage`, used by `commit propose`, the next command after approval and the gate's class).
 
 ### 6.3 Normalised state
 
@@ -749,7 +755,9 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] opencode runtime (branch `runtime-opencode`; runtime chosen per agent, profile, `defaultRuntime`)
   - [x] Codex runtime (branch `runtime-codex`; skills, hooks, TOML trust; unit tests and hook/skill/resume behaviour checked against Codex 0.167 without model turns, not yet run end to end)
   - [x] To review (R-111, with Mark seen) and Work log (agent and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
-  - [x] Kanban: the Board with stages and tasks as work units (Pending / In progress / Done), TODOs and swimlanes; the Herd's By stage layout with agents in columns by role (cards declared by packs and profiles, R-1101, come with profiles)
+  - [x] Kanban: the Board with stages and tasks as work units (Pending / In progress / Done), TODOs and swimlanes (agent, repository, workflow); the Herd's By stage layout with agents in their flow's stage columns, one lane per workflow when several are shown (cards declared by packs and profiles, R-1101, come with profiles)
+  - [x] `bugfix` flow (#142, branch `142-bugfix-flow-plugin`): analysis (`spec.md` + `tasks.md`, one gate) → reproduce (failing test, its commit) → fix → review → ship → PR rounds; stage `label`, several commit stages, `tasks.md` gated by any stage; *Tasks in this commit* with evidence in the Changes panel
+  - [ ] `hotfix` flow (like bugfix, from `hotfixBase`, ship human-only)
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [x] Herd views as plugins (#108): kind `view`, sandboxed frame, protocol v1, view kit

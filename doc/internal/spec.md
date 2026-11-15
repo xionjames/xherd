@@ -98,7 +98,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 | **SDD** | Spec-driven development: a method that moves work through written documents and approvals before and while coding. |
 | **xherd** | xherd's built-in SDD. Commands `/xherd:*`. |
 | **Flow pack** | A versioned bundle that defines an SDD for xherd: manifest, prompts per runtime, optional schemas, parser and views. |
-| **Flow** | A path through a pack's stages (`feature`, `bug`, `hotfix`), or `none` (no SDD). |
+| **Flow** | A path through a pack's stages (`feature`, `bugfix`, `hotfix`), or `none` (no SDD). |
 | **Stage / step role** | A pack's step (its own id) and the canonical role it maps to: `explore`, `spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`, `custom`. |
 | **Gate (✋)** | A point where the agent stops and waits for approval: documents, a proposed commit, PR triage, PR replies, or a question. |
 | **Autonomy** | `ask` / `important` / `never`: which gates xherd may approve by itself. |
@@ -280,8 +280,8 @@ xherd is xherd's own SDD, written for xherd: documents for each step, approval g
 ### 7.1 Flows
 
 - **feature**: spec ✋ → design ✋ (skippable) → tasks ✋ → implement (commit ✋ per task) → review ✋ → ship ✋ → PR rounds → done.
-- **bug**: spec (investigation, root cause, fix approach) ✋ → tasks (a failing reproduction test first) ✋ → implement → review ✋ → ship ✋ → PR rounds → done.
-- **hotfix**: like bug, based on the profile's `hotfixBase`; ship always waits for a human.
+- **bugfix**: analysis (investigation, root cause, fix approach, the reproduction test; `spec.md` and `tasks.md` under one gate) ✋ → reproduce (the failing test alone, its failing run as evidence; commit ✋) → fix (commit ✋ per task, each verified by the reproduction command) → review ✋ → ship ✋ → PR rounds → done.
+- **hotfix** (planned): like bugfix, based on the profile's `hotfixBase`; ship always waits for a human.
 - **PR rounds**: new comments are analysed into items (triage ✋, a decision per comment), fixes are implemented with commit gates, replies are drafted (replies ✋) and posted.
 
 Design may be skipped only when the change is small and local, has no data/API/config/dependency changes, touches nothing security- or concurrency-sensitive, and has one obvious approach. The spec states the decision; approving the spec approves the skip.
@@ -291,7 +291,8 @@ Design may be skipped only when the change is small and local, has no data/API/c
 | Command | Does | XAP calls |
 |---|---|---|
 | `/xherd:feature <KEY> <prompt>` | Read the ticket, explore, write `ticket.md` and `spec.md` | `gate open --role spec` |
-| `/xherd:bug <KEY> <prompt>` | Investigate without changing production code, write the bug `spec.md` | `gate open --role spec` |
+| `/xherd:bugfix <KEY> <prompt>` | Investigate without changing repository files, write the bug `spec.md` and `tasks.md` (T01 = the reproduction test) | `tasks sync`, `gate open analysis` |
+| `/xherd:reproduce` | Write the reproduction test only, see it fail for the analysed reason, propose its commit | `task start/done`, `commit propose` |
 | `/xherd:design` | Write `design.md` | `gate open --role design` |
 | `/xherd:tasks` | Write `tasks.md` | `tasks sync`, `gate open --role tasks` |
 | `/xherd:next` | Implement the next ready task, verify, propose a commit; when all are done, start the review | `task start/done`, `commit propose` |

@@ -52,7 +52,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | Flag | Meaning |
 |---|---|
 | `--ticket` | The ticket: an issue URL (`https://acme.atlassian.net/browse/PAY-412`, `https://github.com/acme/api/issues/12`) or a key (`PAY-412`, `#12`). Its key starts the branch name (`PAY-412-<name>`, `12-<name>`); without one the branch is the name. A URL no enabled tracker reads is kept as a link only |
-| `--flow` | A flow of the built-in pack, or `none` for a plain session with your prompt (default `feature`) |
+| `--flow` | A flow of the built-in pack (`feature` or `bugfix`), or `none` for a plain session with your prompt (default `feature`) |
 | `--repo` | A local path, or a URL cloned once into `<workspace>/repos/<host>/<path>`. Default: the current directory |
 | `--base` | Base branch (default: the repository's default) |
 | `--autonomy` | `ask` (default) or `important` |

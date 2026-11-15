@@ -4,7 +4,8 @@ description: xherd shared rules and document formats
 # xherd rules
 
 xherd is a spec-driven flow: spec, design, tasks, one commit per task,
-review, ship. Every step ends at a gate where the user approves or asks for
+review, ship (a bug fix: analysis, a failing reproduction test, the fix,
+review, ship). Every step ends at a gate where the user approves or asks for
 changes. These rules apply to every `{{prefix}}` command.
 
 ## Running under xherd

@@ -421,7 +421,13 @@ fn flows(d: &Daemon) -> Vec<Value> {
                 let stages: Vec<Value> = f
                     .stages
                     .iter()
-                    .map(|s| json!({"id": s.id, "role": s.role, "class": s.class, "gate": s.gate.is_some()}))
+                    .map(|s| {
+                        let mut v = json!({"id": s.id, "role": s.role, "class": s.class, "gate": s.gate.is_some()});
+                        if let Some(label) = &s.label {
+                            v["label"] = json!(label);
+                        }
+                        v
+                    })
                     .collect();
                 json!({"pack": p.name, "flow": name, "stages": stages})
             })

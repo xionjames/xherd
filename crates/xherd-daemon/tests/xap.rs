@@ -55,19 +55,25 @@ async fn setup_config(config: Value) -> T {
 }
 
 async fn setup_full(config: Value, verify_timeout: Option<Duration>) -> T {
-    setup_inner(config, verify_timeout, None).await
+    setup_inner(config, verify_timeout, None, "feature").await
+}
+
+/// An agent on another flow of the built-in pack.
+async fn setup_flow(flow: &str) -> T {
+    setup_inner(json!({"freshSessions": true}), None, None, flow).await
 }
 
 /// The agent is created on this profile (the test never goes through a repo
 /// match: that is `tests/profiles.rs`).
 async fn setup_profile(config: Value, p: xherd_core::profile::Profile) -> T {
-    setup_inner(config, None, Some(p)).await
+    setup_inner(config, None, Some(p), "feature").await
 }
 
 async fn setup_inner(
     config: Value,
     verify_timeout: Option<Duration>,
     profile: Option<xherd_core::profile::Profile>,
+    flow: &str,
 ) -> T {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
@@ -87,7 +93,7 @@ async fn setup_inner(
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(wt.path().to_string_lossy().into_owned());
     a.pack = Some("xherd".into());
-    a.flow = Some("feature".into());
+    a.flow = Some(flow.into());
     a.base = Some("main".into());
     if let Some(p) = profile {
         a.profile = Some(d.create_profile(p).await.unwrap().id);
@@ -3395,6 +3401,210 @@ async fn ask_hold_ends_when_the_session_is_lost() {
     assert!(a.ask_hold.is_none());
     let ev = t.d.store.events(&t.a.id, 50).await.unwrap();
     assert!(ev.iter().any(|e| e.kind == "session-lost"));
+}
+
+/// The bug analysis of a bugfix agent: `spec.md` and `tasks.md` (T01 the
+/// reproduction test without `verify:`, T02 the fix), synced, the one
+/// analysis gate open and the agent stopped.
+async fn bugfix_analysis(t: &T) {
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    let spec = t.wt.path().join(".xherd/spec");
+    std::fs::write(spec.join("spec.md"), "---\nflow: bugfix\n---\n# Bug\n").unwrap();
+    std::fs::write(
+        spec.join("tasks.md"),
+        "# Tasks\n\n## T01: Reproduce\n- status: todo\n- files: `repro.txt`\n- depends: none\n- evidence:\n\n\
+         ## T02: Fix\n- status: todo\n- files: `fix.txt`\n- depends: T01\n- verify: `true`\n- evidence:\n",
+    )
+    .unwrap();
+    xap(t, "b1", "tasks.sync", json!({})).await.unwrap();
+    xap(t, "b2", "gate.open", json!({"stage": "analysis"}))
+        .await
+        .unwrap();
+    stop(t, 1).await;
+}
+
+/// Proposes `id` for `task` with `file`, then stops.
+async fn bugfix_commit(t: &T, id: &str, task: &str, file: &str, seq: u64) {
+    std::fs::write(t.wt.path().join(file), "x\n").unwrap();
+    xap(
+        t,
+        &format!("p-{id}"),
+        "commit.propose",
+        json!({"id": id, "subject": id, "files": [file], "tasks": [task]}),
+    )
+    .await
+    .unwrap();
+    stop(t, seq).await;
+}
+
+#[tokio::test]
+async fn a_bugfix_agent_walks_analysis_reproduce_fix_and_review() {
+    let t = setup_flow("bugfix").await;
+    bugfix_analysis(&t).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::WaitingInput);
+    assert!(
+        matches!(&a.gate, Some(Gate::Docs { stage, files, .. })
+            if stage == "analysis" && files.len() == 2),
+        "{:?}",
+        a.gate
+    );
+    act(&t, approve(None)).await.unwrap();
+    assert_eq!(
+        get(&t).await.next_prompt.as_deref(),
+        Some("/xherd:reproduce")
+    );
+    let ledger = ledger_lines(&t);
+    assert_eq!(ledger.len(), 2, "one approval per document of the gate");
+
+    // The reproduction: no evidence is refused; with it, done, and the
+    // progress written into tasks.md does not re-open the analysis.
+    xap(&t, "r1", "stage.enter", json!({"stage": "reproduce"}))
+        .await
+        .unwrap();
+    xap(&t, "r2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "r3", "task.done", json!({"id": "T01", "evidence": " "}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "evidence_missing");
+    xap(
+        &t,
+        "r4",
+        "task.done",
+        json!({"id": "T01", "evidence": "cargo test repro: exit 101, assertion failed"}),
+    )
+    .await
+    .unwrap();
+    let tasks = std::fs::read_to_string(t.wt.path().join(".xherd/spec/tasks.md")).unwrap();
+    assert!(tasks.contains("- status: done"), "{tasks}");
+    stop(&t, 2).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_none(), "{:?}", a.gate);
+    xap(&t, "r5", "tasks.sync", json!({})).await.unwrap();
+
+    // C01 stays in reproduce and is handed on as a commit.
+    bugfix_commit(&t, "C01", "T01", "repro.txt", 3).await;
+    let a = get(&t).await;
+    assert_eq!(a.stage.as_deref(), Some("reproduce"));
+    assert!(matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C01"));
+    act(&t, approve(None)).await.unwrap();
+    let a = get(&t).await;
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:commit C01"));
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+
+    // The fix, in the implement stage.
+    xap(&t, "f1", "stage.enter", json!({"stage": "implement"}))
+        .await
+        .unwrap();
+    xap(&t, "f2", "task.start", json!({"id": "T02"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "f3",
+        "task.done",
+        json!({"id": "T02", "evidence": "cargo test repro: passes"}),
+    )
+    .await
+    .unwrap();
+    // A fix that also changes the reproduction test is held (review F02).
+    std::fs::write(t.wt.path().join("repro.txt"), "weakened\n").unwrap();
+    std::fs::write(t.wt.path().join("fix.txt"), "x\n").unwrap();
+    xap(
+        &t,
+        "p-C02",
+        "commit.propose",
+        json!({"id": "C02", "subject": "C02", "files": ["fix.txt", "repro.txt"], "tasks": ["T02"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 4).await;
+    let a = get(&t).await;
+    assert_eq!(a.stage.as_deref(), Some("implement"));
+    assert!(
+        matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C02"
+            && c.needs_human.as_deref() == Some("outside the files: of T02: repro.txt")),
+        "{:?}",
+        a.gate
+    );
+    act(&t, approve(None)).await.unwrap();
+    assert_eq!(
+        get(&t).await.next_prompt.as_deref(),
+        Some("/xherd:commit C02")
+    );
+
+    xap(&t, "v1", "stage.enter", json!({"stage": "review"}))
+        .await
+        .unwrap();
+    let a = get(&t).await;
+    assert_eq!(a.stage.as_deref(), Some("review"));
+    assert!(a.tasks.iter().all(|t| t.status == TaskStatus::Done));
+}
+
+/// Review F03: only the task list of the analysis counts for `tasks sync`;
+/// an edited `spec.md` is left to `infer_gate` at the next stop.
+#[tokio::test]
+async fn an_edited_bug_analysis_does_not_refuse_tasks_sync() {
+    let t = setup_flow("bugfix").await;
+    bugfix_analysis(&t).await;
+    act(&t, approve(None)).await.unwrap();
+    xap(&t, "r1", "stage.enter", json!({"stage": "reproduce"}))
+        .await
+        .unwrap();
+    xap(&t, "r2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    bugfix_commit(&t, "C01", "T01", "repro.txt", 2).await;
+    assert!(matches!(&get(&t).await.gate, Some(Gate::Commit(_))));
+
+    let spec = t.wt.path().join(".xherd/spec");
+    std::fs::write(
+        spec.join("spec.md"),
+        "---\nflow: bugfix\n---\n# Bug, edited\n",
+    )
+    .unwrap();
+    xap(&t, "r3", "tasks.sync", json!({})).await.unwrap();
+
+    let tasks = std::fs::read_to_string(spec.join("tasks.md")).unwrap();
+    std::fs::write(
+        spec.join("tasks.md"),
+        format!("{tasks}\n## T03: More\n- status: todo\n- files: `more.txt`\n- depends: none\n"),
+    )
+    .unwrap();
+    let e = xap(&t, "r4", "tasks.sync", json!({})).await.unwrap_err();
+    assert_eq!(e.code, "tasks_approved");
+}
+
+#[tokio::test]
+async fn autonomy_never_approves_the_analysis_but_approves_a_bugfix_commit() {
+    let t = setup_flow("bugfix").await;
+    act(&t, level("important")).await.unwrap();
+    bugfix_analysis(&t).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_some() && a.status == Status::WaitingInput);
+    assert!(ledger_lines(&t).is_empty(), "the analysis is critical");
+    act(&t, approve(None)).await.unwrap();
+
+    xap(&t, "r1", "stage.enter", json!({"stage": "reproduce"}))
+        .await
+        .unwrap();
+    xap(&t, "r2", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    bugfix_commit(&t, "C01", "T01", "repro.txt", 2).await;
+    let a = get(&t).await;
+    assert!(a.gate.is_none(), "{:?}", a.gate);
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:commit C01"));
+    assert!(
+        ledger_lines(&t)
+            .iter()
+            .any(|l| l["auto"].as_bool() == Some(true) && l["gate"].as_str() == Some("commit C01")),
+        "{:?}",
+        ledger_lines(&t)
+    );
 }
 
 // ---- Resolve conflicts (#139) ------------------------------------------------

@@ -21,7 +21,9 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    templates, pick the fitting one and name its `path` in the frontmatter.
 4. Write `.xherd/spec/pr.md` in the pr format: the template's headings first,
    the essentials (summary, requirements covered, key decisions, testing,
-   assumptions) placed in them. It becomes the pull request's body, so it
+   assumptions) placed in them. For a bug fix (`flow: bugfix` in `spec.md`),
+   name the reproduction test and how it failed before the fix (from the
+   evidence of `T01` in `tasks.md`). It becomes the pull request's body, so it
    holds only what belongs there; do not update the ticket yourself: xherd
    offers the user a summary to post once the PR is open.
 5. `xherd gate open ship`, then stop and wait for the user.

@@ -206,6 +206,22 @@ async fn refusals_leave_nothing_behind() {
 }
 
 #[tokio::test]
+async fn a_bugfix_agent_starts_with_the_bugfix_command() {
+    let t = setup().await;
+    let mut r = req(&t, "SC-5");
+    r.flow = Some("bugfix".into());
+    let a = t.d.new_agent(r).await.unwrap();
+    assert_eq!(
+        (a.pack.as_deref(), a.flow.as_deref()),
+        (Some("xherd"), Some("bugfix"))
+    );
+    assert_eq!(
+        a.next_prompt.as_deref(),
+        Some("/xherd:bugfix SC-5 add login")
+    );
+}
+
+#[tokio::test]
 async fn flow_none_and_origin_base() {
     let t = setup().await;
     // A clone whose origin/HEAD points at main.

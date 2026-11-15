@@ -10,6 +10,8 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
 2. Check `git status` and `git log` against `commits.md` and `tasks.md`.
 3. Continue the current stage with its command: read its file and follow it
    (`{{prefix}}design`: `{{path:design}}`, `{{prefix}}tasks`: `{{path:tasks}}`,
+   for a bug fix the `analysis` stage `{{prefix}}bugfix`: `{{path:bugfix}}` and
+   `{{prefix}}reproduce`: `{{path:reproduce}}`,
    `{{prefix}}next`: `{{path:next}}`, `{{prefix}}review`: `{{path:review}}`,
    `{{prefix}}ship`: `{{path:ship}}`). If the stage waits at a gate that is not
    approved yet, declare it again and stop.
