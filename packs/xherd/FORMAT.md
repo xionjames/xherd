@@ -65,6 +65,51 @@ local, changes no data model, API, configuration or dependency, touches
 nothing security- or concurrency-sensitive, and has one obvious approach.
 Approving the spec approves the skip.
 
+### spec.md for a bug (flow `bugfix`)
+
+The analysis of a bug fix. It has no design step: it is approved together
+with `tasks.md` at the analysis gate.
+
+```markdown
+---
+ticket: SC-12
+flow: bugfix
+stage: analysis
+---
+# <What goes wrong>
+
+## Symptom
+What the user sees, with the error or wrong output.
+
+## Steps to reproduce
+1. …
+
+## Root cause
+Where and why it happens (`file:line`). When unsure: the best hypothesis,
+how sure you are, and what would confirm it.
+
+## Fix approach
+What will change, and why there.
+
+## Reproduction test
+The test file, what the test asserts, and the one command that runs it.
+
+## Requirements
+- R1: When …, the system shall … (the expected behaviour)
+
+## Acceptance
+How each requirement is checked; the reproduction test passes.
+
+## Out of scope
+What this fix does not do.
+
+## Open questions
+- … one list item per question (or "None.")
+
+## Assumptions
+- …
+```
+
 ## design.md
 
 Frontmatter as above (`stage: design`). Sections: `## Approach`,
@@ -120,6 +165,12 @@ stage: tasks
 | `contract` | optional: verified `file:line` references the task relies on, and things that do not exist yet |
 
 Keep tasks small: one task is one commit.
+
+In a bug fix (flow `bugfix`, `stage: analysis`), `T01` adds the reproduction
+test: its `files` are the test files only, and it has **no `verify`** (the
+test fails until the fix). The fix tasks come after it (`depends: T01`):
+their `files` never include the test files of `T01`, and their `verify` is
+the reproduction command, which passes once the bug is fixed.
 
 `status` and `evidence` are progress, not content: xherd writes them when you
 start, finish or block a task, so do not edit them, and they never

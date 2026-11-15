@@ -15,7 +15,9 @@ run a sub-agent with a fresh context, give it this review to do.
    `git diff <base>...HEAD`.
 3. Check every requirement is met and tested, look for bugs, missing error
    handling, security problems, leftovers (debug output, TODOs), and run the
-   repository's tests and linters.
+   repository's tests and linters. For a bug fix (`flow: bugfix` in
+   `spec.md`), check that the reproduction test it names is on the branch and
+   passes, and say so under `## Tests`.
 4. Write each finding as `### F01: title` with `- severity:`, `- location:`
    and, once it has a task, `- fixed: T05` (the review format in the
    rules). Each finding that must be fixed becomes a new task in

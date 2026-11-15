@@ -521,6 +521,48 @@ mod tests {
         assert_eq!(f.stage("design").unwrap().docs(), ["design.md"]);
         assert_eq!(f.after("ship").unwrap().id, "pr-review");
         assert_eq!(p.install["claude-code"].slash_enters, 1);
+        assert!(f.stages.iter().all(|s| s.label.is_none()));
+
+        let b = p.flow("bugfix").unwrap();
+        assert_eq!(b.start, "{prefix}bugfix {key} {prompt}");
+        let stages: Vec<(&str, Role, Class)> = b
+            .stages
+            .iter()
+            .map(|s| (s.id.as_str(), s.role, s.class))
+            .collect();
+        assert_eq!(
+            stages,
+            [
+                ("analysis", Role::Spec, Class::Critical),
+                ("reproduce", Role::Implement, Class::Code),
+                ("implement", Role::Implement, Class::Code),
+                ("review", Role::Review, Class::Routine),
+                ("ship", Role::Ship, Class::Critical),
+                ("pr-review", Role::Pr, Class::HumanOnly),
+                ("pr", Role::Pr, Class::HumanOnly),
+            ]
+        );
+        let analysis = b.stage("analysis").unwrap();
+        assert_eq!(analysis.docs(), ["spec.md", "tasks.md"]);
+        assert!(analysis.gates_tasks());
+        assert_eq!(
+            analysis.next_template(&F::default(), false),
+            Some("{prefix}reproduce")
+        );
+        let commits: Vec<&str> = b
+            .stages
+            .iter()
+            .filter(|s| s.is_commit_gate())
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(commits, ["reproduce", "implement"]);
+        assert_eq!(b.stage("implement").unwrap().label.as_deref(), Some("Fix"));
+        assert_eq!(
+            b.stage("implement").unwrap().then.as_deref(),
+            Some("review")
+        );
+        assert_eq!(b.commit_stage(Some("reproduce")).unwrap().id, "reproduce");
+        assert_eq!(b.commit_stage(Some("analysis")).unwrap().id, "reproduce");
     }
 
     #[test]

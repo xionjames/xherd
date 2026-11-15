@@ -18,7 +18,10 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
 6. Implement it, changing only the files listed in its `files`. If it needs
    another file, do not edit the approved `tasks.md`: change the file, list
    it in the commit proposal and say why in `--message`; xherd holds that
-   commit for the user. If the task cannot be done, run
+   commit for the user. In a bug fix, never change, weaken or delete the
+   reproduction test (the files of `T01`) to make it pass; if the test itself
+   is wrong, say why with `xherd ask "The reproduction test expects the old error text: may I change it?"`
+   and stop. If the task cannot be done, run
    `xherd task block T01 --reason "The API has no endpoint for this"`
    and stop.
 7. Verify: run its `verify` command and the relevant tests. Fix until green.
