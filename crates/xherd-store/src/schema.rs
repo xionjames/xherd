@@ -23,4 +23,16 @@ CREATE TABLE worklog     (day TEXT NOT NULL, ticket_key TEXT NOT NULL, kind TEXT
 CREATE TABLE budgets     (scope TEXT NOT NULL, day TEXT NOT NULL, tokens INTEGER NOT NULL, cost_micros INTEGER, PRIMARY KEY (scope, day));
 CREATE TABLE memory_declined (repo TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY (repo, path));
 "#,
+    // 2: an agent became a job (issue #141): `agents` -> `jobs`, `agent_id` -> `job_id`.
+    // Rows, keys and indexes are kept (SQLite renames them in place).
+    r#"
+ALTER TABLE agents RENAME TO jobs;
+ALTER TABLE events RENAME COLUMN agent_id TO job_id;
+ALTER TABLE notes RENAME COLUMN agent_id TO job_id;
+ALTER TABLE approvals RENAME COLUMN agent_id TO job_id;
+ALTER TABLE reviewed RENAME COLUMN agent_id TO job_id;
+ALTER TABLE diff_viewed RENAME COLUMN agent_id TO job_id;
+DROP INDEX events_agent;
+CREATE INDEX events_job ON events(job_id, at);
+"#,
 ];

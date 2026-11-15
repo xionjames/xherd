@@ -80,6 +80,40 @@ pub struct Store {
 
 const READERS: usize = 4;
 
+/// Writes a database as migration 1 left it (tables `agents`, column
+/// `agent_id`) holding `job`, one `user.pause` event and one approval of
+/// `spec.md` with hash `h`. For tests of the migration to jobs (issue #141).
+#[doc(hidden)]
+pub fn write_version_1_database(db: &Path, job: &Job) -> Result<()> {
+    let mut c = Connection::open(db)?;
+    Migrations::new(vec![M::up(schema::MIGRATIONS[0])])
+        .to_latest(&mut c)
+        .map_err(|source| StoreError::Migration {
+            backup: None,
+            source,
+        })?;
+    let data = serde_json::to_string(job).map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+    c.execute(
+        "INSERT INTO agents (id, name, status, created_at, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            job.id,
+            job.name,
+            job.status.to_string(),
+            job.created_at,
+            data
+        ],
+    )?;
+    c.execute(
+        "INSERT INTO events (id, agent_id, kind, payload, at) VALUES ('e1', ?1, 'user.pause', NULL, 5)",
+        [&job.id],
+    )?;
+    c.execute(
+        "INSERT INTO approvals (agent_id, file, sha256, at, actor, auto) VALUES (?1, 'spec.md', 'h', 5, 'user', 0)",
+        [&job.id],
+    )?;
+    Ok(())
+}
+
 fn migrations() -> Migrations<'static> {
     Migrations::new(schema::MIGRATIONS.iter().map(|sql| M::up(sql)).collect())
 }
@@ -243,7 +277,7 @@ impl Store {
         );
         self.write(move |c| {
             c.execute(
-                "INSERT INTO agents (id, name, status, created_at, data) VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO jobs (id, name, status, created_at, data) VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(id) DO UPDATE SET name = excluded.name, status = excluded.status, data = excluded.data",
                 params![id, name, status, created, data],
             )?;
@@ -256,7 +290,7 @@ impl Store {
         let id = id.to_string();
         self.read(move |c| {
             let data: Option<String> = c
-                .query_row("SELECT data FROM agents WHERE id = ?1", [id], |r| r.get(0))
+                .query_row("SELECT data FROM jobs WHERE id = ?1", [id], |r| r.get(0))
                 .optional()?;
             Ok(data
                 .map(|d| serde_json::from_str::<Job>(&d))
@@ -268,7 +302,7 @@ impl Store {
 
     pub async fn list_jobs(&self) -> Result<Vec<Job>> {
         self.read(|c| {
-            let mut st = c.prepare("SELECT data FROM agents ORDER BY created_at, id")?;
+            let mut st = c.prepare("SELECT data FROM jobs ORDER BY created_at, id")?;
             let rows = st.query_map([], |r| r.get::<_, String>(0))?;
             let mut out = Vec::new();
             for d in rows {
@@ -284,9 +318,9 @@ impl Store {
         self.write(move |c| {
             let tx = c.transaction()?;
             for t in ["events", "notes", "approvals", "reviewed", "diff_viewed"] {
-                tx.execute(&format!("DELETE FROM {t} WHERE agent_id = ?1"), [&id])?;
+                tx.execute(&format!("DELETE FROM {t} WHERE job_id = ?1"), [&id])?;
             }
-            tx.execute("DELETE FROM agents WHERE id = ?1", [&id])?;
+            tx.execute("DELETE FROM jobs WHERE id = ?1", [&id])?;
             tx.commit()?;
             Ok(())
         })
@@ -300,7 +334,7 @@ impl Store {
         let (a, f, h) = (job_id.to_string(), file.to_string(), sha256.to_string());
         self.read(move |c| {
             Ok(c.query_row(
-                "SELECT 1 FROM approvals WHERE agent_id = ?1 AND file = ?2 AND sha256 = ?3",
+                "SELECT 1 FROM approvals WHERE job_id = ?1 AND file = ?2 AND sha256 = ?3",
                 params![a, f, h],
                 |_| Ok(()),
             )
@@ -314,7 +348,7 @@ impl Store {
     pub async fn insert_approval(&self, r: Approval) -> Result<()> {
         self.write(move |c| {
             c.execute(
-                "INSERT OR IGNORE INTO approvals (agent_id, file, sha256, at, actor, auto, reason)
+                "INSERT OR IGNORE INTO approvals (job_id, file, sha256, at, actor, auto, reason)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![r.job_id, r.file, r.sha256, r.at, r.actor, r.auto, r.reason],
             )?;
@@ -327,7 +361,7 @@ impl Store {
     pub async fn approved_files(&self, job_id: &str) -> Result<BTreeSet<String>> {
         let a = job_id.to_string();
         self.read(move |c| {
-            let mut st = c.prepare("SELECT DISTINCT file FROM approvals WHERE agent_id = ?1")?;
+            let mut st = c.prepare("SELECT DISTINCT file FROM approvals WHERE job_id = ?1")?;
             let rows = st.query_map([a], |r| r.get::<_, String>(0))?;
             Ok(rows.collect::<rusqlite::Result<BTreeSet<String>>>()?)
         })
@@ -367,8 +401,8 @@ impl Store {
         let (a, f, t) = (job_id.to_string(), file.to_string(), text.to_string());
         self.write(move |c| {
             c.execute(
-                "INSERT INTO reviewed (agent_id, file, text) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(agent_id, file) DO UPDATE SET text = excluded.text",
+                "INSERT INTO reviewed (job_id, file, text) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(job_id, file) DO UPDATE SET text = excluded.text",
                 params![a, f, t],
             )?;
             Ok(())
@@ -380,7 +414,7 @@ impl Store {
         let (a, f) = (job_id.to_string(), file.to_string());
         self.read(move |c| {
             Ok(c.query_row(
-                "SELECT text FROM reviewed WHERE agent_id = ?1 AND file = ?2",
+                "SELECT text FROM reviewed WHERE job_id = ?1 AND file = ?2",
                 params![a, f],
                 |r| r.get(0),
             )
@@ -406,12 +440,12 @@ impl Store {
         self.write(move |c| {
             match f {
                 Some(f) => c.execute(
-                    "INSERT INTO diff_viewed (agent_id, path, fingerprint) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(agent_id, path) DO UPDATE SET fingerprint = excluded.fingerprint",
+                    "INSERT INTO diff_viewed (job_id, path, fingerprint) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(job_id, path) DO UPDATE SET fingerprint = excluded.fingerprint",
                     params![a, p, f],
                 )?,
                 None => c.execute(
-                    "DELETE FROM diff_viewed WHERE agent_id = ?1 AND path = ?2",
+                    "DELETE FROM diff_viewed WHERE job_id = ?1 AND path = ?2",
                     params![a, p],
                 )?,
             };
@@ -425,7 +459,7 @@ impl Store {
         let a = job_id.to_string();
         self.read(move |c| {
             let mut st =
-                c.prepare("SELECT path, fingerprint FROM diff_viewed WHERE agent_id = ?1")?;
+                c.prepare("SELECT path, fingerprint FROM diff_viewed WHERE job_id = ?1")?;
             let rows = st.query_map([a], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
             })?;
@@ -555,16 +589,28 @@ impl Store {
         let k = kind.to_string();
         self.read(move |c| {
             let mut st = c.prepare(
-                "SELECT id, agent_id, kind, payload, at FROM events WHERE kind = ?1 ORDER BY at, id",
+                "SELECT id, job_id, kind, payload, at FROM events WHERE kind = ?1 ORDER BY at, id",
             )?;
             let rows = st.query_map([k], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, Option<String>>(3)?, r.get(4)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get(4)?,
+                ))
             })?;
             let mut out = Vec::new();
             for row in rows {
                 let (id, job_id, kind, payload, at) = row?;
                 let payload = payload.map(|p| serde_json::from_str(&p)).transpose()?;
-                out.push(Event { id, job_id, kind, payload, at });
+                out.push(Event {
+                    id,
+                    job_id,
+                    kind,
+                    payload,
+                    at,
+                });
             }
             Ok(out)
         })
@@ -653,7 +699,7 @@ impl Store {
         let payload = e.payload.as_ref().map(serde_json::to_string).transpose()?;
         self.write(move |c| {
             let n = c.execute(
-                "INSERT OR IGNORE INTO events (id, agent_id, kind, payload, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT OR IGNORE INTO events (id, job_id, kind, payload, at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![e.id, e.job_id, e.kind, payload, e.at],
             )?;
             Ok(n == 1)
@@ -689,7 +735,7 @@ impl Store {
         let id = job_id.to_string();
         self.read(move |c| {
             let mut st = c.prepare(
-                "SELECT id, agent_id, kind, payload, at FROM events WHERE agent_id = ?1 ORDER BY at DESC, id DESC LIMIT ?2",
+                "SELECT id, job_id, kind, payload, at FROM events WHERE job_id = ?1 ORDER BY at DESC, id DESC LIMIT ?2",
             )?;
             let rows = st.query_map(params![id, limit as i64], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, Option<String>>(3)?, r.get(4)?))
@@ -710,7 +756,7 @@ impl Store {
     pub async fn auto_approvals(&self, limit: usize) -> Result<Vec<Event>> {
         self.read(move |c| {
             let mut st = c.prepare(
-                "SELECT id, agent_id, kind, payload, at FROM events
+                "SELECT id, job_id, kind, payload, at FROM events
                  WHERE kind = 'approval' AND json_extract(payload, '$.auto') = 1
                  ORDER BY at DESC, id DESC LIMIT ?1",
             )?;
@@ -760,7 +806,7 @@ impl Store {
         let (a, k) = (job_id.to_string(), kind.to_string());
         self.read(move |c| {
             Ok(c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM events WHERE agent_id = ?1 AND kind = ?2)",
+                "SELECT EXISTS(SELECT 1 FROM events WHERE job_id = ?1 AND kind = ?2)",
                 [a, k],
                 |r| r.get(0),
             )?)
@@ -880,6 +926,62 @@ mod tests {
         let v = s.viewed("a").await.unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(v["x.rs"], "3");
+    }
+
+    /// Migration 2 (issue #141): a version-1 database keeps every row under
+    /// the new table and column names.
+    #[tokio::test]
+    async fn migration_2_renames_agents_to_jobs_and_keeps_rows() {
+        let d = tempfile::tempdir().unwrap();
+        let (db, backups) = (d.path().join("x.db"), d.path().join("backups"));
+        let job = Job::new("SC-1", 1);
+        {
+            let mut c = Connection::open(&db).unwrap();
+            let v1 = Migrations::new(vec![M::up(schema::MIGRATIONS[0])]);
+            v1.to_latest(&mut c).unwrap();
+            let data = serde_json::to_string(&job).unwrap();
+            let id = &job.id;
+            for sql in [
+                format!(
+                    "INSERT INTO agents VALUES ('{id}', 'SC-1', 'queued', 1, '{}')",
+                    data.replace('\'', "''")
+                ),
+                format!("INSERT INTO events VALUES ('e1', '{id}', 'report.stop', NULL, 5)"),
+                format!("INSERT INTO notes VALUES (1, '{id}', 'n', 5)"),
+                format!(
+                    "INSERT INTO approvals VALUES ('{id}', 'spec.md', 'h', 5, 'user', 0, NULL)"
+                ),
+                format!("INSERT INTO reviewed VALUES ('{id}', 'spec.md', 'text')"),
+                format!("INSERT INTO diff_viewed VALUES ('{id}', 'a.rs', 'fp')"),
+            ] {
+                c.execute(&sql, []).unwrap();
+            }
+        }
+        let s = Store::open(&db, &backups).unwrap();
+        assert!(
+            backups.read_dir().unwrap().next().is_some(),
+            "pre-migrate copy"
+        );
+        assert_eq!(s.get_job(&job.id).await.unwrap(), Some(job.clone()));
+        let ev = s.events(&job.id, 10).await.unwrap();
+        assert_eq!((ev.len(), ev[0].job_id.as_str()), (1, job.id.as_str()));
+        assert!(s.approved(&job.id, "spec.md", "h").await.unwrap());
+        assert_eq!(
+            s.reviewed(&job.id, "spec.md").await.unwrap().as_deref(),
+            Some("text")
+        );
+        assert_eq!(s.viewed(&job.id).await.unwrap()["a.rs"], "fp");
+        let c = Connection::open(&db).unwrap();
+        let n: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE job_id = ?1",
+                [&job.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        s.delete_job(&job.id).await.unwrap();
+        assert!(s.events(&job.id, 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -825,3 +825,23 @@ async fn concurrent_secret_saves_keep_each_other() {
     assert_eq!(s.for_plugin("github")["token"], "p39");
     assert_eq!(s.git_token("git.example.com").as_deref(), Some("g39"));
 }
+
+/// Migration 2 (issue #141): a database written before the rename opens, its
+/// job resumes and its history (events, approvals) is still there.
+#[tokio::test]
+async fn a_version_1_database_opens_and_its_job_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::at(dir.path());
+    paths.ensure().unwrap();
+    let mut job = agent("SC-1", 1);
+    job.status = Status::Paused;
+    xherd_store::write_version_1_database(&paths.db(), &job).unwrap();
+    let t = daemon_with(dir, 4, |_| {}).await;
+    assert_eq!(status(&t.d, "SC-1").await, Status::Paused);
+    t.d.action("SC-1", UserAction::Resume).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
+    assert!(t.d.store.approved(&job.id, "spec.md", "h").await.unwrap());
+    let ev = t.d.store.events(&job.id, 20).await.unwrap();
+    assert!(ev.iter().any(|e| e.kind == "user.pause"));
+    assert!(ev.iter().any(|e| e.kind == "user.resume"));
+}

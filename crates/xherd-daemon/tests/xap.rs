@@ -218,7 +218,7 @@ async fn already_approved_and_bad_frontmatter() {
     t.d.store
         .write(move |c| {
             c.execute(
-                "INSERT INTO approvals (agent_id, file, sha256, at, actor, auto) VALUES (?1, 'spec.md', ?2, 0, 'user', 0)",
+                "INSERT INTO approvals (job_id, file, sha256, at, actor, auto) VALUES (?1, 'spec.md', ?2, 0, 'user', 0)",
                 [&id, &sha],
             )?;
             Ok(())
