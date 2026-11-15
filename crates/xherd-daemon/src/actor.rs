@@ -3557,13 +3557,8 @@ async fn local_mergeable(
     agent_base: Option<&str>,
 ) -> xherd_core::pr::Mergeable {
     use xherd_core::pr::Mergeable;
-    let Some(base) = host_base.or(agent_base) else {
+    let Some(base) = xherd_core::pr::base_ref(host_base, agent_base) else {
         return Mergeable::Unknown;
-    };
-    let base = if base.starts_with("origin/") {
-        base.to_string()
-    } else {
-        format!("origin/{base}")
     };
     if let Err(e) = git.fetch(wd, "origin").await {
         tracing::warn!(error = %e, "fetch for the merge check failed");
