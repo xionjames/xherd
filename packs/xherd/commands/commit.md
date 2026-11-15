@@ -24,5 +24,8 @@ user left it). You record it, or fix it when git refused.
    `git show --name-only --format= HEAD` lists the proposal's files.
 4. Report it: `xherd commit done C01 --sha 3f2a9c1` (harmless when xherd
    already recorded it).
-5. Continue: follow the command in `{{path:next}}` (next task, or the review
-   when every task is done).
+5. If `HEAD` is a merge commit (`git rev-parse -q --verify HEAD^2` succeeds),
+   it merged the base branch: continue with step 9 of `{{path:conflicts}}`
+   (push and stop) instead.
+6. Otherwise continue: follow the command in `{{path:next}}` (next task, or
+   the review when every task is done).
