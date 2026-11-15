@@ -23,7 +23,7 @@ by theme; update it together with them.
 - [x] Open questions read from the gate documents' `## Open questions` section and answered as inline comments on their list items, sent with the other comments (R-105a)
 - [x] Board (tasks of all agents by status) and Review with "Mark seen"; the notification bell is in
 - [x] Time (work log: agent and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
-- [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (agent, repository) and TODO cards; the Herd's By stage layout (agents in columns by role); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
+- [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (agent, repository, workflow) and TODO cards; the Herd's By stage layout (agents in their flow's stage columns, a lane per workflow); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
 - [ ] Board cards declared by packs and profiles (R-1101), checks for runtimes other than Claude Code (they need a `check` command in their plugin)
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [x] Plugin secrets from the UI (write-only, live)
@@ -65,6 +65,8 @@ by theme; update it together with them.
 - [ ] Measure the token savings per step; validate the size and accuracy of the code map
 - [ ] Pack JSON schemas for gate documents (R-204); `views`, `extends`, `parse` for external packs
 - [ ] Loading external flow packs (only the built-in pack loads today) and dynamic flows, so an SDD that makes XAP calls gets gates without a pack of its own (`doc/extend/integrate-your-sdd.md`)
+- [x] `bugfix` flow in the built-in pack: analysis, a failing reproduction test committed first, then the fix (#142); the Herd's By stage lanes per workflow and the Board's lanes by workflow
+- [ ] `hotfix` flow (like bugfix, based on the profile's `hotfixBase`, ship always human)
 - [ ] More flow packs: PR review, research/design; multi-repo tickets
 - [x] `xherd memory propose` and the Shared memory tab (AGENTS.md, #65)
 

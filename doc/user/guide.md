@@ -10,9 +10,9 @@ You give xherd a ticket. It creates an **agent**: a git worktree and a branch fo
 
 | Screen | What it is for |
 |---|---|
-| **Herd** (home) | Every agent: status, stage, progress, tasks. Agents waiting for you are on top. *By stage* puts them in columns by the role of their current stage; *Tiles* (a view plugin) and other [Herd view plugins](../extend/plugins.md#herd-view-plugins) add more layouts. *Pause all* is the kill switch |
+| **Herd** (home) | Every agent: status, stage, progress, tasks. Agents waiting for you are on top. *By stage* puts them in columns by their current stage, using their workflow's stages (one lane per workflow when the agents shown use more than one); *Tiles* (a view plugin) and other [Herd view plugins](../extend/plugins.md#herd-view-plugins) add more layouts. *Pause all* is the kill switch |
 | **Agent page** | One agent: the your-call band on top, then tabs (below) |
-| **Board** | Every stage and task of every agent as cards in Pending / In progress / Done, plus your TODOs. Swimlanes by agent or repository, filters for one agent, one repository, or only what needs you |
+| **Board** | Every stage and task of every agent as cards in Pending / In progress / Done, plus your TODOs. Swimlanes by agent, repository or workflow, filters for one agent, one repository, or only what needs you |
 | **Needs attention** (✋ and a count in the bar) | Agents waiting for you and TODOs that are due or whose check failed: only these raise the ✋ and the count. Below them, folded, *Approved by xherd*: the approvals xherd made for you that you have not marked seen, each linking to what was approved |
 | **TODOs** | Reminders and condition checks (below) |
 | **Time** | Agent time and your time per day and ticket, cycle time, review rounds and rework |
@@ -35,7 +35,7 @@ The **Welcome** screen opens by itself the first time, in six steps: Welcome, Pl
 
 **New agent** (or `xherd new`) asks for:
 
-- a **name** (`refund-retry`: lowercase letters, digits and `-`), which is what the UI shows, the tmux session and the worktree folder, and the **workflow** (`feature`, or *No workflow* for a plain session with your instructions and no gates);
+- a **name** (`refund-retry`: lowercase letters, digits and `-`), which is what the UI shows, the tmux session and the worktree folder, and the **workflow** (`feature`, `bugfix`, or *No workflow* for a plain session with your instructions and no gates; see [Picking a workflow](#picking-a-workflow));
 - optionally a **ticket**: an issue URL or a key (`PROJ-123`, `#12`). The form says which tracker reads it; its key starts the branch name (`PROJ-123-refund-retry`), and it shows as a label beside the name. A URL no tracker reads is kept as a link;
 - the **repository**: a path inside the workspace, or a URL, cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use, and optionally the **base branch**;
 - the **instructions** (required with *No workflow*);
@@ -57,6 +57,23 @@ The built-in `feature` flow goes through these stages. Each ends at a gate where
 | ship | `pr.md` | The branch as it will be pushed, and the PR text. The agent then pushes and opens a **draft** pull request |
 | pr-review | `pr-review.md` | Its decision on each new PR comment (fix, reply, skip). Always yours to approve |
 
+## The bugfix flow
+
+The built-in `bugfix` flow is for a defect: find the cause, prove it with a failing test, then fix it.
+
+| Stage | Gate | You review |
+|---|---|---|
+| analysis | `spec.md` and `tasks.md`, one gate | The symptom, steps to reproduce, root cause, fix approach and the test that will reproduce it; the task list (T01 = that test, then the fix tasks). The agent changes no repository files here |
+| reproduce | a commit proposal with the test only | The new test and, under *Tasks in this commit*, the evidence that it fails today for the reason the analysis gives. When no automated test is practical, the agent asks you and goes on without one only if you agree |
+| implement (shown as *Fix*) | a commit proposal per fix task | The fix. Each fix task's `verify:` is the reproduction command: xherd runs it, and the task cannot be marked done while it fails |
+| review, ship, pr-review | as in the feature flow | The PR text also names the reproduction test and how it failed before the fix |
+
+### Picking a workflow
+
+Use **feature** for new behaviour or a change that needs a spec and a design; **bugfix** when something that should work does not and a test can show it; **No workflow** for a plain session with no documents and no gates. The workflow is chosen when the agent is created (`xherd new --flow bugfix`) and stays for its life.
+
+## Sessions and memory
+
 Every stage starts a **fresh session** of the runtime. What carries over is `.xherd/spec/memory.md` (state, decisions, a code map, things to watch out for), which each step reads first and rewrites before its gate.
 
 ## Gates and reviews
@@ -64,7 +81,7 @@ Every stage starts a **fresh session** of the runtime. What carries over is `.xh
 When an agent stops at a gate, the **your-call band** on its page says what it waits for, with **Approve** and **Request changes** on the tab that holds what you approve.
 
 - **Documents** (the *Spec* tab) render Markdown, with Mermaid diagrams drawn. Click any block, or a list item, to comment on it. Questions the agent lists under `## Open questions` get an answer box each. After a change request, the blocks that changed since you read them are marked.
-- **Changes** shows diffs. The side column lists the files of the diff shown, with their +/− counts and a box that filters the list by path; clicking a file jumps to it (on a phone the list is folded behind *Files (N)* above the diff). Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*. A new or changed file over 8 MiB that is not committed yet (a heap dump, a build artefact) is listed with its size but not read.
+- **Changes** shows diffs. For a commit waiting for you, the side column starts with *Tasks in this commit*: each task's id, title and the evidence the agent gave (for a bug fix, the failing then passing test run). Below it, the side column lists the files of the diff shown, with their +/− counts and a box that filters the list by path; clicking a file jumps to it (on a phone the list is folded behind *Files (N)* above the diff). Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*. A new or changed file over 8 MiB that is not committed yet (a heap dump, a build artefact) is listed with its size but not read.
 - **Send N comments** sends every comment, from documents and diffs, as one change request.
 - **Approve** covers exactly what you read: the UI sends the hash of what it showed, and if a file changed since, the approval is refused. Editing an approved document re-opens its gate.
 - At a commit gate you can edit the commit message before approving. If git refuses the commit (a hook fails), the agent is asked to fix it.

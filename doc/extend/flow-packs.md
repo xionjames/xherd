@@ -39,6 +39,12 @@ Each stage has an `id`, a `role` (`explore`, `spec`, `design`, `tasks`, `impleme
 - **`class`**: `routine`, `critical`, `code` or `human-only`. Autonomy decides from it: `ask` approves nothing; `important` approves `routine` and `code` gates when no tripwire holds them; `critical` and `human-only` always wait. A stage with role `pr` is human-only whatever the manifest says.
 - **`next`**: the command typed after approval, from a fixed vocabulary of conditions. `{prefix}`, `{key}`, `{prompt}`, `{commit}` and similar placeholders are filled in; `${…}` is left for the shell.
 - **`loopUntil` / `then`**: repeat a stage until a condition (for example all tasks done), then move on.
+- **`label`** (optional, 1–40 characters): the name the UI shows for the stage instead of one made from its `id`. The built-in `bugfix` flow keeps the id `implement` for its fix stage, which the shared prompts enter, and labels it `Fix`.
+
+Rules that follow from the stages:
+
+- **The task list** is `tasks.md` wherever it is gated: in a stage with role `tasks`, or in any stage whose `gate.docs` lists `tasks.md` (the bugfix `analysis` stage gates `spec.md` and `tasks.md` together). Its progress lines and the fix tasks a review or PR round adds never re-open that gate, and editing it after approval does.
+- **Several commit stages**: a flow may have more than one stage with `{kind: commit}` (bugfix: `reproduce`, then `implement`). A commit proposal belongs to the agent's current stage when that stage gates commits, else to the first one that does; that stage's `next` and `class` apply when it is approved.
 
 ## Command prompts
 
@@ -56,4 +62,4 @@ Each file in `commands/` becomes a runtime command (`/xherd:design`, …). Conve
 
 ## Limits today
 
-Only the built-in `xherd` pack and its `feature` flow ship, and xherd cannot load another pack yet (`xherd install --pack` accepts only `xherd`). Editing the installed command files works: `xherd install` keeps your edits (above). Fields not implemented yet (`views`, `extends`, `parse`, …) are rejected by the manifest parser instead of being silently ignored. A new file in `packs/xherd/` must also be added to `xherd_flow::install::BUILTIN_FILES`.
+Only the built-in `xherd` pack and its `feature` and `bugfix` flows ship, and xherd cannot load another pack yet (`xherd install --pack` accepts only `xherd`). Editing the installed command files works: `xherd install` keeps your edits (above). Fields not implemented yet (`views`, `extends`, `parse`, …) are rejected by the manifest parser instead of being silently ignored. A new file in `packs/xherd/` must also be added to `xherd_flow::install::BUILTIN_FILES`.
