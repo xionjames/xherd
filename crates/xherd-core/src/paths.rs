@@ -79,6 +79,10 @@ impl Paths {
     pub fn backups(&self) -> PathBuf {
         self.root.join("backups")
     }
+    /// What the `xherd-term` link handler last reported (R-707).
+    pub fn terminal_handler(&self) -> PathBuf {
+        self.root.join("terminal-handler.json")
+    }
     pub fn plugin_config(&self, name: &str) -> PathBuf {
         self.root.join("plugin-config").join(name)
     }

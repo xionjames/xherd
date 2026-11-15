@@ -168,8 +168,9 @@ enum Cmd {
     Attach { agent: String },
     /// A shell in an agent's worktree (in the container when xherd runs in Docker).
     Shell { agent: String },
-    /// Run Open-in requests from the browser with this computer's apps.
-    Companion,
+    /// Register the xherd-term:// link that opens a terminal in a worktree.
+    #[command(subcommand)]
+    TerminalHandler(TerminalHandlerCmd),
     /// Toolchains of the current worktree (R-652).
     #[command(subcommand)]
     Toolchain(ToolchainCmd),
@@ -305,6 +306,14 @@ enum GuardCmd {
         #[arg(trailing_var_arg = true)]
         _git: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum TerminalHandlerCmd {
+    /// Install (or update) the handler for this user, for the daemon's worktrees.
+    Install,
+    /// Remove the handler and its registration.
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -445,7 +454,8 @@ fn main() -> ExitCode {
         Cmd::Open { agent, app } => with_client(|c| open_in::open(c, &agent, app)),
         Cmd::Attach { agent } => with_client(|c| open_in::attach(c, &agent, false)),
         Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),
-        Cmd::Companion => with_client(open_in::companion),
+        Cmd::TerminalHandler(TerminalHandlerCmd::Install) => open_in::terminal_handler(false),
+        Cmd::TerminalHandler(TerminalHandlerCmd::Uninstall) => open_in::terminal_handler(true),
         Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
         Cmd::Security(SecurityCmd::Check) => with_client(security_check),
         Cmd::Backup(BackupCmd::Create { to }) => backup::create(to),

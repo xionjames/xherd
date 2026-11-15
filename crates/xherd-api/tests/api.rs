@@ -1038,3 +1038,234 @@ async fn opaque_origin_gets_no_rights() {
     assert_eq!(plugin("my-view")["view"], json!({"entry": "index.html"}));
     assert!(plugin("github").get("view").is_none());
 }
+
+#[tokio::test]
+async fn companion_routes_are_gone() {
+    let (_dir, d, _a) = setup().await;
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    // Now only the generic action route matches: no such action.
+    let req = Request::post("/api/v1/agents/SC-1/open")
+        .header("host", "127.0.0.1:4740")
+        .body(Body::empty())
+        .unwrap();
+    let (s, v) = call(local.clone(), req).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_action"))
+    );
+    let req = get("/api/v1/companion/next?wait=0")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local.clone(), req).await.0, StatusCode::NOT_FOUND);
+
+    // The test agent has no worktree.
+    let req = get("/api/v1/agents/SC-1/open-targets")
+        .body(Body::empty())
+        .unwrap();
+    let (s, v) = call(local, req).await;
+    assert!(s.is_client_error(), "{s}");
+    assert_eq!(v["code"], "no_workspace");
+}
+
+fn post_json(uri: &str, body: Value) -> Request<Body> {
+    Request::post(uri)
+        .header("host", "127.0.0.1:4740")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn terminal_handler_script_is_served_for_the_host() {
+    let (dir, d, _a) = setup().await;
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let (s, h, body) = fetch(local.clone(), "/api/v1/open-in/terminal-handler.sh").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(h["content-type"], "text/plain; charset=utf-8");
+    assert_eq!(h["cache-control"], "no-store");
+    let script = String::from_utf8(body).unwrap();
+    let root = dir.path().join("ws").join("worktrees");
+    assert!(script.contains(&format!("'{}'", root.display())), "root");
+    assert!(script.contains("'http://127.0.0.1:4740'"), "report url");
+    assert!(script.contains(&format!("'{}'", open_in::HANDLER_VERSION)));
+    assert!(script.contains(xherd_core::BUILD_VERSION));
+    assert!(!script.contains("@ROOT@") && !script.contains("@HANDLER@"));
+
+    let req = Request::get("/api/v1/open-in/terminal-handler.sh")
+        .header("host", "127.0.0.1:4740'$(x)")
+        .body(Body::empty())
+        .unwrap();
+    // Not a local Host either, so the user check answers first.
+    assert!(call(local, req).await.0.is_client_error());
+
+    // The Host check on its own, for a request with the user token.
+    let token = xherd_core::config::Config::load(&d.paths.config())
+        .unwrap()
+        .0
+        .user_token
+        .unwrap();
+    let req = Request::get("/api/v1/open-in/terminal-handler.sh")
+        .header("host", "evil host")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let remote =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([10, 0, 0, 9], 5555))));
+    let (s, v) = call(remote, req).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!("bad_host"))
+    );
+}
+
+#[tokio::test]
+async fn terminal_handler_reports_are_kept() {
+    let (_dir, d, _a) = setup().await;
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let view = |app: axum::Router| async move {
+        call(app, get("/api/v1/open-in").body(Body::empty()).unwrap())
+            .await
+            .1
+    };
+    let v = view(local.clone()).await;
+    assert_eq!(v["handler"]["installed"], Value::Null);
+    assert_eq!(v["handler"]["shipped"], json!(open_in::HANDLER_VERSION));
+    assert_eq!(v["native"], json!(true));
+
+    // An agent with a worktree: no Terminal entry before a report.
+    let mut a = Agent::new("SC-2", 2);
+    a.workdir = Some(format!("{}/app/sc-2", d.worktrees_root()));
+    d.create_agent(a).await.unwrap();
+    let targets = |app: axum::Router| async move {
+        let (s, v) = call(
+            app,
+            get("/api/v1/agents/SC-2/open-targets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        v["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        !targets(local.clone())
+            .await
+            .contains(&"terminal".to_string())
+    );
+
+    let rec = json!({"version": open_in::HANDLER_VERSION, "xherd": "0.3.0",
+        "os": "linux", "terminals": ["konsole", "xterm"], "root": d.worktrees_root()});
+    let (s, v) = call(
+        local.clone(),
+        post_json("/api/v1/open-in/terminal-handler", rec),
+    )
+    .await;
+    assert_eq!((s, v), (StatusCode::OK, json!({"ok": true})));
+    let v = view(local.clone()).await;
+    assert_eq!(
+        v["handler"]["installed"]["terminals"],
+        json!(["konsole", "xterm"])
+    );
+    assert_eq!(v["handler"]["updateAvailable"], json!(false));
+    assert_eq!(v["handler"]["rootChanged"], json!(false));
+    assert!(
+        targets(local.clone())
+            .await
+            .contains(&"terminal".to_string())
+    );
+    // Kept on disk, so a restarted daemon still knows it.
+    assert!(d.paths.terminal_handler().exists());
+    assert_eq!(d.handler_record().unwrap().os, "linux");
+
+    // An older handler for another root (written directly: version 1 is the
+    // oldest a report may carry): update, root changed.
+    std::fs::write(
+        d.paths.terminal_handler(),
+        json!({"version": open_in::HANDLER_VERSION - 1, "xherd": "x", "os": "mac",
+            "terminals": [], "root": "/a", "at": 1})
+        .to_string(),
+    )
+    .unwrap();
+    let v = view(local.clone()).await;
+    assert_eq!(v["handler"]["updateAvailable"], json!(true));
+    assert_eq!(v["handler"]["rootChanged"], json!(true));
+
+    // Bad reports are refused.
+    for bad in [
+        json!({"version": 0, "xherd": "x", "os": "linux", "terminals": [], "root": "/a"}),
+        json!({"version": 1, "xherd": "x", "os": "windows", "terminals": [], "root": "/a"}),
+        json!({"version": 1, "xherd": "x", "os": "mac", "terminals": ["rm"], "root": "/a"}),
+        json!({"version": 1, "xherd": "", "os": "mac", "terminals": [], "root": "/a"}),
+        json!({"version": 1, "xherd": "x", "os": "mac", "terminals": [], "root": "/a\nb"}),
+        json!({"installed": true}),
+        json!({"hello": 1}),
+    ] {
+        let (s, _) = call(
+            local.clone(),
+            post_json("/api/v1/open-in/terminal-handler", bad.clone()),
+        )
+        .await;
+        assert!(s.is_client_error(), "{bad}: {s}");
+    }
+
+    // Uninstalled: the record and the Terminal entry go.
+    let (s, _) = call(
+        local.clone(),
+        post_json(
+            "/api/v1/open-in/terminal-handler",
+            json!({"installed": false}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!d.paths.terminal_handler().exists());
+    assert_eq!(
+        view(local.clone()).await["handler"]["installed"],
+        Value::Null
+    );
+    assert!(!targets(local).await.contains(&"terminal".to_string()));
+}
+
+#[tokio::test]
+async fn terminal_handler_install_is_native_only() {
+    let (_dir, d, _a) = setup().await;
+    // The container's daemon, without starting one (that would install the
+    // pack into the real HOME).
+    let mut c = d.clone();
+    c.sandbox = true;
+    let local =
+        xherd_api::router(c).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let token = xherd_core::config::Config::load(&d.paths.config())
+        .unwrap()
+        .0
+        .user_token
+        .unwrap();
+    let req = Request::post("/api/v1/open-in/terminal-handler/install")
+        .header("host", "127.0.0.1:4740")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (s, v) = call(local.clone(), req).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("native_only"))
+    );
+    let (s, _) = call(
+        local,
+        post_json(
+            "/api/v1/open-in/terminal-handler/install",
+            json!({"bogus": 1}),
+        ),
+    )
+    .await;
+    assert!(s.is_client_error(), "{s}");
+}

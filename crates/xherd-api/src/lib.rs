@@ -53,10 +53,20 @@ pub fn router(d: Daemon) -> Router {
             get(get_viewed).post(post_viewed),
         )
         .route("/api/v1/agents/{id}/open-targets", get(open_targets))
-        .route("/api/v1/agents/{id}/open", post(open_in))
         .route("/api/v1/agents/{id}/{action}", post(agent_action))
-        .route("/api/v1/companion/next", get(companion_next))
         .route("/api/v1/open-in", get(open_in_view))
+        .route(
+            "/api/v1/open-in/terminal-handler.sh",
+            get(terminal_handler_script),
+        )
+        .route(
+            "/api/v1/open-in/terminal-handler",
+            post(terminal_handler_report),
+        )
+        .route(
+            "/api/v1/open-in/terminal-handler/install",
+            post(terminal_handler_install),
+        )
         .route("/api/v1/repos", get(repos))
         .route("/api/v1/repos/resolve", post(resolve_repo))
         .route("/api/v1/tickets/resolve", post(resolve_ticket))
@@ -167,7 +177,7 @@ impl From<ActionError> for ApiError {
             | "runtime_hooks" | "unknown_pack" | "unknown_runtime" | "bad_model"
             | "model_unavailable" => StatusCode::UNPROCESSABLE_ENTITY,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
-            "not_fixable" | "no_companion" => StatusCode::NOT_FOUND,
+            "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
@@ -782,63 +792,74 @@ async fn open_targets(
     Ok(Json(json!({"targets": d.open_targets(&id).await?})))
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OpenReq {
-    app: String,
-}
-
-async fn open_in(
-    _: User,
-    State(d): State<Daemon>,
-    Path(id): Path<String>,
-    Json(r): Json<OpenReq>,
-) -> ApiResult<Json<Value>> {
-    d.open_with_companion(&id, &r.app).await?;
-    Ok(Json(json!({"ok": true})))
-}
-
-/// Settings → Open in (R-706): link entries and the companion's offer.
+/// Settings → Open in (R-706): the link entries and the handler's state.
 async fn open_in_view(_: User, State(d): State<Daemon>) -> Json<Value> {
     Json(d.open_in_view())
 }
 
-#[derive(Deserialize)]
-struct CompanionQuery {
-    #[serde(default)]
-    apps: String,
-    /// Request kinds it understands: `terminal`, `commands` (R-706, R-707).
-    #[serde(default)]
-    features: String,
-    /// Terminal apps installed there, its default first (R-707).
-    #[serde(default)]
-    terminals: String,
-    #[serde(default)]
-    wait: Option<u64>,
-}
-
-/// The host companion's long poll (`xherd companion`): `{request}` or
-/// `{request: null}` after `wait` seconds (at most 30).
-async fn companion_next(
+/// The handler's installer (R-707), for `curl … | sh` on the user's
+/// computer; it reports back to the address the request came to.
+async fn terminal_handler_script(
     _: User,
     State(d): State<Daemon>,
-    axum::extract::Query(q): axum::extract::Query<CompanionQuery>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if host.is_empty()
+        || !host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '[' | ']' | '-'))
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_host",
+            "the Host header is not a plain host name",
+        ));
+    }
+    let script =
+        xherd_daemon::open_in::handler_script(&d.worktrees_root(), &format!("http://{host}"))
+            .map_err(|m| ApiError::new(StatusCode::BAD_REQUEST, "bad_config", m))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        script,
+    )
+        .into_response())
+}
+
+/// The installer's report: what it installed, or `{"installed": false}`.
+async fn terminal_handler_report(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<xherd_daemon::open_in::HandlerReport>,
 ) -> ApiResult<Json<Value>> {
-    let list = |s: &str| {
-        s.split(',')
-            .map(str::trim)
-            .filter(|a| !a.is_empty())
-            .map(str::to_string)
-            .collect()
-    };
-    let offer = xherd_daemon::open_in::Offer {
-        apps: list(&q.apps),
-        features: list(&q.features),
-        terminals: list(&q.terminals),
-    };
-    let wait = std::time::Duration::from_secs(q.wait.unwrap_or(25).min(30));
-    let r = d.companion.next(offer, wait).await;
-    Ok(Json(json!({"request": r})))
+    let rec = r
+        .into_record(d.clock.now())
+        .map_err(|m| ApiError::new(StatusCode::BAD_REQUEST, "bad_report", m))?;
+    d.record_handler(rec.as_ref()).map_err(ApiError::internal)?;
+    Ok(Json(json!({"ok": true})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HandlerInstall {
+    #[serde(default)]
+    uninstall: bool,
+}
+
+/// Native only: the daemon installs (or removes) the handler itself.
+async fn terminal_handler_install(
+    _: User,
+    State(d): State<Daemon>,
+    Json(b): Json<HandlerInstall>,
+) -> ApiResult<Json<Value>> {
+    let (ok, output) = d.install_terminal_handler(b.uninstall).await?;
+    Ok(Json(json!({"ok": ok, "output": output})))
 }
 
 // ---- git access ----------------------------------------------------------------
