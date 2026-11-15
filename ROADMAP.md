@@ -32,14 +32,16 @@ by theme; update it together with them.
 - [x] Agent names (#114, #115): a lowercase name, an optional ticket (issue URL or key) that prefixes the branch; New agent form with More options
 - [x] Needs attention and the agent page (#120, #122, #124, #127, #128): the ✋ count is only what waits for you, *Approved by xherd* folded last; a gate autonomy will approve is not shown as waiting; one-row header; a file list in Changes
 - [x] Gate notices (#133, #135): one notice per gate with what it waits on, none for automatic approvals; the bell says why browser notifications cannot be on, and can send a test
-- [ ] Check in real browsers: the bell's texts and re-alerts, the header and file-list layouts (light, dark, phone), the Resolve conflicts button
+- [x] Checked in real browsers: the bell's texts and re-alerts, the header and file-list layouts (light, dark, phone)
+- [ ] Check the Resolve conflicts button in a browser
 
 ## M3 Docker-first
 
 - [x] Image with version managers, `xherd init`, `docker init/doctor/update`, toolchain resolution
 - [x] Open-in (URL schemes, Dev Containers)
 - [x] Settings → Open in (R-706, R-707): hide entries, your own links, Open in terminal (your terminal app in the worktree) through the `xherd-term://` link handler installed once per computer, no companion (#129)
-- [ ] Check the terminal handler on a real Mac (osacompile app, `open -a`, Ghostty's working directory) and on Linux desktops in Chrome and Firefox
+- [x] Terminal handler checked on a real Mac
+- [ ] Check the terminal handler on Linux desktops in Chrome and Firefox
 - [x] Git access setup and doctor
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
 - [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`
@@ -73,7 +75,6 @@ by theme; update it together with them.
 - [ ] Pack JSON schemas for gate documents (R-204); `views`, `extends`, `parse` for external packs
 - [ ] Loading external flow packs (only the built-in pack loads today) and dynamic flows, so an SDD that makes XAP calls gets gates without a pack of its own (`doc/extend/integrate-your-sdd.md`)
 - [x] `bugfix` flow in the built-in pack: analysis, a failing reproduction test committed first, then the fix (#142); the Herd's By stage lanes per workflow and the Board's lanes by workflow
-- [ ] `hotfix` flow (like bugfix, based on the profile's `hotfixBase`, ship always human)
 - [ ] More flow packs: PR review, research/design; multi-repo tickets
 - [x] `xherd memory propose` and the Shared memory tab (AGENTS.md, #65)
 
@@ -143,4 +144,4 @@ by theme; update it together with them.
 - [ ] `claude auth status` exits non-zero when logged out (only run logged in)
 - [ ] `claude --resume` finds its transcript after a container recreate (assumes the home volume persists)
 - [ ] The new UI layout in a browser at several widths
-- [ ] A full agent run (spec → ship) with the plain-`xherd` prompts, the allow rules and the `edits` default
+- [x] A full agent run (spec → ship) with the plain-`xherd` prompts, the allow rules and the `edits` default

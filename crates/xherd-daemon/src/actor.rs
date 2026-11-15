@@ -2540,28 +2540,25 @@ impl Actor {
 
     /// Autonomy class of the open gate's stage (spec §6.3). `None`: unknown
     /// (flow `none`, a stage the pack does not declare), so a human decides.
-    /// Pull-request rounds and the ship stage of a `hotfix` flow are always
-    /// `human-only` (R-121, T1), whatever the pack says.
+    /// Pull-request rounds are always `human-only` (T1), whatever the pack
+    /// says.
     fn gate_class(&self, gate: &Gate) -> Option<xherd_core::domain::Class> {
         use xherd_core::domain::{Class, Role};
         let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
-        let flow_name = self.agent.flow.as_deref()?;
-        let flow = pack.flow(flow_name)?;
+        let flow = pack.flow(self.agent.flow.as_deref()?)?;
         let stage = match gate {
             Gate::Docs { stage, .. } => flow.stage(stage)?,
             Gate::Commit(_) => flow.commit_stage(self.agent.stage.as_deref())?,
             _ => return None,
         };
-        let human_only =
-            stage.role == Role::Pr || (flow_name == "hotfix" && stage.role == Role::Ship);
-        Some(if human_only {
+        Some(if stage.role == Role::Pr {
             Class::HumanOnly
         } else {
             stage.class
         })
     }
 
-    /// What autonomy would do with the open gate at a stop (R-110, R-121),
+    /// What autonomy would do with the open gate at a stop (R-110),
     /// whatever the status: callers check it (`try_auto_approve` at a stop,
     /// the mark in `commit()` while running). Reads the agent, the pack and
     /// the settings snapshot only.

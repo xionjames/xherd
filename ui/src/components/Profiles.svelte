@@ -16,12 +16,12 @@
 
   type Profile = {
     id: string; name: string; match: string[];
-    baseBranch?: string; stagingBranch?: string; hotfixBase?: string;
+    baseBranch?: string; stagingBranch?: string;
     autonomy?: string; permissionMode?: string; runtime?: string; models?: Record<string, string>; sensitivePaths?: string[]; maxDiffLines?: number;
     agentTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
   };
   type Form = {
-    id: string; name: string; match: string; baseBranch: string; stagingBranch: string; hotfixBase: string;
+    id: string; name: string; match: string; baseBranch: string; stagingBranch: string;
     autonomy: string; permissionMode: string; runtime: string; models: Record<string, string>; sensitivePaths: string; maxDiffLines: string; agentTokenBudget: string;
     testCommand: string; lintCommand: string; instructions: string;
   };
@@ -37,7 +37,7 @@
   // Runtimes that can choose a model get a model field each.
   const modelRuntimes = $derived(runtimes(app.state?.plugins).filter((r) => r.chooseModel));
 
-  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', hotfixBase: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
+  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
   const opt = (s: string) => (s.trim() ? s.trim() : undefined);
   const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
@@ -45,7 +45,7 @@
   function toForm(p: Profile): Form {
     return {
       id: p.id, name: p.name, match: p.match.join('\n'), baseBranch: p.baseBranch ?? '', stagingBranch: p.stagingBranch ?? '',
-      hotfixBase: p.hotfixBase ?? '', autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '', models: { ...(p.models ?? {}) },
+      autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '', models: { ...(p.models ?? {}) },
       sensitivePaths: p.sensitivePaths ? p.sensitivePaths.join('\n') : '', maxDiffLines: p.maxDiffLines?.toString() ?? '',
       agentTokenBudget: p.agentTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
     };
@@ -60,7 +60,7 @@
   function body(f: Form) {
     return {
       name: f.name, match: lines(f.match),
-      baseBranch: opt(f.baseBranch), stagingBranch: opt(f.stagingBranch), hotfixBase: opt(f.hotfixBase),
+      baseBranch: opt(f.baseBranch), stagingBranch: opt(f.stagingBranch),
       autonomy: opt(f.autonomy),
       permissionMode: opt(f.permissionMode),
       runtime: opt(f.runtime),
@@ -188,11 +188,8 @@
         <header><h3>Branches</h3></header>
         <label class="f">Base branch <input class="mono" bind:value={form.baseBranch} placeholder="the repository's default" />
           <span class="hint">Where new agents start when the request names none.</span></label>
-        <div class="g2">
-          <label class="f">Staging branch <input class="mono" bind:value={form.stagingBranch} /></label>
-          <label class="f">Hotfix base <input class="mono" bind:value={form.hotfixBase} /></label>
-        </div>
-        <span class="hint">Staging and hotfix branches are stored for the flows that will use them; nothing reads them yet.</span>
+        <label class="f">Staging branch <input class="mono" bind:value={form.stagingBranch} />
+          <span class="hint">Stored for the flows that will use it; nothing reads it yet.</span></label>
       </div>
       <div class="grp">
         <header><h3>Autonomy &amp; limits</h3><span class="hint">Empty fields use the global setting.</span></header>

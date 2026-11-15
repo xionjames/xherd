@@ -64,7 +64,7 @@ Settings → Repo profiles (stored in the database, not `config.json`; `GET/POST
 | `testCommand` | One shell command (one line) run in the worktree at each commit proposal; if it fails or times out, the commit is held for a human (only the exit status is shown) |
 | `lintCommand` | Like `testCommand`, run before it (a linter or formatter check); leave both empty to run nothing |
 | `instructions` | Added to the agent's `instructions.md` |
-| `stagingBranch`, `hotfixBase` | Stored; no flow uses them yet |
+| `stagingBranch` | Stored; no flow uses it yet |
 
 Changes apply to running agents at once, except `instructions`, which is written at an agent's creation and when its autonomy changes. Deleting a profile sends its agents back to the global settings.
 
