@@ -1,4 +1,4 @@
- `issue add`, `memory propose`, `agent memory propose` |# CLI reference
+# CLI reference
 
 `xherd` is one binary: the daemon, the user commands, the calls jobs make, and a few helpers. Run `xherd <command> --help` for the exact flags of your version, and `xherd --version` for the version. The global `--json` flag gives machine-readable output for the XAP calls and `xherd diff`.
 
@@ -38,6 +38,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `xherd remove-worktree <job>` | Delete a `done` or `cancelled` job's worktree folder, with its uncommitted changes and `.xherd/` documents; the branch and the job's record stay, and the coding agent can no longer be resumed |
 | `xherd talk <job> "<text>"` | Ask a paused, parked, watching or failed job something: starts a session with the text as its first prompt and keeps it open (no auto-approval, no move to watching) until `xherd finish` or until the coding agent does flow work. (`xherd ask` is the jobs' question call) |
 | `xherd finish <job>` | End a `talk` session: back to watching its PR when it was watching, else paused |
+| `xherd done <job>` | Mark a job with no workflow done (it has no PR to merge): from `idle`, `waiting-input`, `paused` or `parked`; the session ends and, when the job has no saved agent, xherd offers to save its setup as one |
 | `xherd resolve-conflicts <job>` | For a job with a PR that conflicts with its base: a new session merges the base branch (`origin/<base>`) into the branch and resolves the conflicts; the merge commit is proposed and held for your approval, then the coding agent pushes. Only a `watching`, `paused`, `error` or `idle` job with no open gate |
 | `xherd autonomy <job> <ask\|important>` | Change what xherd may approve by itself (rewrites the job's instructions and tries an auto-approval at once) |
 | `xherd mode <job> <ask\|edits\|auto\|all>` | Change the job's tool permissions; the running session keeps its mode, the next session start uses the new one. `all` only in the container |
@@ -88,7 +89,7 @@ These are not for daily use; they are what Claude Code and the jobs call.
 |---|---|
 | `xherd hook <event>` | Runtime hook; reads the hook JSON on stdin. Silent, always exits 0 |
 | `xherd report …` | Push status for jobs or wrappers without hooks |
-| `xherd stage enter`, `gate open`, `ask`, `tasks sync`, `task start\|done\|block`, `commit propose\|done\|drop`, `pr opened`, `handoff written`, `issue add`, `memory propose` | The agent protocol, XAP. See the [XAP reference](xap.md) |
+| `xherd stage enter`, `gate open`, `ask`, `tasks sync`, `task start\|done\|block`, `commit propose\|done\|drop`, `pr opened`, `handoff written`, `issue add`, `memory propose`, `agent memory propose`, `agent propose` | The agent protocol, XAP. See the [XAP reference](xap.md) |
 | `xherd toolchain exec -- <argv>` | Provide the tools `.xherd/toolchain.json` lists, then run the command with them on `PATH`. The daemon starts jobs this way |
 | `xherd guard pre-push --branch B` | The check behind the worktree's `pre-push` hook: only branch `B` may be pushed |
 

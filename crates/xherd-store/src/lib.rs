@@ -78,6 +78,9 @@ pub struct Store {
     path: PathBuf,
 }
 
+/// Notes kept per job (the user's own texts; R31).
+pub const NOTES_KEPT: i64 = 50;
+
 const READERS: usize = 4;
 
 /// Writes a database as migration 1 left it (tables `agents`, column
@@ -378,6 +381,37 @@ impl Store {
                 params![r, p],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    /// A text the user wrote to a job (Send, answer, Ask, change request),
+    /// kept for the agent draft of a job without an agent (R31). Newest
+    /// notes beyond `NOTES_KEPT` per job are dropped.
+    pub async fn add_note(&self, job_id: &str, text: &str, at: i64) -> Result<()> {
+        let (j, t) = (job_id.to_string(), text.to_string());
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO notes (job_id, text, at) VALUES (?1, ?2, ?3)",
+                params![j, t, at],
+            )?;
+            c.execute(
+                "DELETE FROM notes WHERE job_id = ?1 AND id NOT IN \
+                 (SELECT id FROM notes WHERE job_id = ?1 ORDER BY id DESC LIMIT ?2)",
+                params![j, NOTES_KEPT],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// A job's notes, oldest first.
+    pub async fn notes(&self, job_id: &str) -> Result<Vec<(String, i64)>> {
+        let j = job_id.to_string();
+        self.read(move |c| {
+            let mut st = c.prepare("SELECT text, at FROM notes WHERE job_id = ?1 ORDER BY id")?;
+            let rows = st.query_map([j], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
         .await
     }

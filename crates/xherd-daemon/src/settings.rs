@@ -38,6 +38,7 @@ pub struct ConfigPatch {
     pub ntfy_topic: Option<String>,
     pub muted_notifications: Option<Vec<String>>,
     pub desktop_notifications: Option<bool>,
+    pub suggest_agents: Option<bool>,
     pub max_session_minutes: Option<u64>,
     pub pr_poll_minutes: Option<u64>,
     pub max_review_loops: Option<u32>,
@@ -312,6 +313,9 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
     }
     if let Some(b) = p.desktop_notifications {
         c.desktop_notifications = b;
+    }
+    if let Some(b) = p.suggest_agents {
+        c.suggest_agents = b;
     }
     if let Some(v) = p.ntfy_topic {
         let v = v.trim();

@@ -92,6 +92,7 @@ const over: Record<string, (a: Job) => boolean> = {
   gate: (a) => !a.gate || a.status === 'running',
   blocked: (a) => a.status !== 'blocked',
   idle: (a) => a.status !== 'idle',
+  suggestion: (a) => !a.suggestion || a.suggestion.dismissed || !!a.agent,
 };
 
 /** Marks read the agent's notices that its new state has settled. */

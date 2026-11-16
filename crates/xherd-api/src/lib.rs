@@ -47,6 +47,15 @@ pub fn router(d: Daemon) -> Router {
             "/api/v1/jobs/{id}/agent-memory-accept",
             post(agent_memory_accept),
         )
+        .route(
+            "/api/v1/jobs/{id}/suggestion/accept",
+            post(suggestion_accept),
+        )
+        .route(
+            "/api/v1/jobs/{id}/suggestion/dismiss",
+            post(suggestion_dismiss),
+        )
+        .route("/api/v1/jobs/{id}/save-as-agent", post(save_as_agent))
         .route("/api/v1/jobs/{id}/pr-review", get(pr_review))
         .route(
             "/api/v1/jobs/{id}/pr-decisions",
@@ -1235,6 +1244,42 @@ async fn agent_memory_accept(
     Ok(Json(d.agent_memory_accept(&id, text).await?))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveAgentBody {
+    agent: xherd_core::agent_def::AgentDef,
+}
+
+/// `POST /jobs/:id/suggestion/accept {agent}` (R32): create the agent from
+/// the form and attach the job.
+async fn suggestion_accept(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<SaveAgentBody>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.save_as_agent(&id, b.agent, true).await?))
+}
+
+/// `POST /jobs/:id/save-as-agent {agent}` (R32): the same, with no suggestion.
+async fn save_as_agent(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<SaveAgentBody>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.save_as_agent(&id, b.agent, false).await?))
+}
+
+/// `POST /jobs/:id/suggestion/dismiss`: remembered for the job (R32).
+async fn suggestion_dismiss(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"job": d.dismiss_suggestion(&id).await?})))
+}
+
 /// `GET /jobs/:id/docs`: the agent's documents, open gate's first.
 async fn docs(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({"docs": d.docs(&id).await?})))
@@ -1405,6 +1450,7 @@ async fn agent_action(
         "memory-accept" => UserAction::MemoryAccept { text: b.text },
         "memory-dismiss" => UserAction::MemoryDismiss,
         "agent-memory-dismiss" => UserAction::AgentMemoryClear,
+        "mark-done" => UserAction::MarkDone,
         "pr-check" => UserAction::CheckPr,
         "resolve-conflicts" => UserAction::ResolveConflicts,
         "request-changes" => UserAction::RequestChanges {

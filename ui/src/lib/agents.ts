@@ -247,3 +247,40 @@ export function fromForm(f: AgentForm, old?: AgentDef): Record<string, unknown> 
     maxLiveJobs: Number(f.maxLiveJobs) || 1,
   };
 }
+
+/** A job's name-like slug: lowercase letters, digits and `-`, up to 41 characters (R10). */
+export function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 41).replace(/-+$/, '');
+}
+
+/** The suggestion is on offer: the job has no agent, the daemon made one and it was not dismissed (R30, R32). */
+export const suggestionOpen = (job: Pick<Job, 'agent' | 'suggestion'>): boolean =>
+  !job.agent && !!job.suggestion && !job.suggestion.dismissed;
+
+/** Mark done is for a job with no workflow, between turns (R30). */
+export const canMarkDone = (job: Pick<Job, 'flow' | 'status'>): boolean =>
+  (!job.flow || job.flow === 'none') && ['idle', 'waiting-input', 'paused', 'parked'].includes(job.status);
+
+/** The "Save as agent" form, pre-filled from what the job ran with (R31): the
+ *  effective settings, a name and description from the repository and the flow,
+ *  and the job's own draft (name, description, instructions) over them. */
+export function fillFromJob(job: Job): AgentForm {
+  const flow = job.flow ?? 'none';
+  const repoDir = (job.repo ?? '').split('/').filter(Boolean).pop() ?? '';
+  const form = toForm();
+  form.name = slugify(`${repoDir || 'agent'}-${flow}`);
+  form.description = repoDir ? `${flow === 'none' ? 'Work' : `${flow} work`} on ${repoDir}` : '';
+  form.runtime = job.runtime ?? 'claude-code';
+  form.model = job.model ?? '';
+  form.pack = job.pack ?? 'xherd';
+  form.flow = flow;
+  form.autonomy = job.autonomy && job.autonomy !== 'never' ? job.autonomy : '';
+  form.permissionMode = job.permissionMode ?? '';
+  const d = job.agentDraft;
+  if (d) {
+    if (slugify(d.name) === d.name && d.name) form.name = d.name;
+    if (d.description) form.description = d.description;
+    form.instructions = d.instructions;
+  }
+  return form;
+}

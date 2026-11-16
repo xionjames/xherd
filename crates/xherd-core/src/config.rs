@@ -136,6 +136,9 @@ pub struct Config {
     /// Also show notifications as operating system notifications from the
     /// daemon (`osascript` / `notify-send`); native installs only. Live.
     pub desktop_notifications: bool,
+    /// Offer to save a job's setup as an agent (R30); "Don't suggest" turns
+    /// it off. Live.
+    pub suggest_agents: bool,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -171,6 +174,7 @@ impl Default for Config {
             ntfy_topic: None,
             muted_notifications: Vec::new(),
             desktop_notifications: false,
+            suggest_agents: true,
             max_session_minutes: 0,
             pr_poll_minutes: 5,
             max_review_loops: 3,
@@ -370,6 +374,7 @@ pub const NOTIFY_KINDS: &[&str] = &[
     "pr",
     "pr-comments",
     "todo",
+    "suggestion",
 ];
 
 impl Config {
@@ -406,6 +411,7 @@ impl Config {
         self.ntfy_topic = s.ntfy_topic;
         self.muted_notifications = s.muted_notifications;
         self.desktop_notifications = s.desktop_notifications;
+        self.suggest_agents = s.suggest_agents;
         self.git_hosts = s.git_hosts;
         self.user_token = s.user_token;
     }

@@ -236,6 +236,7 @@ pub fn apply(
             | XapCmd::IssueAdd { .. }
             | XapCmd::MemoryPropose { .. }
             | XapCmd::AgentMemoryPropose { .. }
+            | XapCmd::AgentPropose { .. }
     ) {
         flow_of(a, pack)?;
     }
@@ -746,6 +747,62 @@ pub fn apply(
             a.agent_memory_proposal = Some(xherd_core::job::MemoryProposal {
                 file: f.to_string(),
                 reason: reason.trim().to_string(),
+                at: now,
+            });
+            Ok(true)
+        }
+
+        XapCmd::AgentPropose {
+            name,
+            description,
+            instructions_file,
+        } => {
+            if a.agent.is_some() {
+                return Err(refuse(
+                    "has_agent",
+                    "this job already started from a saved agent: there is nothing to propose",
+                ));
+            }
+            let text = match obs {
+                Observed::Text(t) => t,
+                // No file given: the actor read none.
+                Observed::Nothing => None,
+                _ => return Err(wrong("agent.propose")),
+            };
+            let name = name.trim();
+            xherd_core::new::check_name(name)
+                .map_err(|r| refuse("usage", format!("--name: {}", r.message)))?;
+            let description = description.trim();
+            if description.chars().count() > xherd_core::agent_def::MAX_DESCRIPTION
+                || description.contains('\n')
+            {
+                return Err(refuse(
+                    "usage",
+                    format!(
+                        "--description: one line, up to {} characters",
+                        xherd_core::agent_def::MAX_DESCRIPTION
+                    ),
+                ));
+            }
+            // No file = no instructions: a draft is optional text (R31).
+            let instructions = match (instructions_file, text) {
+                (None, _) => String::new(),
+                (Some(f), None) => {
+                    return Err(refuse("doc_missing", format!("{f} does not exist")));
+                }
+                (Some(_), Some(t)) => t.trim().to_string(),
+            };
+            let max = xherd_core::agent_def::MAX_INSTRUCTIONS;
+            if instructions.chars().count() > max || instructions.contains('\0') {
+                return Err(refuse(
+                    "doc_schema",
+                    format!("the instructions are over {max} characters: keep them short"),
+                ));
+            }
+            a.agent_draft = Some(xherd_core::job::AgentDraft {
+                name: name.to_string(),
+                description: description.to_string(),
+                instructions,
                 at: now,
             });
             Ok(true)

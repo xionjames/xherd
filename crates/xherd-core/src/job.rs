@@ -30,6 +30,31 @@ pub struct MemoryProposal {
     pub at: Millis,
 }
 
+/// Why and when xherd offers to save a job's setup as an agent (R30). Set
+/// once; `dismissed` is remembered for the job (R32).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Suggestion {
+    /// `done`, `marked-done` or `repeated` (the third job with this setup).
+    pub reason: String,
+    pub at: Millis,
+    #[serde(default)]
+    pub dismissed: bool,
+}
+
+/// What a job without an agent proposes to save as one (R31): written by
+/// `xherd agent propose`, read when the user accepts the suggestion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDraft {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub instructions: String,
+    pub at: Millis,
+}
+
 /// An agent's ticket (#114): what the user gave, a key (`PAY-412`, `#12`)
 /// or an issue URL, with the key found from the URL by a tracker plugin.
 /// A URL no tracker reads keeps no key and is only shown as a link.
@@ -143,6 +168,13 @@ pub struct Job {
     /// accepts or dismisses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_memory_proposal: Option<MemoryProposal>,
+    /// Offer to save this job's setup as an agent (R30); never for a job that
+    /// has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<Suggestion>,
+    /// What the job proposes for that agent (R31).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_draft: Option<AgentDraft>,
     /// A pause is waiting for the agent's handoff note (R-026); cleared when
     /// the session ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -272,6 +304,8 @@ impl Job {
             handoff_at: None,
             memory_proposal: None,
             agent_memory_proposal: None,
+            suggestion: None,
+            agent_draft: None,
             pause_requested_at: None,
             last_message: None,
             screen_blocked: false,

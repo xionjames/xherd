@@ -162,6 +162,29 @@ pub enum AgentMemoryCmd {
     },
 }
 
+#[derive(clap::Args)]
+pub struct AgentProposeArgs {
+    /// Slug for the agent (like a job's name).
+    #[arg(long)]
+    name: String,
+    /// One line about what the agent is for.
+    #[arg(long, default_value = "")]
+    description: String,
+    /// File with the agent's instructions (what the user had to repeat).
+    #[arg(long)]
+    instructions_file: Option<String>,
+}
+
+impl From<AgentProposeArgs> for XapCmd {
+    fn from(a: AgentProposeArgs) -> XapCmd {
+        XapCmd::AgentPropose {
+            name: a.name,
+            description: a.description,
+            instructions_file: a.instructions_file,
+        }
+    }
+}
+
 impl From<AgentMemoryCmd> for XapCmd {
     fn from(c: AgentMemoryCmd) -> XapCmd {
         let AgentMemoryCmd::Propose { file, reason } = c;

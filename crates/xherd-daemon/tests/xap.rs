@@ -3777,3 +3777,270 @@ async fn agent_memory_proposal_is_saved_on_accept() {
         "no_proposal"
     );
 }
+
+/// A second job on the same daemon with no workflow (flow `none`), running.
+async fn flow_none_job(t: &T, name: &str) -> Job {
+    let mut b = Job::new(name, 2);
+    b.workdir = t.a.workdir.clone();
+    b.repo = t.a.workdir.clone();
+    b.launch = Some(vec!["rt".into()]);
+    b.base = Some("main".into());
+    let b = t.d.create_job(b).await.unwrap();
+    wait_status(t, name, Status::Running).await;
+    b
+}
+
+async fn wait_status(t: &T, name: &str, to: Status) -> Job {
+    for _ in 0..400 {
+        let a = t.d.action(name, UserAction::Get).await.unwrap();
+        if a.status == to {
+            return a;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    t.d.action(name, UserAction::Get).await.unwrap()
+}
+
+async fn stop_job(t: &T, j: &Job, seq: u64) {
+    t.d.report(Report {
+        id: format!("stop-{}-{seq}", j.name),
+        job_id: j.id.clone(),
+        event: ReportEvent::Stop,
+        payload: Value::Null,
+        seq,
+        at: 0,
+    })
+    .await;
+}
+
+fn suggestion_notices(
+    rx: &mut tokio::sync::broadcast::Receiver<xherd_daemon::support::Change>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind, text, .. } = c
+            && kind == "suggestion"
+        {
+            out.push(text);
+        }
+    }
+    out
+}
+
+/// R30: Mark done is for a job with no workflow, from idle (or waiting,
+/// paused, parked); the session ends, the job is done and offers its setup
+/// as an agent, once, with one notice.
+#[tokio::test]
+async fn marking_a_job_without_a_workflow_done_suggests_an_agent() {
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    // A workflow job is done when its PR is merged.
+    assert_eq!(
+        act(&t, UserAction::MarkDone).await.unwrap_err().code,
+        "not_allowed"
+    );
+    let b = flow_none_job(&t, "SC-3").await;
+    // Still running: not yet.
+    assert_eq!(
+        t.d.action("SC-3", UserAction::MarkDone)
+            .await
+            .unwrap_err()
+            .code,
+        "not_allowed"
+    );
+    stop_job(&t, &b, 1).await;
+    wait_status(&t, "SC-3", Status::Idle).await;
+    let done = t.d.action("SC-3", UserAction::MarkDone).await.unwrap();
+    assert_eq!(done.status, Status::Done);
+    let s = done.suggestion.expect("a suggestion");
+    assert_eq!(s.reason, "marked-done");
+    assert!(!s.dismissed);
+    assert_eq!(suggestion_notices(&mut rx).len(), 1);
+    assert!(t.drv.calls().iter().any(|c| c.starts_with("stop")));
+
+    // Dismiss is remembered.
+    let d = t.d.dismiss_suggestion("SC-3").await.unwrap();
+    assert!(d.suggestion.unwrap().dismissed);
+}
+
+#[tokio::test]
+async fn no_suggestion_when_it_is_off_or_the_job_is_cancelled_or_has_an_agent() {
+    let t = setup_config(json!({"freshSessions": true, "suggestAgents": false})).await;
+    let b = flow_none_job(&t, "SC-3").await;
+    stop_job(&t, &b, 1).await;
+    wait_status(&t, "SC-3", Status::Idle).await;
+    let done = t.d.action("SC-3", UserAction::MarkDone).await.unwrap();
+    assert!(done.suggestion.is_none());
+
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    let b = flow_none_job(&t, "SC-3").await;
+    t.d.action(
+        "SC-3",
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+    let c = wait_status(&t, "SC-3", Status::Cancelled).await;
+    assert!(c.suggestion.is_none());
+    let _ = b;
+
+    // A job of a saved agent has nothing to suggest.
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "keeper", "runtime": "claude-code",
+        "workflow": {"pack": "xherd", "flow": "feature"},
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+    let mut e = Job::new("SC-4", 3);
+    e.workdir = t.a.workdir.clone();
+    e.launch = Some(vec!["rt".into()]);
+    e.base = Some("main".into());
+    e.agent = Some(def.snapshot());
+    let e = t.d.create_job(e).await.unwrap();
+    wait_status(&t, "SC-4", Status::Running).await;
+    stop_job(&t, &e, 1).await;
+    wait_status(&t, "SC-4", Status::Idle).await;
+    let done = t.d.action("SC-4", UserAction::MarkDone).await.unwrap();
+    assert!(done.suggestion.is_none());
+    assert!(suggestion_notices(&mut rx).is_empty());
+}
+
+/// R32: accepting creates the agent (version 1) from the edited form and
+/// attaches the job, which keeps its own settings; "save as agent" needs no
+/// suggestion; a job with an agent is refused.
+#[tokio::test]
+async fn accepting_a_suggestion_creates_the_agent_and_attaches_the_job() {
+    let t = setup().await;
+    let b = flow_none_job(&t, "SC-3").await;
+    stop_job(&t, &b, 1).await;
+    wait_status(&t, "SC-3", Status::Idle).await;
+    let form = || -> xherd_core::agent_def::AgentDef {
+        serde_json::from_value(json!({
+            "name": "shop-notes", "description": "Notes on the shop",
+            "runtime": "claude-code", "instructions": "Run the linter first.",
+            "workflow": {"pack": "xherd", "flow": "feature"},
+        }))
+        .unwrap()
+    };
+    // No suggestion yet: accept is refused, save-as-agent is not.
+    assert_eq!(
+        t.d.save_as_agent("SC-3", form(), true)
+            .await
+            .unwrap_err()
+            .code,
+        "no_suggestion"
+    );
+    t.d.action("SC-3", UserAction::MarkDone).await.unwrap();
+    let r = t.d.save_as_agent("SC-3", form(), true).await.unwrap();
+    assert_eq!(r["agent"]["version"], 1);
+    assert_eq!(r["agent"]["name"], "shop-notes");
+    let job = t.d.action("SC-3", UserAction::Get).await.unwrap();
+    let snap = job.agent.expect("attached");
+    assert_eq!(snap.name, "shop-notes");
+    assert_eq!(snap.version, 1);
+    assert_eq!(snap.instructions.as_deref(), Some("Run the linter first."));
+    assert!(job.suggestion.is_none());
+    assert_eq!(job.status, Status::Done);
+    assert_eq!(
+        t.d.save_as_agent("SC-3", form(), false)
+            .await
+            .unwrap_err()
+            .code,
+        "has_agent"
+    );
+    // The agent lists the job.
+    assert_eq!(t.d.agent_jobs("shop-notes").await.unwrap().len(), 1);
+}
+
+/// R31: `agent propose` is for a job without an agent; the instructions
+/// come from a file; the user's own texts are kept and written to
+/// `user-notes.md` when a ship-role stage starts.
+#[tokio::test]
+async fn an_agent_draft_and_the_users_notes() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    let propose = |id: &'static str, args: Value| xap(&t, id, "agent.propose", args);
+    std::fs::write(wt.join(".xherd/draft.md"), "Run the linter first.\n").unwrap();
+    // Name and file are checked.
+    assert_eq!(
+        propose("p1", json!({"name": "Bad Name"}))
+            .await
+            .unwrap_err()
+            .code,
+        "usage"
+    );
+    assert_eq!(
+        propose(
+            "p2",
+            json!({"name": "shop", "instructionsFile": "./.xherd/none.md"})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "doc_missing"
+    );
+    std::fs::write(wt.join(".xherd/big.md"), "x".repeat(4001)).unwrap();
+    assert_eq!(
+        propose(
+            "p3",
+            json!({"name": "shop", "instructionsFile": "./.xherd/big.md"})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "doc_schema"
+    );
+    propose(
+        "p4",
+        json!({"name": "shop", "description": "Shop work", "instructionsFile": "./.xherd/draft.md"}),
+    )
+    .await
+    .unwrap();
+    let d = get(&t).await.agent_draft.expect("a draft");
+    assert_eq!(d.name, "shop");
+    assert_eq!(d.description, "Shop work");
+    assert_eq!(d.instructions, "Run the linter first.");
+    // No file = no instructions.
+    propose("p5", json!({"name": "shop"})).await.unwrap();
+    assert_eq!(get(&t).await.agent_draft.unwrap().instructions, "");
+
+    // The user's texts are kept, nothing else.
+    act(
+        &t,
+        UserAction::Send {
+            text: "Use tabs, not spaces".into(),
+        },
+    )
+    .await
+    .unwrap();
+    xap(&t, "s1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    let notes = std::fs::read_to_string(wt.join(".xherd/spec/user-notes.md")).unwrap();
+    assert!(notes.contains("- Use tabs, not spaces"), "{notes}");
+}
+
+#[tokio::test]
+async fn a_job_with_an_agent_cannot_propose_one() {
+    let t = setup().await;
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "keeper", "runtime": "claude-code",
+        "workflow": {"pack": "xherd", "flow": "feature"},
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+    let mut b = Job::new("SC-2", 1);
+    b.workdir = t.a.workdir.clone();
+    b.pack = Some("xherd".into());
+    b.flow = Some("feature".into());
+    b.launch = Some(vec!["rt".into()]);
+    b.agent = Some(def.snapshot());
+    let b = t.d.create_job(b).await.unwrap();
+    let r =
+        t.d.xap(call(&b, "h1", "agent.propose", json!({"name": "other"})))
+            .await;
+    assert_eq!(r.unwrap_err().code, "has_agent");
+}

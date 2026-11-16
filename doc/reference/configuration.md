@@ -2,7 +2,7 @@
 
 xherd keeps its settings in `config.json` in the data root (`XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd`; in the container, `/var/lib/xherd-daemon/data`). Secrets (git tokens, plugin secrets) are in `secrets.json`, mode `0600`, never in `config.json`.
 
-Most settings are edited in the web UI (Settings) and saved to the file. A change saved through the UI or `PUT /api/v1/config` **applies at once** for every setting except `port`, `bind`, `maxConcurrentAgents`, `workspace`, `tmuxSocket` and `pluginSettings`, which are read at daemon start (the UI says "restart needed" when those differ). Live: the timeouts and limits (`idleAlertMinutes`, `gateParkMinutes`, `pauseTimeoutSec`, `freshSessions`, `maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, `maxAutoApprovalsInRow`, the budgets, `maxDiffLines`, `sensitivePaths`), `autonomy`, `permissionMode`, `defaultRuntime`, `runtimeModels`, `openIn`, `toolchainDefaults`, `eventRetentionDays`, `ntfyServer`/`ntfyTopic`, `mutedNotifications`, `desktopNotifications`, `welcomed`, `disabledPlugins` (the host, trust writer and toolchain plugins skip a disabled plugin), the commit identity and git access. A hand edit of `config.json` still needs a restart.
+Most settings are edited in the web UI (Settings) and saved to the file. A change saved through the UI or `PUT /api/v1/config` **applies at once** for every setting except `port`, `bind`, `maxConcurrentAgents`, `workspace`, `tmuxSocket` and `pluginSettings`, which are read at daemon start (the UI says "restart needed" when those differ). Live: the timeouts and limits (`idleAlertMinutes`, `gateParkMinutes`, `pauseTimeoutSec`, `freshSessions`, `maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, `maxAutoApprovalsInRow`, the budgets, `maxDiffLines`, `sensitivePaths`), `autonomy`, `permissionMode`, `defaultRuntime`, `runtimeModels`, `openIn`, `toolchainDefaults`, `eventRetentionDays`, `ntfyServer`/`ntfyTopic`, `mutedNotifications`, `desktopNotifications`, `suggestAgents`, `welcomed`, `disabledPlugins` (the host, trust writer and toolchain plugins skip a disabled plugin), the commit identity and git access. A hand edit of `config.json` still needs a restart.
 
 Files are written atomically. Keys this version does not know are kept when saving. A `config.json` newer than the running xherd is refused with a message to update.
 
@@ -20,8 +20,9 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `idleAlertMinutes` | `15` | Notify when a job has been idle this long; `0` = off |
 | `gateParkMinutes` | `30` | A gate waiting this long parks the job (frees its slot, stays in *Needs you*); `0` = never |
 | `freshSessions` | `true` | Each approved gate starts a new runtime session; `memory.md` carries over |
-| `mutedNotifications` | `[]` | Notification kinds (`gate`, `blocked`, `idle`, `delivery`, `error`, `recovery`, `budget`, `limit`, `pr`, `pr-comments`, `todo`) that are not sent anywhere. Applies at once |
+| `mutedNotifications` | `[]` | Notification kinds (`gate`, `blocked`, `idle`, `delivery`, `error`, `recovery`, `budget`, `limit`, `pr`, `pr-comments`, `todo`, `suggestion`) that are not sent anywhere. Applies at once |
 | `desktopNotifications` | `false` | The daemon also shows system notifications (`osascript` on macOS, `notify-send` on Linux); not in the Docker image. Applies at once |
+| `suggestAgents` | `true` | Offer to save a job's setup as an agent (a band on the job page and one `suggestion` notification) when a job with no agent is done or marked done, or when you start the same setup a third time (same repository, runtime, model, workflow, autonomy and tool permissions within 30 days). Never after a cancel or a failure. Applies at once; Settings → Gates & autonomy |
 | `ntfyServer` / `ntfyTopic` | unset | Also send every notification to this ntfy topic (both needed; messages carry job names and reasons, in plain text). Applies at once; Settings → Notifications |
 | `maxSessionMinutes` | `0` | End a session and pause the job after this many minutes; `0` = off (after the coding agent writes a handoff note, like Pause) |
 | `prPollMinutes` | `5` | How often a watched pull request is polled; `0` = off |
@@ -73,7 +74,7 @@ Changes apply to running jobs at once, except `instructions`, which is written a
 | Settings tab | Keys |
 |---|---|
 | General | `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays` |
-| Gates & autonomy | `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `maxAutoApprovalsInRow`, `defaultRuntime`, `permissionMode` |
+| Gates & autonomy | `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `maxAutoApprovalsInRow`, `defaultRuntime`, `permissionMode`, `suggestAgents` |
 | Notifications | `mutedNotifications`, `desktopNotifications`, `ntfyServer`, `ntfyTopic` |
 | Open in | `openIn` |
 | Git access | `gitUserName`, `gitUserEmail`, `gitIdentities`, `gitHosts` and their tokens |

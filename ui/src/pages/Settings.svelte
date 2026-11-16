@@ -27,9 +27,9 @@
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
+  const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications', 'suggestAgents'];
   let form = $state<Form>({});
-  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
+  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due'], ['suggestion', 'Save a job\'s setup as an agent']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
   function toggleKind(k: string, on: boolean) {
     const next = new Set(muted);
@@ -132,7 +132,7 @@
         <label class="f">Park at a gate after
           <span class="unit"><input type="number" min="0" bind:value={form.gateParkMinutes} /><span>min</span></span>
           <span class="hint">Frees the slot; stays in Needs you. 0 never parks.</span></label>
-        {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.']] as [k, title, hint] (k)}
+        {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.'], ['suggestAgents', 'Suggest saving a job\'s setup as an agent', 'When a job without an agent is done, or you start the same setup a third time. Never blocks anything; Save as agent is always in the job\'s menu.']] as [k, title, hint] (k)}
           <div class="tog">
             <button class="sw" class:on={form[k] === true} role="switch" aria-checked={form[k] === true} aria-label={title}
               onclick={() => (form[k] = !form[k])}></button>

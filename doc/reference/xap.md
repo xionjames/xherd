@@ -130,11 +130,14 @@ xherd handoff written [--file PATH]
 xherd issue add --title TEXT --severity minor|major|blocker [--about PATH]... [--body TEXT]
 xherd memory propose --reason TEXT [--file PATH]
 xherd agent memory propose --reason TEXT [--file PATH]
+xherd agent propose --name SLUG [--description TEXT] [--instructions-file PATH]
 ```
 
 `pr opened` starts PR follow-up (refused with `bad_url` unless http(s)). `handoff written` confirms a pause/ship handoff (the pause waits for it); default file `.xherd/HANDOFF.md`, refused with `doc_missing` when absent. `issue add` appends to the issue ledger (`.xherd/ledger/issues.jsonl`). `memory propose` registers a proposed update of the repository's shared memory, `AGENTS.md`: `--file` (default `.xherd/AGENTS.proposed.md`) holds the whole proposed file, `--reason` one line on what it adds. One proposal per job; proposing again replaces it. It never blocks the flow: the user accepts (xherd commits `AGENTS.md`, plus a `CLAUDE.md` with `@AGENTS.md` when that import is missing, on the job's branch) or dismisses it. Refusals: `doc_missing`, `doc_schema` (empty, or over 64 KiB), `usage` (no reason), `memory_declined` (the repository has no `AGENTS.md` and the user dismissed a starter one before).
 
 `agent memory propose` registers a new memory for the saved agent the job was started from: `--file` (default `.xherd/agent-memory.proposed.md`) holds the whole text (at most 4 000 characters), `--reason` one line on why. One proposal per job; proposing again replaces it. Nothing is committed: the user accepts it on the job's Agent memory tab (it becomes the agent's memory, version + 1, and only jobs created later see it) or dismisses it. Refusals: `no_agent` (the job has no saved agent), `doc_missing`, `doc_schema` (empty, or over 4 000 characters), `usage` (no reason).
+
+`agent propose` is the opposite call, for a job **without** a saved agent: it drafts the agent the job could become, so the user can save it (a suggestion when the job ends, or *Save as agent*). `--name` is a slug like a job's name, `--description` one line (up to 200 characters), `--instructions-file` (a `./.xherd/…` path) holds up to 4 000 characters of general instructions: what the user had to repeat or correct, nothing about this task. Without the file the instructions are empty. One draft per job; proposing again replaces it. xherd keeps the user's own messages, answers and change requests for the job and writes them to `.xherd/spec/user-notes.md` when a ship-role stage starts, as the input for the draft; ticket and PR text never go in. Nothing is saved without the user. Refusals: `has_agent` (the job already started from an agent), `usage` (a bad name or description), `doc_missing`, `doc_schema` (over 4 000 characters).
 
 ## 7. MCP transport
 

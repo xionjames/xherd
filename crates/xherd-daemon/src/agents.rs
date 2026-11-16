@@ -435,6 +435,90 @@ impl Daemon {
         Ok(done)
     }
 
+    /// Whether `new` (not stored yet) is the third job without an agent with
+    /// the same repository, runtime, model, flow, autonomy and mode created
+    /// in the last 30 days (R30). Off with `suggestAgents`. Only the third:
+    /// a fourth would nag after the third was dismissed.
+    pub(crate) async fn repeated_setup(&self, new: &Job) -> bool {
+        const DAYS_30: i64 = 30 * 24 * 3600 * 1000;
+        if new.agent.is_some() || !self.live_config().suggest_agents {
+            return false;
+        }
+        let Ok(jobs) = self.store.list_jobs().await else {
+            return false;
+        };
+        let same = jobs
+            .iter()
+            .filter(|j| {
+                j.agent.is_none()
+                    && new.created_at - j.created_at <= DAYS_30
+                    && j.repo == new.repo
+                    && j.runtime == new.runtime
+                    && j.model == new.model
+                    && j.flow == new.flow
+                    && j.autonomy == new.autonomy
+                    && j.permission_mode == new.permission_mode
+            })
+            .count();
+        same == 2
+    }
+
+    /// The notice for a suggestion made at creation (R30); the actor sends
+    /// its own when a job ends.
+    pub(crate) fn suggestion_notify(&self, job: &Job) {
+        if self
+            .live_config()
+            .muted_notifications
+            .iter()
+            .any(|k| k == "suggestion")
+        {
+            return;
+        }
+        let _ = self.hub.send(Change::Notify {
+            job_id: job.id.clone(),
+            kind: "suggestion".into(),
+            text: format!("{}: save this setup as an agent?", job.name),
+        });
+    }
+
+    /// `POST /jobs/{id}/suggestion/accept {agent}` and
+    /// `POST /jobs/{id}/save-as-agent {agent}` (R32): create the agent
+    /// (version 1) from the form the user edited, then attach the job to it.
+    /// A suggestion must exist for `accept`; `save-as-agent` works for any
+    /// job without an agent. The job keeps its own settings and snapshot.
+    pub async fn save_as_agent(
+        &self,
+        who: &str,
+        def: AgentDef,
+        accept: bool,
+    ) -> Result<Value, ActionError> {
+        let a = self.action(who, crate::actor::UserAction::Get).await?;
+        if a.agent.is_some() {
+            return Err(err(
+                "has_agent",
+                format!("{} already belongs to an agent", a.name),
+            ));
+        }
+        if accept && a.suggestion.is_none() {
+            return Err(err(
+                "no_suggestion",
+                format!("{} has no suggestion to accept", a.name),
+            ));
+        }
+        let view = self.create_agent(def).await?;
+        let snapshot = Box::new(view.def.snapshot());
+        let job = self
+            .action(who, crate::actor::UserAction::AttachAgent { snapshot })
+            .await?;
+        Ok(json!({"agent": view, "job": job}))
+    }
+
+    /// `POST /jobs/{id}/suggestion/dismiss` (R32): remembered for the job.
+    pub async fn dismiss_suggestion(&self, who: &str) -> Result<Job, ActionError> {
+        self.action(who, crate::actor::UserAction::SuggestionDismiss)
+            .await
+    }
+
     /// The jobs started from an agent, newest first.
     pub async fn agent_jobs(&self, key: &str) -> Result<Vec<Job>, ActionError> {
         let def = self.agent_def(key).await?;

@@ -1672,3 +1672,76 @@ async fn skill_routes() {
         (StatusCode::NOT_FOUND, json!("no_such_skill"))
     );
 }
+
+/// Mark done, suggestion and save-as-agent (R30…R32).
+#[tokio::test]
+async fn mark_done_and_save_as_agent_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let form = json!({"agent": {"name": "shop", "description": "Shop",
+        "runtime": "claude-code", "instructions": "Run the linter.",
+        "workflow": {"pack": "xherd", "flow": "feature"}}});
+    // SC-1 is running: it can be neither marked done nor accepted.
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/jobs/SC-1/mark-done", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("not_allowed"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/jobs/SC-1/suggestion/accept",
+            Some(form.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("no_suggestion"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/jobs/SC-1/save-as-agent",
+            Some(json!({"nope": 1})),
+        ),
+    )
+    .await;
+    // Like the agent routes: a body of the wrong shape is axum's 422.
+    assert_eq!((s, v), (StatusCode::UNPROCESSABLE_ENTITY, Value::Null));
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/jobs/SC-1/save-as-agent",
+            Some(form.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["agent"]["name"], "shop");
+    assert_eq!(v["job"]["agent"]["name"], "shop");
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/jobs/SC-1/save-as-agent", Some(form)),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("has_agent"))
+    );
+    // Dismissing with nothing to dismiss is a no-op.
+    let (s, _) = call(
+        app,
+        send("POST", "/api/v1/jobs/SC-1/suggestion/dismiss", None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+}

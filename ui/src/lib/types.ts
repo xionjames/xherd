@@ -182,6 +182,10 @@ export interface Job {
   /** A pending update of the repo's AGENTS.md (spec §16.6). */
   memoryProposal?: { file: string; reason: string; at: number };
   agentMemoryProposal?: { file: string; reason: string; at: number };
+  /** Offer to save this job's setup as an agent (R30); never for a job with an agent. */
+  suggestion?: { reason: string; at: number; dismissed: boolean };
+  /** What the job proposes for that agent (R31). */
+  agentDraft?: { name: string; description: string; instructions: string; at: number };
   /** What the last poll of the pull request found (R-303). */
   prState?: 'open' | 'merged' | 'closed';
   prCi?: 'pending' | 'failing' | 'passing';

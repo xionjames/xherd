@@ -1242,3 +1242,44 @@ async fn agent_memory_is_copied_into_the_job_when_it_is_created() {
     );
     assert!(t.d.set_agent_memory("nobody", "x").await.is_err());
 }
+
+/// R30: the third job without an agent with the same setup in the same repo
+/// gets a suggestion and one notice; the first two and a fourth do not, and
+/// neither does a different setup or `suggestAgents` off.
+#[tokio::test]
+async fn the_third_job_with_the_same_setup_gets_a_suggestion() {
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    let mut made = Vec::new();
+    for n in ["one", "two", "three", "four"] {
+        let mut r = req(&t, "");
+        r.name = n.into();
+        made.push(t.d.new_job(r).await.unwrap());
+    }
+    let reasons: Vec<_> = made
+        .iter()
+        .map(|j| j.suggestion.as_ref().map(|s| s.reason.as_str()))
+        .collect();
+    assert_eq!(reasons, [None, None, Some("repeated"), None]);
+    let mut notices = 0;
+    while let Ok(c) = rx.try_recv() {
+        if let Change::Notify { kind, .. } = c
+            && kind == "suggestion"
+        {
+            notices += 1;
+        }
+    }
+    assert_eq!(notices, 1);
+}
+
+#[tokio::test]
+async fn a_different_setup_does_not_count_for_the_third_job_rule() {
+    let t = setup().await;
+    for (n, autonomy) in [("one", "ask"), ("two", "ask"), ("three", "important")] {
+        let mut r = req(&t, "");
+        r.name = n.into();
+        r.autonomy = serde_json::from_value(serde_json::json!(autonomy)).unwrap();
+        let j = t.d.new_job(r).await.unwrap();
+        assert!(j.suggestion.is_none(), "{n}");
+    }
+}

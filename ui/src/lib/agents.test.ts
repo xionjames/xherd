@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  FORM_DEFAULTS, agentLane, agentLaneOrder, changedSince, fillFromAgent, fromForm, pickable,
-  profileMarks, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
+  FORM_DEFAULTS, agentLane, agentLaneOrder, canMarkDone, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
+  profileMarks, slugify, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
 } from './agents';
-import type { AgentDef, AgentView } from './types';
+import type { AgentDef, AgentView, Job } from './types';
 
 const def = (over: Partial<AgentDef> = {}): AgentDef => ({
   id: 'ag1', name: 'reviewer', description: '', version: 1, runtime: 'claude-code',
@@ -155,5 +155,40 @@ describe('the edit form', () => {
   it('numbers become numbers and a bad live-jobs count falls back to 1', () => {
     const f = { ...toForm(), jobTokenBudget: '5000', maxDiffLines: '200', maxLiveJobs: 'x' };
     expect(fromForm(f)).toMatchObject({ jobTokenBudget: 5000, maxDiffLines: 200, maxLiveJobs: 1 });
+  });
+});
+
+describe('suggestions (R30…R32)', () => {
+  const job = (over: Partial<Job> = {}): Job => ({ id: 'j1', name: 'login', status: 'done', createdAt: 0, statusSince: 0, lastActivity: 0, branch: 'login', ...over } as Job);
+
+  it('slugify makes a valid name', () => {
+    expect(slugify('My Shop_API!')).toBe('my-shop-api');
+    expect(slugify('a'.repeat(60))).toHaveLength(41);
+    expect(slugify('--x--')).toBe('x');
+  });
+
+  it('is open only for a job with no agent, with a suggestion that was not dismissed', () => {
+    const s = { reason: 'done', at: 1, dismissed: false };
+    expect(suggestionOpen(job({ suggestion: s }))).toBe(true);
+    expect(suggestionOpen(job({ suggestion: { ...s, dismissed: true } }))).toBe(false);
+    expect(suggestionOpen(job())).toBe(false);
+    expect(suggestionOpen(job({ suggestion: s, agent: { id: 'a', name: 'a', version: 1 } as Job['agent'] }))).toBe(false);
+  });
+
+  it('Mark done is for a job with no workflow between turns', () => {
+    expect(canMarkDone({ flow: undefined, status: 'idle' })).toBe(true);
+    expect(canMarkDone({ flow: 'none', status: 'paused' })).toBe(true);
+    expect(canMarkDone({ flow: 'feature', status: 'idle' })).toBe(false);
+    expect(canMarkDone({ flow: undefined, status: 'running' })).toBe(false);
+    expect(canMarkDone({ flow: undefined, status: 'error' })).toBe(false);
+  });
+
+  it('fills the form from the job, then from its draft', () => {
+    const j = job({ repo: '/ws/repos/Shop API', flow: 'feature', pack: 'xherd', runtime: 'opencode', model: 'big', autonomy: 'important', permissionMode: 'auto' });
+    expect(fillFromJob(j)).toMatchObject({ name: 'shop-api-feature', description: 'feature work on Shop API', runtime: 'opencode', model: 'big', flow: 'feature', autonomy: 'important', permissionMode: 'auto', instructions: '' });
+    const d = fillFromJob({ ...j, agentDraft: { name: 'shop', description: 'Shop work', instructions: 'Run the linter.', at: 1 } });
+    expect(d).toMatchObject({ name: 'shop', description: 'Shop work', instructions: 'Run the linter.' });
+    expect(fillFromJob(job()).flow).toBe('none');
+    expect(fillFromJob({ ...j, agentDraft: { name: 'Bad Name', description: '', instructions: '', at: 1 } }).name).toBe('shop-api-feature');
   });
 });

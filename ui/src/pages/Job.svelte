@@ -10,6 +10,7 @@
   import Dialog from '../components/Dialog.svelte';
   import Callout from '../components/Callout.svelte';
   import TicketPrompt from '../components/TicketPrompt.svelte';
+  import SuggestAgent from '../components/SuggestAgent.svelte';
   import type { Job } from '../lib/types';
   import { app, upsertJob } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
@@ -21,7 +22,7 @@
   import { MODE_HINT, modes } from '../lib/modes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
-  import { agentOf, changedSince, waitsForAgent } from '../lib/agents';
+  import { agentOf, canMarkDone, changedSince, waitsForAgent } from '../lib/agents';
 
   let { agent }: { agent: Job } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -35,6 +36,7 @@
     return () => clearInterval(t);
   });
   let confirmCancel = $state(false);
+  let saveOpen = $state(false);
   let menu = $state(false);
   // Open in… (R-701, R-702, R-706, R-707): links that work because the
   // workspace has the same path on this computer; the browser opens them.
@@ -120,6 +122,7 @@
 
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
 <TicketPrompt {agent} />
+<SuggestAgent {agent} bind:open={saveOpen} />
 {#if agent.agent?.skills?.some((s) => !s.installed)}
   <Callout tone="info">{#each agent.agent.skills.filter((s) => !s.installed) as s (s.name)}<div>
     Skill <b>{s.name}</b> was not installed: {s.skipped ?? 'skipped'}.</div>{/each}</Callout>
@@ -201,6 +204,12 @@
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>
         {#if menu}
           <div class="pop" role="menu">
+            {#if canMarkDone(agent)}
+              <button role="menuitem" class="btn ghost" title="This job has no pull request to merge: end it here" onclick={() => act('mark-done', 'Could not mark it done')}>Mark done</button>
+            {/if}
+            {#if !agent.agent}
+              <button role="menuitem" class="btn ghost" onclick={() => { menu = false; saveOpen = true; }}>Save as agent…</button>
+            {/if}
             <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel job…</button>
             {#if canRemove}
               <button role="menuitem" class="btn ghost danger" onclick={() => { menu = false; confirmRemove = true; }}>Remove worktree…</button>

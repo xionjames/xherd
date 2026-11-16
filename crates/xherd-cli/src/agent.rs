@@ -13,6 +13,8 @@ pub enum AgentCmd {
     /// The job's agent memory (called from a job, XAP).
     #[command(subcommand)]
     Memory(crate::xap::AgentMemoryCmd),
+    /// Propose the agent a job without one could become (called from a job, XAP).
+    Propose(crate::xap::AgentProposeArgs),
     /// List saved agents.
     Ls,
     /// Show one agent's settings.
@@ -327,6 +329,9 @@ pub fn run(cmd: AgentCmd, json: bool) -> i32 {
     if let AgentCmd::Memory(m) = cmd {
         return crate::xap::run(m.into(), json);
     }
+    if let AgentCmd::Propose(p) = cmd {
+        return crate::xap::run(p.into(), json);
+    }
     let c = match Client::new() {
         Ok(c) => c,
         Err(e) => {
@@ -336,6 +341,7 @@ pub fn run(cmd: AgentCmd, json: bool) -> i32 {
     };
     match cmd {
         AgentCmd::Memory(m) => crate::xap::run(m.into(), json),
+        AgentCmd::Propose(p) => crate::xap::run(p.into(), json),
         AgentCmd::Ls => match c.call("GET", "/agents", None) {
             Ok(v) if json => print_json(&v),
             Ok(v) => {

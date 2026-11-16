@@ -104,6 +104,16 @@ pub enum UserAction {
     /// Drop the pending agent-memory proposal (R29): after an accept, which
     /// `Daemon::agent_memory_accept` wrote, or a dismiss. Memory is untouched.
     AgentMemoryClear,
+    /// End a job without a workflow by hand (R30): it has no PR to merge.
+    MarkDone,
+    /// The job now belongs to this saved agent (R32): accepting a
+    /// suggestion or "Save as agent". Only `Job.agent` changes, to the
+    /// agent's version 1 snapshot; the job keeps its own settings.
+    AttachAgent {
+        snapshot: Box<xherd_core::agent_def::JobAgent>,
+    },
+    /// Remember that the user does not want this job's suggestion (R32).
+    SuggestionDismiss,
     /// Check the agent's pull request now (issue #131): the automatic poll
     /// without its guards, refused `no_pr` without a PR URL.
     CheckPr,
@@ -242,6 +252,8 @@ pub struct ActorSettings {
     /// and the toolchain plugins skip them while running.
     pub disabled_plugins: Vec<String>,
     /// Notification kinds that are not published (`mutedNotifications`).
+    /// Offer to save a job's setup as an agent (`suggestAgents`, R30).
+    pub suggest_agents: bool,
     pub muted_notifications: Vec<String>,
 }
 
@@ -271,6 +283,7 @@ impl ActorSettings {
             disabled_plugins: c.disabled_plugins.clone(),
             git_hosts: c.git_hosts.clone(),
             muted_notifications: c.muted_notifications.clone(),
+            suggest_agents: c.suggest_agents,
             ..base
         }
     }
@@ -414,6 +427,7 @@ impl Default for ActorSettings {
             sensitive_paths: Vec::new(),
             disabled_plugins: Vec::new(),
             muted_notifications: Vec::new(),
+            suggest_agents: true,
         }
     }
 }
@@ -724,6 +738,75 @@ impl Actor {
         self.notify("gate", text);
     }
 
+    /// Offer to save this job's setup as an agent (R30): once, for a job with
+    /// no agent, while `suggestAgents` is on. One notice, never a modal.
+    fn offer_agent(&mut self, reason: &str) {
+        if self.job.agent.is_some()
+            || self.job.suggestion.is_some()
+            || !self.env.settings.get().suggest_agents
+        {
+            return;
+        }
+        self.job.suggestion = Some(xherd_core::job::Suggestion {
+            reason: reason.into(),
+            at: self.now(),
+            dismissed: false,
+        });
+        self.notify(
+            "suggestion",
+            format!("{}: save this setup as an agent?", self.job.name),
+        );
+    }
+
+    /// Keep a text the user wrote to this job, for the agent draft (R31).
+    /// Only jobs without an agent: those are the ones that may become one.
+    async fn keep_note(&self, text: &str) {
+        let text = text.trim();
+        if self.job.agent.is_some() || text.is_empty() {
+            return;
+        }
+        if let Err(e) = self
+            .env
+            .store
+            .add_note(&self.job.id, text, self.now())
+            .await
+        {
+            tracing::warn!(job = %self.job.name, error = %e, "note not stored");
+        }
+    }
+
+    /// `.xherd/spec/user-notes.md` (R31): what the user told this job, for
+    /// the ship prompt's agent draft. Only the user's own texts; ticket and
+    /// PR text never go in.
+    async fn write_user_notes(&self) {
+        if self.job.agent.is_some() {
+            return;
+        }
+        let Ok(wd) = self.workdir() else {
+            return;
+        };
+        let notes = self.env.store.notes(&self.job.id).await.unwrap_or_default();
+        let mut text = String::from(
+            "# What the user told this job\n\nOne item per message, oldest first.\n\n",
+        );
+        for (n, _) in &notes {
+            let one: String = n.split_whitespace().collect::<Vec<_>>().join(" ");
+            text.push_str("- ");
+            text.extend(one.chars().take(500));
+            text.push('\n');
+        }
+        if notes.is_empty() {
+            text.push_str("None.\n");
+        }
+        let dir = wd.join(xherd_flow::xap::SPEC_DIR);
+        let written = std::fs::create_dir_all(&dir).and_then(|()| {
+            xherd_core::paths::write_atomic(&dir.join("user-notes.md"), text.as_bytes(), None)
+        });
+        if let Err(e) = written {
+            tracing::warn!(job = %self.job.name, error = %e, "user-notes.md not written");
+        }
+    }
+
     /// Persist and publish; tell the supervisor when the status moved.
     async fn commit(&mut self, before: Status) {
         self.job.note_stage();
@@ -740,6 +823,16 @@ impl Actor {
             && matches!(self.auto_check(), AutoCheck::Approve { .. });
         if self.job.gate.is_none() {
             self.notified_gate = None;
+        }
+        // R30: a job without an agent that is done (merged, or marked done)
+        // offers to save its setup. Cancelled and failed jobs never do.
+        if self.job.status == Status::Done && before != Status::Done {
+            let reason = if self.job.flow.is_none() {
+                "marked-done"
+            } else {
+                "done"
+            };
+            self.offer_agent(reason);
         }
         if let Err(err) = self.env.store.put_job(&self.job).await {
             tracing::error!(agent = %self.job.name, %err, "agent not stored");
@@ -1348,6 +1441,7 @@ impl Actor {
             && self.stage_role(pack, stage) == Some(xherd_core::domain::Role::Ship)
         {
             self.fetch_templates();
+            self.write_user_notes().await;
         }
         // R8: flow work after an Ask ends its hold.
         let hold_ended = call.cmd.is_flow_work() && self.job.ask_hold.take().is_some();
@@ -1789,6 +1883,14 @@ impl Actor {
                 let d = doc_path(f, &wd)?;
                 Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
             }
+            XapCmd::AgentPropose {
+                instructions_file: Some(f),
+                ..
+            } => {
+                let wd = self.workdir()?;
+                let d = doc_path(f, &wd)?;
+                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+            }
             XapCmd::HandoffWritten { file } => {
                 let wd = self.workdir()?;
                 let d = doc_path(file.as_deref().unwrap_or(HANDOFF), &wd)?;
@@ -2057,6 +2159,7 @@ impl Actor {
                 } else {
                     self.send(text, 1).await?;
                 }
+                self.keep_note(text).await;
                 // A message while a question is open is its answer (xap.md `ask`).
                 if matches!(self.job.gate, Some(Gate::Question { .. })) {
                     self.job.gate = None;
@@ -2070,6 +2173,7 @@ impl Actor {
             }
             UserAction::Ask { text } => {
                 self.ask(text).await?;
+                self.keep_note(text).await;
                 payload = Some(json!({"chars": text.trim().chars().count()}));
                 "user.ask"
             }
@@ -2109,6 +2213,7 @@ impl Actor {
             }
             UserAction::RequestChanges { comment } => {
                 self.request_changes(comment).await?;
+                self.keep_note(comment).await;
                 self.job.ask_hold = None;
                 "user.request-changes"
             }
@@ -2137,6 +2242,52 @@ impl Actor {
                     return Ok(());
                 }
                 "user.agent-memory-clear"
+            }
+            UserAction::MarkDone => {
+                if self.job.flow.is_some() {
+                    return Err(refuse(
+                        "not_allowed",
+                        format!(
+                            "{} has a workflow: it is done when its PR is merged",
+                            self.job.name
+                        ),
+                    ));
+                }
+                if next_status(self.job.status, Trigger::MarkDone).is_none() {
+                    return Err(refuse(
+                        "not_allowed",
+                        format!(
+                            "{} is {}: only an idle, waiting, paused or parked job can be marked done",
+                            self.job.name, self.job.status
+                        ),
+                    ));
+                }
+                if self.job.status.is_live() {
+                    self.end_session().await;
+                }
+                self.job.pause_requested_at = None;
+                self.job.fire(Trigger::MarkDone, now);
+                "user.mark-done"
+            }
+            UserAction::AttachAgent { snapshot } => {
+                if self.job.agent.is_some() {
+                    return Err(refuse(
+                        "has_agent",
+                        format!("{} already belongs to an agent", self.job.name),
+                    ));
+                }
+                payload = Some(json!({"agent": snapshot.id, "version": snapshot.version}));
+                self.job.agent = Some((**snapshot).clone());
+                self.job.suggestion = None;
+                self.job.agent_draft = None;
+                "user.attach-agent"
+            }
+            UserAction::SuggestionDismiss => {
+                match self.job.suggestion.as_mut() {
+                    Some(s) if !s.dismissed => s.dismissed = true,
+                    _ => return Ok(()),
+                }
+                "user.suggestion-dismiss"
             }
             UserAction::CheckPr => {
                 self.check_pr()?;

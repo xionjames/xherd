@@ -139,6 +139,8 @@ enum Cmd {
     Talk { job: String, text: String },
     /// End a `talk`: back to watching its PR when it was watching, else paused.
     Finish { job: String },
+    /// Mark a job with no workflow done (it has no PR to merge); offers to save its setup as an agent.
+    Done { job: String },
     /// Have the job merge its PR's base branch into its branch and resolve the conflicts (a new session; the merge commit waits for your approval).
     ResolveConflicts { job: String },
     /// Approve the job's open gate (documents or commit) as they are now.
@@ -446,6 +448,7 @@ fn main() -> ExitCode {
         Cmd::Send { job, text } => action(&job, "send", Some(serde_json::json!({"text": text}))),
         Cmd::Talk { job, text } => action(&job, "ask", Some(serde_json::json!({"text": text}))),
         Cmd::Finish { job } => action(&job, "finish", None),
+        Cmd::Done { job } => action(&job, "mark-done", None),
         Cmd::ResolveConflicts { job } => action(&job, "resolve-conflicts", None),
         Cmd::Approve { job, reason } => {
             action(&job, "approve", Some(serde_json::json!({"reason": reason})))
@@ -1097,6 +1100,12 @@ mod tests {
         let cli = Cli::try_parse_from(["xherd", "finish", "shop"]).unwrap();
         assert!(matches!(cli.cmd, Cmd::Finish { ref job } if job == "shop"));
         assert!(Cli::try_parse_from(["xherd", "talk", "shop"]).is_err());
+    }
+
+    #[test]
+    fn done_parses() {
+        let cli = Cli::try_parse_from(["xherd", "done", "shop"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Done { ref job } if job == "shop"));
     }
 
     #[test]

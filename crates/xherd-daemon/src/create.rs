@@ -262,6 +262,15 @@ impl Daemon {
             a.pack = Some(pack_name.into());
             a.flow = Some(c.flow.clone());
         }
+        // R30: the third job without an agent with this setup in 30 days.
+        let suggested = self.repeated_setup(&a).await;
+        if suggested {
+            a.suggestion = Some(xherd_core::job::Suggestion {
+                reason: "repeated".into(),
+                at: a.created_at,
+                dismissed: false,
+            });
+        }
 
         let wanted: Vec<(String, Option<String>)> = agent
             .as_ref()
@@ -282,6 +291,9 @@ impl Daemon {
         }
         let a = res?;
         debug_assert_eq!(a.status, Status::Queued);
+        if suggested {
+            self.suggestion_notify(&a);
+        }
         Ok(a)
     }
 }
@@ -785,6 +797,7 @@ const XAP_ALLOW: &[&str] = &[
     "xherd issue *",
     "xherd memory *",
     "xherd agent memory *",
+    "xherd agent propose *",
 ];
 
 /// What the runtime allows without asking in a new worktree: reading the
