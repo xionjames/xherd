@@ -5,7 +5,7 @@
 // (R9, R12) come after the built-ins as `plugin:<name>`, drawn in a
 // sandboxed frame by `HerdPluginView`.
 import type { Component } from 'svelte';
-import type { Job, FlowInfo, PluginInfo } from './types';
+import type { AgentView, Job, FlowInfo, PluginInfo } from './types';
 import HerdList from '../components/HerdList.svelte';
 import StageColumns from '../components/StageColumns.svelte';
 import HerdPluginView from '../components/HerdPluginView.svelte';
@@ -13,7 +13,10 @@ import HerdPluginView from '../components/HerdPluginView.svelte';
 export interface HerdViewProps {
   agents: Job[];
   flows: FlowInfo[];
+  /** The saved agents (a view plugin gets a trimmed copy). */
+  savedAgents?: AgentView[];
   open: (a: Job) => void;
+  openAgent?: (name: string) => void;
   /** For a plugin view: the plugin, its page and its label. */
   plugin?: string;
   entry?: string;

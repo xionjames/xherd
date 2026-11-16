@@ -3,7 +3,7 @@
 // build step.
 //
 // The kit script (loaded before this file) defines the global `xherdView`:
-//   xherdView.onData(cb)  cb({agents, flows, theme}) on every change
+//   xherdView.onData(cb)  cb({agents (the jobs), savedAgents, flows, theme}) on every change
 //   xherdView.open(id)    open that agent's page in xherd
 //
 // Agent fields come from the Herd page (names, branches, tickets) and are

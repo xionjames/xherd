@@ -20,6 +20,7 @@
   const setLayout = (id: string) =>
     go('/', { f: route.query.get('f') ?? undefined, layout: id === views[0].id ? undefined : id, group: route.query.get('group') ?? undefined });
   const open = (a: Job) => go(`/jobs/${a.name}`);
+  const openAgent = (name: string) => go(`/agents/${name}`);
 
   // The kill switch (R-032): no handoff notes, nothing new starts.
   const pausable = $derived(agents.filter((a) => ['queued', 'running', 'idle', 'blocked', 'waiting-input'].includes(a.status)).length);
@@ -44,7 +45,7 @@
 
 <!-- Keyed, so a switch between two plugin views starts a fresh frame. -->
 {#key view.id}
-  <view.component {agents} {flows} {open} plugin={view.plugin} entry={view.entry} label={view.label} />
+  <view.component {agents} {flows} savedAgents={app.state?.agents ?? []} {open} {openAgent} plugin={view.plugin} entry={view.entry} label={view.label} />
 {/key}
 
 {#if confirmPause}

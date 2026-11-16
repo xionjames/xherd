@@ -128,7 +128,7 @@ A view plugin is **files only**: a manifest with `commands`, `hooks`, `checks`, 
 
 So a view gets its data only by message, and does what it shows with the DOM. One thing no policy stops: a view can navigate its own frame to another site, and take the data it was given along in the URL. Install only views you trust with your jobs' names, branches, repository folder names and ticket and PR links. After any new page loads in the frame the Herd page sends nothing until that page says `ready` again. Job fields (names, branches, tickets) are written by people and jobs: draw them as text (`textContent`), never as HTML.
 
-**Protocol v1.** Every message is a plain object with `xherdView: 1` and a `kind`. The view sends `{kind: "ready"}` once it listens; from then on the Herd page sends `{kind: "data", agents, flows, theme}` after each change (jobs, flows or the visible theme). The field is still called `agents` and holds the jobs: protocol v1 is unchanged, so views written before jobs and saved agents existed keep working. The view may send `{kind: "open", agentId}` to open that job's page; anything else, and an `open` of an unknown job, is ignored. The page accepts messages only from the frame's window with the origin `null`, and posts to that window only.
+**Protocol v1.** Every message is a plain object with `xherdView: 1` and a `kind`. The view sends `{kind: "ready"}` once it listens; from then on the Herd page sends `{kind: "data", agents, savedAgents, flows, theme}` after each change (jobs, saved agents, flows or the visible theme). The field is still called `agents` and holds the jobs: protocol v1 is unchanged, so views written before jobs and saved agents existed keep working. The view may send `{kind: "open", agentId}` to open that job's page, or `{kind: "open-agent", name}` to open a saved agent's page; anything else, and an `open` of an unknown job or agent, is ignored. `savedAgents` and `open-agent` are additions: a view that ignores them keeps working, and one run on an older xherd sees no `savedAgents`. The page accepts messages only from the frame's window with the origin `null`, and posts to that window only.
 
 `theme` is `light` or `dark`. `flows` are the packs' flows (`{pack, flow, stages: [{id, role, class, gate}]}`, as in `GET /state`). `jobs` holds every job (finished ones too, unfiltered) as a `ViewAgent`, and nothing else of it: no prompts, messages, question texts, documents, comments or paths.
 
@@ -143,14 +143,27 @@ So a view gets its data only by message, and does what it shows with the DOM. On
 | `stageName`, `waitsOn` | The current stage's label, and what its open gate waits on (document names, a commit id, a count) |
 | `gate` | The open gate's kind only (`docs`, `commit`, `question`) |
 | `needsYou` | Whether it waits for the user |
+| `agent` | The name of the saved agent running its current stage; left out for a job with none |
 | `hue` | The job's colour as a CSS `hsl(…)`, the one the rest of the UI uses |
 | `prUrl`, `prState`, `prCi` | The pull request, its state and checks, when there is one |
+
+A field with no value is left out. `savedAgents` holds every saved agent, archived ones too, as a `ViewSavedAgent` and nothing else of it (never its instructions, memory, skills, budgets or paths):
+
+| Field | Meaning |
+|---|---|
+| `id`, `name`, `description`, `version` | The agent and its current version |
+| `runtime` | Its runtime |
+| `status` | `needs-you`, `working`, `idle` or `archived`, as on the Agents page |
+| `archived` | Whether it is archived |
+| `liveJobs`, `maxLiveJobs` | Live jobs against its limit |
+| `tokensToday` | Tokens counted today for its jobs |
+| `jobs` | Ids of the jobs in `agents` that use it |
 
 A field with no value is left out. `gate` may also be `pr-triage` or `pr-replies` (pull request comment rounds).
 
 **The view kit.** Two files at `/api/v1/view-kit/` save writing the protocol and the styles yourself:
 
-- `xherd-view.js`, a classic script that defines the global `xherdView`: `xherdView.onData(cb)` calls `cb({agents, flows, theme})` for every `data` message (a callback added after the first message gets the last one at once), `xherdView.open(agentId)` asks to open a job. It says `ready` when it loads and sets `data-theme` on `<html>` before each callback. Load it before your own scripts.
+- `xherd-view.js`, a classic script that defines the global `xherdView`: `xherdView.onData(cb)` calls `cb({agents, savedAgents, flows, theme})` for every `data` message (a callback added after the first message gets the last one at once), `xherdView.open(agentId)` asks to open a job, `xherdView.openAgent(name)` a saved agent. It says `ready` when it loads and sets `data-theme` on `<html>` before each callback. Load it before your own scripts.
 - `xherd.css`, xherd's design tokens and component classes (`app.css`), which follow `data-theme`, so the view matches the UI in both themes.
 
 Reference them by absolute path (`/api/v1/view-kit/xherd-view.js`); your own files by relative path.
