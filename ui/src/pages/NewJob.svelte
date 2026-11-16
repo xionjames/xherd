@@ -80,6 +80,12 @@
   const picks = $derived(flowView ? resolveStages(flowView.stages, agentName || undefined, stagePick) : []);
   const stageNames = $derived(flowView ? Object.fromEntries(flowView.stages.map((x) => [x.id, stageLabel({ ...x, gate: false })])) : {});
   const anyStageAgent = $derived(picks.some((x) => x.agent));
+  // With agents on the stages, each owns its autonomy, runtime, model and
+  // tools: the form sends none of them unless "Override for all stages" is on.
+  const staged = $derived(!agent && anyStageAgent);
+  let override = $state(false);
+  $effect(() => { void f.flow; override = false; });
+  const own = $derived(!staged || override);
   let autonomyTouched = $state(false); // a profile's autonomy fills the selector until the user picks one
   const nameOk = $derived(/^[a-z0-9][a-z0-9-]{0,40}$/.test(f.name));
   // With an agent the name may be left out: <agent>-<ticket key>, else <agent>-<n> (R21).
@@ -205,12 +211,12 @@
     if (ticketIn) body.ticket = ticketIn;
     if (f.base.trim()) body.base = f.base.trim();
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
-    if (!agent || autonomyTouched || from('autonomy')) body.autonomy = f.autonomy;
+    if (own && (!agent || autonomyTouched || from('autonomy'))) body.autonomy = f.autonomy;
     const ov = stageOverrides(stagePick);
     if (Object.keys(ov).length) (body as Record<string, unknown>).agents = ov;
-    if (f.mode) body.permissionMode = f.mode;
-    if (f.runtime) body.runtime = f.runtime;
-    if (canModel && f.model.trim()) body.model = f.model.trim();
+    if (own && f.mode) body.permissionMode = f.mode;
+    if (own && f.runtime) body.runtime = f.runtime;
+    if (own && canModel && f.model.trim()) body.model = f.model.trim();
     try {
       const r = await post<{ job: Job }>(agent ? `/agents/${agent.id}/jobs` : '/jobs', body);
       upsertJob(r.job);
@@ -304,7 +310,12 @@
         <span class="hint">Assignments are edited on <a href={href(flowPack ? `/flows/${flowPack}/${f.flow}` : '/flows')}>Flows</a>. Agents of one job must share a runtime.</span>
       </details>
     {/if}
-    <details class="more" open={more || moreTouched} ontoggle={toggleMore}>
+    {#if staged && !override}
+      <div class="f">Autonomy, runtime, model and tools
+        <span class="hint">Set by the agent of each stage (above), under the repository profile's limits.
+          <label class="inl"><input type="checkbox" bind:checked={override} /> Override for all stages</label></span></div>
+    {:else}
+    <details class="more" open={more || moreTouched || override} ontoggle={toggleMore}>
       <summary><span class="mono hint">{summary}{prof ? ` (profile ${prof.name})` : ''}</span><span class="lbl">More options</span></summary>
       <div class="opts">
       <div class="f">Autonomy {#if from('autonomy')}<span class="frm">from agent</span>{/if}
@@ -333,6 +344,7 @@
         <span class="hint">{f.mode || repo.data?.profile?.permissionMode ? MODE_HINT[(f.mode || repo.data?.profile?.permissionMode)!] : 'The mode set in Settings → Gates & autonomy (edits unless you changed it).'} Each agent can change it later.</span></label>
       </div>
     </details>
+    {/if}
     {#snippet foot()}
       <button type="button" class="btn ghost" onclick={() => history.back()}>Cancel</button>
       <button class="btn primary" disabled={!ready || busy}>{busy && repo.busy ? 'Getting the repository…' : 'Create job'}</button>
@@ -341,6 +353,7 @@
 </form>
 
 <style>
+  .inl { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
   .frm { font-size: 11px; font-weight: 600; margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); }
   .more > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; cursor: pointer; list-style: none; }
   .more > summary::-webkit-details-marker { display: none; }

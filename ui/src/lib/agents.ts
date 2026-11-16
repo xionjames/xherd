@@ -284,10 +284,6 @@ export function stageRuns(job: Pick<Job, 'agents' | 'stageAgents' | 'currentAgen
   });
 }
 
-/** Different stages run different agents: only then does the stepper name them. */
-export const mixedAgents = (runs: readonly StageRun[]): boolean =>
-  new Set(runs.map((r) => r.agent ?? '')).size > 1;
-
 /** What a stage resolves to in the New job form: the agent picked for this
  *  stage, else the stage's assignment, else the job's agent, else the stage
  *  before's (R37). `from` says which. */

@@ -2,11 +2,11 @@
   import Icon from './Icon.svelte';
   import type { Job, FlowInfo } from '../lib/types';
   import { steps, stageLabel } from '../lib/flow';
-  import { stageRuns, mixedAgents } from '../lib/agents';
+  import { stageRuns } from '../lib/agents';
   let { agent, flow }: { agent: Job; flow?: FlowInfo } = $props();
-  // With different agents on different stages, each stage names its agent (D26, R42).
+  // Each stage names its agent when the job has any (D26, R42).
   const runs = $derived(flow ? stageRuns(agent, flow.stages) : []);
-  const named = $derived(mixedAgents(runs));
+  const named = $derived(runs.some((r) => r.agent));
 </script>
 
 {#if flow}

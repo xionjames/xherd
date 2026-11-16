@@ -87,6 +87,12 @@
   }
 
   const finished = $derived(['done', 'cancelled'].includes(agent.status));
+  // A job with agents gets its runtime, model, autonomy and tools from them:
+  // shown as facts. Changing one here pins the job to the current agent (it
+  // stops switching agents per stage), so it takes a deliberate click.
+  let override = $state(false);
+  $effect(() => { void agent.id; override = false; });
+  const owned = $derived(hasAgents(agent) && !agent.pinned && !override && !finished);
   async function setAutonomy(e: Event) {
     const level = (e.currentTarget as HTMLSelectElement).value;
     try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/autonomy`, { level })).job); }
@@ -152,10 +158,18 @@
           {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
           <span>{agent.runtime ?? 'claude-code'}</span>
           {#if !canModel && agent.model}<span class="mono">{agent.model}</span>{/if}
+          {#if owned}
+            {#if canModel && agent.model}<span class="mono" title="Model">{agent.model}</span>{/if}
+            {#if agent.flow && agent.flow !== 'none'}<span title="Autonomy">autonomy {agent.autonomy ?? 'ask'}</span>{/if}
+            {#if agent.permissionMode}<span title={MODE_HINT[agent.permissionMode]}>tools {agent.permissionMode}</span>{/if}
+          {/if}
           <span>started {agoText(agent.createdAt)}</span>
           <span>active {agoText(agent.lastActivity)}</span>
         </div>
         <div class="hctl">
+          {#if owned}
+            <button class="btn ghost" title="Set the model, autonomy or tools for this job only. The job then stops switching agents at each stage." onclick={() => (override = true)}>Override for this job</button>
+          {:else}
           {#if canModel}
             {#key agent.model}
               <label class="hfield" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume)."><span>model</span>
@@ -173,6 +187,7 @@
               <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
                 {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
               </select></label>
+          {/if}
           {/if}
         </div>
       </div>
