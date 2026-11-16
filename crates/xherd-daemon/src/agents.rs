@@ -132,8 +132,13 @@ fn proposal_agent<'a>(
 }
 
 /// Live jobs and the newest job's name, from the jobs of one agent (pure).
-fn summarize(jobs: &[&Job]) -> (usize, Option<String>) {
-    let live = jobs.iter().filter(|j| j.status.is_live()).count();
+/// Live jobs of agent `id` (those whose current stage it runs, like the
+/// supervisor's limit) and the newest job that used it.
+fn summarize(id: &str, jobs: &[&Job]) -> (usize, Option<String>) {
+    let live = jobs
+        .iter()
+        .filter(|j| j.status.is_live() && j.current_agent.as_deref() == Some(id))
+        .count();
     let last = jobs
         .iter()
         .max_by_key(|j| (j.created_at, j.id.as_str()))
@@ -180,7 +185,7 @@ impl Daemon {
     }
 
     async fn view(&self, def: AgentDef, jobs: &[&Job]) -> AgentView {
-        let (live_jobs, last_job) = summarize(jobs);
+        let (live_jobs, last_job) = summarize(&def.id, jobs);
         AgentView {
             status: agent_def::derived_status(&def, jobs),
             broken: self.agent_broken(&def),
@@ -899,11 +904,14 @@ mod tests {
 
     #[test]
     fn summary_counts_live_jobs_and_names_the_newest() {
-        let a = job("a", Status::Running, 1);
+        let mut a = job("a", Status::Running, 1);
         let b = job("b", Status::Done, 3);
         let c = job("c", Status::Paused, 2);
-        assert_eq!(summarize(&[]), (0, None));
-        assert_eq!(summarize(&[&a, &b, &c]), (1, Some("b".into())));
+        a.current_agent = Some("g1".into());
+        assert_eq!(summarize("g1", &[]), (0, None));
+        assert_eq!(summarize("g1", &[&a, &b, &c]), (1, Some("b".into())));
+        // running, but another agent's stage now: not live for this one
+        assert_eq!(summarize("g2", &[&a]), (0, Some("a".into())));
     }
 
     #[test]

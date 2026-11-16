@@ -247,18 +247,22 @@ pub fn check(def: &mut AgentDef) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// `archived`, else `needs you` when any job does, else `working` when any is
-/// live, else `idle` (R17). Finished jobs do not count.
+/// `archived`, else `needs you` when a job whose current stage this agent
+/// runs does, else `working` when one is live, else `idle` (R17). Finished jobs
+/// do not count, and neither does a job that only used the agent for another
+/// stage: the agent of the stage that waits is the one that needs you.
 pub fn derived_status(def: &AgentDef, jobs: &[&Job]) -> AgentStatus {
     use crate::Status::{Cancelled, Done};
+    let mine = |j: &&&Job| j.current_agent.as_deref() == Some(def.id.as_str());
     if def.archived_at.is_some() {
         AgentStatus::Archived
     } else if jobs
         .iter()
+        .filter(mine)
         .any(|j| !matches!(j.status, Done | Cancelled) && j.needs_you())
     {
         AgentStatus::NeedsYou
-    } else if jobs.iter().any(|j| j.status.is_live()) {
+    } else if jobs.iter().filter(mine).any(|j| j.status.is_live()) {
         AgentStatus::Working
     } else {
         AgentStatus::Idle
@@ -330,6 +334,7 @@ mod tests {
     fn job(status: Status, gate: bool) -> Job {
         let mut j = Job::new("j", 0);
         j.status = status;
+        j.current_agent = Some("a1".into());
         if gate {
             j.gate = Some(crate::domain::Gate::Question { text: "q".into() });
         }
@@ -444,6 +449,18 @@ mod tests {
             derived_status(&archived, &[&waiting]),
             AgentStatus::Archived
         );
+    }
+
+    #[test]
+    fn only_the_agent_of_the_current_stage_needs_you() {
+        let d = def();
+        // the job used this agent before, but another one runs its stage now
+        let mut gated = job(Status::Idle, true);
+        gated.current_agent = Some("other".into());
+        assert_eq!(derived_status(&d, &[&gated]), AgentStatus::Idle);
+        let mut running = job(Status::Running, false);
+        running.current_agent = None;
+        assert_eq!(derived_status(&d, &[&running]), AgentStatus::Idle);
     }
 
     #[test]
