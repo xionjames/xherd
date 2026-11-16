@@ -100,6 +100,14 @@ impl Daemon {
                 req.flow = Some(def.workflow.flow.clone());
             }
         }
+        // No repository yet: the one a ticket URL names (#148). An explicit
+        // repository or the agent's always wins; without any, `check` refuses.
+        if req.repo.trim().is_empty()
+            && let Some(Ok(Some(input))) = req.ticket.as_deref().map(new::parse_ticket)
+            && let Some(url) = self.ticket_repo(&input)
+        {
+            req.repo = url;
+        }
         if agent.is_some() && req.repo.trim().is_empty() {
             return Err(refuse(
                 "repo_required",

@@ -70,7 +70,9 @@ enum Cmd {
         /// Flow of the built-in pack, or `none` (default `feature`).
         #[arg(long)]
         flow: Option<String>,
-        /// Local repository, or a remote URL cloned into the workspace (default: the current directory).
+        /// Local repository, or a remote URL cloned into the workspace. Default: the current
+        /// directory when it is inside a git repository, else the repository of an https
+        /// ticket URL that a tracker reads.
         #[arg(long)]
         repo: Option<String>,
         #[arg(long)]
@@ -894,6 +896,11 @@ fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
     }
 }
 
+/// Is `dir` inside a git repository (an ancestor has a `.git` file or folder)? No process runs.
+fn inside_git(dir: &std::path::Path) -> bool {
+    dir.ancestors().any(|d| d.join(".git").exists())
+}
+
 fn new_job(repo: Option<String>, mut req: xherd_core::new::NewJob) -> i32 {
     // The daemon has its own working directory: send an absolute path.
     // An agent with a repository of its own needs none from here (R20).
@@ -906,6 +913,15 @@ fn new_job(repo: Option<String>, mut req: xherd_core::new::NewJob) -> i32 {
     let repo = match repo {
         _ if agent_has_repo => String::new(),
         Some(r) if r.contains("://") || r.starts_with("git@") => r,
+        None if req
+            .ticket
+            .as_deref()
+            .is_some_and(|t| t.starts_with("https://"))
+            && !std::env::current_dir().is_ok_and(|d| inside_git(&d)) =>
+        {
+            // Not in a repository: the daemon derives it from the ticket URL.
+            String::new()
+        }
         r => {
             let p = r.map_or_else(std::env::current_dir, |r| std::fs::canonicalize(&r));
             match p {
@@ -1023,6 +1039,19 @@ mod tests {
         let cli = Cli::try_parse_from(argv(&["xherd", "new", "shop"])).unwrap();
         assert!(matches!(cli.cmd, Cmd::New { .. }));
         assert!(Cli::try_parse_from(argv(&["xherd", "job"])).is_err());
+    }
+
+    #[test]
+    fn inside_git_looks_at_ancestors_for_a_git_file_or_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let deep = d.path().join("a/b");
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(!inside_git(&deep));
+        std::fs::write(d.path().join(".git"), "gitdir: x").unwrap();
+        assert!(inside_git(&deep));
+        let d2 = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d2.path().join(".git")).unwrap();
+        assert!(inside_git(d2.path()));
     }
 
     #[test]

@@ -139,24 +139,42 @@ impl Daemon {
         (ticket, found.map(|(t, _)| t))
     }
 
+    /// The repository a ticket URL names (#148): the clone URL of the issue's
+    /// repository, only for a URL an enabled tracker reads. A key, a URL no
+    /// tracker reads, or a URL that is not an issue of a repository: `None`.
+    /// No tracker is asked anything: the URL itself says it.
+    pub(crate) fn ticket_repo(&self, input: &TicketInput) -> Option<String> {
+        let TicketInput::Url(url) = input else {
+            return None;
+        };
+        let ticket = Ticket {
+            key: None,
+            url: Some(url.clone()),
+        };
+        pick_tracker(&self.ticket_readers(), None, &ticket)?;
+        xherd_plugin::issues::repo_url(url)
+    }
+
     /// `POST /tickets/resolve {ticket, repo?}`: what the New agent form
-    /// shows under the ticket field: the key, the URL and the tracker that
-    /// reads it (`null`: none, the URL stays a plain link). `repo` is a
-    /// local repository path, for the tracker of its host.
+    /// shows under the ticket field: the key, the URL, the tracker that
+    /// reads it (`null`: none, the URL stays a plain link) and the
+    /// repository the URL names (`repo`, `null`: none). The request's `repo`
+    /// is a local repository path, for the tracker of its host.
     pub async fn resolve_ticket_input(
         &self,
         ticket: &str,
         repo: Option<&str>,
     ) -> Result<Value, ActionError> {
         let Some(input) = xherd_core::new::parse_ticket(ticket)? else {
-            return Ok(json!({"key": null, "url": null, "tracker": null}));
+            return Ok(json!({"key": null, "url": null, "tracker": null, "repo": null}));
         };
         let remote = match repo.map(std::path::Path::new).filter(|p| p.is_absolute()) {
             Some(p) => crate::actor::origin_host(p).await,
             None => None,
         };
         let (t, tracker) = self.ticket_of(&input, remote.as_deref());
-        Ok(json!({"key": t.key, "url": t.url, "tracker": tracker}))
+        let repo = self.ticket_repo(&input);
+        Ok(json!({"key": t.key, "url": t.url, "tracker": tracker, "repo": repo}))
     }
 
     /// The agent and, when an enabled tracker reads its ticket key, that

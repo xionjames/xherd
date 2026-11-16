@@ -740,6 +740,66 @@ async fn a_ticket_url_names_the_branch() {
     );
 }
 
+/// A ticket URL names its repository (#148): the resolve answer carries it,
+/// a key or a URL no tracker reads gives none, and with no repository at all
+/// the agent is refused as `repo_required`.
+#[tokio::test]
+async fn a_ticket_url_names_the_repository() {
+    let t = setup().await;
+    let repo = |v: serde_json::Value| v["repo"].clone();
+    let code = |r: Result<Job, ActionError>| r.unwrap_err().code;
+    let v =
+        t.d.resolve_ticket_input("https://github.com/acme/api/issues/12", None)
+            .await
+            .unwrap();
+    assert_eq!(repo(v), serde_json::json!("https://github.com/acme/api"));
+    let v =
+        t.d.resolve_ticket_input("https://gitlab.com/acme/sub/api/-/issues/3", None)
+            .await
+            .unwrap();
+    assert_eq!(
+        repo(v),
+        serde_json::json!("https://gitlab.com/acme/sub/api")
+    );
+    // No tracker reads a Jira URL here, and a key names no repository.
+    for ticket in ["https://acme.atlassian.net/browse/PAY-4", "pay-4", ""] {
+        let v = t.d.resolve_ticket_input(ticket, None).await.unwrap();
+        assert_eq!(repo(v), serde_json::Value::Null, "{ticket}");
+    }
+
+    // No repository and nothing to derive one from.
+    for ticket in [
+        None,
+        Some("PAY-4"),
+        Some("https://acme.atlassian.net/browse/PAY-4"),
+    ] {
+        let mut r = req(&t, "x");
+        r.repo = String::new();
+        r.ticket = ticket.map(Into::into);
+        assert_eq!(code(t.d.new_job(r).await), "repo_required", "{ticket:?}");
+    }
+
+    // With the tracker switched off the URL names nothing either.
+    let patch =
+        serde_json::from_value(serde_json::json!({"disabledPlugins": ["github-issues"]})).unwrap();
+    t.d.save_config(patch).unwrap();
+    let v =
+        t.d.resolve_ticket_input("https://github.com/acme/api/issues/12", None)
+            .await
+            .unwrap();
+    assert_eq!(repo(v), serde_json::Value::Null);
+    let mut r = req(&t, "x");
+    r.repo = String::new();
+    r.ticket = Some("https://github.com/acme/api/issues/12".into());
+    assert_eq!(code(t.d.new_job(r).await), "repo_required");
+
+    // An explicit repository wins over the one the ticket names.
+    let mut r = req(&t, "x");
+    r.ticket = Some("https://github.com/acme/api/issues/12".into());
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.repo.as_deref(), Some(t.repo.path().to_str().unwrap()));
+}
+
 #[tokio::test]
 async fn cancel_can_remove_the_worktree_and_keeps_the_branch() {
     let t = setup().await;
