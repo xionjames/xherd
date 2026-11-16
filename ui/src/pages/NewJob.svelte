@@ -22,7 +22,7 @@
   let f = $state({ name: '', ticket: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
   let busy = $state(false);
 
-  // Agent (R23): the first choice. It fills the fields it sets and marks them
+  // Agent (R23): for a job with no workflow. It fills the fields it sets and marks them
   // "from agent"; each can still be changed for this job only. The last
   // choice is remembered in this browser.
   const AGENT_KEY = 'xherd.newJob.agent';
@@ -32,9 +32,9 @@
   const agent = $derived(agents.find((a) => a.name === agentName));
   const from = (k: FormField) => marks.includes(k);
   const edited = (k: FormField) => { marks = unmark(marks, k); };
-  function pickAgent(name: string) {
+  function pickAgent(name: string, remember = true) {
     agentName = name;
-    try { localStorage.setItem(AGENT_KEY, name); } catch { /* private mode */ }
+    if (remember) { try { localStorage.setItem(AGENT_KEY, name); } catch { /* private mode */ } }
     const r = fillFromAgent(agents.find((a) => a.name === name), { runtime: f.runtime, model: f.model, autonomy: f.autonomy, mode: f.mode }, marks);
     f.runtime = r.form.runtime;
     f.model = r.form.model; f.autonomy = r.form.autonomy; f.mode = r.form.mode;
@@ -46,9 +46,22 @@
     // Wait for the list: /state may still be loading on a direct visit.
     if (agentRestored || !app.state) return;
     agentRestored = true;
-    let want = route.query.get('agent') ?? '';
-    if (!want) { try { want = localStorage.getItem(AGENT_KEY) ?? ''; } catch { /* private mode */ } }
-    if (want && agents.some((a) => a.name === want)) untrack(() => pickAgent(want));
+    // ?agent= (the Agents page's Start job) means a job with no workflow.
+    const want = route.query.get('agent') ?? '';
+    if (want && agents.some((a) => a.name === want)) untrack(() => { f.flow = 'none'; });
+  });
+  // Only a job with no workflow has an agent: leaving "No workflow" drops it
+  // (the remembered choice stays), coming back picks the remembered one.
+  $effect(() => {
+    if (!app.state) return;
+    const none = f.flow === 'none';
+    untrack(() => {
+      if (!none) { if (agentName) pickAgent('', false); return; }
+      if (agentName) return;
+      let want = route.query.get('agent') ?? '';
+      if (!want) { try { want = localStorage.getItem(AGENT_KEY) ?? ''; } catch { /* private mode */ } }
+      if (want && agents.some((a) => a.name === want)) pickAgent(want);
+    });
   });
   // Agent per stage (D26, R35, R37): what each stage of the workflow runs with
   // (its assignment, else the agent picked above, else the stage before's), and
@@ -213,15 +226,6 @@
 <PageHead width="narrow" title="New job" sub="One job, one worktree, one branch." />
 <form class="stack narrow" onsubmit={create}>
   <Panel>
-    <label class="f">Agent
-      <select value={agentName} onchange={(e) => pickAgent(e.currentTarget.value)}>
-        <option value="">No agent</option>
-        {#each agents as a (a.id)}<option value={a.name}>{a.name}{a.description ? ` · ${a.description}` : ''}</option>{/each}
-      </select>
-      {#if agent}<span class="hint">Fields marked <span class="frm">from agent</span> come from <a href={href(`/agents/${agent.name}`)}>{agent.name}</a> v{agent.version}; change any of them for this job only.
-        {#if agent.liveJobs >= agent.maxLiveJobs}It has {agent.liveJobs} live job{agent.liveJobs === 1 ? '' : 's'} (limit {agent.maxLiveJobs}): this one waits in the queue.{/if}</span>
-      {:else if agents.length}<span class="hint">Start from a saved setup, or none.</span>
-      {:else}<span class="hint">No saved agents yet. <a href={href('/agents/new')}>Create one</a>.</span>{/if}</label>
     <div class="g2">
       <label class="f">Name
         <input class="mono" bind:value={f.name} placeholder={agent ? `${agent.name}-1` : 'refund-retry'} required={!agent} autocomplete="off"
@@ -234,6 +238,17 @@
         <Seg label="Workflow" value={f.flow} onchange={(v) => { f.flow = v; }}
           options={[...flows, 'none'].map((fl) => ({ value: fl, label: fl === 'none' ? 'No workflow' : fl }))} /></div>
     </div>
+    {#if f.flow === 'none'}
+    <label class="f">Agent (optional)
+      <select value={agentName} onchange={(e) => pickAgent(e.currentTarget.value)}>
+        <option value="">No agent</option>
+        {#each agents as a (a.id)}<option value={a.name}>{a.name}{a.description ? ` · ${a.description}` : ''}</option>{/each}
+      </select>
+      {#if agent}<span class="hint">Fields marked <span class="frm">from agent</span> come from <a href={href(`/agents/${agent.name}`)}>{agent.name}</a> v{agent.version}; change any of them for this job only.
+        {#if agent.liveJobs >= agent.maxLiveJobs}It has {agent.liveJobs} live job{agent.liveJobs === 1 ? '' : 's'} (limit {agent.maxLiveJobs}): this one waits in the queue.{/if}</span>
+      {:else if agents.length}<span class="hint">A saved setup for a job with no workflow. With a workflow, agents are assigned per stage.</span>
+      {:else}<span class="hint">No saved agents yet. <a href={href('/agents/new')}>Create one</a>.</span>{/if}</label>
+    {/if}
     <label class="f">Ticket (optional)
       <input class="mono" bind:value={f.ticket} onchange={resolveTicket} autocomplete="off"
         placeholder="https://acme.atlassian.net/browse/PAY-412 or PAY-412" />
