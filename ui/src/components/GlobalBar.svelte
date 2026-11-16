@@ -25,6 +25,8 @@
        href={href('/board')}>Board</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path.startsWith('/agents')} aria-current={route.path.startsWith('/agents') ? 'page' : undefined}
        href={href('/agents')}>Agents</a>{/if}
+    {#if !blocked}<a class="gt" class:on={route.path.startsWith('/flows')} aria-current={route.path.startsWith('/flows') ? 'page' : undefined}
+       href={href('/flows')}>Flows</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/time'} aria-current={route.path === '/time' ? 'page' : undefined}
        href={href('/time')}>Time</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/todos'} aria-current={route.path === '/todos' ? 'page' : undefined}
