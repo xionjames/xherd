@@ -146,6 +146,7 @@
           {#if curAgent}
             <span>agent {#if def}<a href={href(`/agents/${def.name}`)}>{curAgent.name}</a>{:else}{curAgent.name}{/if} <span class="muted">v{curAgent.version}</span>
               {#if newer && def}<a class="hint" href={href(`/agents/${def.name}`, { s: 'versions', since: String(curAgent.version) })} title="This job keeps the settings it started with">· agent changed since this job started (now v{def.version})</a>{/if}
+              {#if curAgent.fellBack}<span class="hint" title="The agent's runtime was off when the job started"> · fell back to {curAgent.runtime}</span>{/if}
               {#if queuedForAgent}<span class="hint"> · waits for its agent: {def?.liveJobs} of {def?.maxLiveJobs} live jobs</span>{/if}</span>
           {/if}
           {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}

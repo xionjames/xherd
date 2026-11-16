@@ -8,6 +8,7 @@ import type { Component } from 'svelte';
 import type { Job, FlowInfo, PluginInfo } from './types';
 import HerdList from '../components/HerdList.svelte';
 import StageColumns from '../components/StageColumns.svelte';
+import AgentRows from '../components/AgentRows.svelte';
 import HerdPluginView from '../components/HerdPluginView.svelte';
 
 export interface HerdViewProps {
@@ -33,6 +34,7 @@ export interface HerdView {
 export const HERD_VIEWS: HerdView[] = [
   { id: 'list', label: 'List', component: HerdList },
   { id: 'stages', label: 'By stage', component: StageColumns },
+  { id: 'agents', label: 'By agent', component: AgentRows },
 ];
 
 /** The built-in views, then one per enabled view plugin. */

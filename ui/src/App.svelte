@@ -13,6 +13,7 @@
   import Todos from './pages/Todos.svelte';
   import Agents from './pages/Agents.svelte';
   import AgentDef from './pages/AgentDef.svelte';
+  import Flows from './pages/Flows.svelte';
   import Callout from './components/Callout.svelte';
   import { app, start, agentByName } from './lib/store.svelte';
   import { route, go } from './lib/router.svelte';
@@ -64,6 +65,8 @@
       <Attention />
     {:else if route.path === '/agents'}
       <Agents />
+    {:else if route.path === '/flows' || route.path.startsWith('/flows/')}
+      <Flows />
     {:else if agentName}
       {#key agentName}<AgentDef name={agentName} />{/key}
     {:else if route.path === '/new'}

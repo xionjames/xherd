@@ -1,5 +1,5 @@
 // Saved agents in the UI (#141, R23): pure helpers, tested in agents.test.ts.
-import type { AgentDef, AgentView, Job, JobAgent } from './types';
+import type { AgentDef, AgentView, AssignmentRow, FlowStageView, Job, JobAgent } from './types';
 import type { PermissionMode } from './modes';
 
 /** The New job form's fields an agent can fill (the names of its state). */
@@ -270,4 +270,59 @@ export function fillFromJob(job: Job): AgentForm {
     form.instructions = d.instructions;
   }
   return form;
+}
+
+/** What runs a stage of the job's workflow now: a name from the job's own
+ *  snapshot, and whether its gate always waits for the user (D26, R42). */
+export interface StageRun { stage: string; agent?: string; human: boolean; current: boolean }
+
+/** The agent of each stage from the job's snapshot, in flow order. */
+export function stageRuns(job: Pick<Job, 'agents' | 'stageAgents' | 'currentAgent' | 'stage'>, stages: readonly { id: string }[]): StageRun[] {
+  return stages.map((s) => {
+    const sa = job.stageAgents?.[s.id];
+    return { stage: s.id, agent: sa ? job.agents?.[sa.agent]?.name : undefined, human: !!sa?.human, current: job.stage === s.id };
+  });
+}
+
+/** Different stages run different agents: only then does the stepper name them. */
+export const mixedAgents = (runs: readonly StageRun[]): boolean =>
+  new Set(runs.map((r) => r.agent ?? '')).size > 1;
+
+/** What a stage resolves to in the New job form: the agent picked for this
+ *  stage, else the stage's assignment, else the job's agent, else the stage
+ *  before's (R37). `from` says which. */
+export interface StagePick { stage: string; agent?: string; from: 'override' | 'assignment' | 'job' | 'previous' | 'none'; human: boolean; broken?: string }
+
+export function resolveStages(
+  stages: readonly FlowStageView[],
+  jobAgent: string | undefined,
+  overrides: Readonly<Record<string, string>>,
+): StagePick[] {
+  let prev: string | undefined;
+  return stages.map((s) => {
+    let agent: string | undefined;
+    let from: StagePick['from'] = 'none';
+    if (overrides[s.id]) { agent = overrides[s.id]; from = 'override'; }
+    else if (s.assigned && s.agent) { agent = s.agent; from = 'assignment'; }
+    else if (jobAgent) { agent = jobAgent; from = 'job'; }
+    else if (prev) { agent = prev; from = 'previous'; }
+    prev = agent;
+    return { stage: s.id, agent, from, human: s.human, broken: from === 'assignment' ? s.broken : undefined };
+  });
+}
+
+/** The `agents` body of a new job: only the stages the user changed from what
+ *  they would resolve to anyway. */
+export function stageOverrides(chosen: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(Object.entries(chosen).filter(([, v]) => v));
+}
+
+/** The editor rows → `PUT /flows/{pack}/{flow}/assignments`: stages with an agent. */
+export function assignmentRows(edit: readonly { stage: string; agent: string; human: boolean }[], agents: readonly Pick<AgentView, 'id' | 'name'>[]): AssignmentRow[] {
+  const out: AssignmentRow[] = [];
+  for (const e of edit) {
+    const a = agents.find((x) => x.name === e.agent);
+    if (a) out.push({ stage: e.stage, agentId: a.id, human: e.human });
+  }
+  return out;
 }

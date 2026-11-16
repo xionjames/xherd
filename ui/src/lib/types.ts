@@ -398,3 +398,22 @@ export interface SkillDetail extends SkillInfo {
   /** The text of SKILL.md. */
   text: string;
 }
+
+/** One stage of a workflow as `GET /flows` shows it (D26, R35): the agent it
+ *  resolves to (its assignment, else the stage before's) and why it cannot run. */
+export interface FlowStageView {
+  id: string;
+  label?: string;
+  role: Role;
+  class: string;
+  command?: string;
+  /** The stage has an assignment row of its own. */
+  assigned: boolean;
+  human: boolean;
+  agentId?: string;
+  agent?: string;
+  broken?: string;
+}
+export interface FlowView { pack: string; flow: string; stages: FlowStageView[] }
+/** A row of `PUT /flows/{pack}/{flow}/assignments`. */
+export interface AssignmentRow { stage: string; agentId: string; human: boolean }

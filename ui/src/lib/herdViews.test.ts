@@ -26,7 +26,7 @@ describe('herd views', () => {
   it('have unique ids, the list first', () => {
     const ids = HERD_VIEWS.map((v) => v.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toEqual(['list', 'stages']);
+    expect(ids).toEqual(['list', 'stages', 'agents']);
   });
   it('pick a view by id', () => {
     expect(pickView('stages').id).toBe('stages');
@@ -45,9 +45,9 @@ describe('herd views', () => {
       plugin('plain'),
     ];
     const views = herdViews(plugins);
-    expect(views.map((v) => v.id)).toEqual(['list', 'stages', 'plugin:herd-tiles', 'plugin:plain']);
-    expect(views[2]).toMatchObject({ label: 'Tiles', plugin: 'herd-tiles', entry: 'index.html' });
-    expect(views[3].label).toBe('plain');
+    expect(views.map((v) => v.id)).toEqual(['list', 'stages', 'agents', 'plugin:herd-tiles', 'plugin:plain']);
+    expect(views[3]).toMatchObject({ label: 'Tiles', plugin: 'herd-tiles', entry: 'index.html' });
+    expect(views[4].label).toBe('plain');
   });
   it('pick a plugin view, falling back when it is unknown or off', () => {
     const plugins = [plugin('herd-tiles', { label: 'Tiles' }), plugin('off', { enabled: false })];

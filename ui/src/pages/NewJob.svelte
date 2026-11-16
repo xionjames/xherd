@@ -6,7 +6,8 @@
   import { upsertJob, app } from '../lib/store.svelte';
   import { go, href, route } from '../lib/router.svelte';
   import { showError } from '../lib/errors.svelte';
-  import type { Job } from '../lib/types';
+  import type { Job, FlowView } from '../lib/types';
+  import { stageLabel } from '../lib/flow';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
   import Seg from '../components/Seg.svelte';
@@ -14,7 +15,7 @@
   import { runtimes, runtimeLabel } from '../lib/runtimes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
-  import { FORM_DEFAULTS, fillFromAgent, pickable, unmark, type FormField } from '../lib/agents';
+  import { FORM_DEFAULTS, fillFromAgent, pickable, resolveStages, stageOverrides, unmark, type FormField } from '../lib/agents';
   import { nextRepo } from '../lib/repoFromTicket';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
@@ -49,6 +50,23 @@
     if (!want) { try { want = localStorage.getItem(AGENT_KEY) ?? ''; } catch { /* private mode */ } }
     if (want && agents.some((a) => a.name === want)) untrack(() => pickAgent(want));
   });
+  // Agent per stage (D26, R35, R37): what each stage of the workflow runs with
+  // (its assignment, else the agent picked above, else the stage before's), and
+  // a way to give one stage another agent for this job only.
+  let flowView = $state<FlowView | null>(null);
+  let stagePick = $state<Record<string, string>>({});
+  const flowPack = $derived((app.state?.flows ?? []).find((x) => x.flow === f.flow)?.pack);
+  $effect(() => {
+    const pack = flowPack, flow = f.flow;
+    stagePick = {};
+    if (!pack || flow === 'none') { flowView = null; return; }
+    get<FlowView>(`/flows/${encodeURIComponent(pack)}/${encodeURIComponent(flow)}`)
+      .then((v) => { if (f.flow === flow) flowView = v; })
+      .catch(() => { flowView = null; });
+  });
+  const picks = $derived(flowView ? resolveStages(flowView.stages, agentName || undefined, stagePick) : []);
+  const stageNames = $derived(flowView ? Object.fromEntries(flowView.stages.map((x) => [x.id, stageLabel({ ...x, gate: false })])) : {});
+  const anyStageAgent = $derived(picks.some((x) => x.agent));
   let autonomyTouched = $state(false); // a profile's autonomy fills the selector until the user picks one
   const nameOk = $derived(/^[a-z0-9][a-z0-9-]{0,40}$/.test(f.name));
   // With an agent the name may be left out: <agent>-<ticket key>, else <agent>-<n> (R21).
@@ -175,6 +193,8 @@
     if (f.base.trim()) body.base = f.base.trim();
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
     if (!agent || autonomyTouched || from('autonomy')) body.autonomy = f.autonomy;
+    const ov = stageOverrides(stagePick);
+    if (Object.keys(ov).length) (body as Record<string, unknown>).agents = ov;
     if (f.mode) body.permissionMode = f.mode;
     if (f.runtime) body.runtime = f.runtime;
     if (canModel && f.model.trim()) body.model = f.model.trim();
@@ -249,6 +269,26 @@
     <label class="f">{f.flow === 'none' ? 'Instructions' : 'Instructions (optional)'}
       <textarea rows="4" bind:value={f.prompt} required={f.flow === 'none'}
         placeholder={f.flow === 'none' ? 'Typed into the agent as its first message' : 'Context for the spec step'}></textarea></label>
+    {#if flowView && (agents.length || anyStageAgent)}
+      <details class="stages" open={anyStageAgent && Object.keys(stagePick).length > 0 ? true : undefined}>
+        <summary><span class="lbl">Agent per stage</span> <span class="hint">{anyStageAgent ? picks.map((x) => x.agent ?? '–').join(' → ') : 'none: a plain job'}</span></summary>
+        <ul class="list">
+          {#each picks as pk (pk.stage)}
+            <li>
+              <span class="sn">{stageNames[pk.stage]}</span>
+              <select aria-label="Agent for {stageNames[pk.stage]}" value={stagePick[pk.stage] ?? ''}
+                onchange={(e) => { const v = e.currentTarget.value; const n = { ...stagePick }; if (v) n[pk.stage] = v; else delete n[pk.stage]; stagePick = n; }}>
+                <option value="">{pk.agent && pk.from !== 'override' ? `${pk.agent} (${pk.from === 'assignment' ? 'assigned' : pk.from === 'job' ? 'job agent' : 'as before'})` : 'No agent'}</option>
+                {#each agents as a (a.id)}<option value={a.name}>{a.name}</option>{/each}
+              </select>
+              {#if pk.human}<span class="hint" title="Its gate always waits for you">✋</span>{/if}
+              {#if pk.broken}<span class="hint err">✕ {pk.broken}</span>{/if}
+            </li>
+          {/each}
+        </ul>
+        <span class="hint">Assignments are edited on <a href={href(flowPack ? `/flows/${flowPack}/${f.flow}` : '/flows')}>Flows</a>. Agents of one job must share a runtime.</span>
+      </details>
+    {/if}
     <details class="more" open={more || moreTouched} ontoggle={toggleMore}>
       <summary><span class="mono hint">{summary}{prof ? ` (profile ${prof.name})` : ''}</span><span class="lbl">More options</span></summary>
       <div class="opts">
@@ -291,5 +331,8 @@
   .more > summary::-webkit-details-marker { display: none; }
   .more > summary .lbl::after { content: ' ▸'; }
   .more[open] > summary .lbl::after { content: ' ▾'; }
+  .stages > summary { cursor: pointer; display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .stages .list li { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .stages .sn { min-width: 90px; font-weight: 600; }
   .opts { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
 </style>
