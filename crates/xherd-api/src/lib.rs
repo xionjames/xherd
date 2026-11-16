@@ -655,16 +655,18 @@ async fn todo_reschedule(
 #[derive(Deserialize)]
 struct WorklogQuery {
     days: Option<u32>,
+    group: Option<String>,
 }
 
-/// `GET /api/v1/worklog?days=N` (spec §16.4): time per day and ticket, and
-/// the delivery metrics per ticket.
+/// `GET /api/v1/worklog?days=N[&group=agent]` (spec §16.4): time per day and
+/// ticket (or saved agent), and the delivery metrics per ticket.
 async fn worklog(
     _: User,
     State(d): State<Daemon>,
     axum::extract::Query(q): axum::extract::Query<WorklogQuery>,
 ) -> ApiResult<Json<Value>> {
-    Ok(Json(d.worklog(q.days.unwrap_or(14)).await?))
+    let by_agent = q.group.as_deref() == Some("agent");
+    Ok(Json(d.worklog(q.days.unwrap_or(14), by_agent).await?))
 }
 
 #[derive(Deserialize)]

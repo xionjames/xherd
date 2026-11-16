@@ -12,15 +12,20 @@
   type Metric = { ticket: string; job: string; status: string; cycleMs: number | null; reviewRounds: number; autoApprovals: number; rework: number };
   let data = $state<{ days: Day[]; tickets: Metric[] } | null>(null);
   let days = $state('14');
+  let group = $state<'ticket' | 'agent'>('ticket');
   $effect(() => {
     const n = days;
-    get<{ days: Day[]; tickets: Metric[] }>(`/worklog?days=${n}`).then((r) => (data = r)).catch((e) => showError('Could not load the work log', e));
+    const g = group === 'agent' ? '&group=agent' : '';
+    get<{ days: Day[]; tickets: Metric[] }>(`/worklog?days=${n}${g}`).then((r) => (data = r)).catch((e) => showError('Could not load the work log', e));
   });
   const total = (d: Day, k: 'agentMs' | 'userMs') => d.tickets.reduce((n, t) => n + t[k], 0);
 </script>
 
 <PageHead width="mid" title="Time" sub="Agent time is time spent running; your time is time with a job's page open and in front. Days are UTC.">
   {#snippet actions()}
+    <select aria-label="Group by" bind:value={group}>
+      <option value="ticket">By ticket</option><option value="agent">By agent</option>
+    </select>
     <select aria-label="Period" bind:value={days}>
       <option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
     </select>

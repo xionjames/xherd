@@ -1105,6 +1105,17 @@ impl Actor {
         {
             tracing::warn!(agent = %self.job.name, %e, "usage not stored");
         }
+        // Recorded per saved agent (R24), shown but not enforced.
+        if delta > 0
+            && let Some(a) = &self.job.agent
+            && let Err(e) = self
+                .env
+                .store
+                .add_usage(&format!("agent:{}", a.id), &today, delta)
+                .await
+        {
+            tracing::warn!(agent = %self.job.name, %e, "agent usage not stored");
+        }
         let daily = self.env.store.usage("all", &today).await.unwrap_or(0);
         let s = self.env.settings.get();
         let agent_budget = self.guardrails(&s).await.job_token_budget;

@@ -507,7 +507,7 @@ async fn worklog_books_running_time_and_user_time() {
     t.d.add_user_time("WL-1", 30_000).await.unwrap();
     t.d.add_user_time("WL-1", 10_000_000).await.unwrap(); // clamped
 
-    let v = t.d.worklog(1).await.unwrap();
+    let v = t.d.worklog(1, false).await.unwrap();
     let row = &v["days"][0]["tickets"][0];
     assert!(row["agentMs"].as_u64().unwrap() >= 60_000);
     assert_eq!(row["userMs"], 30_000 + 120_000);
@@ -883,4 +883,55 @@ async fn an_agents_max_live_jobs_holds_its_next_job_back() {
     raised.max_live_jobs = 2;
     t.d.update_agent(&def.id, raised).await.unwrap();
     wait_status(&t.d, "R-3", Status::Running).await;
+}
+
+#[tokio::test]
+async fn worklog_and_tokens_are_kept_per_saved_agent() {
+    let t = daemon(4).await;
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "reviewer",
+        "runtime": "claude-code",
+        "workflow": {"pack": "xherd", "flow": "feature"},
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+    t.d.create_job(of_agent("WA-1", 1, &def)).await.unwrap();
+    t.d.create_job(agent("WA-2", 2)).await.unwrap();
+    wait_status(&t.d, "WA-1", Status::Running).await;
+    wait_status(&t.d, "WA-2", Status::Running).await;
+
+    t.d.flush_worklog().await;
+    t.d.worklog_flushed.store(
+        t.d.clock.now() - 60_000,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    t.d.flush_worklog().await;
+    t.d.add_user_time("WA-1", 30_000).await.unwrap();
+    t.d.add_user_time("WA-2", 10_000).await.unwrap();
+
+    // By ticket: the agent's own rows never show up as a ticket.
+    let v = t.d.worklog(1, false).await.unwrap();
+    let tickets = v["days"][0]["tickets"].as_array().unwrap();
+    assert!(tickets.iter().all(|r| r["ticket"] != "reviewer"));
+    assert!(
+        tickets
+            .iter()
+            .all(|r| !r["ticket"].as_str().unwrap().starts_with("agent:"))
+    );
+
+    // By agent: only the job that came from it, under its name.
+    let v = t.d.worklog(1, true).await.unwrap();
+    let rows = v["days"][0]["tickets"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["ticket"], "reviewer");
+    assert!(rows[0]["agentMs"].as_u64().unwrap() >= 60_000);
+    assert_eq!(rows[0]["userMs"], 30_000);
+
+    // Tokens recorded under `agent:<id>` show as the agent's tokens today.
+    let today = xherd_core::usage::day(t.d.clock.now());
+    t.d.store
+        .add_usage(&format!("agent:{}", def.id), &today, 1234)
+        .await
+        .unwrap();
+    assert_eq!(t.d.agent("reviewer").await.unwrap().tokens_today, 1234);
 }

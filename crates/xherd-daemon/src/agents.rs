@@ -37,7 +37,7 @@ pub struct AgentView {
     pub live_jobs: usize,
     /// Name of the newest job started from it.
     pub last_job: Option<String>,
-    /// Recorded under scope `agent:<id>` from T14 on; 0 until then.
+    /// Today's tokens, recorded under scope `agent:<id>` (shown, not enforced).
     pub tokens_today: u64,
 }
 
@@ -102,14 +102,21 @@ impl Daemon {
         Ok(jobs)
     }
 
-    fn view(&self, def: AgentDef, jobs: &[&Job]) -> AgentView {
+    async fn view(&self, def: AgentDef, jobs: &[&Job]) -> AgentView {
         let (live_jobs, last_job) = summarize(jobs);
         AgentView {
             status: agent_def::derived_status(&def, jobs),
             broken: self.agent_broken(&def),
             live_jobs,
             last_job,
-            tokens_today: 0,
+            tokens_today: self
+                .store
+                .usage(
+                    &format!("agent:{}", def.id),
+                    &xherd_core::usage::day(self.clock.now()),
+                )
+                .await
+                .unwrap_or(0),
             def,
         }
     }
@@ -117,16 +124,15 @@ impl Daemon {
     pub async fn agents(&self) -> Result<Vec<AgentView>, ActionError> {
         let defs = self.store.list_agent_defs().await.map_err(store)?;
         let jobs = self.store.list_jobs().await.map_err(store)?;
-        Ok(defs
-            .into_iter()
-            .map(|d| {
-                let mine: Vec<&Job> = jobs
-                    .iter()
-                    .filter(|j| job_agent(j) == Some(d.id.as_str()))
-                    .collect();
-                self.view(d, &mine)
-            })
-            .collect())
+        let mut out = Vec::new();
+        for d in defs {
+            let mine: Vec<&Job> = jobs
+                .iter()
+                .filter(|j| job_agent(j) == Some(d.id.as_str()))
+                .collect();
+            out.push(self.view(d, &mine).await);
+        }
+        Ok(out)
     }
 
     /// An agent by id or by name.
@@ -141,7 +147,7 @@ impl Daemon {
         let def = self.agent_def(key).await?;
         let jobs = self.jobs_of(&def.id).await?;
         let refs: Vec<&Job> = jobs.iter().collect();
-        Ok(self.view(def, &refs))
+        Ok(self.view(def, &refs).await)
     }
 
     /// Whether `key` names a saved agent (the API resolves agents before the
@@ -253,7 +259,7 @@ impl Daemon {
         self.store.put_agent_def(&def).await.map_err(store)?;
         self.sup.agent_limit(&def.id, Some(def.max_live_jobs));
         self.agents_changed();
-        Ok(self.view(def, &[]))
+        Ok(self.view(def, &[]).await)
     }
 
     /// Replace an agent's settings: the version goes up by one and the old one

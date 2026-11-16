@@ -74,7 +74,7 @@ A saved agent is a named, versioned setup that jobs start from (runtime, models,
 
 | Method and path | Does |
 |---|---|
-| `GET /agents` | `{agents}`: each agent's settings plus the derived `status` (`archived`, `needs-you`, `working`, `idle`), `broken` (why jobs cannot start from it now: its pack, flow or runtime is gone or switched off; absent when fine), `liveJobs`, `lastJob` (the newest job's name) and `tokensToday` (0 until the agent budget scope lands). `/state` carries the same list as `agents` |
+| `GET /agents` | `{agents}`: each agent's settings plus the derived `status` (`archived`, `needs-you`, `working`, `idle`), `broken` (why jobs cannot start from it now: its pack, flow or runtime is gone or switched off; absent when fine), `liveJobs`, `lastJob` (the newest job's name) and `tokensToday` (the day's tokens of its jobs, UTC; recorded under the budget scope `agent:<id>`, shown but not enforced). `/state` carries the same list as `agents` |
 | `POST /agents` | Create (body: `name`, `runtime`, `workflow: {pack, flow}`, and optional `description`, `models` (runtime → model), `autonomy`, `permissionMode`, `instructions`, `repo`, `baseBranch`, `jobTokenBudget`, `sensitivePaths`, `maxDiffLines`, `stageOverrides` (stage → `{human: true}`, which can only tighten a gate), `skills`, `maxLiveJobs` (default 1)). `id`, `version` and the dates are assigned. Refusals: `bad_name`, `bad_agent`, `name_taken`, `unknown_pack`, `unknown_flow`, `unknown_runtime`, `runtime_unusable` (the pack has no commands for it), `mode_unavailable` (`all` outside the container), `unknown_stage`, `autonomy_unavailable` |
 | `GET /agents/{id}`, `PUT /agents/{id}`, `DELETE /agents/{id}` | One agent; replace its settings (the version goes up by one; the name cannot change: `name_fixed`); delete it with its versions and memory (refused with `agent_busy` while a job started from it is live; jobs keep their snapshot) |
 | `POST /agents/{id}/archive`, `POST /agents/{id}/unarchive` | Hide it from pickers, or bring it back. Not a new version |
@@ -93,7 +93,7 @@ Every write publishes `{"type": "agents"}` on `/ws`; the UI refetches `/agents`.
 | `GET /reviews`, `POST /reviews/seen {items}` | Automatic approvals to look at, and marking them seen |
 | `GET /todos`, `POST /todos`, `PUT /todos/{id}`, `DELETE /todos/{id}` | TODOs |
 | `POST /todos/{id}/complete`, `POST /todos/{id}/reschedule {due}`, `POST /todos/{id}/check` | Complete, reschedule, run a condition check now |
-| `GET /worklog?days=N` | Job and user time per day and ticket, with delivery metrics |
+| `GET /worklog?days=N[&group=agent]` | Job and user time per day and ticket, with delivery metrics; `group=agent` lists the days by saved agent (name) instead of ticket |
 | `GET /backups`, `POST /backups` | List and create backups |
 
 ### Git access, plugins, toolchains, Open in
