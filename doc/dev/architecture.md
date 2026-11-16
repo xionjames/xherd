@@ -124,6 +124,8 @@ sequenceDiagram
 
 Approving a gate starts a **fresh runtime session** (`freshSessions`, on by default). The tmux session and its environment survive; only the job window's process is respawned, and the next command is typed once the runtime's `session-start` hook arrives. What carries over is `.xherd/spec/memory.md` (State, Decisions, Code map, Watch out), which every step reads first and rewrites before its gate. The daemon refuses a gate or commit proposal whose `memory.md` is missing or malformed.
 
+A job may start from a saved **agent** (a versioned row in the `agents` table, with `agent_versions` and `agent_memory`). `xherd_core::resolve` merges request, agent, profile and global settings (a profile's autonomy and permission mode are ceilings), and the job stores a snapshot (`Job.agent`); the actor never reads the `agents` table, so editing an agent changes only later jobs. The supervisor holds an agent's `maxLiveJobs`. The skills library (`<data>/skills/`) is copied into the worktree where the runtime declares a skill folder. Backups include the database (agents, versions, memories) and `skills/`.
+
 After a daemon or container restart the daemon reconciles with tmux: a job waiting at a gate is *parked* (approving still works), any other live job is resumed through the pack's `resume` command, continuing the runtime's own conversation when its transcript can be found.
 
 ## Flow packs and plugins

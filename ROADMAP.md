@@ -77,6 +77,8 @@ by theme; update it together with them.
 - [x] `bugfix` flow in the built-in pack: analysis, a failing reproduction test committed first, then the fix (#142); the Herd's By stage lanes per workflow and the Board's lanes by workflow
 - [ ] More flow packs: PR review, research/design; multi-repo tickets
 - [x] `xherd memory propose` and the Shared memory tab (AGENTS.md, #65)
+- [x] Saved agents (#141): versioned setups jobs start from, with a skills library, agent memory and its proposals, suggestions after a finished or repeated job, and backups; "agent" now means the saved setup, a run is a job (design §18, D25)
+- [ ] Saved agents, still open: check the pages in a browser and a job from an agent with real runtimes; a Skills tab on the agent page; update the supervisor's live count when a running job is attached to an agent; scheduled agent runs
 
 ## Git, accounts and credentials
 

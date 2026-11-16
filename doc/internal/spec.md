@@ -217,6 +217,19 @@ Statuses: `queued`, `running`, `waiting-input`, `blocked`, `idle`, `parked`, `pa
 | R-033 | Flow `none`: the prompt is sent as is; no gates, tasks or handoff. Status, pause/resume, PR follow-up (notify only) still work. |
 | R-034 | Workspace `folder`: the job runs in `<data>/scratch/<name>/` (or a chosen folder) without a branch; git-dependent features are hidden. Instructions tell it which repo it may read. |
 
+### 5.8 Saved agents
+
+An **agent** is a saved, versioned setup that jobs start from (issue #141); a **job** is one run. (What older text called an agent is a job.)
+
+| ID | Requirement |
+|---|---|
+| R-035 | An agent has an id, a slug name (unique, fixed), a description, a version (1 on creation, +1 on each edit, every version kept), runtime, model per runtime, workflow (pack + flow, or `none`), autonomy, tool-permission mode, instructions, a default repository and base branch, a job token budget, guardrails (`sensitivePaths`, `maxDiffLines`, per-stage `stageOverrides`), skills, `maxLiveJobs`, and `archivedAt`. Archived agents start no jobs. A job started from an agent keeps a snapshot, so later edits never change a running job. |
+| R-036 | Resolution order for a job: request, agent, repo profile, global settings. A profile's autonomy and permission mode are ceilings on all of them. An agent can only tighten guardrails and mark stages `human`; it cannot loosen a gate. |
+| R-037 | Agents are created, edited, archived, deleted, exported and imported (import refuses an existing name and lists risky settings first) from the UI, the CLI and the HTTP API. Status, live jobs, last job and tokens today are derived from jobs. |
+| R-038 | The skills library (`<data>/skills/<name>/`, a `SKILL.md` per skill) is copied into a job's worktree where the runtime plugin declares a skill folder; a skill the repository already has is skipped and said so. |
+| R-039 | An agent has a memory (at most 4 000 characters) copied into the job's `instructions.md`. A job may propose an update (`xherd agent memory propose`); the user accepts, optionally edited, or dismisses it. |
+| R-040 | A job without an agent may be suggested as one when it is done, marked done (flow `none`) or is the third with the same setup in 30 days; a job may also draft the agent (`xherd agent propose`). Never after cancel or error; switched off by `suggestAgents`. |
+
 ## 6. Gates, approvals and autonomy
 
 ### 6.1 Gates
@@ -661,6 +674,8 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 |---|---|---|---|
 | Database, config, secrets, devices | `<data>` in `xherd-home` | ✓ (secrets encrypted) | Jobs, profiles, approvals, settings |
 | Plugins and packs | `<data>/plugins/` | ✓ | Reinstalling may fetch different code |
+| Saved agents, their versions and memories | database | ✓ (in the database copy) | Setups jobs start from (R-035) |
+| Skills library | `<data>/skills/` | ✓ | Agents list skills by name |
 | Archived `.xherd/` folders | `<data>/archive/` | ✓ | History of finished jobs |
 | Live jobs' `.xherd/` folders | worktrees | ✓ | Specs, ledgers and handoffs are not in git |
 | Unpushed work | worktrees | ✓ as git bundles of job branches + patches of uncommitted changes | Not on the remote yet |
@@ -704,6 +719,8 @@ Job time (time in `running`) and the user's time on a job page, per day and tick
 Rewritten on every start, resume and autonomy change: workspace notes (folder jobs), autonomy level and what it means for the job, ticket key and link with the tracker's fragment, git host fragment, repo commands (or a note to use the project's usual ones and state them in evidence), repo instructions from the profile, the XAP commands the coding agent must call, its port block, and the untrusted-content rule.
 
 ### 16.6 Memory proposals
+
+Memory has three levels: `memory.md` (one job, carried between its steps), the saved agent's memory (every job of that agent, R-039) and the repository's `AGENTS.md` (every job there). Each is changed by a proposal the user accepts.
 
 `memory.md` is one job's memory and goes with it; the repository's `AGENTS.md` is the memory shared by every future job there (#65). The review step, once all tasks are done, may propose an update of `AGENTS.md` (the whole proposed text plus a one-line reason; a starter `AGENTS.md` when none exists): short facts a future job needs (commands, conventions, traps), no task history. `CLAUDE.md` only imports it (`@AGENTS.md`), so every runtime reads the same text. The job page's Shared memory tab shows the diff (and the `CLAUDE.md` change, if any); the user accepts, optionally editing first, and xherd commits `AGENTS.md` (and `CLAUDE.md` when the import is missing) on the job's branch as one commit, so it ships with the PR; or dismisses it (dismissing a starter file is remembered per repo, and jobs stop proposing one there). Accepting is refused while the job works or once its PR is open (xherd never pushes). Pending proposals do not block the PR.
 

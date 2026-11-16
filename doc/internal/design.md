@@ -753,6 +753,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] To review (R-111, with Mark seen) and Work log (job and user time per day and ticket; per-ticket cycle time, review–fix rounds, rework; spec §16.4)
   - [x] Kanban: the Board with stages and tasks as work units (Pending / In progress / Done), TODOs and swimlanes (job, repository, workflow); the Herd's By stage layout with jobs in their flow's stage columns, one lane per workflow when several are shown (cards declared by packs and profiles, R-1101, come with profiles)
   - [x] `bugfix` flow (#142, branch `142-bugfix-flow-plugin`): analysis (`spec.md` + `tasks.md`, one gate) → reproduce (failing test, its commit) → fix → review → ship → PR rounds; stage `label`, several commit stages, `tasks.md` gated by any stage; *Tasks in this commit* with evidence in the Changes panel
+  - [x] Saved agents (#141, branch `141-rethink-agents`; D25): job rename, `agents`/`agent_versions`/`agent_memory` tables, resolver (request > agent > profile > settings), CRUD/export/import, jobs from agents, `maxLiveJobs`, CLI, UI (Agents, agent page, picker, grouping), time and budgets by agent, skills library and per-runtime skill install, agent memory and proposals, mark done and suggestions, backups of agents and skills. Not checked in a browser or with real runtimes
   - [ ] Toolchain plugins and Welcome installer
   - [ ] Plugin install from the UI
   - [x] Herd views as plugins (#108): kind `view`, sandboxed frame, protocol v1, view kit
@@ -797,6 +798,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
 | D22 | GPL-3.0-or-later licence (was MIT, #134) | Accepted |
 | D23 | Every step is a new session fed by `memory.md` (state, decisions, code map) and the approved documents, never by conversation history; the session stays open while a gate waits so change requests keep their context | Accepted |
 | D24 | Git hosts are bound to a provider (a `host` plugin) that supplies the API, the credential helper, the login, the doctor's API checks and its own install; transport stays in core per hostname; issues stay with trackers (revises D19, R-689…R-693) | Proposed |
+| D25 | "Agent" is a saved, versioned setup; what ran before under that name is a "job". Jobs keep a snapshot of their agent (the actor never reads the `agents` table); profiles are ceilings; agents only tighten guardrails; memory has three levels (job, agent, repo) each changed by an accepted proposal; skills are copied per job from a library (#141, R-035…R-040) | Accepted |
 
 ### D24 in detail (proposed)
 

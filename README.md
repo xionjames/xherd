@@ -57,6 +57,12 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 - **Resolve conflicts** has the job merge the base branch (never a rebase), and the merge commit always waits for you.
 - GitHub and GitLab for pull requests; Bitbucket for git access only.
 
+### Saved agents
+
+- Save a setup once (runtime, model, workflow, autonomy, instructions, guardrails, skills, a memory) as a named, versioned **agent**, and start jobs from it in the UI, the CLI or the API.
+- A job keeps a snapshot of its agent, so editing the agent never changes a running job; the agent's memory grows through proposals you accept.
+- xherd suggests saving a job as an agent when you finish one, or when you start the same setup a third time.
+
 ### Autonomy and guardrails
 
 - Adjustable autonomy: xherd can approve routine steps itself, and lists them for you to look over later.

@@ -42,7 +42,7 @@ The **Welcome** screen opens by itself the first time, in six steps: Welcome, Pl
 - the **instructions** (required with *No workflow*);
 - under **More options**: the **autonomy**, the **runtime**, its **model** and the **tool permissions**. Closed, it shows one line with what will apply and whether a profile sets it; it opens by itself once you change one of them, and remembers whether you left it open.
 
-A [repo profile](#repo-profiles) that matches the repository fills in its defaults; its autonomy and tool permissions are limits (a looser choice is lowered and the job shows a note). A job may start from a saved agent (`POST /api/v1/agents/{id}/jobs`; the CLI and UI come next): the agent's runtime, model, workflow, autonomy, instructions and guardrails apply, the job keeps a snapshot, and the agent's `human` stages are never approved by autonomy. If more jobs are live than `maxConcurrentAgents`, the new one waits in *queued*.
+A [repo profile](#repo-profiles) that matches the repository fills in its defaults; its autonomy and tool permissions are limits (a looser choice is lowered and the job shows a note). A job may start from a saved agent (`POST /api/v1/agents/{id}/jobs`; or `xherd new --agent`, the New job form's Agent picker): the agent's runtime, model, workflow, autonomy, instructions and guardrails apply, the job keeps a snapshot, and the agent's `human` stages are never approved by autonomy. If more jobs are live than `maxConcurrentJobs`, the new one waits in *queued*.
 
 ## The feature flow
 
@@ -218,7 +218,7 @@ From a terminal, `xherd attach`, `xherd shell` and `xherd open` still work.
 
 ## Backups
 
-Settings → Backups (or `xherd backup create`) writes one archive with the database, the configuration (no secrets), and for each unfinished job its `.xherd/` notes, its commits as a git bundle, its uncommitted changes and untracked files. `xherd docker update` takes one before updating. `xherd backup restore` brings the jobs back paused, on this machine or another (`--workspace`, `--map`). Tokens and logins are entered again after a restore.
+Settings → Backups (or `xherd backup create`) writes one archive with the database (which holds your saved agents, their versions and memories), the skills library, the configuration (no secrets), and for each unfinished job its `.xherd/` notes, its commits as a git bundle, its uncommitted changes and untracked files. `xherd docker update` takes one before updating. `xherd backup restore` brings the jobs back paused, on this machine or another (`--workspace`, `--map`). Tokens and logins are entered again after a restore.
 
 ## Everyday CLI
 

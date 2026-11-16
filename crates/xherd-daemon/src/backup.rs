@@ -1,7 +1,7 @@
 //! Backups and restore (spec §15, R-1401…R-1405, design §10.4).
 //!
 //! One `tar.zst` archive holds: a consistent database copy, `config.json`
-//! (without the user token), plugins, plugin settings and `archive/`; for each
+//! (without the user token), plugins, plugin settings, the skills library and `archive/` (saved agents, their versions and memories are in the database copy); for each
 //! agent that is not finished its `.xherd/` folder, a git bundle of the branch
 //! (commits beyond the agent's base), a patch of uncommitted changes and the
 //! untracked files. A `manifest.json` carries the sha256 of every part.
@@ -256,7 +256,7 @@ async fn fill_stage(
             write_atomic(&data.join("config.json"), &bytes, Some(0o600)),
         )?;
     }
-    for d in ["plugins", "archive", "plugin-config"] {
+    for d in ["plugins", "archive", "plugin-config", "skills"] {
         io(d, copy_tree(&paths.root.join(d), &data.join(d), &[], false))?;
     }
 
@@ -569,7 +569,7 @@ async fn restore_from(
         "database",
         std::fs::copy(work.join("db/xherd.db"), paths.db()),
     )?;
-    for d in ["plugins", "archive", "plugin-config"] {
+    for d in ["plugins", "archive", "plugin-config", "skills"] {
         io(
             d,
             copy_tree(&work.join("data").join(d), &paths.root.join(d), &[], false),

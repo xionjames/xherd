@@ -76,6 +76,45 @@ async fn backup_and_restore_on_another_machine() {
     a.base = Some("origin/main".into());
     store.put_job(&a).await.unwrap();
 
+    // A saved agent (issue #141): two versions, a memory and a skill in the
+    // library. They live in the database snapshot and `data/skills`.
+    let mut def = xherd_core::agent_def::AgentDef {
+        id: "ad1".into(),
+        name: "reviewer".into(),
+        description: String::new(),
+        version: 1,
+        runtime: "claude-code".into(),
+        models: Default::default(),
+        workflow: xherd_core::agent_def::Workflow {
+            pack: "xherd".into(),
+            flow: "feature".into(),
+        },
+        autonomy: None,
+        permission_mode: None,
+        instructions: Some("Be brief.".into()),
+        repo: None,
+        base_branch: None,
+        job_token_budget: None,
+        sensitive_paths: vec![],
+        max_diff_lines: None,
+        stage_overrides: Default::default(),
+        skills: vec!["lint".into()],
+        max_live_jobs: 1,
+        created_at: 1,
+        updated_at: 10,
+        archived_at: None,
+    };
+    store.put_agent_def(&def).await.unwrap();
+    def.version = 2;
+    def.updated_at = 20;
+    store.put_agent_def(&def).await.unwrap();
+    store
+        .put_agent_memory("ad1", "Use cargo nextest.", 30)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(p1.skills().join("lint")).unwrap();
+    std::fs::write(p1.skills().join("lint/SKILL.md"), "---\nname: lint\n---\n").unwrap();
+
     let dest = t.join("out");
     let made = backup::create(&p1, &ws1, &store, &g, &dest, "manual", 1_000_000)
         .await
@@ -133,6 +172,14 @@ async fn backup_and_restore_on_another_machine() {
         back.repo.as_deref(),
         Some(ws2.join("repos/r").to_str().unwrap())
     );
+    let ad = s2.get_agent_def("ad1").await.unwrap().unwrap();
+    assert_eq!((ad.name.as_str(), ad.version), ("reviewer", 2));
+    assert_eq!(s2.agent_versions("ad1").await.unwrap().len(), 2);
+    assert_eq!(
+        s2.agent_memory("ad1").await.unwrap().map(|m| m.0),
+        Some("Use cargo nextest.".into())
+    );
+    assert!(p2.skills().join("lint/SKILL.md").is_file());
     let cfg: serde_json::Value =
         serde_json::from_slice(&std::fs::read(p2.config()).unwrap()).unwrap();
     assert!(cfg.get("userToken").is_none());
