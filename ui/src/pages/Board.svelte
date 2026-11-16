@@ -199,16 +199,14 @@
                 {#if c.kind === 'stage'}
                   <a class="card tk" class:needs={c.needs} style:--hue={agentHue(c.agent.name)} href={href(`/jobs/${c.agent.name}`, { s: c.tab })}>
                     {#if lanes !== 'agent'}<span class="hint mono who">{c.agent.name}</span>{/if}
-                    <span><b>{c.label}</b></span>
-                    {#if c.by}<span class="hint">agent {c.by}</span>{/if}
+                    <span class="top"><b>{c.label}</b>{#if c.by}<span class="hint mono by">{c.by}</span>{/if}</span>
                     {#if c.needs}<span class="hint">✋ {c.hint || 'needs you'}</span>{:else if c.hint}<span class="hint">{c.hint}</span>{/if}
                   </a>
                 {:else if c.kind === 'task'}
                   {@const after = waitsOn(c.agent, c.task)}
                   <a class="card tk" class:needs={c.needs} style:--hue={agentHue(c.agent.name)} href={href(`/jobs/${c.agent.name}`, { s: 'tasks' })}>
-                    <span class="top"><span class="hint mono" class:who={lanes !== 'agent'}>{lanes === 'agent' ? '' : `${c.agent.name} · `}{c.task.id}</span>{#if c.task.source && SOURCE_TAG[c.task.source]}<span class="pill">{SOURCE_TAG[c.task.source]}</span>{/if}</span>
+                    <span class="top"><span class="hint mono" class:who={lanes !== 'agent'}>{lanes === 'agent' ? '' : `${c.agent.name} · `}{c.task.id}</span><span class="right">{#if c.task.source && SOURCE_TAG[c.task.source]}<span class="pill">{SOURCE_TAG[c.task.source]}</span>{/if}{#if c.by}<span class="hint mono by">{c.by}</span>{/if}</span></span>
                     <span>{c.task.title}</span>
-                    {#if c.by}<span class="hint">agent {c.by}</span>{/if}
                     {#if after.length}<span class="hint">after {after.join(', ')}</span>{/if}
                     {#if c.task.status === 'blocked'}<span class="hint">⛔ Blocked{c.task.blockedReason ? `: ${c.task.blockedReason}` : ''}</span>{/if}
                     {#if c.needs}<span class="hint">✋ needs you</span>{/if}
@@ -260,6 +258,8 @@
   .hue { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
   /* Without lanes by agent, the agent's colour marks whose card it is. */
   .who::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--hue); margin-right: 6px; }
+  .right { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .by { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
   .tk.needs { border-color: var(--gate); box-shadow: inset 3px 0 0 var(--gate); }
 </style>
