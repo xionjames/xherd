@@ -139,6 +139,18 @@ pub fn branch_name(key: Option<&str>, name: &str) -> String {
     }
 }
 
+/// The slug rule of job and agent names (#114, R10).
+pub fn check_name(name: &str) -> Result<(), Refusal> {
+    if NAME.is_match(name) {
+        Ok(())
+    } else {
+        Err(refuse(
+            "bad_name",
+            format!("name {name:?} must match {}", NAME.as_str()),
+        ))
+    }
+}
+
 pub fn check(req: &NewJob) -> Result<Checked, Refusal> {
     // Before #114: `ticketKey` (+ `slug`) instead of `name` (+ `ticket`).
     let legacy_key = req
@@ -159,12 +171,7 @@ pub fn check(req: &NewJob) -> Result<Checked, Refusal> {
             (None, None) => return Err(refuse("name_required", "a job needs a name")),
         };
     }
-    if !NAME.is_match(&name) {
-        return Err(refuse(
-            "bad_name",
-            format!("name {name:?} must match {}", NAME.as_str()),
-        ));
-    }
+    check_name(&name)?;
     let flow = req
         .flow
         .clone()

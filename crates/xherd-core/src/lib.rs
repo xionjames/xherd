@@ -1,6 +1,7 @@
 //! xherd domain: agent statuses and lifecycle, status reports, flow types,
 //! paths and config, and the external command runner.
 
+pub mod agent_def;
 pub mod autonomy;
 pub mod config;
 pub mod container;
@@ -18,6 +19,7 @@ pub mod pr;
 pub mod profile;
 pub mod queue;
 pub mod report;
+pub mod resolve;
 pub mod runner;
 pub mod status;
 pub mod ticket;
