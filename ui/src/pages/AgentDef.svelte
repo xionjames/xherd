@@ -36,14 +36,6 @@
   ]);
 
   // ---- the form -------------------------------------------------------------
-  const packs = $derived.by(() => {
-    const seen = new Map<string, string[]>();
-    for (const f of app.state?.flows ?? []) seen.set(f.pack, [...(seen.get(f.pack) ?? []), f.flow]);
-    return seen;
-  });
-  const workflows = $derived([...(app.state?.flows ?? []).map((f) => ({ pack: f.pack, flow: f.flow })), { pack: 'xherd', flow: 'none' }]);
-  const wfKey = (w: { pack: string; flow: string }) => `${w.pack}/${w.flow}`;
-
   let form = $state<AgentForm>(toForm());
   let base = $state('');
   let loadedId = '';
@@ -65,42 +57,12 @@
   const canModel = $derived(canChooseModel(app.state?.plugins, form.runtime));
   const modelOk = $derived(validModel(form.model));
   const nameOk = $derived(/^[a-z0-9][a-z0-9-]{0,40}$/.test(form.name));
-  const stages = $derived((app.state?.flows ?? []).find((f) => f.pack === form.pack && f.flow === form.flow)?.stages.filter((s) => s.gate) ?? []);
   const ready = $derived((!isNew || nameOk) && modelOk && form.runtime !== '' && Number(form.maxLiveJobs) >= 1);
 
-  function pickWorkflow(v: string) {
-    const [pack, flow] = v.split('/');
-    form.pack = pack;
-    form.flow = flow;
-    // A stage the new flow does not have cannot keep its override.
-    const ids = (app.state?.flows ?? []).find((f) => f.pack === pack && f.flow === flow)?.stages.map((s) => s.id) ?? [];
-    form.humanStages = form.humanStages.filter((s) => ids.includes(s));
-  }
-  function toggleStage(id: string, on: boolean) {
-    form.humanStages = on ? [...form.humanStages, id] : form.humanStages.filter((s) => s !== id);
-  }
-
   // ---- what a matching profile does to this agent (R13, R23) ------------------
-  let profile = $state<(ProfileLimits & { id?: string }) | null>(null);
-  let profileFor = '';
-  async function lookupProfile() {
-    const repo = form.repo.trim();
-    if (repo === profileFor) return;
-    profileFor = repo;
-    profile = null;
-    if (!repo) return;
-    try {
-      const r = await post<{ profile: ProfileLimits | null }>('/repos/resolve', { repo });
-      if (profileFor === repo) profile = r.profile;
-    } catch {
-      // no repository to read it from: no marks
-    }
-  }
-  $effect(() => {
-    loadedId;
-    form.repo;
-    untrack(lookupProfile);
-  });
+  // An agent names no repository now, so there is no profile to read here: the
+  // marks appear on the job's own page, where the repository is known.
+  const profile: ProfileLimits | null = null;
   const marks = $derived(profileMarks({
     autonomy: (form.autonomy || undefined) as AgentDef['autonomy'],
     permissionMode: (form.permissionMode || undefined) as AgentDef['permissionMode'],
@@ -255,10 +217,12 @@
             {#if !modelOk}<span class="hint err">Letters, digits and . _ : / @ - [ ] only.</span>{/if}</label>
         {/if}
       </div>
-      <label class="f">Workflow
-        <select value={wfKey(form)} onchange={(e) => pickWorkflow(e.currentTarget.value)}>
-          {#each workflows as w (wfKey(w))}<option value={wfKey(w)}>{w.flow === 'none' ? 'No workflow' : packs.size > 1 ? `${w.flow} (${w.pack})` : w.flow}</option>{/each}
-        </select></label>
+      <label class="f">Fallback runtime
+        <select bind:value={form.fallbackRuntime}>
+          <option value="">none</option>
+          {#each rts.filter((r) => r.name !== form.runtime) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
+        </select>
+        <span class="hint">A job starts on it when the runtime above is switched off at that moment.</span></label>
       <div class="g2">
         <label class="f">Autonomy
           <select bind:value={form.autonomy}><option value="">global setting</option><option value="ask">ask</option><option value="important">important</option></select>
@@ -274,13 +238,6 @@
       <label class="f">Instructions
         <textarea rows="6" bind:value={form.instructions} placeholder="Added to every job's instructions, after the repository's"></textarea>
         <span class="hint">Jobs read this text as their own instructions: write only what you trust.</span></label>
-      <div class="g2">
-        <label class="f">Repository (default)
-          <input class="mono" bind:value={form.repo} placeholder="https://github.com/acme/payments-api" />
-          <span class="hint">Only a default: a job may use any repository.</span></label>
-        <label class="f">Base branch
-          <input class="mono" bind:value={form.baseBranch} placeholder="the repository's default" /></label>
-      </div>
       <div class="g2">
         <label class="f">Live jobs at once
           <input type="number" min="1" max="100" bind:value={form.maxLiveJobs} />
@@ -298,17 +255,6 @@
           <span class="hint">Added to the repository's. A commit touching one waits for you.</span>
           {@render mark(marks.sensitivePaths)}</label>
       </div>
-      {#if stages.length}
-        <fieldset class="f">
-          <legend>Stages that always wait for a person</legend>
-          <div class="row">
-            {#each stages as s (s.id)}
-              <label class="chk"><input type="checkbox" checked={form.humanStages.includes(s.id)} onchange={(e) => toggleStage(s.id, e.currentTarget.checked)} /> {s.label ?? s.id}</label>
-            {/each}
-          </div>
-          <span class="hint">An agent can only add waits, never remove one.</span>
-        </fieldset>
-      {/if}
       {#snippet foot()}
         {#if isNew}
           <a class="btn ghost" href={href('/agents')}>Cancel</a>
@@ -418,7 +364,4 @@
   .versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
   .pm.low { color: var(--ink); font-weight: 600; }
   .dt .del { text-decoration: line-through; text-decoration-color: var(--line); }
-  fieldset.f { border: 0; padding: 0; margin: 0; }
-  fieldset.f legend { padding: 0; margin-bottom: 6px; }
-  .chk { display: inline-flex; gap: 6px; align-items: center; }
 </style>

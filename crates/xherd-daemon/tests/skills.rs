@@ -43,7 +43,6 @@ fn agent(name: &str, skills: &[&str]) -> AgentDef {
     serde_json::from_value(serde_json::json!({
         "name": name,
         "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
         "skills": skills,
     }))
     .unwrap()

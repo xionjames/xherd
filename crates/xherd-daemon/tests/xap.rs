@@ -3727,7 +3727,6 @@ async fn agent_memory_proposal_is_saved_on_accept() {
         "name": "reviewer",
         "description": "Reviews",
         "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
     }))
     .unwrap();
     let def = t.d.create_agent(def).await.unwrap().def;
@@ -3890,7 +3889,6 @@ async fn no_suggestion_when_it_is_off_or_the_job_is_cancelled_or_has_an_agent() 
     // A job of a saved agent has nothing to suggest.
     let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
         "name": "keeper", "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
     }))
     .unwrap();
     let def = t.d.create_agent(def).await.unwrap().def;
@@ -3921,7 +3919,6 @@ async fn accepting_a_suggestion_creates_the_agent_and_attaches_the_job() {
         serde_json::from_value(json!({
             "name": "shop-notes", "description": "Notes on the shop",
             "runtime": "claude-code", "instructions": "Run the linter first.",
-            "workflow": {"pack": "xherd", "flow": "feature"},
         }))
         .unwrap()
     };
@@ -4028,7 +4025,6 @@ async fn a_job_with_an_agent_cannot_propose_one() {
     let t = setup().await;
     let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
         "name": "keeper", "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
     }))
     .unwrap();
     let def = t.d.create_agent(def).await.unwrap().def;

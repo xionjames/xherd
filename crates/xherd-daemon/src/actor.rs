@@ -2736,14 +2736,9 @@ impl Actor {
             Gate::Commit(_) => flow.commit_stage(self.job.stage.as_deref())?,
             _ => return None,
         };
-        // Human-only by the pack (role `pr`) or by the saved agent (R14).
-        let human = self
-            .job
-            .agent
-            .as_ref()
-            .and_then(|a| a.stage_overrides.get(&stage.id))
-            .is_some_and(|o| o.human);
-        Some(if stage.role == Role::Pr || human {
+        // Human-only by the pack (role `pr`). A stage the user marked human
+        // comes back with stage assignments (D26).
+        Some(if stage.role == Role::Pr {
             Class::HumanOnly
         } else {
             stage.class

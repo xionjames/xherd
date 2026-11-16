@@ -43,4 +43,11 @@ CREATE TABLE agent_versions (agent_id TEXT NOT NULL, version INTEGER NOT NULL, a
                              PRIMARY KEY (agent_id, version));
 CREATE TABLE agent_memory (agent_id TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL);
 "#,
+    // 4: an agent no longer names a workflow, repository, base branch or
+    // stage overrides (issue #141, second part, D26). `AgentDef` refuses
+    // unknown fields, so the keys go from the row and from every version.
+    r#"
+UPDATE agents SET data = json_remove(data, '$.workflow', '$.repo', '$.baseBranch', '$.stageOverrides');
+UPDATE agent_versions SET data = json_remove(data, '$.workflow', '$.repo', '$.baseBranch', '$.stageOverrides');
+"#,
 ];

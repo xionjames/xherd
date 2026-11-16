@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use xherd_core::agent_def::{AgentDef, AgentStatus, StageOverride, Workflow};
+use xherd_core::agent_def::{AgentDef, AgentStatus};
 use xherd_core::paths::Paths;
 use xherd_daemon::agents::Import;
 use xherd_daemon::*;
@@ -35,7 +35,6 @@ fn agent(name: &str) -> AgentDef {
         "name": name,
         "description": "Reviews branches",
         "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
     }))
     .unwrap()
 }
@@ -77,12 +76,13 @@ async fn checks_that_need_plugins_and_packs() {
     let cases: Vec<(&str, Edit)> = vec![
         ("bad_name", Box::new(|d| d.name = "Bad Name".into())),
         (
-            "unknown_pack",
-            Box::new(|d| d.workflow.pack = "other".into()),
+            "bad_fallback",
+            Box::new(|d| d.fallback_runtime = Some("nothing".into())),
         ),
+        // a plugin that exists but is no runtime
         (
-            "unknown_flow",
-            Box::new(|d| d.workflow.flow = "hotfix".into()),
+            "bad_fallback",
+            Box::new(|d| d.fallback_runtime = Some("github".into())),
         ),
         (
             "unknown_runtime",
@@ -93,13 +93,6 @@ async fn checks_that_need_plugins_and_packs() {
         (
             "mode_unavailable",
             Box::new(|d| d.permission_mode = Some(xherd_core::permission::PermissionMode::All)),
-        ),
-        (
-            "unknown_stage",
-            Box::new(|d| {
-                d.stage_overrides
-                    .insert("nope".into(), StageOverride { human: true });
-            }),
         ),
         (
             "bad_agent",
@@ -123,16 +116,9 @@ async fn checks_that_need_plugins_and_packs() {
         );
     }
     assert!(t.d.agents().await.unwrap().is_empty(), "nothing was saved");
-    // flow none needs no pack; a known stage override is fine
+    // a fallback runtime that exists is fine
     let mut d = agent("plain");
-    d.workflow = Workflow {
-        pack: "xherd".into(),
-        flow: "none".into(),
-    };
-    t.d.create_agent(d).await.unwrap();
-    let mut d = agent("strict");
-    d.stage_overrides
-        .insert("ship".into(), StageOverride { human: true });
+    d.fallback_runtime = Some("opencode".into());
     t.d.create_agent(d).await.unwrap();
 }
 
@@ -161,10 +147,10 @@ async fn editing_keeps_every_version() {
         "name_fixed"
     );
     let mut bad = agent("reviewer");
-    bad.workflow.flow = "hotfix".into();
+    bad.runtime = "nothing".into();
     assert_eq!(
         t.d.update_agent(&a.def.id, bad).await.unwrap_err().code,
-        "unknown_flow"
+        "unknown_runtime"
     );
     assert_eq!(t.d.agent("reviewer").await.unwrap().def.version, 2);
     assert_eq!(
@@ -268,6 +254,7 @@ async fn export_and_import() {
     fresh.description = "new".into();
     let mixed = Import {
         agents: vec![fresh, agent("plain")],
+        ..Default::default()
     };
     assert_eq!(
         u.d.import_agents(mixed, false).await.unwrap_err().code,
@@ -277,6 +264,7 @@ async fn export_and_import() {
     // the dry run says so without refusing
     let mixed = Import {
         agents: vec![agent("plain")],
+        ..Default::default()
     };
     assert_eq!(
         u.d.import_agents(mixed, true).await.unwrap()["nameTaken"],
@@ -284,20 +272,51 @@ async fn export_and_import() {
     );
     // one invalid agent imports none
     let mut bad = agent("broken-one");
-    bad.workflow.flow = "hotfix".into();
+    bad.runtime = "nothing".into();
     let mixed = Import {
         agents: vec![agent("good"), bad],
+        ..Default::default()
     };
     let e = u.d.import_agents(mixed, false).await.unwrap_err();
-    assert_eq!(e.code, "unknown_flow");
+    assert_eq!(e.code, "unknown_runtime");
     assert!(e.message.starts_with("broken-one: "));
     assert_eq!(u.d.agents().await.unwrap().len(), 2);
     // the same name twice in one import
     let twice = Import {
         agents: vec![agent("dup"), agent("dup")],
+        ..Default::default()
     };
     assert_eq!(
         u.d.import_agents(twice, false).await.unwrap_err().code,
         "name_taken"
     );
+}
+
+/// An export from before stage agents still imports: the workflow, repository,
+/// base branch and stage overrides are dropped, and the dry run says so.
+#[tokio::test]
+async fn an_old_export_imports_without_the_dropped_keys() {
+    let t = setup().await;
+    let old: Import = serde_json::from_value(serde_json::json!({"agents": [{
+        "name": "old", "runtime": "claude-code",
+        "workflow": {"pack": "xherd", "flow": "bugfix"}, "repo": "/r",
+        "baseBranch": "main", "stageOverrides": {"ship": {"human": true}},
+        "maxDiffLines": 7
+    }]}))
+    .unwrap();
+    assert_eq!(
+        old.ignored,
+        [["workflow", "repo", "baseBranch", "stageOverrides"]]
+    );
+    let dry = t.d.import_agents(old, true).await.unwrap();
+    assert_eq!(
+        dry["agents"][0]["ignored"],
+        serde_json::json!(["workflow", "repo", "baseBranch", "stageOverrides"])
+    );
+    let again: Import = serde_json::from_value(serde_json::json!({"agents": [{
+        "name": "old", "runtime": "claude-code", "workflow": {"pack": "xherd", "flow": "none"}
+    }]}))
+    .unwrap();
+    assert_eq!(t.d.import_agents(again, false).await.unwrap()["added"], 1);
+    assert_eq!(t.d.agent("old").await.unwrap().def.name, "old");
 }

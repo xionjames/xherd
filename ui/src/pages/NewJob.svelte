@@ -34,12 +34,11 @@
   function pickAgent(name: string) {
     agentName = name;
     try { localStorage.setItem(AGENT_KEY, name); } catch { /* private mode */ }
-    const r = fillFromAgent(agents.find((a) => a.name === name), { flow: f.flow, repo: f.repo, base: f.base, runtime: f.runtime, model: f.model, autonomy: f.autonomy, mode: f.mode }, marks);
-    f.flow = r.form.flow; f.repo = r.form.repo; f.base = r.form.base; f.runtime = r.form.runtime;
+    const r = fillFromAgent(agents.find((a) => a.name === name), { runtime: f.runtime, model: f.model, autonomy: f.autonomy, mode: f.mode }, marks);
+    f.runtime = r.form.runtime;
     f.model = r.form.model; f.autonomy = r.form.autonomy; f.mode = r.form.mode;
     marks = r.marks;
     autonomyTouched = false;
-    if (f.repo.trim()) resolve();
   }
   let agentRestored = false;
   $effect(() => {
@@ -211,8 +210,8 @@
         {:else if f.name}<span class="hint">Branch <span class="mono">{branch}</span></span>
         {:else if agent}<span class="hint">Empty: <span class="mono">{agent.name}</span>-ticket key, else a number.</span>
         {:else}<span class="hint">Job, session and worktree folder.</span>{/if}</label>
-      <div class="f">Workflow {#if from('flow')}<span class="frm">from agent</span>{/if}
-        <Seg label="Workflow" value={f.flow} onchange={(v) => { f.flow = v; edited('flow'); }}
+      <div class="f">Workflow
+        <Seg label="Workflow" value={f.flow} onchange={(v) => { f.flow = v; }}
           options={[...flows, 'none'].map((fl) => ({ value: fl, label: fl === 'none' ? 'No workflow' : fl }))} /></div>
     </div>
     <label class="f">Ticket (optional)
@@ -225,8 +224,8 @@
         {:else}<span class="hint"><span class="mono">{tk.data.key}</span> · no issue tracker reads this key: it names the branch only.</span>{/if}
       {:else}<span class="hint">An issue URL or a key. Its key starts the branch name.</span>{/if}</label>
     <div class="g2">
-      <label class="f">Repository: URL or local path {#if from('repo')}<span class="frm">from agent</span>{/if}
-        <input class="mono" bind:value={f.repo} list="known-repos" required={!(tk.input === ticketIn && tk.data?.repo)} onchange={resolve} oninput={() => edited('repo')}
+      <label class="f">Repository: URL or local path
+        <input class="mono" bind:value={f.repo} list="known-repos" required={!(tk.input === ticketIn && tk.data?.repo)} onchange={resolve}
           placeholder="https://github.com/acme/payments-api or /Users/you/xherd/payments-api" />
         <datalist id="known-repos">{#each known as k (k.path)}<option value={k.path}></option>{/each}</datalist>
         {#if repo.busy && repo.input === input}
@@ -239,8 +238,8 @@
         {:else}
           <span class="hint">A URL is cloned into the workspace once and fetched before each new agent.</span>
         {/if}</label>
-      <label class="f">Base branch (optional) {#if from('base')}<span class="frm">from agent</span>{/if}
-        <input class="mono" bind:value={f.base} list="repo-branches" oninput={() => edited('base')}
+      <label class="f">Base branch (optional)
+        <input class="mono" bind:value={f.base} list="repo-branches"
           placeholder={repo.data?.base ?? "origin's default branch"} />
         <datalist id="repo-branches">{#each repo.data?.branches ?? [] as b (b)}<option value={b}></option>{/each}</datalist></label>
     </div>

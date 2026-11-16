@@ -4,16 +4,13 @@ import type { PermissionMode } from './modes';
 
 /** The New job form's fields an agent can fill (the names of its state). */
 export interface JobForm {
-  flow: string;
-  repo: string;
-  base: string;
   runtime: string;
   model: string;
   autonomy: string;
   mode: PermissionMode | '';
 }
 
-export const FORM_DEFAULTS: JobForm = { flow: 'feature', repo: '', base: '', runtime: '', model: '', autonomy: 'ask', mode: '' };
+export const FORM_DEFAULTS: JobForm = { runtime: '', model: '', autonomy: 'ask', mode: '' };
 
 export type FormField = keyof JobForm;
 
@@ -34,9 +31,6 @@ export function fillFromAgent(
     out[k] = v;
     marks.push(k);
   };
-  set('flow', agent.workflow.flow);
-  set('repo', agent.repo);
-  set('base', agent.baseBranch);
   set('runtime', agent.runtime);
   set('model', agent.models?.[agent.runtime]);
   set('autonomy', agent.autonomy);
@@ -101,16 +95,13 @@ const FIELDS: [keyof AgentDef, string][] = [
   ['description', 'Description'],
   ['runtime', 'Runtime'],
   ['models', 'Models'],
-  ['workflow', 'Workflow'],
+  ['fallbackRuntime', 'Fallback runtime'],
   ['autonomy', 'Autonomy'],
   ['permissionMode', 'Tool permissions'],
   ['instructions', 'Instructions'],
-  ['repo', 'Repository'],
-  ['baseBranch', 'Base branch'],
   ['jobTokenBudget', 'Token budget per job'],
   ['sensitivePaths', 'Sensitive paths'],
   ['maxDiffLines', 'Max diff lines'],
-  ['stageOverrides', 'Stages that wait for a person'],
   ['skills', 'Skills'],
   ['maxLiveJobs', 'Live jobs at once'],
 ];
@@ -118,12 +109,7 @@ const FIELDS: [keyof AgentDef, string][] = [
 /** One value as a line of text; empty when the field is not set. */
 export function show(field: keyof AgentDef, v: unknown): string {
   if (v === undefined || v === null || v === '') return '';
-  if (field === 'workflow') {
-    const w = v as AgentDef['workflow'];
-    return w.flow === 'none' ? 'no workflow' : `${w.flow} (${w.pack})`;
-  }
   if (field === 'models') return Object.entries(v as Record<string, string>).map(([k, m]) => `${k}: ${m}`).join(', ');
-  if (field === 'stageOverrides') return Object.entries(v as Record<string, { human: boolean }>).filter(([, o]) => o.human).map(([k]) => k).join(', ');
   if (Array.isArray(v)) return v.join(', ');
   return String(v);
 }
@@ -184,17 +170,13 @@ export interface AgentForm {
   description: string;
   runtime: string;
   model: string;
-  pack: string;
-  flow: string;
+  fallbackRuntime: string;
   autonomy: string;
   permissionMode: string;
   instructions: string;
-  repo: string;
-  baseBranch: string;
   jobTokenBudget: string;
   sensitivePaths: string;
   maxDiffLines: string;
-  humanStages: string[];
   maxLiveJobs: string;
 }
 
@@ -204,17 +186,13 @@ export function toForm(a?: AgentDef): AgentForm {
     description: a?.description ?? '',
     runtime: a?.runtime ?? '',
     model: a ? (a.models?.[a.runtime] ?? '') : '',
-    pack: a?.workflow.pack ?? 'xherd',
-    flow: a?.workflow.flow ?? 'feature',
+    fallbackRuntime: a?.fallbackRuntime ?? '',
     autonomy: a?.autonomy ?? '',
     permissionMode: a?.permissionMode ?? '',
     instructions: a?.instructions ?? '',
-    repo: a?.repo ?? '',
-    baseBranch: a?.baseBranch ?? '',
     jobTokenBudget: a?.jobTokenBudget ? String(a.jobTokenBudget) : '',
     sensitivePaths: (a?.sensitivePaths ?? []).join('\n'),
     maxDiffLines: a?.maxDiffLines ? String(a.maxDiffLines) : '',
-    humanStages: Object.entries(a?.stageOverrides ?? {}).filter(([, o]) => o.human).map(([k]) => k),
     maxLiveJobs: String(a?.maxLiveJobs ?? 1),
   };
 }
@@ -227,22 +205,18 @@ export function fromForm(f: AgentForm, old?: AgentDef): Record<string, unknown> 
   const models = { ...(old?.models ?? {}) };
   if (f.model.trim()) models[f.runtime] = f.model.trim();
   else delete models[f.runtime];
-  const stageOverrides = Object.fromEntries(f.humanStages.map((s) => [s, { human: true }]));
   return {
     name: f.name.trim(),
     description: f.description.trim(),
     runtime: f.runtime,
     models,
-    workflow: { pack: f.pack, flow: f.flow },
+    fallbackRuntime: text(f.fallbackRuntime),
     autonomy: text(f.autonomy),
     permissionMode: text(f.permissionMode),
     instructions: f.instructions.trim() === '' ? undefined : f.instructions,
-    repo: text(f.repo),
-    baseBranch: text(f.baseBranch),
     jobTokenBudget: num(f.jobTokenBudget),
     sensitivePaths: f.sensitivePaths.split('\n').map((s) => s.trim()).filter(Boolean),
     maxDiffLines: num(f.maxDiffLines),
-    stageOverrides,
     skills: old?.skills ?? [],
     maxLiveJobs: Number(f.maxLiveJobs) || 1,
   };
@@ -272,8 +246,6 @@ export function fillFromJob(job: Job): AgentForm {
   form.description = repoDir ? `${flow === 'none' ? 'Work' : `${flow} work`} on ${repoDir}` : '';
   form.runtime = job.runtime ?? 'claude-code';
   form.model = job.model ?? '';
-  form.pack = job.pack ?? 'xherd';
-  form.flow = flow;
   form.autonomy = job.autonomy && job.autonomy !== 'never' ? job.autonomy : '';
   form.permissionMode = job.permissionMode ?? '';
   const d = job.agentDraft;

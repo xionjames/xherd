@@ -58,7 +58,7 @@
 
 {#if offered}
   <Callout tone="info">
-    Save this setup as an agent? Next time you start a job from it, the runtime, workflow and autonomy are already filled in.
+    Save this setup as an agent? Next time you start a job from it, the runtime and autonomy are already filled in.
     <button class="btn sm" onclick={start}>Save as agent…</button>
     <button class="btn ghost sm" onclick={dismiss}>Not now</button>
     <button class="btn ghost sm" onclick={never}>Don't suggest</button>
@@ -77,7 +77,7 @@
       <span class="hint">{agent.agentDraft ? 'The job drafted these from what you told it; edit freely.' : 'Optional.'} Nothing task-specific.</span></label>
     <p class="hint">
       Runtime <b>{form.runtime}</b>{form.model ? ` (${form.model})` : ''},
-      workflow <b>{form.flow}</b>{form.autonomy ? `, autonomy ${form.autonomy}` : ''}{form.permissionMode ? `, tools ${form.permissionMode}` : ''}.
+      {form.autonomy ? `autonomy ${form.autonomy}` : 'autonomy from Settings'}{form.permissionMode ? `, tools ${form.permissionMode}` : ''}.
       This job keeps its own settings and becomes the agent's first job.</p>
     {#snippet actions()}
       <button class="btn ghost" onclick={() => (open = false)}>Cancel</button>

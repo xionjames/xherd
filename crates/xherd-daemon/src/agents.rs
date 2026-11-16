@@ -43,10 +43,45 @@ pub struct AgentView {
 
 /// `POST /agents/import` and the shape `GET /agents/export` returns (R22):
 /// no ids, no secrets (an agent holds none).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Default, Deserialize)]
+#[serde(try_from = "RawImport")]
 pub struct Import {
     pub agents: Vec<AgentDef>,
+    /// Per agent, the keys of an older export that agents no longer have
+    /// (a workflow, repository, base branch, stage overrides): dropped, and
+    /// said in the dry run.
+    pub ignored: Vec<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawImport {
+    agents: Vec<serde_json::Value>,
+}
+
+/// The keys the agent record lost with stage agents (D26).
+const DROPPED_KEYS: [&str; 4] = ["workflow", "repo", "baseBranch", "stageOverrides"];
+
+impl TryFrom<RawImport> for Import {
+    type Error = String;
+
+    fn try_from(raw: RawImport) -> Result<Self, String> {
+        let mut i = Import::default();
+        for mut v in raw.agents {
+            let mut ignored = Vec::new();
+            if let Some(o) = v.as_object_mut() {
+                for k in DROPPED_KEYS {
+                    if o.remove(k).is_some() {
+                        ignored.push(k.to_string());
+                    }
+                }
+            }
+            i.agents
+                .push(serde_json::from_value(v).map_err(|e| e.to_string())?);
+            i.ignored.push(ignored);
+        }
+        Ok(i)
+    }
 }
 
 /// The saved agent a job started from.
@@ -162,24 +197,6 @@ impl Daemon {
     /// stage override names a stage of the flow. With `running`, the runtime
     /// must also be switched on (that is `broken`, R15).
     fn validate(&self, def: &AgentDef, running: bool) -> Result<(), ActionError> {
-        let w = &def.workflow;
-        let flow_none = w.flow == xherd_core::new::FLOW_NONE;
-        let pack = self.packs.get(&w.pack);
-        if !flow_none && pack.is_none() {
-            return Err(err(
-                "unknown_pack",
-                format!("no flow pack named {}", w.pack),
-            ));
-        }
-        let flow = match (flow_none, pack) {
-            (false, Some(p)) => Some(p.flow(&w.flow).ok_or_else(|| {
-                err(
-                    "unknown_flow",
-                    format!("pack {} has no flow {:?}", w.pack, w.flow),
-                )
-            })?),
-            _ => None,
-        };
         let off: Vec<String> = if running {
             self.live_config().disabled_plugins
         } else {
@@ -187,14 +204,10 @@ impl Daemon {
         };
         self.check_runtime(&def.runtime, &off)
             .map_err(|m| err("unknown_runtime", m))?;
-        if let Some(p) = pack
-            && !flow_none
-            && !p.install.contains_key(&def.runtime)
-        {
-            return Err(err(
-                "runtime_unusable",
-                format!("the {} pack has no commands for {}", p.name, def.runtime),
-            ));
+        // The fallback only has to exist; it may be off, that is what it is for.
+        if let Some(f) = &def.fallback_runtime {
+            self.check_runtime(f, &[])
+                .map_err(|m| err("bad_fallback", format!("fallbackRuntime: {m}")))?;
         }
         for rt in def.models.keys() {
             self.check_model_runtime(rt)
@@ -214,18 +227,6 @@ impl Daemon {
                 return Err(err(
                     "unknown_skill",
                     format!("skills: no skill named {s:?} in the library"),
-                ));
-            }
-        }
-        for stage in def.stage_overrides.keys() {
-            let known = flow.is_some_and(|f| f.stages.iter().any(|s| &s.id == stage));
-            if !known {
-                return Err(err(
-                    "unknown_stage",
-                    format!(
-                        "stageOverrides: the flow {:?} has no stage {stage:?}",
-                        w.flow
-                    ),
                 ));
             }
         }
@@ -562,7 +563,9 @@ impl Daemon {
         let now = self.clock.now();
         let mut out = Vec::new();
         let mut taken = false;
+        let mut ignored = i.ignored.into_iter();
         for mut def in i.agents {
+            let dropped = ignored.next().unwrap_or_default();
             self.check_agent(&mut def)
                 .map_err(|e| err(e.code, format!("{}: {}", def.name, e.message)))?;
             let name_taken = names.contains(&def.name);
@@ -579,16 +582,18 @@ impl Daemon {
             def.created_at = now;
             def.updated_at = now;
             def.archived_at = None;
-            out.push((def, name_taken));
+            out.push((def, name_taken, dropped));
         }
         if dry_run {
             let agents: Vec<Value> = out
                 .iter()
-                .map(|(d, t)| json!({"agent": d, "risky": risky_fields(d), "nameTaken": t}))
+                .map(|(d, t, ig)| {
+                    json!({"agent": d, "risky": risky_fields(d), "nameTaken": t, "ignored": ig})
+                })
                 .collect();
             return Ok(json!({"agents": agents, "nameTaken": taken}));
         }
-        for (d, _) in &out {
+        for (d, _, _) in &out {
             self.store.put_agent_def(d).await.map_err(store)?;
             self.sup.agent_limit(&d.id, Some(d.max_live_jobs));
         }
@@ -657,13 +662,10 @@ mod tests {
 
     #[test]
     fn risky_fields_are_the_ones_that_widen_or_instruct() {
-        let d: AgentDef = serde_json::from_str(
-            r#"{"name":"a","runtime":"r","workflow":{"pack":"p","flow":"f"}}"#,
-        )
-        .unwrap();
+        let d: AgentDef = serde_json::from_str(r#"{"name":"a","runtime":"r"}"#).unwrap();
         assert!(risky_fields(&d).is_empty());
         let d: AgentDef = serde_json::from_str(
-            r#"{"name":"a","runtime":"r","workflow":{"pack":"p","flow":"f"},
+            r#"{"name":"a","runtime":"r",
                 "permissionMode":"all","autonomy":"important","instructions":"x","skills":["s"]}"#,
         )
         .unwrap();

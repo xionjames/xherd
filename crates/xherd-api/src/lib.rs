@@ -215,7 +215,7 @@ impl From<ActionError> for ApiError {
             | "repo_url" | "not_a_repo" | "repo_required" | "base_unresolved"
             | "runtime_unusable" | "runtime_hooks" | "unknown_pack" | "unknown_runtime"
             | "bad_model" | "model_unavailable" | "bad_agent" | "unknown_stage" | "bad_skill"
-            | "bad_memory" | "unknown_skill" => StatusCode::UNPROCESSABLE_ENTITY,
+            | "bad_memory" | "unknown_skill" | "bad_fallback" => StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_agent" | "no_such_skill" => StatusCode::NOT_FOUND,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "not_fixable" => StatusCode::NOT_FOUND,

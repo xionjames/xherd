@@ -20,24 +20,6 @@ pub const MAX_MEMORY: usize = 4000;
 pub const MAX_PATHS: usize = 50;
 pub const MAX_LIVE_JOBS: usize = 100;
 
-/// The workflow an agent runs: a flow of a pack (`none` = no flow).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct Workflow {
-    pub pack: String,
-    pub flow: String,
-}
-
-/// What an agent may say about one stage. It can only tighten (R14): the type
-/// has no way to loosen a gate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct StageOverride {
-    /// The stage's gate waits for a person, whatever the autonomy.
-    #[serde(default)]
-    pub human: bool,
-}
-
 fn one() -> usize {
     1
 }
@@ -60,7 +42,9 @@ pub struct AgentDef {
     /// Runtime plugin → model.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, String>,
-    pub workflow: Workflow,
+    /// Used once, at job creation, when `runtime` is switched off (R36).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_runtime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autonomy: Option<Autonomy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,11 +52,6 @@ pub struct AgentDef {
     /// Added to the job's `instructions.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
-    /// Only a default: a job may use any repository.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repo: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_token_budget: Option<u64>,
     /// Added to the repository's (R13).
@@ -80,9 +59,6 @@ pub struct AgentDef {
     pub sensitive_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_diff_lines: Option<usize>,
-    /// Stage id → override.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub stage_overrides: BTreeMap<String, StageOverride>,
     /// Names in the skills library (phase 3).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
@@ -109,6 +85,24 @@ pub struct JobAgent {
     pub id: String,
     pub name: String,
     pub version: u32,
+    /// What the job runs this agent on (R36, R40): the agent's runtime, or its
+    /// fallback when that one was off at creation. Empty in snapshots from
+    /// before stage agents.
+    #[serde(default)]
+    pub runtime: String,
+    #[serde(default)]
+    pub fell_back: bool,
+    /// The values the job resolved for this agent at creation (request >
+    /// agent > settings, under the profile's ceilings); `launch` is the
+    /// runtime's argv with them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomy: Option<Autonomy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<PermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -117,8 +111,6 @@ pub struct JobAgent {
     pub max_diff_lines: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_token_budget: Option<u64>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub stage_overrides: BTreeMap<String, StageOverride>,
     /// What became of each skill the agent lists (R26, R27): filled when the
     /// job is created, never by `snapshot`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -147,11 +139,16 @@ impl AgentDef {
             id: self.id.clone(),
             name: self.name.clone(),
             version: self.version,
+            runtime: self.runtime.clone(),
+            fell_back: false,
+            autonomy: None,
+            permission_mode: None,
+            model: None,
+            launch: vec![],
             instructions: self.instructions.clone(),
             sensitive_paths: self.sensitive_paths.clone(),
             max_diff_lines: self.max_diff_lines,
             job_token_budget: self.job_token_budget,
-            stage_overrides: self.stage_overrides.clone(),
             skills: vec![],
             memory: None,
         }
@@ -187,10 +184,22 @@ pub fn check(def: &mut AgentDef) -> Result<(), Refusal> {
         return Err(bad("a runtime is needed"));
     }
     def.models = crate::model::clean_map(std::mem::take(&mut def.models)).map_err(bad)?;
-    def.workflow.pack = def.workflow.pack.trim().to_string();
-    def.workflow.flow = def.workflow.flow.trim().to_string();
-    if def.workflow.pack.is_empty() || def.workflow.flow.is_empty() {
-        return Err(bad("workflow: a pack and a flow are needed"));
+    if let Some(f) = def.fallback_runtime.as_deref() {
+        let f = f.trim();
+        if f.is_empty() {
+            def.fallback_runtime = None;
+        } else if f == def.runtime
+            || !f
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(refuse(
+                "bad_fallback",
+                "fallbackRuntime: another runtime plugin's name",
+            ));
+        } else {
+            def.fallback_runtime = Some(f.to_string());
+        }
     }
     if let Some(a) = def.autonomy
         && !a.selectable()
@@ -209,21 +218,6 @@ pub fn check(def: &mut AgentDef) -> Result<(), Refusal> {
             )));
         }
     }
-    for (field, v) in [
-        ("repo", &mut def.repo),
-        ("baseBranch", &mut def.base_branch),
-    ] {
-        if let Some(s) = v.as_deref() {
-            let s = s.trim();
-            if s.is_empty() {
-                *v = None;
-            } else if s.contains(['\n', '\0']) {
-                return Err(bad(format!("{field}: one line")));
-            } else {
-                *v = Some(s.to_string());
-            }
-        }
-    }
     if def.sensitive_paths.len() > MAX_PATHS
         || def
             .sensitive_paths
@@ -236,9 +230,6 @@ pub fn check(def: &mut AgentDef) -> Result<(), Refusal> {
     }
     if def.max_diff_lines == Some(0) {
         return Err(bad("maxDiffLines: at least 1"));
-    }
-    if def.stage_overrides.keys().any(|k| k.trim().is_empty()) {
-        return Err(bad("stageOverrides: a stage id is needed"));
     }
     if def.max_live_jobs == 0 || def.max_live_jobs > MAX_LIVE_JOBS {
         return Err(bad(format!("maxLiveJobs: 1 to {MAX_LIVE_JOBS}")));
@@ -311,19 +302,13 @@ mod tests {
             version: 1,
             runtime: "claude-code".into(),
             models: BTreeMap::new(),
-            workflow: Workflow {
-                pack: "xherd".into(),
-                flow: "feature".into(),
-            },
+            fallback_runtime: None,
             autonomy: None,
             permission_mode: None,
             instructions: None,
-            repo: None,
-            base_branch: None,
             job_token_budget: None,
             sensitive_paths: vec![],
             max_diff_lines: None,
-            stage_overrides: BTreeMap::new(),
             skills: vec![],
             max_live_jobs: 1,
             created_at: 0,
@@ -368,8 +353,14 @@ mod tests {
                     d.models.insert("claude-code".into(), "-x".into());
                 }),
             ),
-            ("bad_agent", Box::new(|d| d.workflow.flow = String::new())),
-            ("bad_agent", Box::new(|d| d.workflow.pack = String::new())),
+            (
+                "bad_fallback",
+                Box::new(|d| d.fallback_runtime = Some("claude-code".into())),
+            ),
+            (
+                "bad_fallback",
+                Box::new(|d| d.fallback_runtime = Some("Bad Runtime".into())),
+            ),
             (
                 "autonomy_unavailable",
                 Box::new(|d| d.autonomy = Some(Autonomy::Never)),
@@ -378,7 +369,6 @@ mod tests {
                 "bad_agent",
                 Box::new(|d| d.instructions = Some("x".repeat(MAX_INSTRUCTIONS + 1))),
             ),
-            ("bad_agent", Box::new(|d| d.repo = Some("a\nb".into()))),
             (
                 "bad_agent",
                 Box::new(|d| d.sensitive_paths = vec![" ".into()]),
@@ -395,29 +385,28 @@ mod tests {
     }
 
     #[test]
-    fn flow_none_is_allowed() {
+    fn the_fallback_runtime_is_trimmed_and_may_be_empty() {
         let mut d = def();
-        d.workflow.flow = "none".into();
+        d.fallback_runtime = Some(" opencode ".into());
         check(&mut d).unwrap();
+        assert_eq!(d.fallback_runtime.as_deref(), Some("opencode"));
+        d.fallback_runtime = Some("  ".into());
+        check(&mut d).unwrap();
+        assert_eq!(d.fallback_runtime, None);
     }
 
     #[test]
     fn import_refuses_unknown_fields_and_fills_defaults() {
-        let d: AgentDef = serde_json::from_str(
-            r#"{"name":"a","runtime":"claude-code","workflow":{"pack":"xherd","flow":"feature"}}"#,
-        )
-        .unwrap();
+        let d: AgentDef = serde_json::from_str(r#"{"name":"a","runtime":"claude-code"}"#).unwrap();
         assert_eq!((d.version, d.max_live_jobs), (1, 1));
         assert!(
-            serde_json::from_str::<AgentDef>(
-                r#"{"name":"a","runtime":"r","workflow":{"pack":"p","flow":"f"},"surprise":1}"#
-            )
-            .is_err()
+            serde_json::from_str::<AgentDef>(r#"{"name":"a","runtime":"r","surprise":1}"#).is_err()
         );
-        assert!(
-            serde_json::from_str::<StageOverride>(r#"{"human":true,"auto":true}"#).is_err(),
-            "an override cannot loosen anything"
-        );
+        // the fields the agent lost with stage agents are no longer known
+        for key in ["workflow", "repo", "baseBranch", "stageOverrides"] {
+            let json = format!(r#"{{"name":"a","runtime":"r","{key}":null}}"#);
+            assert!(serde_json::from_str::<AgentDef>(&json).is_err(), "{key}");
+        }
     }
 
     #[test]
@@ -474,12 +463,10 @@ mod tests {
         d.sensitive_paths = vec!["*.pem".into()];
         d.max_diff_lines = Some(200);
         d.job_token_budget = Some(5);
-        d.stage_overrides
-            .insert("ship".into(), StageOverride { human: true });
         let s = d.snapshot();
         assert_eq!((s.name.as_str(), s.version), ("reviewer", 1));
         assert_eq!(s.max_diff_lines, Some(200));
-        assert!(s.stage_overrides["ship"].human);
+        assert_eq!((s.runtime.as_str(), s.fell_back), ("claude-code", false));
         let back: JobAgent = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }

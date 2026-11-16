@@ -23,10 +23,9 @@
   });
 
   const tokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
-  const flowText = (a: AgentView) => (a.workflow.flow === 'none' ? 'no workflow' : a.workflow.flow);
 </script>
 
-<PageHead title="Agents" sub="A saved setup (runtime, model, workflow, autonomy, instructions) that jobs start from.">
+<PageHead title="Agents" sub="A saved setup (runtime, model, autonomy, instructions) that jobs start from.">
   {#snippet actions()}
     <a class="btn primary" href={href('/agents/new')}>New agent</a>
   {/snippet}
@@ -73,7 +72,7 @@
         <span class="hue" style:background={agentHue(a.name)}></span>
         <a class="mono nm" href={href(`/agents/${a.name}`)}>{a.name}</a>
         <span class="muted"> v{a.version}</span>
-        <div class="hint">{a.description || `${flowText(a)} · ${a.runtime}`}</div>
+        <div class="hint">{a.description || a.runtime}</div>
         {#if a.broken}<div class="hint err">Cannot start jobs: {a.broken}</div>{/if}
       </div>
     </td>

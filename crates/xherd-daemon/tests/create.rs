@@ -891,13 +891,11 @@ fn saved(name: &str) -> AgentDef {
     serde_json::from_value(serde_json::json!({
         "name": name,
         "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
         "autonomy": "important",
         "permissionMode": "auto",
         "instructions": "Be terse.",
         "sensitivePaths": ["secrets/**"],
         "maxDiffLines": 300,
-        "stageOverrides": {"ship": {"human": true}},
     }))
     .unwrap()
 }
@@ -975,14 +973,12 @@ async fn an_agent_job_is_refused_when_the_agent_cannot_start_it() {
     t.d.archive_agent("rev", false).await.unwrap();
     let mut r = from_agent(&t, "rev");
     r.repo = String::new();
+    r.name = "no-repo".into();
     assert_eq!(code(t.d.new_job(r.clone()).await), "repo_required");
-    // an agent's own repository is the default
-    let mut d = saved("home");
-    d.repo = Some(t.repo.path().to_string_lossy().into_owned());
-    t.d.create_agent(d).await.unwrap();
-    r.agent = Some("home".into());
-    r.name = "from-home".into();
-    assert_eq!(t.d.new_job(r).await.unwrap().agent.unwrap().name, "home");
+    // an agent has no repository of its own: the request names one
+    r.repo = t.repo.path().to_string_lossy().into_owned();
+    r.name = "from-rev".into();
+    assert_eq!(t.d.new_job(r).await.unwrap().agent.unwrap().name, "rev");
 }
 
 #[tokio::test]

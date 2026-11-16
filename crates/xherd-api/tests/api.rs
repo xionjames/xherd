@@ -1350,8 +1350,7 @@ async fn saved_agent_routes() {
     let (_dir, d, _a) = setup().await;
     let app =
         xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
-    let new = json!({"name": "reviewer", "runtime": "claude-code",
-                     "workflow": {"pack": "xherd", "flow": "feature"}});
+    let new = json!({"name": "reviewer", "runtime": "claude-code"});
     let (s, v) = call(
         app.clone(),
         send("POST", "/api/v1/agents", Some(new.clone())),
@@ -1367,12 +1366,12 @@ async fn saved_agent_routes() {
     for (body, status, code) in [
         (new.clone(), StatusCode::CONFLICT, "name_taken"),
         (
-            json!({"name": "x", "runtime": "claude-code", "workflow": {"pack": "xherd", "flow": "hotfix"}}),
+            json!({"name": "x", "runtime": "claude-code", "fallbackRuntime": "claude-code"}),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "unknown_flow",
+            "bad_fallback",
         ),
         (
-            json!({"name": "Bad Name", "runtime": "claude-code", "workflow": {"pack": "xherd", "flow": "feature"}}),
+            json!({"name": "Bad Name", "runtime": "claude-code"}),
             StatusCode::UNPROCESSABLE_ENTITY,
             "bad_name",
         ),
@@ -1644,7 +1643,7 @@ async fn skill_routes() {
     // an agent needs the skill to exist; the skill cannot go while it is used
     let agent = |skills: Value| {
         json!({"name": "rev", "runtime": "claude-code",
-               "workflow": {"pack": "xherd", "flow": "feature"}, "skills": skills})
+               "skills": skills})
     };
     let (s, v) = call(
         app.clone(),
@@ -1680,8 +1679,7 @@ async fn mark_done_and_save_as_agent_routes() {
     let app =
         xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
     let form = json!({"agent": {"name": "shop", "description": "Shop",
-        "runtime": "claude-code", "instructions": "Run the linter.",
-        "workflow": {"pack": "xherd", "flow": "feature"}}});
+        "runtime": "claude-code", "instructions": "Run the linter."}});
     // SC-1 is running: it can be neither marked done nor accepted.
     let (s, v) = call(
         app.clone(),

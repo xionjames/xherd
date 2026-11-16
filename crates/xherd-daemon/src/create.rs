@@ -92,27 +92,13 @@ impl Daemon {
             }
             None => None,
         };
-        if let Some(def) = &agent {
-            if req.repo.trim().is_empty() {
-                req.repo = def.repo.clone().unwrap_or_default();
-            }
-            if req.flow.as_deref().is_none_or(|f| f.trim().is_empty()) {
-                req.flow = Some(def.workflow.flow.clone());
-            }
-        }
         // No repository yet: the one a ticket URL names (#148). An explicit
-        // repository or the agent's always wins; without any, `check` refuses.
+        // repository always wins; without any, `check` refuses.
         if req.repo.trim().is_empty()
             && let Some(Ok(Some(input))) = req.ticket.as_deref().map(new::parse_ticket)
             && let Some(url) = self.ticket_repo(&input)
         {
             req.repo = url;
-        }
-        if agent.is_some() && req.repo.trim().is_empty() {
-            return Err(refuse(
-                "repo_required",
-                "this agent has no default repository: choose one",
-            ));
         }
         let c = new::check(&req)?;
         if req.autonomy.is_some_and(|a| !a.selectable()) {
@@ -121,9 +107,7 @@ impl Daemon {
                 "autonomy never is not available yet (v1.x, R-1209)",
             ));
         }
-        let pack_name = agent
-            .as_ref()
-            .map_or(xherd_flow::BUILTIN, |d| d.workflow.pack.as_str());
+        let pack_name = xherd_flow::BUILTIN;
         let pack = (c.flow != FLOW_NONE)
             .then(|| self.packs.get(pack_name))
             .flatten();

@@ -858,7 +858,6 @@ async fn an_agents_max_live_jobs_holds_its_next_job_back() {
     let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
         "name": "reviewer",
         "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
         "maxLiveJobs": 1,
     }))
     .unwrap();
@@ -891,7 +890,6 @@ async fn worklog_and_tokens_are_kept_per_saved_agent() {
     let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
         "name": "reviewer",
         "runtime": "claude-code",
-        "workflow": {"pack": "xherd", "flow": "feature"},
     }))
     .unwrap();
     let def = t.d.create_agent(def).await.unwrap().def;

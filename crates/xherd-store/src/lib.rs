@@ -1140,7 +1140,7 @@ mod tests {
     }
 
     fn agent(id: &str, name: &str, version: u32) -> xherd_core::agent_def::AgentDef {
-        use xherd_core::agent_def::{AgentDef, Workflow};
+        use xherd_core::agent_def::AgentDef;
         AgentDef {
             id: id.into(),
             name: name.into(),
@@ -1148,24 +1148,48 @@ mod tests {
             version,
             runtime: "claude-code".into(),
             models: Default::default(),
-            workflow: Workflow {
-                pack: "xherd".into(),
-                flow: "feature".into(),
-            },
+            fallback_runtime: None,
             autonomy: None,
             permission_mode: None,
             instructions: None,
-            repo: None,
-            base_branch: None,
             job_token_budget: None,
             sensitive_paths: vec![],
             max_diff_lines: None,
-            stage_overrides: Default::default(),
             skills: vec![],
             max_live_jobs: 1,
             created_at: 1,
             updated_at: 10 + Millis::from(version),
             archived_at: None,
+        }
+    }
+
+    /// Migration 4 (issue #141, D26): the dropped keys leave the agent's row
+    /// and every version, and the rows still parse as `AgentDef`.
+    #[tokio::test]
+    async fn migration_4_strips_the_workflow_keys_from_agents_and_versions() {
+        let d = tempfile::tempdir().unwrap();
+        let (db, backups) = (d.path().join("x.db"), d.path().join("backups"));
+        let old = r#"{"id":"a1","name":"rev","version":2,"runtime":"claude-code","workflow":{"pack":"xherd","flow":"bugfix"},"repo":"/r","baseBranch":"main","stageOverrides":{"ship":{"human":true}},"maxDiffLines":5}"#;
+        {
+            let mut c = Connection::open(&db).unwrap();
+            let v3 = Migrations::new(schema::MIGRATIONS[..3].iter().map(|s| M::up(s)).collect());
+            v3.to_latest(&mut c).unwrap();
+            c.execute("INSERT INTO agents VALUES ('a1','rev',NULL,?1)", [old])
+                .unwrap();
+            c.execute("INSERT INTO agent_versions VALUES ('a1',2,5,?1)", [old])
+                .unwrap();
+        }
+        let s = Store::open(&db, &backups).unwrap();
+        let got = s.get_agent_def("a1").await.unwrap().unwrap();
+        assert_eq!((got.name.as_str(), got.max_diff_lines), ("rev", Some(5)));
+        let vs = s.agent_versions("a1").await.unwrap();
+        assert_eq!((vs.len(), vs[0].version), (1, 2));
+        let c = Connection::open(&db).unwrap();
+        let data: String = c
+            .query_row("SELECT data FROM agent_versions", [], |r| r.get(0))
+            .unwrap();
+        for key in ["workflow", "repo", "baseBranch", "stageOverrides"] {
+            assert!(!data.contains(key), "{key} left in {data}");
         }
     }
 

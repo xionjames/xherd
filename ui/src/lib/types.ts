@@ -103,7 +103,13 @@ export interface JobAgent {
   sensitivePaths?: string[];
   maxDiffLines?: number;
   jobTokenBudget?: number;
-  stageOverrides?: Record<string, { human: boolean }>;
+  /** What the job runs this agent on; the agent's fallback when its runtime was off (R36, R40). */
+  runtime?: string;
+  fellBack?: boolean;
+  autonomy?: string;
+  permissionMode?: string;
+  model?: string;
+  launch?: string[];
   /** What became of each skill the agent lists, set at creation (R26, R27). */
   skills?: SkillCopy[];
   /** The agent's memory when the job was created (R28). */
@@ -124,16 +130,14 @@ export interface AgentDef {
   version: number;
   runtime: string;
   models?: Record<string, string>;
-  workflow: { pack: string; flow: string };
+  /** Used once, at job creation, when `runtime` is switched off (R36). */
+  fallbackRuntime?: string;
   autonomy?: 'ask' | 'important' | 'never';
   permissionMode?: import('./modes').PermissionMode;
   instructions?: string;
-  repo?: string;
-  baseBranch?: string;
   jobTokenBudget?: number;
   sensitivePaths?: string[];
   maxDiffLines?: number;
-  stageOverrides?: Record<string, { human: boolean }>;
   skills?: string[];
   maxLiveJobs: number;
   createdAt: number;

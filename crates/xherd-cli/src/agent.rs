@@ -60,7 +60,7 @@ pub enum AgentCmd {
         prompt: Option<String>,
         #[arg(long)]
         ticket: Option<String>,
-        /// Repository (path or URL); default: the agent's, else the current directory.
+        /// Repository (path or URL); default: the current directory.
         #[arg(long)]
         repo: Option<String>,
         #[arg(long)]
@@ -81,12 +81,9 @@ pub struct Fields {
     /// Runtime plugin (default for a new agent: claude-code).
     #[arg(long)]
     runtime: Option<String>,
-    /// Flow pack (default for a new agent: xherd).
+    /// Runtime a job uses when `--runtime`'s is switched off ("" clears).
     #[arg(long)]
-    pack: Option<String>,
-    /// Flow of the pack, or `none` (default for a new agent: feature).
-    #[arg(long)]
-    flow: Option<String>,
+    fallback_runtime: Option<String>,
     /// Model for the agent's runtime.
     #[arg(long)]
     model: Option<String>,
@@ -102,12 +99,6 @@ pub struct Fields {
     /// Read the instructions from a file.
     #[arg(long)]
     instructions_file: Option<PathBuf>,
-    /// Default repository (path or URL).
-    #[arg(long)]
-    repo: Option<String>,
-    /// Default base branch.
-    #[arg(long)]
-    base: Option<String>,
     /// Tokens one job may use (0 = off).
     #[arg(long)]
     job_token_budget: Option<u64>,
@@ -117,9 +108,6 @@ pub struct Fields {
     /// Hold a commit over this many changed lines.
     #[arg(long)]
     max_diff_lines: Option<usize>,
-    /// A stage whose gate always waits for a person (repeat; replaces the list; "" clears).
-    #[arg(long = "human-stage")]
-    human_stages: Vec<String>,
     /// A skill of the library (repeat; replaces the list; "" clears).
     #[arg(long = "skill")]
     skills: Vec<String>,
@@ -154,14 +142,8 @@ pub fn apply(def: &mut Map<String, Value>, f: &Fields, instructions: Option<Stri
     if let Some(v) = &f.runtime {
         def.insert("runtime".into(), json!(v));
     }
-    let wf = def
-        .entry("workflow")
-        .or_insert_with(|| json!({"pack": "xherd", "flow": "feature"}));
-    if let Some(v) = &f.pack {
-        wf["pack"] = json!(v);
-    }
-    if let Some(v) = &f.flow {
-        wf["flow"] = json!(v);
+    if let Some(v) = &f.fallback_runtime {
+        set_text(def, "fallbackRuntime", v);
     }
     if let Some(v) = &f.model {
         let runtime = def["runtime"].as_str().unwrap_or("claude-code").to_string();
@@ -184,12 +166,6 @@ pub fn apply(def: &mut Map<String, Value>, f: &Fields, instructions: Option<Stri
     if let Some(v) = instructions {
         set_text(def, "instructions", &v);
     }
-    if let Some(v) = &f.repo {
-        set_text(def, "repo", v);
-    }
-    if let Some(v) = &f.base {
-        set_text(def, "baseBranch", v);
-    }
     if let Some(v) = f.job_token_budget {
         def.insert("jobTokenBudget".into(), json!(v));
     }
@@ -198,17 +174,6 @@ pub fn apply(def: &mut Map<String, Value>, f: &Fields, instructions: Option<Stri
     }
     if let Some(v) = f.max_diff_lines {
         def.insert("maxDiffLines".into(), json!(v));
-    }
-    if !f.human_stages.is_empty() {
-        let o: Map<String, Value> = list(&f.human_stages)
-            .into_iter()
-            .map(|s| (s, json!({"human": true})))
-            .collect();
-        if o.is_empty() {
-            def.remove("stageOverrides");
-        } else {
-            def.insert("stageOverrides".into(), Value::Object(o));
-        }
     }
     if !f.skills.is_empty() {
         set_list(def, "skills", list(&f.skills));
@@ -234,20 +199,6 @@ fn instructions_of(f: &Fields) -> Result<Option<String>, String> {
             .map_err(|e| format!("{}: {e}", p.display())),
         None => Ok(f.instructions.clone()),
     }
-}
-
-/// The fields of an agent whose text or reach another person should read
-/// before saying yes (R22): the daemon's list plus stage overrides.
-pub fn risky(agent: &Value, from_daemon: &[String]) -> Vec<String> {
-    let mut v = from_daemon.to_vec();
-    if agent["stageOverrides"]
-        .as_object()
-        .is_some_and(|o| !o.is_empty())
-        && !v.iter().any(|s| s == "stageOverrides")
-    {
-        v.push("stageOverrides".into());
-    }
-    v
 }
 
 /// Every setting, one per line; a risky one is marked.
@@ -277,13 +228,8 @@ pub fn describe(agent: &Value, risky: &[String]) -> String {
 /// The agents table of `xherd agent ls`.
 pub fn table(agents: &[Value]) -> String {
     let mut rows =
-        vec![["AGENT", "STATUS", "RUNTIME", "WORKFLOW", "LIVE", "LAST JOB"].map(String::from)];
+        vec![["AGENT", "STATUS", "RUNTIME", "FALLBACK", "LIVE", "LAST JOB"].map(String::from)];
     for a in agents {
-        let wf = format!(
-            "{}/{}",
-            a["workflow"]["pack"].as_str().unwrap_or("?"),
-            a["workflow"]["flow"].as_str().unwrap_or("?")
-        );
         rows.push([
             format!(
                 "{} v{}",
@@ -292,7 +238,7 @@ pub fn table(agents: &[Value]) -> String {
             ),
             a["status"].as_str().unwrap_or("?").to_string(),
             a["runtime"].as_str().unwrap_or("?").to_string(),
-            wf,
+            a["fallbackRuntime"].as_str().unwrap_or("-").to_string(),
             a["liveJobs"].as_u64().unwrap_or(0).to_string(),
             a["lastJob"].as_str().unwrap_or("-").to_string(),
         ]);
@@ -515,9 +461,21 @@ fn import(c: &Client, file: &std::path::Path, yes: bool) -> i32 {
             .flatten()
             .filter_map(|s| s.as_str().map(String::from))
             .collect();
-        let r = risky(a, &from_daemon);
+        let r = from_daemon;
         println!("{}", a["name"].as_str().unwrap_or("?"));
         print!("{}", describe(a, &r));
+        let ignored: Vec<&str> = it["ignored"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str())
+            .collect();
+        if !ignored.is_empty() {
+            println!(
+                "  ignored (agents no longer have them): {}",
+                ignored.join(", ")
+            );
+        }
         if it["nameTaken"].as_bool().unwrap_or(false) {
             println!("  ! an agent with this name exists: the import will be refused");
         }
@@ -557,21 +515,16 @@ fn start(
     base: Option<String>,
     name: Option<String>,
 ) -> i32 {
-    // The daemon has its own working directory: send an absolute path, and
-    // nothing when the agent has a repository of its own.
+    // The daemon has its own working directory: send an absolute path.
     let repo = match repo {
         Some(r) if r.contains("://") || r.starts_with("git@") => r,
         Some(r) => match std::fs::canonicalize(&r) {
             Ok(p) => p.to_string_lossy().into_owned(),
             Err(e) => return fail("start", format!("repository: {e}")),
         },
-        None => match c.call("GET", &format!("/agents/{agent}"), None) {
-            Ok(v) if v["repo"].as_str().is_some_and(|r| !r.is_empty()) => String::new(),
-            Ok(_) => match std::env::current_dir() {
-                Ok(p) => p.to_string_lossy().into_owned(),
-                Err(e) => return fail("start", format!("repository: {e}")),
-            },
-            Err(e) => return fail("start", e),
+        None => match std::env::current_dir() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => return fail("start", format!("repository: {e}")),
         },
     };
     let body = json!({
@@ -624,10 +577,8 @@ mod tests {
                 "dev",
                 "--runtime",
                 "codex",
-                "--pack",
-                "xherd",
-                "--flow",
-                "bugfix",
+                "--fallback-runtime",
+                "opencode",
             ],
             &[
                 "new",
@@ -646,8 +597,6 @@ mod tests {
                 "a/**",
                 "--sensitive-path",
                 "b",
-                "--human-stage",
-                "spec",
                 "--skill",
                 "s",
                 "--max-live-jobs",
@@ -708,8 +657,8 @@ mod tests {
             "opus",
             "--mode",
             "edits",
-            "--human-stage",
-            "spec",
+            "--fallback-runtime",
+            "opencode",
         ]);
         let mut d = Map::new();
         d.insert("name".into(), json!("x"));
@@ -718,9 +667,8 @@ mod tests {
         assert_eq!(
             Value::Object(d.clone()),
             json!({"name": "x", "runtime": "claude-code",
-                "workflow": {"pack": "xherd", "flow": "feature"},
-                "models": {"claude-code": "opus"}, "permissionMode": "edits",
-                "stageOverrides": {"spec": {"human": true}}})
+                "fallbackRuntime": "opencode",
+                "models": {"claude-code": "opus"}, "permissionMode": "edits"})
         );
         // An edit of a saved agent: derived fields go, the rest stays.
         let mut saved = d;
@@ -729,23 +677,20 @@ mod tests {
         saved.insert("version".into(), json!(3));
         apply(
             &mut saved,
-            &fields(&["--flow", "bugfix", "--model", ""]),
+            &fields(&["--fallback-runtime", "codex", "--model", ""]),
             None,
         );
-        assert_eq!(
-            saved["workflow"],
-            json!({"pack": "xherd", "flow": "bugfix"})
-        );
+        assert_eq!(saved["fallbackRuntime"], json!("codex"));
         assert!(!saved.contains_key("models") && !saved.contains_key("status"));
         assert_eq!(saved["version"], json!(3));
         assert_eq!(saved["permissionMode"], json!("edits"));
         // Empty values clear.
         apply(
             &mut saved,
-            &fields(&["--human-stage", ""]),
+            &fields(&["--fallback-runtime", ""]),
             Some("x".into()),
         );
-        assert!(!saved.contains_key("stageOverrides"));
+        assert!(!saved.contains_key("fallbackRuntime"));
         assert_eq!(saved["instructions"], json!("x"));
         apply(&mut saved, &fields(&[]), Some(String::new()));
         assert!(!saved.contains_key("instructions"));
@@ -765,10 +710,9 @@ mod tests {
 
     #[test]
     fn import_marks_what_widens_or_instructs() {
-        let a = json!({"name": "a", "permissionMode": "all", "stageOverrides": {"spec": {"human": true}},
+        let a = json!({"name": "a", "permissionMode": "all",
             "instructions": "line 1\nline 2"});
-        let r = risky(&a, &["permissionMode".into(), "instructions".into()]);
-        assert_eq!(r, ["permissionMode", "instructions", "stageOverrides"]);
+        let r: Vec<String> = vec!["permissionMode".into(), "instructions".into()];
         let text = describe(&a, &r);
         assert!(text.contains("! permissionMode: all\n"), "{text}");
         assert!(text.contains("  name: a\n"), "{text}");
@@ -776,22 +720,20 @@ mod tests {
             text.contains("! instructions: \n      line 1\n      line 2\n"),
             "{text}"
         );
-        assert!(risky(&json!({"stageOverrides": {}}), &[]).is_empty());
     }
 
     #[test]
     fn the_table_aligns_its_columns() {
         let a = [
             json!({"name": "reviewer", "version": 2, "status": "running", "runtime": "claude-code",
-                "workflow": {"pack": "xherd", "flow": "feature"}, "liveJobs": 1, "lastJob": "reviewer-3"}),
-            json!({"name": "b", "status": "idle", "runtime": "codex",
-                "workflow": {"pack": "xherd", "flow": "none"}}),
+                "fallbackRuntime": "opencode", "liveJobs": 1, "lastJob": "reviewer-3"}),
+            json!({"name": "b", "status": "idle", "runtime": "codex"}),
         ];
         assert_eq!(
             table(&a),
-            "AGENT        STATUS   RUNTIME      WORKFLOW       LIVE  LAST JOB\n\
-             reviewer v2  running  claude-code  xherd/feature  1     reviewer-3\n\
-             b v1         idle     codex        xherd/none     0     -\n"
+            "AGENT        STATUS   RUNTIME      FALLBACK  LIVE  LAST JOB\n\
+             reviewer v2  running  claude-code  opencode  1     reviewer-3\n\
+             b v1         idle     codex        -         0     -\n"
         );
     }
 }

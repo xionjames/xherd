@@ -7,41 +7,41 @@ import type { AgentDef, AgentView, Job } from './types';
 
 const def = (over: Partial<AgentDef> = {}): AgentDef => ({
   id: 'ag1', name: 'reviewer', description: '', version: 1, runtime: 'claude-code',
-  workflow: { pack: 'xherd', flow: 'feature' }, maxLiveJobs: 1, createdAt: 0, updatedAt: 0, ...over,
+  maxLiveJobs: 1, createdAt: 0, updatedAt: 0, ...over,
 });
 const view = (over: Partial<AgentView> = {}): AgentView => ({ ...def(), status: 'idle', liveJobs: 0, lastJob: null, tokensToday: 0, ...over });
 
 describe('fillFromAgent', () => {
   it('fills the fields the agent sets and marks them', () => {
-    const a = def({ runtime: 'opencode', models: { opencode: 'big', 'claude-code': 'opus' }, autonomy: 'important', permissionMode: 'auto', repo: '/r', baseBranch: 'dev', workflow: { pack: 'xherd', flow: 'bugfix' } });
+    const a = def({ runtime: 'opencode', models: { opencode: 'big', 'claude-code': 'opus' }, autonomy: 'important', permissionMode: 'auto' });
     const { form, marks } = fillFromAgent(a, FORM_DEFAULTS);
-    expect(form).toEqual({ flow: 'bugfix', repo: '/r', base: 'dev', runtime: 'opencode', model: 'big', autonomy: 'important', mode: 'auto' });
-    expect(marks.sort()).toEqual(['autonomy', 'base', 'flow', 'mode', 'model', 'repo', 'runtime']);
+    expect(form).toEqual({ runtime: 'opencode', model: 'big', autonomy: 'important', mode: 'auto' });
+    expect(marks.sort()).toEqual(['autonomy', 'mode', 'model', 'runtime']);
   });
 
   it('leaves what the agent does not set, and marks only what it sets', () => {
-    const { form, marks } = fillFromAgent(def(), { ...FORM_DEFAULTS, repo: '/mine' });
-    expect(form.repo).toBe('/mine');
+    const { form, marks } = fillFromAgent(def(), { ...FORM_DEFAULTS, model: 'mine' });
+    expect(form.model).toBe('mine');
     expect(form.autonomy).toBe('ask');
-    expect(marks.sort()).toEqual(['flow', 'runtime']);
+    expect(marks.sort()).toEqual(['runtime']);
   });
 
   it('a different pick resets what the previous agent filled, and keeps the user\'s own', () => {
-    const first = fillFromAgent(def({ repo: '/a', autonomy: 'important' }), FORM_DEFAULTS);
-    const typed = { ...first.form, base: 'mine' };
-    const second = fillFromAgent(def({ name: 'b', repo: '/b' }), typed, first.marks);
-    expect(second.form).toMatchObject({ repo: '/b', autonomy: 'ask', base: 'mine' });
+    const first = fillFromAgent(def({ runtime: 'codex', autonomy: 'important' }), FORM_DEFAULTS);
+    const typed = { ...first.form, mode: 'ask' as const };
+    const second = fillFromAgent(def({ name: 'b' }), typed, first.marks);
+    expect(second.form).toMatchObject({ runtime: 'claude-code', autonomy: 'ask', mode: 'ask' });
   });
 
   it('"No agent" gives the defaults back', () => {
-    const first = fillFromAgent(def({ repo: '/a' }), FORM_DEFAULTS);
+    const first = fillFromAgent(def({ autonomy: 'important' }), FORM_DEFAULTS);
     const none = fillFromAgent(undefined, first.form, first.marks);
     expect(none.form).toEqual(FORM_DEFAULTS);
     expect(none.marks).toEqual([]);
   });
 
   it('editing a field removes its mark', () => {
-    expect(unmark(['repo', 'flow'], 'repo')).toEqual(['flow']);
+    expect(unmark(['model', 'mode'], 'model')).toEqual(['mode']);
   });
 });
 
@@ -85,12 +85,11 @@ describe('profileMarks', () => {
 describe('versionDiff', () => {
   it('lists the fields that changed, with empty text for unset ones', () => {
     const a = def({ autonomy: 'ask', instructions: 'old' });
-    const b = def({ version: 2, updatedAt: 9, autonomy: 'important', models: { 'claude-code': 'opus' }, stageOverrides: { review: { human: true } } });
+    const b = def({ version: 2, updatedAt: 9, autonomy: 'important', models: { 'claude-code': 'opus' } });
     expect(versionDiff(a, b)).toEqual([
       { field: 'models', label: 'Models', from: '', to: 'claude-code: opus' },
       { field: 'autonomy', label: 'Autonomy', from: 'ask', to: 'important' },
       { field: 'instructions', label: 'Instructions', from: 'old', to: '' },
-      { field: 'stageOverrides', label: 'Stages that wait for a person', from: '', to: 'review' },
     ]);
   });
 
@@ -98,9 +97,9 @@ describe('versionDiff', () => {
     expect(versionDiff(def(), def({ version: 5, updatedAt: 99, archivedAt: 3 }))).toEqual([]);
   });
 
-  it('shows the workflow and the flow none', () => {
-    const d = versionDiff(def(), def({ workflow: { pack: 'xherd', flow: 'none' } }));
-    expect(d).toEqual([{ field: 'workflow', label: 'Workflow', from: 'feature (xherd)', to: 'no workflow' }]);
+  it('shows the fallback runtime', () => {
+    const d = versionDiff(def(), def({ fallbackRuntime: 'opencode' }));
+    expect(d).toEqual([{ field: 'fallbackRuntime', label: 'Fallback runtime', from: '', to: 'opencode' }]);
   });
 });
 
@@ -137,18 +136,18 @@ describe('changedSince', () => {
 
 describe('the edit form', () => {
   it('round-trips an agent, keeping other runtimes\' models and the skills', () => {
-    const a = def({ models: { 'claude-code': 'opus', opencode: 'big' }, skills: ['lint'], autonomy: 'ask', sensitivePaths: ['a', 'b'], maxDiffLines: 300, stageOverrides: { review: { human: true } } });
+    const a = def({ models: { 'claude-code': 'opus', opencode: 'big' }, skills: ['lint'], autonomy: 'ask', sensitivePaths: ['a', 'b'], maxDiffLines: 300, fallbackRuntime: 'opencode' });
     const body = fromForm(toForm(a), a);
-    expect(body).toMatchObject({ name: 'reviewer', runtime: 'claude-code', models: { 'claude-code': 'opus', opencode: 'big' }, skills: ['lint'], autonomy: 'ask', sensitivePaths: ['a', 'b'], maxDiffLines: 300, stageOverrides: { review: { human: true } }, maxLiveJobs: 1 });
+    expect(body).toMatchObject({ name: 'reviewer', runtime: 'claude-code', models: { 'claude-code': 'opus', opencode: 'big' }, skills: ['lint'], autonomy: 'ask', sensitivePaths: ['a', 'b'], maxDiffLines: 300, fallbackRuntime: 'opencode', maxLiveJobs: 1 });
   });
 
   it('an emptied field is cleared, a cleared model leaves the others', () => {
-    const a = def({ models: { 'claude-code': 'opus', opencode: 'big' }, autonomy: 'important', instructions: 'x', repo: '/r' });
-    const f = { ...toForm(a), autonomy: '', instructions: ' ', repo: '', model: '' };
+    const a = def({ models: { 'claude-code': 'opus', opencode: 'big' }, autonomy: 'important', instructions: 'x', fallbackRuntime: 'opencode' });
+    const f = { ...toForm(a), autonomy: '', instructions: ' ', fallbackRuntime: '', model: '' };
     const body = fromForm(f, a);
     expect(body.autonomy).toBeUndefined();
     expect(body.instructions).toBeUndefined();
-    expect(body.repo).toBeUndefined();
+    expect(body.fallbackRuntime).toBeUndefined();
     expect(body.models).toEqual({ opencode: 'big' });
   });
 
@@ -185,10 +184,9 @@ describe('suggestions (R30…R32)', () => {
 
   it('fills the form from the job, then from its draft', () => {
     const j = job({ repo: '/ws/repos/Shop API', flow: 'feature', pack: 'xherd', runtime: 'opencode', model: 'big', autonomy: 'important', permissionMode: 'auto' });
-    expect(fillFromJob(j)).toMatchObject({ name: 'shop-api-feature', description: 'feature work on Shop API', runtime: 'opencode', model: 'big', flow: 'feature', autonomy: 'important', permissionMode: 'auto', instructions: '' });
+    expect(fillFromJob(j)).toMatchObject({ name: 'shop-api-feature', description: 'feature work on Shop API', runtime: 'opencode', model: 'big', autonomy: 'important', permissionMode: 'auto', instructions: '' });
     const d = fillFromJob({ ...j, agentDraft: { name: 'shop', description: 'Shop work', instructions: 'Run the linter.', at: 1 } });
     expect(d).toMatchObject({ name: 'shop', description: 'Shop work', instructions: 'Run the linter.' });
-    expect(fillFromJob(job()).flow).toBe('none');
     expect(fillFromJob({ ...j, agentDraft: { name: 'Bad Name', description: '', instructions: '', at: 1 } }).name).toBe('shop-api-feature');
   });
 });

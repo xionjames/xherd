@@ -28,8 +28,8 @@ pub struct NewJob {
     pub slug: Option<String>,
     /// Absolute path of a local git repository, or a remote URL that xherd
     /// clones into the workspace (R-001, R-605). May be omitted (empty) when
-    /// the ticket is an issue URL that names its repository (#148), or when
-    /// `agent` has a default repository (else `repo_required`).
+    /// the ticket is an issue URL that names its repository (#148); else
+    /// `repo_required`.
     #[serde(default)]
     pub repo: String,
     /// A saved agent (id or name) the job starts from (#141): its settings

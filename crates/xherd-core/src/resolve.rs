@@ -91,11 +91,9 @@ pub fn effective(
         .or(d.models.get(&runtime))
         .cloned();
     let base = non_empty(&r.base)
-        .or(a.and_then(|a| non_empty(&a.base_branch)))
         .or(p.and_then(|p| non_empty(&p.base_branch)))
         .cloned();
     let flow = non_empty(&r.flow)
-        .or(a.map(|a| &a.workflow.flow))
         .cloned()
         .unwrap_or_else(|| DEFAULT_FLOW.into());
 
@@ -186,7 +184,6 @@ pub fn guardrails(global: &Guardrails, p: Option<&Profile>, a: Option<&JobAgent>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_def::{StageOverride, Workflow};
 
     fn defaults() -> Defaults {
         Defaults {
@@ -212,19 +209,13 @@ mod tests {
             version: 1,
             runtime: "claude-code".into(),
             models: BTreeMap::new(),
-            workflow: Workflow {
-                pack: "xherd".into(),
-                flow: "bugfix".into(),
-            },
+            fallback_runtime: None,
             autonomy: None,
             permission_mode: None,
             instructions: None,
-            repo: None,
-            base_branch: None,
             job_token_budget: None,
             sensitive_paths: vec![],
             max_diff_lines: None,
-            stage_overrides: BTreeMap::new(),
             skills: vec![],
             max_live_jobs: 1,
             created_at: 0,
@@ -277,16 +268,15 @@ mod tests {
         assert_eq!(e.runtime, "opencode");
         assert_eq!(e.model.as_deref(), Some("p-model"));
         assert_eq!(e.base.as_deref(), Some("p-base"));
-        // agent beats profile
+        // agent beats profile (the base and the flow are not the agent's)
         let mut a = agent();
         a.runtime = "codex".into();
         a.models.insert("codex".into(), "a-model".into());
-        a.base_branch = Some("a-base".into());
         let e = effective(&d, Some(&p), Some(&a), &Requested::default());
         assert_eq!(e.runtime, "codex");
         assert_eq!(e.model.as_deref(), Some("a-model"));
-        assert_eq!(e.base.as_deref(), Some("a-base"));
-        assert_eq!(e.flow, "bugfix");
+        assert_eq!(e.base.as_deref(), Some("p-base"));
+        assert_eq!(e.flow, "feature");
         // the request beats the agent
         let r = Requested {
             runtime: Some("opencode".into()),
@@ -411,8 +401,6 @@ mod tests {
         a.sensitive_paths = vec!["secrets/**".into(), "*.pem".into()];
         a.max_diff_lines = Some(300);
         a.job_token_budget = Some(5000);
-        a.stage_overrides
-            .insert("ship".into(), StageOverride { human: true });
         a.snapshot()
     }
 
