@@ -9,28 +9,28 @@ by theme; update it together with them.
 ## Foundations (M0, M1)
 
 - [x] Skeleton: workspace, config and paths, store and migrations, supervisor and actors, scheduler, plugin loader, git/tmux wrappers, `xherd hook/report` with the offline queue
-- [x] One agent end to end: xherd v0, worktree + `.xherd/`, Claude Code in tmux, XAP gates, hash approvals, fresh sessions, commit gates, ship, draft PR via GitHub
+- [x] One job end to end: xherd v0, worktree + `.xherd/`, Claude Code in tmux, XAP gates, hash approvals, fresh sessions, commit gates, ship, draft PR via GitHub
 
 ## M2 UI
 
-- [x] Svelte UI on the panel registry: Herd, Agent page, Settings, Setup checks, Welcome
+- [x] Svelte UI on the panel registry: Herd, Job page, Settings, Setup checks, Welcome
 - [x] Hash approvals from the UI, websockets, terminal, diffs
 - [x] Welcome: plugins switched on/off and configured, with a Claude login step; at least one of each kind
-- [x] Commits: xherd runs the approved commit (editable message, agent fixes it if git refuses); Commits view with message and files; Changes tabs: uncommitted / all changes / one commit
-- [x] Agent page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked agents
+- [x] Commits: xherd runs the approved commit (editable message, job fixes it if git refuses); Commits view with message and files; Changes tabs: uncommitted / all changes / one commit
+- [x] Job page: Terminal first and default, vertical menu, one-row "Your call" band, Approve only on the tab that holds what is approved, "Open the terminal" for blocked jobs
 - [x] Gate documents: highlight what changed after a change request (spec, design, tasks…), without keeping version history
 - [x] Open questions: a text box per question to answer them inline
 - [x] Open questions read from the gate documents' `## Open questions` section and answered as inline comments on their list items, sent with the other comments (R-105a)
-- [x] Board (tasks of all agents by status) and Review with "Mark seen"; the notification bell is in
-- [x] Time (work log: agent and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
-- [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (agent, repository, workflow) and TODO cards; the Herd's By stage layout (agents in their flow's stage columns, a lane per workflow); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
+- [x] Board (tasks of all jobs by status) and Review with "Mark seen"; the notification bell is in
+- [x] Time (work log: job and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
+- [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (job, repository, workflow) and TODO cards; the Herd's By stage layout (jobs in their flow's stage columns, a lane per workflow); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
 - [ ] Board cards declared by packs and profiles (R-1101), checks for runtimes other than Claude Code (they need a `check` command in their plugin)
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [x] Plugin secrets from the UI (write-only, live)
 - [ ] Plugin install from the UI
 - [x] Herd views as plugins (#108): plugin kind `view`, a sandboxed frame with protocol v1 and the view kit; built-in `herd-tiles` as the example
-- [x] Agent names (#114, #115): a lowercase name, an optional ticket (issue URL or key) that prefixes the branch; New agent form with More options
-- [x] Needs attention and the agent page (#120, #122, #124, #127, #128): the ✋ count is only what waits for you, *Approved by xherd* folded last; a gate autonomy will approve is not shown as waiting; one-row header; a file list in Changes
+- [x] Job names (#114, #115): a lowercase name, an optional ticket (issue URL or key) that prefixes the branch; New job form with More options
+- [x] Needs attention and the job page (#120, #122, #124, #127, #128): the ✋ count is only what waits for you, *Approved by xherd* folded last; a gate autonomy will approve is not shown as waiting; one-row header; a file list in Changes
 - [x] Gate notices (#133, #135): one notice per gate with what it waits on, none for automatic approvals; the bell says why browser notifications cannot be on, and can send a test
 - [x] Checked in real browsers: the bell's texts and re-alerts, the header and file-list layouts (light, dark, phone)
 - [ ] Check the Resolve conflicts button in a browser
@@ -44,29 +44,29 @@ by theme; update it together with them.
 - [ ] Check the terminal handler on Linux desktops in Chrome and Firefox
 - [x] Git access setup and doctor
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
-- [ ] SSH agent forwarding for Colima, openvscode-server (R-705), `xherd login`
-- [x] Issue trackers: `data.tracker.links` and built-in `jira`, `github-issues`, `gitlab-issues`; the Ticket tab reads the ticket and its comments through `gh` / `glab` (read-only). Jira reading through `acli` is built and the output of `view` and `comment list` is checked against the real CLI. Posting a user-accepted summary comment is built (fake CLIs only). Not done: automatic or stage-hook posting, status transitions, GitHub Projects, giving ticket text to agents
-- [ ] Git providers (proposed, D24, R-689…R-693; steps 1, 2 and 3 done, plus `requires` (R-691: install in the container, instructions natively), token reuse, plugin secrets from the UI and installed versions on the language cards (3: built-in `gitlab` merge requests through `glab api`, the host plugin chosen per agent by its remote; **not run against a real GitLab or `glab`**, only a fake `glab`): `data.git` in the `github` manifest and built-in `gitlab` and `bitbucket` with git access only, read by `git_access.rs`; hosts carry a `provider` field): `host` plugins carry the API, credential helper, login, doctor API checks and their own CLI install; hosts bind to a provider; a built-in `gitlab` on `glab`; Gitea and Bitbucket as external plugins. Order: move `gh`/`glab` out of `git_access.rs` into the manifest, provider field in the UI, `gitlab`, the rest
-- [x] Block an agent on git auth failures (R-688): an auth error on the screen or from a host command blocks a live agent with reason `git access` (UI: "Fix git access"); the band shows the doctor's first failure and fix (`GET /agents/{id}/git-access`)
+- [ ] SSH job forwarding for Colima, openvscode-server (R-705), `xherd login`
+- [x] Issue trackers: `data.tracker.links` and built-in `jira`, `github-issues`, `gitlab-issues`; the Ticket tab reads the ticket and its comments through `gh` / `glab` (read-only). Jira reading through `acli` is built and the output of `view` and `comment list` is checked against the real CLI. Posting a user-accepted summary comment is built (fake CLIs only). Not done: automatic or stage-hook posting, status transitions, GitHub Projects, giving ticket text to jobs
+- [ ] Git providers (proposed, D24, R-689…R-693; steps 1, 2 and 3 done, plus `requires` (R-691: install in the container, instructions natively), token reuse, plugin secrets from the UI and installed versions on the language cards (3: built-in `gitlab` merge requests through `glab api`, the host plugin chosen per job by its remote; **not run against a real GitLab or `glab`**, only a fake `glab`): `data.git` in the `github` manifest and built-in `gitlab` and `bitbucket` with git access only, read by `git_access.rs`; hosts carry a `provider` field): `host` plugins carry the API, credential helper, login, doctor API checks and their own CLI install; hosts bind to a provider; a built-in `gitlab` on `glab`; Gitea and Bitbucket as external plugins. Order: move `gh`/`glab` out of `git_access.rs` into the manifest, provider field in the UI, `gitlab`, the rest
+- [x] Block a job on git auth failures (R-688): an auth error on the screen or from a host command blocks a live job with reason `git access` (UI: "Fix git access"); the band shows the doctor's first failure and fix (`GET /jobs/{id}/git-access`)
 - [ ] Profile `toolchain:` / `setup:` (R-654; profiles exist, these fields do not yet) and the Welcome toolchain step (R-653; each toolchain plugin's page in Settings → Plugins has defaults, a version dropdown and installs)
 
-## Agents that survive and recover
+## Jobs that survive and recover
 
 - [x] First command typed again until the runtime accepts a prompt
-- [x] Container restart: agents are parked at their gate or resumed, not failed
+- [x] Container restart: jobs are parked at their gate or resumed, not failed
 - [x] Resume button (also from `error`): continues the last Claude conversation when its transcript exists, else a new session
 - [x] Auto-resume a vanished session, at most twice per hour
 - [x] Fewer permission prompts: pack commands readable, plain `xherd` calls with allow rules, `edits` as the default mode
 - [x] Plugins switched off apply live to toolchains, the host plugin and the trust writer
-- [x] Pause with a handoff (R-026): the agent is asked for a note, the session ends after it or after `pauseTimeoutSec`; resume starts a fresh session from the note
-- [x] Kill switch (R-032): `xherd pause --all`, `POST /agents/pause-all`, "Pause all" in the Herd; immediate, no handoff (also for the budget pause, on purpose)
+- [x] Pause with a handoff (R-026): the job is asked for a note, the session ends after it or after `pauseTimeoutSec`; resume starts a fresh session from the note
+- [x] Kill switch (R-032): `xherd pause --all`, `POST /jobs/pause-all`, "Pause all" in the Herd; immediate, no handoff (also for the budget pause, on purpose)
 - [ ] Background-task guard (R-024): done for auto-approval and the move to watching; a user approval still starts a fresh session. Runtime change between steps (R-025)
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
-- [ ] Check the Resume button on `parked` agents (no Resume transition from `parked` in the lifecycle table)
-- [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the agent's until guardrails)
-- [x] Ask (#121): `xherd talk` / the Ask box gives a stopped agent a session with your text, held open (no auto-approval, no move to watching) until Finish or flow work
-- [x] Remove a finished agent's worktree (#123): `xherd remove-worktree`, `cancel --remove-worktree`; the branch and record stay
-- [x] Per-agent tool-permission mode (R-002a): New agent form / `xherd new --mode`, repo profile, Settings default; changed live on the agent page or `xherd mode` (applies from the next session start); `all` only in the container
+- [ ] Check the Resume button on `parked` jobs (no Resume transition from `parked` in the lifecycle table)
+- [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the job's until guardrails)
+- [x] Ask (#121): `xherd talk` / the Ask box gives a stopped job a session with your text, held open (no auto-approval, no move to watching) until Finish or flow work
+- [x] Remove a finished job's worktree (#123): `xherd remove-worktree`, `cancel --remove-worktree`; the branch and record stay
+- [x] Per-job tool-permission mode (R-002a): New job form / `xherd new --mode`, repo profile, Settings default; changed live on the job page or `xherd mode` (applies from the next session start); `all` only in the container
 
 ## Context and flow quality
 
@@ -86,9 +86,9 @@ by theme; update it together with them.
 
 ## M4 → v1.0
 
-- [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for agents created from now on
+- [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for jobs created from now on
 - [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence holds the commit (R-116)
-- [x] Repo profiles, first slice: matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-agent token budget, test command tripwire (R-115) and repo instructions, with the global values as defaults; Settings → Repo profiles, JSON export/import (R-1407)
+- [x] Repo profiles, first slice: matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-job token budget, test command tripwire (R-115) and repo instructions, with the global values as defaults; Settings → Repo profiles, JSON export/import (R-1407)
 - [ ] More profile fields: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, spec folder mode, default flow/pack, ticket prefix, tool permissions; the daily budget and a cost estimate per profile
 - [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
 - [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asks for a handoff first
@@ -98,19 +98,19 @@ by theme; update it together with them.
 - [x] R-114 first half: findings in `review.md` are Markdown with a field list; major/blocker findings not fixed hold the review gate; severity colours in the UI
 - [x] Daemon/agent user split in the container (R-1203, branch `m4-user-split`): `xherd runner`, `xherd-daemon` user and volume, loopback is not the user; **check on Linux and Docker Desktop** (file permissions are not enforced on Colima's mounts)
 - [x] Guardrails: "Viewed" marks per file in the Changes panel; Setup check `runner` pings the runner on every run
-- [x] Backups and restore (R-1401, R-1403…R-1405): `xherd backup create|verify|restore`, `/backups` API and Settings → Backups, a backup before `xherd docker update`; the restore can move agents to another computer (`--workspace`, `--map`); secrets and logins are left out
+- [x] Backups and restore (R-1401, R-1403…R-1405): `xherd backup create|verify|restore`, `/backups` API and Settings → Backups, a backup before `xherd docker update`; the restore can move jobs to another computer (`--workspace`, `--map`); secrets and logins are left out
 - [ ] Scheduled backups with keep-N and a destination command (R-1402), restore inside the container, backups before database migrations (R-1305), encrypted secrets/logins (`age`)
-- [x] Autonomy `ask` / `important` (R-109…R-111) with `maxAutoApprovalsInRow` (R-120), per agent, changeable live; ship is critical, so it is never auto-approved
-- [x] "To review" list of auto-approvals (R-111): `GET /reviews` and the page `#/review`; a mark-as-reviewed state and the agent's stated assumptions come with the v1.x views
-- [x] PR polling: state, checks and mergeability of a watching agent's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the agent; shown in the PR panel with each check (link to the run), the reviewers and their review state, and a local merge check when the host does not say (#75)
-- [x] PR comments into the agent (R-304): new comments saved wrapped as untrusted data, agent queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
+- [x] Autonomy `ask` / `important` (R-109…R-111) with `maxAutoApprovalsInRow` (R-120), per job, changeable live; ship is critical, so it is never auto-approved
+- [x] "To review" list of auto-approvals (R-111): `GET /reviews` and the page `#/review`; a mark-as-reviewed state and the job's stated assumptions come with the v1.x views
+- [x] PR polling: state, checks and mergeability of a watching job's PR every `prPollMinutes`; CI and conflict notifications; merged/closed finishes the job; shown in the PR panel with each check (link to the run), the reviewers and their review state, and a local merge check when the host does not say (#75)
+- [x] PR comments into the job (R-304): new comments saved wrapped as untrusted data, job queued with `/xherd:pr-review`, approval hands on `/xherd:pr-apply`; replies are not posted by xherd yet
 - [x] PR decisions and replies (R-306): per-comment fix/reply/skip with a note in the PR panel; replies posted by the host on approval
-- [x] PR *Check now* (#131): `POST /agents/{id}/pr-check` and a button in the Pull request tab
+- [x] PR *Check now* (#131): `POST /jobs/{id}/pr-check` and a button in the Pull request tab
 - [x] Resolve conflicts (#139): `xherd resolve-conflicts`, the pack's `conflicts` command merges the base (never a rebase), the merge commit is always held for a human
 - [ ] Run a whole Resolve conflicts round against a real PR
 - [x] `pr-template` (R-153): templates looked up on entering the ship stage, `pr-templates.json` read by the `ship` prompt
 - [ ] Stage hooks (R-401…R-404), including `pr.merged` (R-307): v1.x, with profiles / pack `stageHooks`
-- [x] Notifications: typed (one per agent and kind), the bell and browser notifications in the UI, ntfy from Settings → Notifications
+- [x] Notifications: typed (one per job and kind), the bell and browser notifications in the UI, ntfy from Settings → Notifications
 - [x] Per-kind notification filter (`mutedNotifications`) and daemon-side desktop notifications (`desktopNotifications`: `osascript` / `notify-send`, native installs)
 - [ ] Notifier plugins, replacing an earlier ntfy message, Windows desktop notifications
 - [x] GitHub Actions (#41): CI on main and PRs; a `v*` tag on main releases Linux binaries (static musl, `.tar.gz`/`.deb`/`.rpm`) and the multi-arch image `ghcr.io/xionjames/xherd`
@@ -120,12 +120,12 @@ by theme; update it together with them.
 
 ## v1.x
 
-- [x] opencode runtime (branch `runtime-opencode`): choice per agent, profile and setting
+- [x] opencode runtime (branch `runtime-opencode`): choice per job, profile and setting
 - [x] Codex runtime (branch `runtime-codex`): skills as commands, hooks, sandbox modes; not yet run end to end with a model
-- [x] A model per agent (#112): `modelArgs` in runtime manifests, defaults per runtime in Settings (`runtimeModels`) and in repo profiles (`models`), changed per agent for its next session
+- [x] A model per job (#112): `modelArgs` in runtime manifests, defaults per runtime in Settings (`runtimeModels`) and in repo profiles (`models`), changed per job for its next session
 - [ ] A model per step (R-522: per role, plus tier and effort)
 - [x] To review and Work log views (per-ticket cycle time, review loops and rework)
-- [x] Kanban Board: stages and tasks as work units, TODOs, swimlanes; agents by stage on the Herd
+- [x] Kanban Board: stages and tasks as work units, TODOs, swimlanes; jobs by stage on the Herd
 - [ ] Pack-declared Kanban cards (R-1101)
 - [ ] Toolchain plugins and the Welcome installer; plugin install from the UI with a catalogue
 - [x] TODO reminders
@@ -133,10 +133,10 @@ by theme; update it together with them.
 
 ## Later
 
-- [ ] ACP driver per runtime, selectable per agent
+- [ ] ACP driver per runtime, selectable per job
 - [ ] Server / Kubernetes deployment; VS Code Remote-SSH entries
 - [ ] Electron desktop app (tray, notifications, built-in host companion)
-- [ ] Panel plugins; per-agent containers with egress allowlists; parallel task execution inside one agent
+- [ ] Panel plugins; per-job containers with egress allowlists; parallel task execution inside one job
 - [ ] `xherd mcp`
 
 ## Verify before relying on it
@@ -144,4 +144,4 @@ by theme; update it together with them.
 - [ ] `claude auth status` exits non-zero when logged out (only run logged in)
 - [ ] `claude --resume` finds its transcript after a container recreate (assumes the home volume persists)
 - [ ] The new UI layout in a browser at several widths
-- [x] A full agent run (spec → ship) with the plain-`xherd` prompts, the allow rules and the `edits` default
+- [x] A full job run (spec → ship) with the plain-`xherd` prompts, the allow rules and the `edits` default

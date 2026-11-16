@@ -28,9 +28,9 @@ run a sub-agent with a fresh context, give it this review to do.
    round, and holds the gate for the user after too many.
 5. Write `.xherd/spec/review.md` in the review format, and update
    `memory.md`.
-6. Shared memory: `memory.md` dies with this agent, the repository's
-   `AGENTS.md` stays for every future agent. If this work taught something a
-   future agent here would need (a build or test command, a convention, a
+6. Shared memory: `memory.md` dies with this job, the repository's
+   `AGENTS.md` stays for every future job. If this work taught something a
+   future job here would need (a build or test command, a convention, a
    trap that cost time) that `AGENTS.md` does not say yet, write the **whole**
    proposed file (today's `AGENTS.md`, or a new one, with your additions:
    short facts, no task history, no secrets) to `.xherd/AGENTS.proposed.md`

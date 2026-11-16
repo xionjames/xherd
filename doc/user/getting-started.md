@@ -1,6 +1,6 @@
 # Getting started
 
-How to install xherd from a published release, start it, and run a first agent. We recommend **Docker**: agents, toolchains and Claude Code stay in a container and only your workspace folder is shared with the host. See [Docker](docker.md) for details and troubleshooting.
+How to install xherd from a published release, start it, and run a first job. We recommend **Docker**: jobs, toolchains and Claude Code stay in a container and only your workspace folder is shared with the host. See [Docker](docker.md) for details and troubleshooting.
 
 To build xherd yourself (an unreleased branch, or to change it), see [Running from source](../dev/from-source.md).
 
@@ -9,8 +9,8 @@ To build xherd yourself (an unreleased branch, or to change it), see [Running fr
 | | Docker (recommended) | Native (Linux) |
 |---|---|---|
 | What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code (or opencode, or Codex) and `gh` / `glab` |
-| Agent CLI and tools | In the image (Claude Code, `git`, `gh`, `glab`, toolchain managers) | Yours, on `PATH` |
-| Isolation | Agents see only the workspace folder | None: agents run as you |
+| Coding-agent CLI and tools | In the image (Claude Code, `git`, `gh`, `glab`, toolchain managers) | Yours, on `PATH` |
+| Isolation | Jobs see only the workspace folder | None: jobs run as you |
 | Platforms | macOS and Linux (amd64, arm64) | Linux (x86_64, arm64) |
 
 macOS binaries are not published yet ([roadmap](../../ROADMAP.md)): on a Mac, use Docker.
@@ -21,7 +21,7 @@ xherd is a single-user tool: one person, one daemon, one workspace folder.
 
 Coding agents run commands on your machine, install toolchains and write files. In a container that has limits:
 
-- **Containment.** Agents see only the workspace folder you share, not your home directory, keys or other projects. A confused or misled agent has a small blast radius.
+- **Containment.** Jobs see only the workspace folder you share, not your home directory, keys or other projects. A confused or misled job has a small blast radius.
 - **Nothing to install.** `git`, `tmux`, `gh`, `glab`, Claude Code and the Java/Node/Go/Rust/Python toolchain managers come in the image, at tested versions. Setup is the same on every machine.
 - **Safe to throw away.** Updating is pulling a new image; a broken toolchain is a rebuilt container, not a repaired laptop.
 - **Your IDE still works.** The workspace is mounted at the same path inside and outside, so worktrees open directly in your editor.
@@ -36,7 +36,7 @@ You need only a container engine with Compose. Nothing else goes on your machine
 
 ### 1. Get the compose file
 
-Make a folder for it (any name; `~/xherd-docker` here) and the workspace your agents will work in, then download the compose file of the latest release and write your values beside it:
+Make a folder for it (any name; `~/xherd-docker` here) and the workspace your jobs will work in, then download the compose file of the latest release and write your values beside it:
 
 ```sh
 mkdir -p ~/xherd-docker ~/xherd
@@ -47,12 +47,12 @@ printf 'XHERD_WORKSPACE=%s/xherd\nXHERD_UID=%s\nXHERD_GID=%s\n' "$HOME" "$(id -u
 
 The `.env` values:
 
-- `XHERD_WORKSPACE` must be an absolute path. It is mounted at the **same path** inside the container, so git worktrees stay valid on both sides and your IDE can open them directly. Repositories the agents work on are cloned into it.
-- `XHERD_UID` / `XHERD_GID` are your ids: agents write files as you.
+- `XHERD_WORKSPACE` must be an absolute path. It is mounted at the **same path** inside the container, so git worktrees stay valid on both sides and your IDE can open them directly. Repositories the jobs work on are cloned into it.
+- `XHERD_UID` / `XHERD_GID` are your ids: jobs write files as you.
 - `XHERD_PORT` (optional, default 4740) changes the port on your machine.
 - `XHERD_IMAGE` (optional, default `ghcr.io/xionjames/xherd:latest`) stays on one version, for example `ghcr.io/xionjames/xherd:0.1.0`.
 
-To forward your SSH agent (Docker Desktop, OrbStack), uncomment the marked line in `compose.yaml`.
+To forward your SSH job (Docker Desktop, OrbStack), uncomment the marked line in `compose.yaml`.
 
 ### 2. Start it
 
@@ -69,19 +69,19 @@ Run these in the folder of `compose.yaml`.
 | Task | How |
 |---|---|
 | Logs | `docker compose logs -f` |
-| Restart | `docker compose restart`: agents waiting at a gate are parked, the others resumed |
+| Restart | `docker compose restart`: jobs waiting at a gate are parked, the others resumed |
 | Stop | `docker compose down` (the volumes and the workspace stay) |
 | `xherd` commands | `docker exec -u xherd-daemon xherd xherd ls`, see [Everyday CLI](guide.md#everyday-cli) |
 
 ### Update
 
-Pause your agents (the Herd's **Pause all**), then:
+Pause your jobs (the Herd's **Pause all**), then:
 
 ```sh
 docker compose pull && docker compose up -d
 ```
 
-and resume them. Your configuration, logins, toolchains and agents live in the volumes and the workspace, so they survive the new container. Take a backup first if you care about the agents' state: Settings → Backups.
+and resume them. Your configuration, logins, toolchains and jobs live in the volumes and the workspace, so they survive the new container. Take a backup first if you care about the jobs' state: Settings → Backups.
 
 ## Run natively on Linux
 
@@ -111,21 +111,21 @@ xherd install           # in another terminal: the xherd commands for each runti
 
 Open <http://127.0.0.1:4740/>.
 
-Data lives in `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd` (`config.json` there holds the port and the token the CLI uses). Worktrees go to `<workspace>/worktrees/<repo>/<agent>`; the workspace is `config.workspace`, else `$XHERD_WORKSPACE`, else `~/xherd`.
+Data lives in `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd` (`config.json` there holds the port and the token the CLI uses). Worktrees go to `<workspace>/worktrees/<repo>/<job>`; the workspace is `config.workspace`, else `$XHERD_WORKSPACE`, else `~/xherd`.
 
 To update, install the newer package and restart `xherd daemon`.
 
 ## First run
 
 1. **Welcome** opens by itself the first time. It walks you through the plugins (which runtime, git hosts and trackers you use, and their logins, in a terminal in the browser), your commit identity, your git hosts (HTTPS tokens or SSH), and the setup checks. Everything it sets is in Settings later.
-2. **Setup checks** must pass before you can create agents. Each failing check shows its fix.
-3. **Create an agent** from the UI (**New agent**) or the CLI:
+2. **Setup checks** must pass before you can create jobs. Each failing check shows its fix.
+3. **Create a job** from the UI (**New job**) or the CLI:
 
    ```sh
    xherd new passkeys --ticket PROJ-123 --repo https://github.com/you/project "Add login with passkeys"
    ```
 
-   `--repo` takes a URL (cloned once into `<workspace>/repos/`) or a local path (in Docker, one inside the workspace). The agent writes a spec and stops for your approval: the [user guide](guide.md) takes it from there.
+   `--repo` takes a URL (cloned once into `<workspace>/repos/`) or a local path (in Docker, one inside the workspace). The job writes a spec and stops for your approval: the [user guide](guide.md) takes it from there.
 
 ## Next
 

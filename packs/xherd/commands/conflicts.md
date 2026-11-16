@@ -35,4 +35,4 @@ force-push**, and never rewrite a commit that was pushed.
    Update `memory.md` and stop.
 9. After the user approved it, `{{path:commit}}` brings you back here: push
    your own branch (`git push`, never a force-push), update `memory.md` and
-   stop. xherd moves the agent back to watching the pull request.
+   stop. xherd moves the job back to watching the pull request.

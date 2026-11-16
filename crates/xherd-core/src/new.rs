@@ -1,5 +1,5 @@
-//! Creating an agent (spec §5.1–5.2): the request, its pure checks, and the
-//! files written into the agent's `.xherd/`. Repository and git checks run in
+//! Creating a job (spec §5.1–5.2): the request, its pure checks, and the
+//! files written into the job's `.xherd/`. Repository and git checks run in
 //! the daemon.
 
 use std::sync::LazyLock;
@@ -14,7 +14,7 @@ use crate::xap::{Refusal, refuse};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NewJob {
-    /// The agent's name (#114): a lowercase slug, unique.
+    /// The job's name (#114): a lowercase slug, unique.
     #[serde(default)]
     pub name: String,
     /// Optional: a ticket key (`PAY-412`, `#12`) or an issue URL.
@@ -156,7 +156,7 @@ pub fn check(req: &NewJob) -> Result<Checked, Refusal> {
         name = match (slug, legacy_key) {
             (Some(s), _) => s.to_string(),
             (None, Some(k)) => k.to_ascii_lowercase().replace('_', "-"),
-            (None, None) => return Err(refuse("name_required", "an agent needs a name")),
+            (None, None) => return Err(refuse("name_required", "a job needs a name")),
         };
     }
     if !NAME.is_match(&name) {
@@ -262,7 +262,7 @@ pub fn instructions_md(a: &Job, repo_instructions: Option<&str>) -> String {
         format!("## Repo instructions\n\nFrom this repository's xherd profile:\n\n{t}\n\n")
     });
     format!(
-        "# xherd agent {name}
+        "# xherd job {name}
 
 - Ticket: {ticket}
 - Flow: {flow}

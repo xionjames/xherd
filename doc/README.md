@@ -4,7 +4,7 @@ What xherd is and what it looks like: the [project README](../README.md).
 
 ## Using xherd
 
-- [Getting started](user/getting-started.md): install a release (Docker recommended, or a Linux package), the first run, a first agent
+- [Getting started](user/getting-started.md): install a release (Docker recommended, or a Linux package), the first run, a first job
 - [Tour](user/tour.md): every screen and the CLI, with mocked data
 - [Using xherd](user/guide.md): the screens, gates and reviews, autonomy, pull requests, tickets, TODOs, notifications, backups, the everyday CLI
 - [Docker](user/docker.md): how the container is laid out, its two users, git access, toolchains, operating it
@@ -13,9 +13,9 @@ What xherd is and what it looks like: the [project README](../README.md).
 ## Reference
 
 - [CLI](reference/cli.md): every `xherd` command, and the environment variables
-- [Configuration](reference/configuration.md): `config.json`, repo profiles, the per-agent files
+- [Configuration](reference/configuration.md): `config.json`, repo profiles, the per-job files
 - [HTTP API](reference/http-api.md): routes, authentication, WebSockets
-- [XAP](reference/xap.md): the protocol agents and SDDs use to talk to xherd
+- [XAP](reference/xap.md): the protocol jobs and SDDs use to talk to xherd
 
 ## Extending xherd
 

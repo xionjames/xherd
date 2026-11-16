@@ -1,7 +1,7 @@
 # Add xherd support to your SDD
 
 > [!NOTE]
-> **Partly planned.** Today only level 0 works: your SDD runs under xherd as flow `none` (a plain session with your prompt). The calls below are the stable [XAP](../reference/xap.md) protocol, but xherd refuses stage, gate, task and commit calls from a flow `none` agent (`no_flow`) until **dynamic flows** exist, and only the built-in pack can be loaded. Adding the calls now is safe: outside xherd they are skipped, and under xherd they will start working when dynamic flows land ([roadmap](../../ROADMAP.md)).
+> **Partly planned.** Today only level 0 works: your SDD runs under xherd as flow `none` (a plain session with your prompt). The calls below are the stable [XAP](../reference/xap.md) protocol, but xherd refuses stage, gate, task and commit calls from a flow `none` job (`no_flow`) until **dynamic flows** exist, and only the built-in pack can be loaded. Adding the calls now is safe: outside xherd they are skipped, and under xherd they will start working when dynamic flows land ([roadmap](../../ROADMAP.md)).
 
 xherd runs coding agents in parallel and stops them at approval gates. If you maintain a spec-driven development (SDD) method (slash commands, skills or scripts), a few calls let it run under xherd with gates, approvals, autonomy and per-step models. You don't need to write an xherd pack. Outside xherd the calls are skipped, so your SDD keeps working as before.
 
@@ -21,7 +21,7 @@ xherd runs coding agents in parallel and stops them at approval gates. If you ma
 3. **Say what comes next.** Pass `--next "<your next command>"`. It must start with one of the prefixes the user registered for your SDD (e.g. `/sdd-`).
 4. **Say what kind of step it is.** Pass `--role` with one of `explore`, `spec`, `design`, `tasks`, `implement`, `review`, `ship`, `pr`. Autonomy decides by role today, and models and runtimes per role are planned, so this is what makes users' settings apply to your SDD.
 5. **Handle refusals.** Exit code 2 means xherd refused the call, and stderr says why in one line (e.g. a missing frontmatter field). Fix it and call again. Exit code 3 means the daemon is unreachable: stop and wait.
-6. **Never approve.** Agents cannot approve; only the user (or xherd's autonomy rules) can.
+6. **Never approve.** Jobs cannot approve; only the user (or xherd's autonomy rules) can.
 
 ## Snippets
 
@@ -97,7 +97,7 @@ Users add a dynamic flow in Settings → Flows with:
 
 ```
 xherd sdd check ./path/to/your-sdd     # which level you reach, missing roles or --next
-xherd sdd try ./path/to/your-sdd       # runs a fake agent through your calls
+xherd sdd try ./path/to/your-sdd       # runs a fake job through your calls
 ```
 
 Tag your repository with the GitHub topic `xherd-sdd` so it appears in xherd's catalogue.

@@ -25,12 +25,12 @@ XHERD_VERSION=dev-$(git rev-parse --short HEAD) docker compose up -d --build   #
 Open <http://127.0.0.1:4740/>. `.env` is gitignored; `.env.example` lists the variables:
 
 - `XHERD_WORKSPACE`: absolute path, mounted at the **same path** in the container, so git worktrees stay valid on both sides and your IDE opens them directly.
-- `XHERD_UID` / `XHERD_GID`: your ids; agents write files as you.
+- `XHERD_UID` / `XHERD_GID`: your ids; jobs write files as you.
 - `XHERD_PORT` (optional, default 4740): the port published on your machine's loopback.
 
 The Dockerfile is multi-stage: the UI (pnpm), the daemon (cargo), and the runtime on Debian trixie with `git`, `tmux`, `gh`, `glab`, `socat`, `tini`, Node with Claude Code, opencode and Codex, `uv`, Go, and seeds of SDKMAN, nvm and rustup. Version pins are `ARG`s at the top of the runtime stage.
 
-After a change, rebuild and recreate with the same command (pause the agents first if you care about their running turns). `xherd docker doctor` and `xherd docker update` work only on the compose file in `~/.config/xherd` (`$XDG_CONFIG_HOME/xherd`), not on this one. The image has no `.git`, so the version it shows is `XHERD_VERSION`, which `compose.yaml` passes to the build as a build argument; without it the image shows `dev`.
+After a change, rebuild and recreate with the same command (pause the jobs first if you care about their running turns). `xherd docker doctor` and `xherd docker update` work only on the compose file in `~/.config/xherd` (`$XDG_CONFIG_HOME/xherd`), not on this one. The image has no `.git`, so the version it shows is `XHERD_VERSION`, which `compose.yaml` passes to the build as a build argument; without it the image shows `dev`.
 
 To build the image alone:
 
@@ -51,13 +51,13 @@ cargo build --release                          # target/release/xherd
 ./target/release/xherd install                 # once: the xherd commands for each runtime that is on
 ```
 
-Put `target/release/xherd` on your `PATH` (the agents' hooks call it by its absolute path, so do not move it while agents exist). Open <http://127.0.0.1:4740/>.
+Put `target/release/xherd` on your `PATH` (the jobs' hooks call it by its absolute path, so do not move it while jobs exist). Open <http://127.0.0.1:4740/>.
 
 - **Data root**: `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd`. `config.json` there holds the port (4740), the tmux socket and the user token the CLI uses. Point `XHERD_HOME` at a throwaway folder to try things without touching your real setup.
-- **Workspace**: `config.workspace`, else `$XHERD_WORKSPACE`, else `~/xherd`. Worktrees go to `<workspace>/worktrees/<repo>/<agent>`, cloned repositories to `<workspace>/repos/<host>/<path>`.
+- **Workspace**: `config.workspace`, else `$XHERD_WORKSPACE`, else `~/xherd`. Worktrees go to `<workspace>/worktrees/<repo>/<job>`, cloned repositories to `<workspace>/repos/<host>/<path>`.
 - **Claude Code**: must be logged in once (`claude`, then `/login`). xherd marks each new worktree trusted in Claude Code's config, so no trust step is needed.
-- **Toolchains**: natively xherd installs nothing; agents use what is on your `PATH`. Installing from version files happens only in the container.
-- Native runs have a single user: agents can read what you can. `xherd security check` lists what that exposes.
+- **Toolchains**: natively xherd installs nothing; jobs use what is on your `PATH`. Installing from version files happens only in the container.
+- Native runs have a single user: jobs can read what you can. `xherd security check` lists what that exposes.
 
 ### Debug builds and UI work
 
@@ -69,9 +69,9 @@ XHERD_HOME=/tmp/xh cargo run -p xherd-cli -- status
 cd ui && pnpm dev            # Vite dev server, proxies /api to XHERD_URL (default 127.0.0.1:4740)
 ```
 
-Agents' sessions get the daemon's `PATH` (tmux takes it from the client that creates the session), and the prompts call plain `xherd …`: to run real agents from a debug build, put `target/debug` on `PATH` before starting the daemon (`PATH=$PWD/target/debug:$PATH`), or their calls fail with "command not found".
+Jobs' sessions get the daemon's `PATH` (tmux takes it from the client that creates the session), and the prompts call plain `xherd …`: to run real jobs from a debug build, put `target/debug` on `PATH` before starting the daemon (`PATH=$PWD/target/debug:$PATH`), or their calls fail with "command not found".
 
-`scripts/demo.sh` runs a throwaway daemon on port 4741 with fake agents, for screenshots ([Development](development.md#demo-data-for-screenshots)).
+`scripts/demo.sh` runs a throwaway daemon on port 4741 with fake jobs, for screenshots ([Development](development.md#demo-data-for-screenshots)).
 
 ## Release builds like CI
 
@@ -86,6 +86,6 @@ How to cut a release is in [Development](development.md#releases).
 
 ## Next
 
-- [Getting started](../user/getting-started.md#first-run): the first run and a first agent, the same from source, then [Using xherd](../user/guide.md)
+- [Getting started](../user/getting-started.md#first-run): the first run and a first job, the same from source, then [Using xherd](../user/guide.md)
 - [Development](development.md): tests, conventions, how to add things
 - [Architecture](architecture.md)
