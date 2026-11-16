@@ -86,6 +86,19 @@ A saved agent is a named, versioned setup that jobs start from (runtime, models,
 
 Every write publishes `{"type": "agents"}` on `/ws`; the UI refetches `/agents`.
 
+### Skills library
+
+Reusable skills agents list in `skills`. A skill is a folder `<data>/skills/<name>/` with a `SKILL.md` whose frontmatter has `name` (the folder's name) and `description`, and the files it uses. At most 1 MiB and 200 files per skill; no symbolic links and no hidden files. Names follow the job-name rule. Jobs do not use them yet (a copy into the worktree comes with the runtime skill target).
+
+| Method and path | Does |
+|---|---|
+| `GET /skills` | `{skills}`: `name`, `description`, `files`, `bytes`, `sha256` (over paths and contents), `usedBy` (names of the agents that list it) |
+| `GET /skills/{name}` | The same plus `fileList` (`path`, `bytes`) and `text` (the `SKILL.md`). `no_such_skill` (404) |
+| `POST /skills` | `{name, text}` (the `SKILL.md`) or `{name, files: [{path, text \| base64}]}`, plus `replace: true` to overwrite a skill of that name. Refusals: `bad_name`, `bad_skill` (header, path, hidden file, no `SKILL.md`), `too_large` (413), `name_taken` |
+| `DELETE /skills/{name}` | Refused with `skill_in_use` (409) while an agent lists it |
+
+Creating or editing an agent that lists a skill the library does not have is refused with `unknown_skill` (422).
+
 ### Reviews, TODOs, time, backups
 
 | Method and path | Does |

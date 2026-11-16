@@ -354,3 +354,21 @@ export interface OpenInView {
   native: boolean;
   handler: { shipped: number; installed: HandlerRecord | null; updateAvailable: boolean; rootChanged: boolean };
 }
+
+/** `GET /skills` row (R25). */
+export interface SkillInfo {
+  name: string;
+  description: string;
+  files: number;
+  bytes: number;
+  sha256: string;
+  /** Names of the agents that list it. */
+  usedBy: string[];
+}
+
+/** `GET /skills/{name}`. */
+export interface SkillDetail extends SkillInfo {
+  fileList: { path: string; bytes: number }[];
+  /** The text of SKILL.md. */
+  text: string;
+}

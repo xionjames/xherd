@@ -209,6 +209,14 @@ impl Daemon {
                 "permission mode all asks nothing, so it is only offered in the container",
             ));
         }
+        for s in &def.skills {
+            if !self.has_skill(s) {
+                return Err(err(
+                    "unknown_skill",
+                    format!("skills: no skill named {s:?} in the library"),
+                ));
+            }
+        }
         for stage in def.stage_overrides.keys() {
             let known = flow.is_some_and(|f| f.stages.iter().any(|s| &s.id == stage));
             if !known {

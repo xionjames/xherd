@@ -117,6 +117,9 @@ pub fn router(d: Daemon) -> Router {
             get(agent_jobs).post(agent_new_job),
         )
         .route("/api/v1/agents/{id}/{*rest}", any(gone_job))
+        // The skills library (R25).
+        .route("/api/v1/skills", get(skills_list).post(skill_create))
+        .route("/api/v1/skills/{name}", get(skill_get).delete(skill_delete))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
         .route(
@@ -193,10 +196,9 @@ impl From<ActionError> for ApiError {
             "bad_ticket" | "bad_name" | "name_required" | "unknown_flow" | "prompt_required"
             | "repo_url" | "not_a_repo" | "base_unresolved" | "runtime_unusable"
             | "runtime_hooks" | "unknown_pack" | "unknown_runtime" | "bad_model"
-            | "model_unavailable" | "bad_agent" | "unknown_stage" => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
-            "unknown_agent" => StatusCode::NOT_FOUND,
+            | "model_unavailable" | "bad_agent" | "unknown_stage" | "bad_skill"
+            | "unknown_skill" => StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_agent" | "no_such_skill" => StatusCode::NOT_FOUND,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
@@ -1463,6 +1465,37 @@ async fn xap(auth: AgentAuth, State(d): State<Daemon>, body: axum::body::Bytes) 
             fail(status, r.code, r.message)
         }
     }
+}
+
+// ---- skills library (R25) -----------------------------------------------------
+
+async fn skills_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"skills": d.skills().await?})))
+}
+
+async fn skill_get(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.skill_detail(&name).await?)))
+}
+
+async fn skill_create(
+    _: User,
+    State(d): State<Daemon>,
+    Json(req): Json<xherd_daemon::skills::NewSkill>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.create_skill(req).await?)))
+}
+
+async fn skill_delete(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    d.delete_skill(&name).await?;
+    Ok(Json(json!({"ok": true})))
 }
 
 // ---- saved agents (R19) -------------------------------------------------------

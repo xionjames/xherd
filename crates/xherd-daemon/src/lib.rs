@@ -31,6 +31,7 @@ pub mod repos;
 pub mod scheduler;
 pub mod security;
 pub mod settings;
+pub mod skills;
 pub mod supervisor;
 pub mod support;
 pub mod tickets;

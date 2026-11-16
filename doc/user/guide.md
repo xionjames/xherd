@@ -177,6 +177,7 @@ An **agent** is a named, versioned setup that jobs start from: runtime and model
 - A [repo profile](#repo-profiles) still applies: its autonomy and tool permissions are ceilings (the form says so under the field), its sensitive paths are added to the agent's, and the smaller diff limit and token budget win.
 - **Archive** hides an agent from pickers and keeps its history; its jobs keep working. **Delete** needs no live job; its jobs keep their settings and show its name as plain text. An agent whose runtime or workflow is gone or switched off is marked and cannot start jobs until fixed.
 - With **live jobs at once** reached, more jobs of that agent wait in the queue (*waits for its agent*) while others start.
+- **Skills** (Settings → Skills) are a library of reusable instructions and files: add a folder with a `SKILL.md` or write one, view or delete it (not while an agent lists it). Agents will list skills from this library.
 
 ## Repo profiles
 

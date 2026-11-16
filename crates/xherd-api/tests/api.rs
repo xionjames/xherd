@@ -1544,3 +1544,96 @@ async fn saved_agent_routes() {
         (StatusCode::NOT_FOUND, json!("unknown_job"))
     );
 }
+
+/// R25: the skills library routes and their refusals.
+#[tokio::test]
+async fn skill_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let md = "---\nname: lint-fix\ndescription: Fixes lint\n---\nSteps\n";
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/skills",
+            Some(json!({"name": "lint-fix", "text": md})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["description"].clone()),
+        (StatusCode::OK, json!("Fixes lint"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/skills",
+            Some(json!({"name": "lint-fix", "text": md})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("name_taken"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/skills",
+            Some(json!({"name": "x", "text": "no header"})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("bad_skill"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/skills").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["skills"][0]["name"].clone()),
+        (StatusCode::OK, json!("lint-fix"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/skills/lint-fix").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!((s, v["text"].clone()), (StatusCode::OK, json!(md)));
+    // an agent needs the skill to exist; the skill cannot go while it is used
+    let agent = |skills: Value| {
+        json!({"name": "rev", "runtime": "claude-code",
+               "workflow": {"pack": "xherd", "flow": "feature"}, "skills": skills})
+    };
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents", Some(agent(json!(["nope"])))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("unknown_skill"))
+    );
+    let (s, _) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents", Some(agent(json!(["lint-fix"])))),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = call(app.clone(), send("DELETE", "/api/v1/skills/lint-fix", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("skill_in_use"))
+    );
+    let (s, v) = call(app, send("DELETE", "/api/v1/skills/nope", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("no_such_skill"))
+    );
+}
