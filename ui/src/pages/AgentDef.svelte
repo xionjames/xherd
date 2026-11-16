@@ -1,7 +1,7 @@
 <script lang="ts">
   // A saved agent (#141, R23): Settings (the form, marking what a matching
   // profile overrides or tightens), Jobs (history) and Versions (with diffs).
-  // `#/agents/new` is the same form, empty. Memory and Skills come later.
+  // `#/agents/new` is the same form, empty. Skills come later.
   import { untrack } from 'svelte';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
@@ -26,11 +26,12 @@
   const isNew = $derived(name === 'new');
   const agent = $derived(isNew ? undefined : agentByName(name));
 
-  const SECTIONS = ['settings', 'jobs', 'versions'];
+  const SECTIONS = ['settings', 'jobs', 'memory', 'versions'];
   const section = $derived(SECTIONS.includes(route.query.get('s') ?? '') ? route.query.get('s')! : 'settings');
   const tabItems = $derived(isNew ? [] : [
     { id: 'settings', label: 'Settings', href: href(`/agents/${name}`) },
     { id: 'jobs', label: 'Jobs', href: href(`/agents/${name}`, { s: 'jobs' }) },
+    { id: 'memory', label: 'Memory', href: href(`/agents/${name}`, { s: 'memory' }) },
     { id: 'versions', label: 'Versions', href: href(`/agents/${name}`, { s: 'versions' }) },
   ]);
 
@@ -148,6 +149,32 @@
       go('/agents');
     } catch (e) {
       showError('Could not delete the agent', e);
+    }
+  }
+
+  // ---- memory (R28) -----------------------------------------------------------
+  const MEMORY_MAX = 4000;
+  let memory = $state('');
+  let memoryBase = $state('');
+  let memoryBusy = $state(false);
+  $effect(() => {
+    const a = agent;
+    if (!a || section !== 'memory') return;
+    get<{ text: string }>(`/agents/${a.id}/memory`)
+      .then((r) => { memory = memoryBase = r.text; })
+      .catch((e) => showError('Could not load the memory', e));
+  });
+  const memoryDirty = $derived(memory !== memoryBase);
+  async function saveMemory() {
+    if (!agent) return;
+    memoryBusy = true;
+    try {
+      const r = await put<{ text: string }>(`/agents/${agent.id}/memory`, { text: memory });
+      memory = memoryBase = r.text;
+    } catch (e) {
+      showError('Could not save the memory', e);
+    } finally {
+      memoryBusy = false;
     }
   }
 
@@ -324,6 +351,17 @@
       {:else}
         <div class="cb"><p class="empty">No job has started from this agent. <a href={href('/new', { agent: agent?.name })}>Start one</a>.</p></div>
       {/if}
+    </Panel>
+  {:else if section === 'memory'}
+    <Panel title="Memory" hint="What every job from this agent should know. Jobs get the text as it is when they start; changing it later does not reach jobs already started.">
+      <label class="f">Memory
+        <textarea rows="10" bind:value={memory} maxlength={MEMORY_MAX} placeholder="Where the tests live, how this team names things…"></textarea>
+        <span class="hint">{memory.length} / {MEMORY_MAX} characters. It goes into each job's instructions, after the agent's own.</span>
+      </label>
+      {#snippet foot()}
+        <button class="btn ghost" disabled={!memoryDirty || memoryBusy} onclick={() => (memory = memoryBase)}>Discard</button>
+        <button class="btn primary" disabled={!memoryDirty || memoryBusy} onclick={saveMemory}>{memoryBusy ? 'Saving…' : 'Save memory'}</button>
+      {/snippet}
     </Panel>
   {:else}
     {#if since && sinceDiff}

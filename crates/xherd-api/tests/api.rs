@@ -1447,6 +1447,41 @@ async fn saved_agent_routes() {
     )
     .await;
     assert_eq!(v["jobs"], json!([]));
+    // memory (R28)
+    let (_, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/memory")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v, json!({"text": "", "version": 0}));
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "PUT",
+            "/api/v1/agents/reviewer/memory",
+            Some(json!({"text": "Use qa/."})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v),
+        (StatusCode::OK, json!({"text": "Use qa/.", "version": 1}))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "PUT",
+            "/api/v1/agents/reviewer/memory",
+            Some(json!({"text": "x".repeat(4001)})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("bad_memory"))
+    );
     let (_, v) = call(
         app.clone(),
         send("POST", "/api/v1/agents/reviewer/archive", None),

@@ -106,6 +106,8 @@ export interface JobAgent {
   stageOverrides?: Record<string, { human: boolean }>;
   /** What became of each skill the agent lists, set at creation (R26, R27). */
   skills?: SkillCopy[];
+  /** The agent's memory when the job was created (R28). */
+  memory?: string;
 }
 
 /** A skill copied into the job's worktree, or skipped with the reason. */

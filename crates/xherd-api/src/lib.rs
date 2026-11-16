@@ -113,6 +113,10 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/unarchive", post(agent_unarchive))
         .route("/api/v1/agents/{id}/versions", get(agent_versions))
         .route(
+            "/api/v1/agents/{id}/memory",
+            get(agent_memory_get).put(agent_memory_put),
+        )
+        .route(
             "/api/v1/agents/{id}/jobs",
             get(agent_jobs).post(agent_new_job),
         )
@@ -196,7 +200,7 @@ impl From<ActionError> for ApiError {
             "bad_ticket" | "bad_name" | "name_required" | "unknown_flow" | "prompt_required"
             | "repo_url" | "not_a_repo" | "base_unresolved" | "runtime_unusable"
             | "runtime_hooks" | "unknown_pack" | "unknown_runtime" | "bad_model"
-            | "model_unavailable" | "bad_agent" | "unknown_stage" | "bad_skill"
+            | "model_unavailable" | "bad_agent" | "unknown_stage" | "bad_skill" | "bad_memory"
             | "unknown_skill" => StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_agent" | "no_such_skill" => StatusCode::NOT_FOUND,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
@@ -1598,6 +1602,37 @@ async fn agent_versions(
         return Err(not_an_agent(&d, &id, "versions").await);
     }
     Ok(Json(json!({"versions": d.agent_versions(&id).await?})))
+}
+
+/// `GET` and `PUT /agents/{id}/memory` (R28).
+async fn agent_memory_get(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !d.is_agent(&id).await {
+        return Err(not_an_agent(&d, &id, "memory").await);
+    }
+    Ok(Json(d.agent_memory(&id).await?))
+}
+
+async fn agent_memory_put(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    if !d.is_agent(&id).await {
+        return Err(not_an_agent(&d, &id, "memory").await);
+    }
+    let Some(text) = body.get("text").and_then(Value::as_str) else {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "text is required".to_string(),
+        ));
+    };
+    Ok(Json(d.set_agent_memory(&id, text).await?))
 }
 
 async fn agent_jobs(

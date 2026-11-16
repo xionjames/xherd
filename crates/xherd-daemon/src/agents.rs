@@ -340,6 +340,38 @@ impl Daemon {
         self.store.agent_versions(&def.id).await.map_err(store)
     }
 
+    /// The agent's memory and its version (R28); empty and 0 before the first save.
+    pub async fn agent_memory(&self, key: &str) -> Result<Value, ActionError> {
+        let def = self.agent_def(key).await?;
+        let (text, version) = self
+            .store
+            .agent_memory(&def.id)
+            .await
+            .map_err(store)?
+            .unwrap_or_default();
+        Ok(json!({"text": text, "version": version}))
+    }
+
+    /// Replace the memory (R28). Jobs already started keep the one they got.
+    pub async fn set_agent_memory(&self, key: &str, text: &str) -> Result<Value, ActionError> {
+        if text.chars().count() > agent_def::MAX_MEMORY || text.contains('\0') {
+            return Err(err(
+                "bad_memory",
+                format!("memory: up to {} characters", agent_def::MAX_MEMORY),
+            ));
+        }
+        let _w = self.agents_write.lock().await;
+        let def = self.agent_def(key).await?;
+        let now = self.clock.now();
+        self.store
+            .put_agent_memory(&def.id, text, now)
+            .await
+            .map_err(store)?;
+        self.agents_changed();
+        drop(_w);
+        self.agent_memory(&def.id).await
+    }
+
     /// The jobs started from an agent, newest first.
     pub async fn agent_jobs(&self, key: &str) -> Result<Vec<Job>, ActionError> {
         let def = self.agent_def(key).await?;

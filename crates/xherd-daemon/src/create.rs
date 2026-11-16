@@ -228,6 +228,16 @@ impl Daemon {
         a.base = Some(base);
         a.runtime = Some(rt_name.into());
         a.agent = agent.as_ref().map(|d| d.snapshot());
+        if let Some(snap) = a.agent.as_mut() {
+            // The memory as it is now; later edits do not reach this job (R28).
+            snap.memory = self
+                .store
+                .agent_memory(&snap.id)
+                .await
+                .map_err(|e| refuse("store", e.to_string()))?
+                .map(|(t, _)| t)
+                .filter(|t| !t.trim().is_empty());
+        }
         a.lowered = eff.lowered.clone();
         a.launch = Some(launch);
         a.next_prompt = Some(match pack {

@@ -283,6 +283,14 @@ pub fn instructions_md(a: &Job, repo_instructions: Option<&str>) -> String {
         ),
         _ => repo,
     };
+    let repo = match a.agent.as_ref().and_then(|g| g.memory.as_deref()) {
+        Some(t) if !t.trim().is_empty() => format!(
+            "{repo}## Agent memory\n\nWhat the saved agent {} remembers from earlier jobs:\n\n{}\n\n",
+            a.agent.as_ref().map_or("", |g| g.name.as_str()),
+            t.trim()
+        ),
+        _ => repo,
+    };
     format!(
         "# xherd job {name}
 

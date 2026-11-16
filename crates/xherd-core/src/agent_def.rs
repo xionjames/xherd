@@ -15,6 +15,8 @@ use crate::{Job, new};
 
 pub const MAX_DESCRIPTION: usize = 200;
 pub const MAX_INSTRUCTIONS: usize = crate::profile::MAX_INSTRUCTIONS;
+/// What an agent may remember (R28), in characters.
+pub const MAX_MEMORY: usize = 4000;
 pub const MAX_PATHS: usize = 50;
 pub const MAX_LIVE_JOBS: usize = 100;
 
@@ -121,6 +123,9 @@ pub struct JobAgent {
     /// job is created, never by `snapshot`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<SkillCopy>,
+    /// The agent's memory when the job was created (R28), never changed after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<String>,
 }
 
 /// One skill of an agent at job creation: copied into the worktree for the
@@ -148,6 +153,7 @@ impl AgentDef {
             job_token_budget: self.job_token_budget,
             stage_overrides: self.stage_overrides.clone(),
             skills: vec![],
+            memory: None,
         }
     }
 }

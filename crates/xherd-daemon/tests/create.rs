@@ -1196,3 +1196,49 @@ async fn a_runtime_without_a_skill_folder_skips_them_and_still_creates_the_job()
         (false, Some("opencode has no skill folder"), sha.as_str())
     );
 }
+
+#[tokio::test]
+async fn agent_memory_is_copied_into_the_job_when_it_is_created() {
+    let t = setup().await;
+    t.d.create_agent(saved("mem")).await.unwrap();
+    // nothing remembered yet: no section
+    assert_eq!(t.d.agent_memory("mem").await.unwrap()["version"], 0);
+    let first =
+        t.d.new_agent_job("mem", from_agent(&t, "mem"))
+            .await
+            .unwrap();
+    assert!(first.agent.as_ref().unwrap().memory.is_none());
+    let md = |j: &xherd_core::Job| {
+        std::fs::read_to_string(
+            Path::new(j.workdir.as_deref().unwrap()).join(".xherd/instructions.md"),
+        )
+        .unwrap()
+    };
+    assert!(!md(&first).contains("## Agent memory"));
+    // saved memory reaches the next job, after the instructions
+    t.d.set_agent_memory("mem", "Tests live in qa/.")
+        .await
+        .unwrap();
+    let second =
+        t.d.new_agent_job("mem", from_agent(&t, "mem"))
+            .await
+            .unwrap();
+    let text = md(&second);
+    assert!(text.contains("## Agent memory") && text.contains("Tests live in qa/."));
+    assert!(text.find("## Agent instructions") < text.find("## Agent memory"));
+    // a later edit leaves the job's copy alone
+    let v = t.d.set_agent_memory("mem", "Changed.").await.unwrap();
+    assert_eq!(v["version"], 2);
+    let again = t.d.action(&second.name, UserAction::Get).await.unwrap();
+    assert_eq!(
+        again.agent.unwrap().memory.as_deref(),
+        Some("Tests live in qa/.")
+    );
+    // too long, and unknown agents
+    let long = "x".repeat(4001);
+    assert_eq!(
+        t.d.set_agent_memory("mem", &long).await.unwrap_err().code,
+        "bad_memory"
+    );
+    assert!(t.d.set_agent_memory("nobody", "x").await.is_err());
+}

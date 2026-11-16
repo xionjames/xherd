@@ -178,6 +178,7 @@ An **agent** is a named, versioned setup that jobs start from: runtime and model
 - **Archive** hides an agent from pickers and keeps its history; its jobs keep working. **Delete** needs no live job; its jobs keep their settings and show its name as plain text. An agent whose runtime or workflow is gone or switched off is marked and cannot start jobs until fixed.
 - With **live jobs at once** reached, more jobs of that agent wait in the queue (*waits for its agent*) while others start.
 - **Skills** (Settings → Skills) are a library of reusable instructions and files: add a folder with a `SKILL.md` or write one, view or delete it (not while an agent lists it). An agent lists skills from this library; each job it starts gets a copy in its worktree, where the job's runtime looks for project skills (Claude Code `.claude/skills`, opencode `.opencode/skills`, Codex `.agents/skills`), hidden from git. A skill the repository already has under that name is left alone, and a runtime with no skill folder skips them: the job page names each skill that was not installed and why. Skills are never pasted into the prompt.
+- **Memory** (the agent page's Memory tab, up to 4 000 characters) is what every job from the agent should know. A job gets the text as it is when it starts, as an *Agent memory* section of its instructions after the agent's own; changing it later does not reach jobs already started.
 
 ## Repo profiles
 
