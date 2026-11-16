@@ -845,3 +845,42 @@ async fn a_version_1_database_opens_and_its_job_resumes() {
     assert!(ev.iter().any(|e| e.kind == "user.pause"));
     assert!(ev.iter().any(|e| e.kind == "user.resume"));
 }
+
+fn of_agent(name: &str, created: i64, def: &xherd_core::agent_def::AgentDef) -> Job {
+    let mut j = agent(name, created);
+    j.agent = Some(def.snapshot());
+    j
+}
+
+#[tokio::test]
+async fn an_agents_max_live_jobs_holds_its_next_job_back() {
+    let t = daemon(5).await;
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "reviewer",
+        "runtime": "claude-code",
+        "workflow": {"pack": "xherd", "flow": "feature"},
+        "maxLiveJobs": 1,
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+
+    t.d.create_job(of_agent("R-1", 1, &def)).await.unwrap();
+    t.d.create_job(of_agent("R-2", 2, &def)).await.unwrap();
+    // A job without an agent is not held, and does not wait behind R-2.
+    t.d.create_job(agent("FREE-1", 3)).await.unwrap();
+    wait_status(&t.d, "R-1", Status::Running).await;
+    wait_status(&t.d, "FREE-1", Status::Running).await;
+    assert_eq!(status(&t.d, "R-2").await, Status::Queued);
+
+    // R-2 starts once R-1 leaves a live status.
+    t.d.action("R-1", UserAction::Pause).await.unwrap();
+    wait_status(&t.d, "R-2", Status::Running).await;
+
+    // Raising the limit starts the next one at once.
+    t.d.create_job(of_agent("R-3", 4, &def)).await.unwrap();
+    assert_eq!(status(&t.d, "R-3").await, Status::Queued);
+    let mut raised = def.clone();
+    raised.max_live_jobs = 2;
+    t.d.update_agent(&def.id, raised).await.unwrap();
+    wait_status(&t.d, "R-3", Status::Running).await;
+}

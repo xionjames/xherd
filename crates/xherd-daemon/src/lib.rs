@@ -292,7 +292,13 @@ impl Daemon {
             runtimes,
         };
         let agents = store.list_jobs().await?;
-        let sup = supervisor::spawn(agents, config.max_concurrent_jobs, env);
+        let limits = store
+            .list_agent_defs()
+            .await?
+            .into_iter()
+            .map(|d| (d.id, d.max_live_jobs))
+            .collect();
+        let sup = supervisor::spawn(agents, limits, config.max_concurrent_jobs, env);
 
         let d = Daemon {
             paths,

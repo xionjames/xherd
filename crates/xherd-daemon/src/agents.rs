@@ -251,6 +251,7 @@ impl Daemon {
         def.updated_at = now;
         def.archived_at = None;
         self.store.put_agent_def(&def).await.map_err(store)?;
+        self.sup.agent_limit(&def.id, Some(def.max_live_jobs));
         self.agents_changed();
         Ok(self.view(def, &[]))
     }
@@ -281,6 +282,7 @@ impl Daemon {
         def.updated_at = self.clock.now();
         def.archived_at = old.archived_at;
         self.store.put_agent_def(&def).await.map_err(store)?;
+        self.sup.agent_limit(&def.id, Some(def.max_live_jobs));
         self.agents_changed();
         drop(_w);
         self.agent(&def.id).await
@@ -313,6 +315,7 @@ impl Daemon {
             ));
         }
         self.store.delete_agent_def(&def.id).await.map_err(store)?;
+        self.sup.agent_limit(&def.id, None);
         self.agents_changed();
         Ok(())
     }
@@ -394,6 +397,7 @@ impl Daemon {
         }
         for (d, _) in &out {
             self.store.put_agent_def(d).await.map_err(store)?;
+            self.sup.agent_limit(&d.id, Some(d.max_live_jobs));
         }
         self.agents_changed();
         Ok(json!({"added": out.len()}))

@@ -31,6 +31,8 @@ pub enum SupMsg {
     Tick(TickKind),
     /// Live session names from the driver (R-011).
     Reconcile(Vec<String>, bool),
+    /// A saved agent's `maxLiveJobs` (R16); `None` once the agent is gone.
+    AgentLimit(String, Option<usize>),
 }
 
 #[derive(Clone)]
@@ -83,10 +85,17 @@ impl SupervisorHandle {
     pub fn reconcile(&self, alive: Vec<String>, recover: bool) {
         let _ = self.tx.send(SupMsg::Reconcile(alive, recover));
     }
+
+    /// Tell the supervisor an agent's live-job limit (R16).
+    pub fn agent_limit(&self, id: &str, limit: Option<usize>) {
+        let _ = self.tx.send(SupMsg::AgentLimit(id.to_string(), limit));
+    }
 }
 
 struct Entry {
     tx: AgentTx,
+    /// The saved agent the job came from (`Job.agent.id`).
+    agent: Option<String>,
     name: String,
     ticket_key: Option<String>,
     status: Status,
@@ -97,19 +106,27 @@ struct Entry {
 struct Supervisor {
     max_live: usize,
     agents: HashMap<String, Entry>,
+    /// `maxLiveJobs` of each saved agent, by id (R16).
+    agent_limits: HashMap<String, usize>,
     /// Sent `Start`, waiting for the status change.
     starting: BTreeSet<String>,
     env: Env,
 }
 
-/// Spawn the supervisor with existing agents (from the store).
-pub fn spawn(agents: Vec<Job>, max_live: usize, mut env: Env) -> SupervisorHandle {
+/// Spawn the supervisor with existing jobs and the saved agents' limits.
+pub fn spawn(
+    agents: Vec<Job>,
+    agent_limits: HashMap<String, usize>,
+    max_live: usize,
+    mut env: Env,
+) -> SupervisorHandle {
     let (tx, mut rx) = mpsc::unbounded_channel::<SupMsg>();
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<SupEvent>();
     env.sup = ev_tx;
     let mut sup = Supervisor {
         max_live,
         agents: HashMap::new(),
+        agent_limits,
         starting: BTreeSet::new(),
         env,
     };
@@ -136,6 +153,7 @@ impl Supervisor {
     fn register(&mut self, a: Job) {
         let entry = Entry {
             tx: actor::spawn(a.clone(), self.env.clone()),
+            agent: a.agent.as_ref().map(|g| g.id.clone()),
             name: a.name.clone(),
             ticket_key: a.ticket_key().map(str::to_string),
             status: a.status,
@@ -242,6 +260,13 @@ impl Supervisor {
                         e.tx.send(Msg::Tick(TickKind::SessionCheck { alive, recover }));
                 }
             }
+            SupMsg::AgentLimit(id, limit) => {
+                match limit {
+                    Some(n) => self.agent_limits.insert(id, n),
+                    None => self.agent_limits.remove(&id),
+                };
+                self.fill_slots();
+            }
         }
     }
 
@@ -274,7 +299,33 @@ impl Supervisor {
             .map(|(id, e)| (e.created_at, id.clone()))
             .collect();
         queued.sort();
-        for (_, id) in queued.into_iter().take(free) {
+        // Jobs of an agent that is at its `maxLiveJobs` wait; they do not hold
+        // a slot back from other jobs (R16).
+        let mut per_agent: HashMap<String, usize> = HashMap::new();
+        for (id, e) in &self.agents {
+            if let Some(a) = &e.agent
+                && (e.status.is_live() || self.starting.contains(id))
+            {
+                *per_agent.entry(a.clone()).or_default() += 1;
+            }
+        }
+        let mut chosen = Vec::new();
+        for (_, id) in queued {
+            if chosen.len() == free {
+                break;
+            }
+            if let Some(a) = &self.agents[&id].agent
+                && let Some(&limit) = self.agent_limits.get(a)
+            {
+                let n = per_agent.entry(a.clone()).or_default();
+                if *n >= limit {
+                    continue;
+                }
+                *n += 1;
+            }
+            chosen.push(id);
+        }
+        for id in chosen {
             let block = self.free_block();
             let e = self.agents.get_mut(&id).expect("queued agent");
             e.port_block = Some(block);
