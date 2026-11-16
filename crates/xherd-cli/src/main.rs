@@ -9,6 +9,7 @@ use serde_json::Value;
 use xherd_core::config::Config;
 use xherd_core::paths::Paths;
 
+mod agent;
 mod backup;
 mod docker;
 mod git;
@@ -86,8 +87,14 @@ enum Cmd {
         /// Model for the runtime (opus, sonnet…); default: the profile's, else Settings, else the runtime's own.
         #[arg(long)]
         model: Option<String>,
+        /// Start from a saved agent (`xherd agent ls`): its settings are the defaults for the flags above.
+        #[arg(long)]
+        agent: Option<String>,
         prompt: Option<String>,
     },
+    /// Saved agents: a named, versioned setup that jobs start from.
+    #[command(subcommand)]
+    Agent(agent::AgentCmd),
     /// List jobs.
     Ls,
     /// Install a pack's commands for job runtimes (default: xherd, every runtime switched on).
@@ -381,6 +388,7 @@ fn main() -> ExitCode {
         }
         Cmd::Status => status(),
         Cmd::Ls => ls(),
+        Cmd::Agent(c) => agent::run(c, json),
         Cmd::Install { runtime, pack } => install(runtime, pack),
         Cmd::New {
             name,
@@ -392,6 +400,7 @@ fn main() -> ExitCode {
             mode,
             runtime,
             model,
+            agent,
             prompt,
         } => new_job(
             repo,
@@ -401,7 +410,7 @@ fn main() -> ExitCode {
                 ticket_key: None,
                 slug: None,
                 repo: String::new(),
-                agent: None,
+                agent,
                 base,
                 flow,
                 prompt,
@@ -728,14 +737,22 @@ impl Client {
     ) -> Result<Value, String> {
         let url = format!("{}/api/v1{path}", self.url.trim_end_matches('/'));
         let auth = self.token.as_ref().map(|t| format!("Bearer {t}"));
-        let res = if method == "GET" {
-            let mut r = agent.get(&url);
+        let res = if method == "GET" || method == "DELETE" {
+            let mut r = if method == "GET" {
+                agent.get(&url)
+            } else {
+                agent.delete(&url)
+            };
             if let Some(a) = &auth {
                 r = r.header("Authorization", a);
             }
             r.call()
         } else {
-            let mut r = agent.post(&url);
+            let mut r = if method == "PUT" {
+                agent.put(&url)
+            } else {
+                agent.post(&url)
+            };
             if let Some(a) = &auth {
                 r = r.header("Authorization", a);
             }
@@ -791,20 +808,26 @@ fn ls() -> i32 {
 /// `xherd ls` as text: each column as wide as its longest value, the
 /// runtime's session id cut to 8 characters (its full form is a UUID).
 fn ls_table(agents: &[Value]) -> String {
-    let mut rows = vec![["JOB", "STATUS", "SESSION", "GATE / PR"].map(String::from)];
+    let mut rows = vec![["JOB", "AGENT", "STATUS", "SESSION", "GATE / PR"].map(String::from)];
     for a in agents {
         let session = a["session"].as_str().unwrap_or("-");
         rows.push([
             a["name"].as_str().unwrap_or("?").to_string(),
+            a["agent"]["name"].as_str().unwrap_or("-").to_string(),
             a["status"].as_str().unwrap_or("?").to_string(),
             session.chars().take(8).collect(),
             gate_or_pr(a),
         ]);
     }
     let width = |i: usize| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0);
-    let (w0, w1, w2) = (width(0), width(1), width(2));
+    let (w0, w1, w2, w3) = (width(0), width(1), width(2), width(3));
     rows.iter()
-        .map(|r| format!("{:<w0$}  {:<w1$}  {:<w2$}  {}\n", r[0], r[1], r[2], r[3]))
+        .map(|r| {
+            format!(
+                "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {}\n",
+                r[0], r[1], r[2], r[3], r[4]
+            )
+        })
         .collect()
 }
 
@@ -870,7 +893,15 @@ fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
 
 fn new_job(repo: Option<String>, mut req: xherd_core::new::NewJob) -> i32 {
     // The daemon has its own working directory: send an absolute path.
+    // An agent with a repository of its own needs none from here (R20).
+    let agent_has_repo = repo.is_none()
+        && req.agent.as_deref().is_some_and(|a| {
+            Client::new()
+                .and_then(|c| c.call("GET", &format!("/agents/{a}"), None))
+                .is_ok_and(|v| v["repo"].as_str().is_some_and(|r| !r.is_empty()))
+        });
     let repo = match repo {
+        _ if agent_has_repo => String::new(),
         Some(r) if r.contains("://") || r.starts_with("git@") => r,
         r => {
             let p = r.map_or_else(std::env::current_dir, |r| std::fs::canonicalize(&r));
@@ -995,15 +1026,16 @@ mod tests {
     fn ls_columns_fit_long_names_and_sessions() {
         let agents = [
             serde_json::json!({"name": "SHOP-151-order-export-csv", "status": "waiting-input",
+                "agent": {"id": "a1", "name": "reviewer"},
                 "session": "5c0e9f1a-2b7d-4e8a-9f3c-1d2e3f4a5b6c",
                 "gate": {"kind": "commit", "id": "C02", "files": ["a.ts"]}}),
             serde_json::json!({"name": "SHOP-9-x", "status": "paused"}),
         ];
         assert_eq!(
             ls_table(&agents),
-            "JOB                        STATUS         SESSION   GATE / PR\n\
-             SHOP-151-order-export-csv  waiting-input  5c0e9f1a  commit C02: a.ts\n\
-             SHOP-9-x                   paused         -         -\n"
+            "JOB                        AGENT     STATUS         SESSION   GATE / PR\n\
+             SHOP-151-order-export-csv  reviewer  waiting-input  5c0e9f1a  commit C02: a.ts\n\
+             SHOP-9-x                   -         paused         -         -\n"
         );
     }
 

@@ -28,7 +28,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | Command | Does |
 |---|---|
 | `xherd new <NAME> [PROMPT]` | Create a job: worktree, branch and `.xherd/`. The name is lowercase letters, digits and `-` (up to 41), unique; it is the tmux session and the worktree folder |
-| `xherd ls` | List jobs, with the open gate or the PR URL (session ids cut to 8 characters) |
+| `xherd ls` | List jobs, with the saved agent they started from (`-` for none), the open gate or the PR URL (session ids cut to 8 characters) |
 | `xherd diff <job>` | The open commit proposal's diff; at a ship gate the branch as it will be pushed; otherwise every uncommitted change |
 | `xherd approve <job> [--reason TEXT]` | Approve the open gate (documents or commit) as they are on disk now; the reason goes to the ledger |
 | `xherd changes <job> "<comment>"` | Ask the job to revise its open gate |
@@ -59,6 +59,26 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `--mode` | Tool permissions: `ask`, `edits`, `auto` or `all` (container only); default: the repo profile's, else the `permissionMode` setting |
 | `--runtime` | Runtime plugin: `claude-code`, `opencode` or `codex`; default: the repo profile's, else the `defaultRuntime` setting |
 | `--model` | Model for the runtime (`opus`, `sonnet`, `opencode/…`); default: the repo profile's `models` entry for the runtime, else the `runtimeModels` setting, else the runtime's own |
+| `--agent` | Start from a saved agent (id or name, see below): its settings are the defaults for the flags above, and a flag you give wins. An agent with a default repository needs no `--repo`; without one the current directory is sent |
+
+## Saved agents
+
+A saved agent is a named, versioned setup (runtime, model, workflow, autonomy, tool permissions, instructions, limits) that jobs start from. Every `xherd agent` command takes the agent's name or id; `--json` prints the API's answer.
+
+| Command | Does |
+|---|---|
+| `xherd agent ls` | Agents with their version, status, runtime, workflow, live jobs and last job |
+| `xherd agent show <agent>` | Every setting of one agent |
+| `xherd agent new <name> [flags]` | Save an agent. Defaults: runtime `claude-code`, pack `xherd`, flow `feature` |
+| `xherd agent edit <agent> [flags]` | Change the settings given; the agent's version goes up by one. The name cannot change |
+| `xherd agent archive\|unarchive <agent>` | Hide an agent from pickers, or bring it back (same version) |
+| `xherd agent rm <agent>` | Delete an agent with no live jobs (its jobs keep their snapshot) |
+| `xherd agent jobs <agent>` | The jobs started from it |
+| `xherd agent start <agent> [PROMPT] [--ticket T] [--repo R] [--base B] [--name N]` | Start a job. Without `--name` it is `<agent>-<ticket key lower-cased>`, else `<agent>-<n>` |
+| `xherd agent export [<agent>] [--out FILE]` | The agents as JSON (no ids, no secrets) |
+| `xherd agent import FILE [--yes]` | Prints every setting of each agent in the file first, with `!` and a "look at" line for the ones that widen what a job may do or add text it reads (`permissionMode` `auto`/`all`, `autonomy` other than `ask`, `instructions`, `skills`, `stageOverrides`), then asks (`--yes` skips the question). All or nothing; a name that exists is refused, never replaced |
+
+`new` and `edit` flags: `--description`, `--runtime`, `--pack`, `--flow`, `--model` (for the agent's runtime), `--autonomy`, `--mode`, `--instructions` or `--instructions-file`, `--repo`, `--base`, `--job-token-budget`, `--sensitive-path` (repeat), `--max-diff-lines`, `--human-stage` (repeat: a stage whose gate always waits for a person), `--skill` (repeat), `--max-live-jobs`. On `edit` a repeated flag replaces its whole list, and an empty value (`--model ""`, `--sensitive-path ""`) clears the setting.
 
 ## Called by the runtime and by jobs
 
