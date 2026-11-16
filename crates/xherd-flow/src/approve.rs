@@ -87,6 +87,33 @@ pub fn next_command(
     Ok(Some((cmd, enters)))
 }
 
+/// The stage the command [`next_command`] hands on starts (D26, R39): the
+/// stage whose `command` is that template. `None` when nothing is handed on
+/// or the command belongs to no stage (a commit, a PR round): the session
+/// stays in the same stage.
+pub fn next_stage(
+    pack: &Pack,
+    a: &Job,
+    gate: &Gate,
+    facts: &dyn Facts,
+    auto: bool,
+) -> Option<String> {
+    let flow = pack.flow(a.flow.as_deref()?)?;
+    let tpl = match gate {
+        Gate::Docs { next: Some(n), .. } => Some(n.clone()),
+        Gate::Docs { stage, .. } => flow
+            .stage(stage)?
+            .next_template(facts, auto)
+            .map(str::to_string),
+        Gate::Commit(_) => flow
+            .commit_stage(a.stage.as_deref())
+            .and_then(|d| d.next_template(facts, auto))
+            .map(str::to_string),
+        _ => None,
+    }?;
+    flow.stage_for_command(&tpl).map(|s| s.id.clone())
+}
+
 /// Text typed to the agent for a change request (R-105).
 pub fn changes_message(gate: &Gate, comment: &str) -> String {
     match gate {

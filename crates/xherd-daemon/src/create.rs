@@ -260,6 +260,18 @@ impl Daemon {
             snap.permission_mode = Some(eff.mode);
             snap.model = eff.model.clone();
             snap.launch = mode_launch(&term, eff.mode, eff.model.as_deref(), self.sandbox)?;
+            // The skills it lists, not copied yet: the first stage's agent gets
+            // them below, the others when the job switches to them (R39).
+            snap.skills = def
+                .skills
+                .iter()
+                .map(|n| SkillCopy {
+                    name: n.clone(),
+                    sha256: String::new(),
+                    installed: false,
+                    skipped: None,
+                })
+                .collect();
             // The memory as it is now; later edits do not reach this job (R28).
             snap.memory = self
                 .store
@@ -516,82 +528,14 @@ impl Daemon {
         rt: &Terminal,
         wanted: &[(String, Option<String>)],
     ) -> Result<Vec<SkillCopy>, ActionError> {
-        let root = self.paths.skills();
-        let mut out = Vec::new();
-        for (name, expected) in wanted {
-            let skip = |sha: &str, why: String| SkillCopy {
-                name: name.clone(),
-                sha256: sha.to_string(),
-                installed: false,
-                skipped: Some(why),
-            };
-            let skill = match crate::skills::load(&root, name) {
-                Ok(s) => s,
-                Err(e) => {
-                    out.push(skip(
-                        "",
-                        format!("not in the skills library: {}", e.message),
-                    ));
-                    continue;
-                }
-            };
-            if expected.as_ref().is_some_and(|e| *e != skill.sha256) {
-                out.push(skip(
-                    &skill.sha256,
-                    "the library copy changed since the job started".into(),
-                ));
-                continue;
-            }
-            let Some(target) = &rt.skills else {
-                out.push(skip(
-                    &skill.sha256,
-                    format!("{rt_name} has no skill folder"),
-                ));
-                continue;
-            };
-            let dir = workdir.join(&target.dir).join(name);
-            if dir.exists() {
-                out.push(skip(&skill.sha256, "the repository has its own".into()));
-                continue;
-            }
-            let io = |p: &Path, e: std::io::Error| {
-                refuse("skill_install", format!("{}: {e}", p.display()))
-            };
-            let mut files: Vec<(PathBuf, &[u8])> = skill
-                .files
-                .iter()
-                .map(|(p, b)| (dir.join(p), b.as_slice()))
-                .collect();
-            files.push((dir.join(".gitignore"), b"*\n"));
-            let copied = async {
-                xherd_core::runner::mkdir(&dir, SHARED_DIR_MODE)
-                    .await
-                    .map_err(|e| io(&dir, e))?;
-                for (path, bytes) in &files {
-                    if let Some(parent) = path.parent().filter(|p| *p != dir) {
-                        xherd_core::runner::mkdir(parent, SHARED_DIR_MODE)
-                            .await
-                            .map_err(|e| io(parent, e))?;
-                    }
-                    xherd_core::runner::write_file(path, bytes, None)
-                        .await
-                        .map_err(|e| io(path, e))?;
-                }
-                Ok::<(), ActionError>(())
-            }
-            .await;
-            if let Err(e) = copied {
-                let _ = std::fs::remove_dir_all(&dir);
-                return Err(e);
-            }
-            out.push(SkillCopy {
-                name: name.clone(),
-                sha256: skill.sha256,
-                installed: true,
-                skipped: None,
-            });
-        }
-        Ok(out)
+        crate::skills::install(
+            &self.paths.skills(),
+            workdir,
+            rt_name,
+            rt.skills.as_ref(),
+            wanted,
+        )
+        .await
     }
 
     /// A restored worktree has none of the skills its job installed (they are
@@ -677,6 +621,9 @@ pub struct RuntimeKit {
     pub usage: Option<runtime::Usage>,
     /// `promptArgs`: the first prompt goes on the launch line (empty: typed).
     pub prompt_args: Vec<String>,
+    /// The runtime's terminal driver: where its skills go and how a mode
+    /// becomes launch arguments (a switch of agent rebuilds `launch`).
+    pub terminal: Option<Terminal>,
 }
 
 /// Every runtime plugin's [`RuntimeKit`], by plugin name.
@@ -688,6 +635,7 @@ pub fn runtime_kits(
         .of_kind(xherd_plugin::Kind::Runtime)
         .filter_map(|p| {
             let t = Terminal::of(&p.manifest).ok()?;
+            let terminal = t.clone();
             let kit = RuntimeKit {
                 trust: t.trust.map(|trust| TrustWriter {
                     trust,
@@ -696,6 +644,7 @@ pub fn runtime_kits(
                 resume: t.resume.map(Resumer),
                 usage: t.usage,
                 prompt_args: t.prompt_args,
+                terminal: Some(terminal),
             };
             Some((p.manifest.name.clone(), kit))
         })

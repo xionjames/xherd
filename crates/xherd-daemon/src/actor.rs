@@ -196,7 +196,16 @@ fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
 /// Sent by actors to the supervisor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupEvent {
-    StatusChanged { id: String, to: Status },
+    StatusChanged {
+        id: String,
+        to: Status,
+    },
+    /// The job's current agent changed (D26, R40): the supervisor counts
+    /// its live jobs against the new one from now on.
+    AgentChanged {
+        id: String,
+        agent: Option<String>,
+    },
 }
 
 /// The settings actors read, replaced as a whole when the config is saved
@@ -456,6 +465,8 @@ pub struct Env {
     /// drop the entry), how to continue its last conversation, and how to
     /// read token usage from its transcript (R-1205).
     pub runtimes: Arc<BTreeMap<String, crate::RuntimeKit>>,
+    /// The skills library (`<data>/skills`), copied from at a switch of agent.
+    pub skills: std::path::PathBuf,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -2316,6 +2327,7 @@ impl Actor {
                 }
                 self.job.lowered.retain(|l| l.field != "permissionMode");
                 self.job.permission_mode = Some(*mode);
+                self.job.pinned = true;
                 self.job.launch = Some(launch.clone());
                 "user.mode"
             }
@@ -2324,6 +2336,7 @@ impl Actor {
                     return Ok(());
                 }
                 self.job.model = model.clone();
+                self.job.pinned = true;
                 self.job.launch = Some(launch.clone());
                 "user.model"
             }
@@ -2519,6 +2532,11 @@ impl Actor {
     }
 
     async fn launch(&mut self, port_base: u16) -> Result<(), ActionError> {
+        // A session that starts on a stage other than its agent's (the job
+        // moved on in a running session) starts on the stage's agent.
+        if let Some(stage) = self.job.stage.clone() {
+            self.switch_agent(&stage).await;
+        }
         let argv = self
             .job
             .launch
@@ -2866,6 +2884,153 @@ impl Actor {
     /// Change the autonomy level (R-109): rewrite `instructions.md`, and
     /// approve at once a gate the agent is already waiting at that the new
     /// level allows (no further stop would come).
+    /// Rewrite `.xherd/instructions.md` from the job as it is now.
+    async fn write_instructions(&self) {
+        let Ok(wd) = self.workdir() else { return };
+        let file = wd.join(".xherd").join("instructions.md");
+        let extra = self.profile().await.and_then(|p| p.instructions);
+        if let Err(e) = xherd_core::paths::write_atomic(
+            &file,
+            xherd_core::new::instructions_md(&self.job, extra.as_deref()).as_bytes(),
+            None,
+        ) {
+            tracing::warn!(agent = %self.job.name, %e, "instructions.md not rewritten");
+        }
+    }
+
+    /// The agent of `stage` takes over when the next session starts (D26,
+    /// R39, R40): instructions and memory, skills, launch line, autonomy,
+    /// mode and model become its own (the profile's ceilings still apply),
+    /// and limits, budgets and the work log follow `current_agent`. A job the
+    /// user attached an agent to by hand (`pinned`), a stage with no agent
+    /// and the agent already in charge change nothing. Never called for a
+    /// running session: only where a new one is about to start.
+    async fn switch_agent(&mut self, stage: &str) {
+        if self.job.pinned {
+            return;
+        }
+        let Some(to) = self.job.stage_agents.get(stage).map(|s| s.agent.clone()) else {
+            return;
+        };
+        if self.job.current_agent.as_deref() == Some(to.as_str()) {
+            return;
+        }
+        let Some(new) = self.job.agents.get(&to).cloned() else {
+            return;
+        };
+        let from = self.job.current_agent.clone();
+        let profile = self.profile().await;
+        let target = self
+            .runtime_kit()
+            .and_then(|k| k.terminal.as_ref())
+            .cloned();
+        // Skills: those of the agent leaving go, those of the one arriving
+        // come (a repository's own folder is left alone).
+        if let Some(wd) = self.job.workdir.clone().map(std::path::PathBuf::from) {
+            let skills = target.as_ref().and_then(|t| t.skills.as_ref());
+            if let Some(old) = from.as_ref().and_then(|f| self.job.agents.get(f)) {
+                crate::skills::remove(&wd, skills, &old.skills).await;
+            }
+            let wanted: Vec<(String, Option<String>)> =
+                new.skills.iter().map(|s| (s.name.clone(), None)).collect();
+            let rt = self.runtime_name().to_string();
+            match crate::skills::install(&self.env.skills, &wd, &rt, skills, &wanted).await {
+                Ok(done) => {
+                    if let Some(g) = self.job.agents.get_mut(&to) {
+                        g.skills = done;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(job = %self.job.name, error = %e.message, "skills not installed");
+                    self.log(
+                        None,
+                        "skills-failed",
+                        Some(json!({"agent": to, "error": e.message})),
+                    )
+                    .await;
+                }
+            }
+        }
+        // Autonomy, mode, model and launch: the agent's baked values under
+        // the profile's ceilings as they are now.
+        self.job
+            .lowered
+            .retain(|l| l.field != "autonomy" && l.field != "permissionMode");
+        let want_autonomy = new.autonomy.unwrap_or(self.job.autonomy);
+        let cap = profile.as_ref().and_then(|p| p.autonomy);
+        let (autonomy, low) = xherd_core::resolve::ceiling(want_autonomy, cap);
+        if let (true, Some(p)) = (low, &profile) {
+            self.job.lowered.push(xherd_core::resolve::Lowered {
+                field: "autonomy".into(),
+                from: want_autonomy.to_string(),
+                to: autonomy.to_string(),
+                profile: p.name.clone(),
+            });
+        }
+        if autonomy != self.job.autonomy {
+            self.job.auto_in_row = 0;
+        }
+        self.job.autonomy = autonomy;
+        let want_mode = new.permission_mode.or(self.job.permission_mode);
+        self.job.model = new.model.clone();
+        if let Some(want) = want_mode {
+            let cap = profile.as_ref().and_then(|p| p.permission_mode);
+            let (mode, low) = xherd_core::resolve::ceiling(want, cap);
+            if let (true, Some(p)) = (low, &profile) {
+                self.job.lowered.push(xherd_core::resolve::Lowered {
+                    field: "permissionMode".into(),
+                    from: want.to_string(),
+                    to: mode.to_string(),
+                    profile: p.name.clone(),
+                });
+            }
+            self.job.permission_mode = Some(mode);
+            let rebuilt = match (&target, low) {
+                (Some(t), true) => crate::create::mode_launch(
+                    t,
+                    mode,
+                    new.model.as_deref(),
+                    self.env.settings.get().toolchain_install, // = running in the container
+                )
+                .ok(),
+                _ => None,
+            };
+            match rebuilt {
+                Some(l) => self.job.launch = Some(l),
+                None if !new.launch.is_empty() => self.job.launch = Some(new.launch.clone()),
+                None => {}
+            }
+        } else if !new.launch.is_empty() {
+            self.job.launch = Some(new.launch.clone());
+        }
+        self.job.current_agent = Some(to.clone());
+        self.write_instructions().await;
+        let _ = self.env.sup.send(SupEvent::AgentChanged {
+            id: self.job.id.clone(),
+            agent: Some(to.clone()),
+        });
+        self.log(
+            None,
+            "agent-switch",
+            Some(json!({"stage": stage, "from": from, "to": to})),
+        )
+        .await;
+    }
+
+    /// The stage the approved gate's next command starts, if it starts one.
+    fn next_stage_of(&self, wd: &Path, gate: &Gate) -> Option<String> {
+        let pack = self
+            .job
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))?;
+        let facts = xherd_flow::approve::DirFacts {
+            spec_dir: xherd_flow::approve::spec_dir(wd),
+            tasks: &self.job.tasks,
+        };
+        xherd_flow::approve::next_stage(pack, &self.job, gate, &facts, false)
+    }
+
     async fn set_autonomy(
         &mut self,
         level: xherd_core::autonomy::Autonomy,
@@ -2892,19 +3057,10 @@ impl Actor {
         }
         self.job.lowered.retain(|l| l.field != "autonomy");
         self.job.autonomy = level;
+        self.job.pinned = true;
         self.job.auto_in_row = 0;
         self.job.generation += 1;
-        if let Ok(wd) = self.workdir() {
-            let file = wd.join(".xherd").join("instructions.md");
-            let extra = self.profile().await.and_then(|p| p.instructions);
-            if let Err(e) = xherd_core::paths::write_atomic(
-                &file,
-                xherd_core::new::instructions_md(&self.job, extra.as_deref()).as_bytes(),
-                None,
-            ) {
-                tracing::warn!(agent = %self.job.name, %e, "instructions.md not rewritten");
-            }
-        }
+        self.write_instructions().await;
         self.log(None, "autonomy", Some(json!({"level": level})))
             .await;
         let before = self.job.status;
@@ -3026,6 +3182,13 @@ impl Actor {
         // (and fixes it when git refuses).
         if let Gate::Commit(c) = &gate {
             self.commit_for_user(&wd, &c.id, message).await;
+        }
+        // The next session starts on the next stage's agent (D26, R39).
+        if (self.fresh_sessions_on() || self.job.status == Status::Parked)
+            && next.is_some()
+            && let Some(stage) = self.next_stage_of(&wd, &gate)
+        {
+            self.switch_agent(&stage).await;
         }
         match (self.job.status, next) {
             (Status::Parked, next) => {

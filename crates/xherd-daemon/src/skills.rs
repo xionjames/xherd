@@ -10,6 +10,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use xherd_core::agent_def::SkillCopy;
+
 use crate::{ActionError, Daemon};
 
 /// The whole skill: every file together, as the spec says (R25).
@@ -435,6 +437,124 @@ impl Daemon {
             ));
         }
         std::fs::remove_dir_all(dir).map_err(io)
+    }
+}
+
+pub(crate) async fn install(
+    root: &Path,
+    workdir: &Path,
+    rt_name: &str,
+    target: Option<&xherd_plugin::runtime::SkillTarget>,
+    wanted: &[(String, Option<String>)],
+) -> Result<Vec<SkillCopy>, ActionError> {
+    let mut out = Vec::new();
+    for (name, expected) in wanted {
+        let skip = |sha: &str, why: String| SkillCopy {
+            name: name.clone(),
+            sha256: sha.to_string(),
+            installed: false,
+            skipped: Some(why),
+        };
+        let skill = match load(root, name) {
+            Ok(s) => s,
+            Err(e) => {
+                out.push(skip(
+                    "",
+                    format!("not in the skills library: {}", e.message),
+                ));
+                continue;
+            }
+        };
+        if expected.as_ref().is_some_and(|e| *e != skill.sha256) {
+            out.push(skip(
+                &skill.sha256,
+                "the library copy changed since the job started".into(),
+            ));
+            continue;
+        }
+        let Some(target) = target else {
+            out.push(skip(
+                &skill.sha256,
+                format!("{rt_name} has no skill folder"),
+            ));
+            continue;
+        };
+        let dir = workdir.join(&target.dir).join(name);
+        if dir.exists() {
+            out.push(skip(&skill.sha256, "the repository has its own".into()));
+            continue;
+        }
+        let io =
+            |p: &Path, e: std::io::Error| err("skill_install", format!("{}: {e}", p.display()));
+        let mut files: Vec<(PathBuf, &[u8])> = skill
+            .files
+            .iter()
+            .map(|(p, b)| (dir.join(p), b.as_slice()))
+            .collect();
+        files.push((dir.join(".gitignore"), b"*\n"));
+        let copied = async {
+            xherd_core::runner::mkdir(&dir, DIR_MODE)
+                .await
+                .map_err(|e| io(&dir, e))?;
+            for (path, bytes) in &files {
+                if let Some(parent) = path.parent().filter(|p| *p != dir) {
+                    xherd_core::runner::mkdir(parent, DIR_MODE)
+                        .await
+                        .map_err(|e| io(parent, e))?;
+                }
+                xherd_core::runner::write_file(path, bytes, None)
+                    .await
+                    .map_err(|e| io(path, e))?;
+            }
+            Ok::<(), ActionError>(())
+        }
+        .await;
+        if let Err(e) = copied {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+        out.push(SkillCopy {
+            name: name.clone(),
+            sha256: skill.sha256,
+            installed: true,
+            skipped: None,
+        });
+    }
+    Ok(out)
+}
+
+/// Mode of the folders xherd creates in a worktree (shared with the agents).
+const DIR_MODE: u32 = 0o2775;
+
+/// Take the skills a switch leaves behind out of the worktree (D26, R39):
+/// only folders xherd copied (`installed`) that still hold its `.gitignore`
+/// marker; a folder the repository owns is never touched. Removal runs as
+/// the agents' user. Failures are only logged.
+pub(crate) async fn remove(
+    workdir: &Path,
+    target: Option<&xherd_plugin::runtime::SkillTarget>,
+    copies: &[SkillCopy],
+) {
+    let Some(target) = target else { return };
+    for s in copies.iter().filter(|s| s.installed) {
+        let dir = workdir.join(&target.dir).join(&s.name);
+        let marked = matches!(
+            xherd_core::runner::read_file(&dir.join(".gitignore")).await,
+            Ok(Some(b)) if b == b"*\n"
+        );
+        if !marked {
+            continue;
+        }
+        let cmd = xherd_core::exec::Cmd::new(["rm", "-rf", "--"])
+            .timeout(std::time::Duration::from_secs(30))
+            .as_agent();
+        let mut cmd = cmd;
+        cmd.argv.push(dir.to_string_lossy().into_owned());
+        match xherd_core::exec::run(cmd).await {
+            Ok(o) if o.code == Some(0) => {}
+            Ok(o) => tracing::warn!(skill = %s.name, stderr = %o.stderr, "skill not removed"),
+            Err(e) => tracing::warn!(skill = %s.name, error = %e, "skill not removed"),
+        }
     }
 }
 

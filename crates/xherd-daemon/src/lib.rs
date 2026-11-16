@@ -291,6 +291,7 @@ impl Daemon {
             secrets: paths.secrets(),
             toolchains: Arc::new(toolchains),
             runtimes,
+            skills: paths.skills(),
         };
         let agents = store.list_jobs().await?;
         let limits = store

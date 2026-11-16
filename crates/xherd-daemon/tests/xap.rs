@@ -75,6 +75,16 @@ async fn setup_inner(
     profile: Option<xherd_core::profile::Profile>,
     flow: &str,
 ) -> T {
+    setup_tweaked(config, verify_timeout, profile, flow, |_| {}).await
+}
+
+async fn setup_tweaked(
+    config: Value,
+    verify_timeout: Option<Duration>,
+    profile: Option<xherd_core::profile::Profile>,
+    flow: &str,
+    tweak: impl FnOnce(&mut Job),
+) -> T {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
     let wt = tempfile::tempdir().unwrap();
@@ -98,6 +108,7 @@ async fn setup_inner(
     if let Some(p) = profile {
         a.profile = Some(d.create_profile(p).await.unwrap().id);
     }
+    tweak(&mut a);
     let a = d.create_job(a).await.unwrap();
     for _ in 0..200 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
@@ -4045,4 +4056,220 @@ async fn a_job_with_an_agent_cannot_propose_one() {
         t.d.xap(call(&b, "h1", "agent.propose", json!({"name": "other"})))
             .await;
     assert_eq!(r.unwrap_err().code, "has_agent");
+}
+
+// ---- Stage agents (D26, R39, R40) ----
+
+fn job_agent(id: &str, extra: Value) -> xherd_core::agent_def::JobAgent {
+    let mut v = json!({"id": id, "name": id, "version": 1, "runtime": "claude-code"});
+    for (k, x) in extra.as_object().unwrap() {
+        v[k] = x.clone();
+    }
+    serde_json::from_value(v).unwrap()
+}
+
+/// An architect on the spec stage and a coder on the design stage.
+fn two_agents(j: &mut Job) {
+    let architect = job_agent(
+        "architect",
+        json!({"instructions": "Be an architect", "launch": ["rt", "--architect"],
+               "autonomy": "ask", "skills": [{"name": "alpha", "sha256": "", "installed": true}]}),
+    );
+    let coder = job_agent(
+        "coder",
+        json!({"instructions": "Be a coder", "launch": ["rt", "--coder"],
+               "autonomy": "important", "model": "haiku",
+               "skills": [{"name": "beta", "sha256": "", "installed": false}]}),
+    );
+    for g in [architect, coder] {
+        j.agents.insert(g.id.clone(), g);
+    }
+    for (stage, agent) in [("spec", "architect"), ("design", "coder")] {
+        j.stage_agents.insert(
+            stage.into(),
+            xherd_core::agent_def::StageAgent {
+                agent: agent.into(),
+                human: false,
+            },
+        );
+    }
+    j.current_agent = Some("architect".into());
+    j.launch = Some(vec!["rt".into(), "--architect".into()]);
+}
+
+fn skill_dir(t: &T, name: &str) -> std::path::PathBuf {
+    t.wt.path().join(".claude/skills").join(name)
+}
+
+fn put_skill(t: &T, name: &str) {
+    let dir = t._home.path().join("skills").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Does {name}\n---\nSteps.\n"),
+    )
+    .unwrap();
+}
+
+async fn approve_spec(t: &T) -> Job {
+    session_start(t, 1).await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(t, 2).await;
+    act(
+        t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn approving_into_another_stage_switches_to_that_stages_agent() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    // alpha was copied for the architect at creation; beta is in the library.
+    let alpha = skill_dir(&t, "alpha");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::write(alpha.join("SKILL.md"), "x").unwrap();
+    std::fs::write(alpha.join(".gitignore"), "*\n").unwrap();
+    put_skill(&t, "beta");
+
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("coder"));
+    assert_eq!(a.autonomy, xherd_core::autonomy::Autonomy::Important);
+    assert_eq!(a.model.as_deref(), Some("haiku"));
+    assert_eq!(a.launch.as_deref().unwrap()[1], "--coder");
+    // The new session starts with the coder's launch line.
+    assert!(
+        t.drv
+            .calls()
+            .contains(&"respawn SC-1 rt --coder".to_string()),
+        "{:?}",
+        t.drv.calls()
+    );
+    // Its instructions replace the architect's; its skills replace theirs.
+    let ins = std::fs::read_to_string(t.wt.path().join(".xherd/instructions.md")).unwrap();
+    assert!(ins.contains("Be a coder") && !ins.contains("Be an architect"));
+    assert!(!alpha.exists());
+    assert!(skill_dir(&t, "beta").join("SKILL.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(skill_dir(&t, "beta").join(".gitignore")).unwrap(),
+        "*\n"
+    );
+    assert!(a.agents["coder"].skills[0].installed);
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    let sw = events.iter().find(|e| e.kind == "agent-switch").unwrap();
+    assert_eq!(
+        sw.payload,
+        Some(json!({"stage": "design", "from": "architect", "to": "coder"}))
+    );
+
+    // `stage enter` in the running session changes nothing about the agent.
+    session_start(&t, 3).await;
+    xap(&t, "c2", "stage.enter", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    assert_eq!(get(&t).await.current_agent.as_deref(), Some("coder"));
+}
+
+#[tokio::test]
+async fn a_repository_skill_folder_survives_a_switch() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    // alpha is the repository's own: no `.gitignore` marker of xherd's.
+    let alpha = skill_dir(&t, "alpha");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::write(alpha.join("SKILL.md"), "mine").unwrap();
+    put_skill(&t, "beta");
+    approve_spec(&t).await;
+    assert_eq!(
+        std::fs::read_to_string(alpha.join("SKILL.md")).unwrap(),
+        "mine"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_job_and_a_job_without_fresh_sessions_keep_their_agent() {
+    let t = setup_tweaked(json!({"freshSessions": true}), None, None, "feature", |j| {
+        two_agents(j);
+        j.pinned = true;
+    })
+    .await;
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("architect"));
+    assert_eq!(a.launch.as_deref().unwrap()[1], "--architect");
+
+    // A running session is never switched: the command is typed into it.
+    let t = setup_tweaked(
+        json!({"freshSessions": false}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("architect"));
+}
+
+#[tokio::test]
+async fn setting_the_autonomy_by_hand_pins_the_agent() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    act(
+        &t,
+        UserAction::SetAutonomy {
+            level: xherd_core::autonomy::Autonomy::Important,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(get(&t).await.pinned);
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("architect"));
+}
+
+#[tokio::test]
+async fn the_profiles_ceiling_still_lowers_the_arriving_agents_autonomy() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        Some(test_profile(|p| {
+            p.autonomy = Some(xherd_core::autonomy::Autonomy::Ask)
+        })),
+        "feature",
+        two_agents,
+    )
+    .await;
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("coder"));
+    assert_eq!(a.autonomy, xherd_core::autonomy::Autonomy::Ask);
+    assert_eq!(a.lowered.len(), 1);
+    assert_eq!(a.lowered[0].field, "autonomy");
+    assert_eq!(a.lowered[0].to, "ask");
 }

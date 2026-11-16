@@ -271,7 +271,15 @@ impl Supervisor {
     }
 
     fn on_event(&mut self, ev: SupEvent) {
-        let SupEvent::StatusChanged { id, to } = ev;
+        let (id, to) = match ev {
+            SupEvent::StatusChanged { id, to } => (id, to),
+            SupEvent::AgentChanged { id, agent } => {
+                if let Some(e) = self.agents.get_mut(&id) {
+                    e.agent = agent;
+                }
+                return;
+            }
+        };
         if let Some(e) = self.agents.get_mut(&id) {
             e.status = to;
             if !to.is_live() {
