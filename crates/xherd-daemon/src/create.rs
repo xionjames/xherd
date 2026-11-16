@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use xherd_core::agent_def::SkillCopy;
 use xherd_core::new::{self, FLOW_NONE, NewJob};
 use xherd_core::paths::write_atomic;
 use xherd_core::permission::PermissionMode;
@@ -252,8 +253,15 @@ impl Daemon {
             a.flow = Some(c.flow.clone());
         }
 
+        let wanted: Vec<(String, Option<String>)> = agent
+            .as_ref()
+            .map(|d| d.skills.iter().map(|s| (s.clone(), None)).collect())
+            .unwrap_or_default();
         let res = async {
             self.prepare_worktree(&a).await?;
+            if let Some(snap) = a.agent.as_mut() {
+                snap.skills = self.install_skills(&workdir, rt_name, &rt, &wanted).await?;
+            }
             self.create_job(a).await
         }
         .await;
@@ -322,6 +330,133 @@ impl Daemon {
         Ok(())
     }
 
+    /// Copy the skills an agent lists into the worktree, where the job's
+    /// runtime reads project skills (R26, R27), and say what became of each.
+    /// `wanted` is a name and, for a restored worktree, the hash the job
+    /// recorded. A skill that cannot be installed is skipped with the reason,
+    /// never an error; only a failed write is (the creation then removes the
+    /// worktree). Each copied folder holds a `.gitignore` with `*`, which
+    /// hides its whole content, itself included: `git status` shows nothing
+    /// and nothing outside the worktree changes. Skills are never put in a
+    /// prompt.
+    pub(crate) async fn install_skills(
+        &self,
+        workdir: &Path,
+        rt_name: &str,
+        rt: &Terminal,
+        wanted: &[(String, Option<String>)],
+    ) -> Result<Vec<SkillCopy>, ActionError> {
+        let root = self.paths.skills();
+        let mut out = Vec::new();
+        for (name, expected) in wanted {
+            let skip = |sha: &str, why: String| SkillCopy {
+                name: name.clone(),
+                sha256: sha.to_string(),
+                installed: false,
+                skipped: Some(why),
+            };
+            let skill = match crate::skills::load(&root, name) {
+                Ok(s) => s,
+                Err(e) => {
+                    out.push(skip(
+                        "",
+                        format!("not in the skills library: {}", e.message),
+                    ));
+                    continue;
+                }
+            };
+            if expected.as_ref().is_some_and(|e| *e != skill.sha256) {
+                out.push(skip(
+                    &skill.sha256,
+                    "the library copy changed since the job started".into(),
+                ));
+                continue;
+            }
+            let Some(target) = &rt.skills else {
+                out.push(skip(
+                    &skill.sha256,
+                    format!("{rt_name} has no skill folder"),
+                ));
+                continue;
+            };
+            let dir = workdir.join(&target.dir).join(name);
+            if dir.exists() {
+                out.push(skip(&skill.sha256, "the repository has its own".into()));
+                continue;
+            }
+            let io = |p: &Path, e: std::io::Error| {
+                refuse("skill_install", format!("{}: {e}", p.display()))
+            };
+            let mut files: Vec<(PathBuf, &[u8])> = skill
+                .files
+                .iter()
+                .map(|(p, b)| (dir.join(p), b.as_slice()))
+                .collect();
+            files.push((dir.join(".gitignore"), b"*\n"));
+            let copied = async {
+                xherd_core::runner::mkdir(&dir, SHARED_DIR_MODE)
+                    .await
+                    .map_err(|e| io(&dir, e))?;
+                for (path, bytes) in &files {
+                    if let Some(parent) = path.parent().filter(|p| *p != dir) {
+                        xherd_core::runner::mkdir(parent, SHARED_DIR_MODE)
+                            .await
+                            .map_err(|e| io(parent, e))?;
+                    }
+                    xherd_core::runner::write_file(path, bytes, None)
+                        .await
+                        .map_err(|e| io(path, e))?;
+                }
+                Ok::<(), ActionError>(())
+            }
+            .await;
+            if let Err(e) = copied {
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(e);
+            }
+            out.push(SkillCopy {
+                name: name.clone(),
+                sha256: skill.sha256,
+                installed: true,
+                skipped: None,
+            });
+        }
+        Ok(out)
+    }
+
+    /// A restored worktree has none of the skills its job installed (they are
+    /// not in the backup): copy again those the job recorded, from the
+    /// library copy with the same hash. Failures are only logged.
+    async fn reinstall_skills(&self, a: &Job, workdir: &Path) {
+        let wanted: Vec<(String, Option<String>)> = a
+            .agent
+            .iter()
+            .flat_map(|g| &g.skills)
+            .filter(|s| s.installed)
+            .map(|s| (s.name.clone(), Some(s.sha256.clone())))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let rt_name = a
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let Ok(rt) = self.runtime_terminal(rt_name) else {
+            return;
+        };
+        match self.install_skills(workdir, rt_name, &rt, &wanted).await {
+            Ok(done) => {
+                for s in done.iter().filter(|s| !s.installed) {
+                    tracing::warn!(job = %a.name, skill = %s.name, why = ?s.skipped, "skill not restored");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(job = %a.name, error = %e.message, "skills not restored")
+            }
+        }
+    }
+
     /// A runtime plugin agents can be started with: installed, of kind
     /// runtime, switched on, with a usable terminal driver.
     pub(crate) fn runtime_terminal(&self, name: &str) -> Result<Terminal, ActionError> {
@@ -353,9 +488,11 @@ impl Daemon {
                 match self.prepare_worktree(&a).await {
                     Ok(()) => tracing::info!(agent = %a.name, "restored worktree prepared"),
                     Err(e) => {
-                        tracing::warn!(agent = %a.name, error = %e.message, "restored worktree not prepared")
+                        tracing::warn!(agent = %a.name, error = %e.message, "restored worktree not prepared");
+                        continue;
                     }
                 }
+                self.reinstall_skills(&a, &w).await;
             }
         }
     }

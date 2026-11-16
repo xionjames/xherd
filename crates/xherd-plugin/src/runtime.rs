@@ -73,6 +73,41 @@ pub struct Terminal {
     /// prints them; any other name may still be typed.
     #[serde(default)]
     pub models: Models,
+    /// Where the runtime reads a project's skills, inside the worktree
+    /// (R26); without it an agent's skills are skipped for this runtime (R27).
+    #[serde(default)]
+    pub skills: Option<SkillTarget>,
+}
+
+/// `data.terminal.skills`: a folder of the worktree, and the layout of what
+/// goes in it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillTarget {
+    /// Relative to the worktree (`.claude/skills`): plain parts, no `..`.
+    pub dir: String,
+    pub format: SkillFormat,
+}
+
+/// How a skill is laid out in the target folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SkillFormat {
+    /// `<dir>/<name>/SKILL.md` and the skill's other files beside it.
+    Skill,
+}
+
+impl SkillTarget {
+    pub fn check(&self) -> Result<(), String> {
+        let d = &self.dir;
+        let plain = |p: &str| !p.is_empty() && p != "." && p != ".." && !p.contains(['\\', '\0']);
+        if d.is_empty() || d.len() > 100 || d.starts_with('/') || !d.split('/').all(plain) {
+            return Err(format!(
+                "skills: dir {d:?} must be a relative path of plain parts, without `..`"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// `data.terminal.models`: a list, or `{"command": "…"}` run with `sh -c`
@@ -714,6 +749,9 @@ impl Terminal {
         if let Some(r) = &t.resume {
             r.check().map_err(|e| format!("runtime {}: {e}", m.name))?;
         }
+        if let Some(s) = &t.skills {
+            s.check().map_err(|e| format!("runtime {}: {e}", m.name))?;
+        }
         if !t.prompt_args.is_empty()
             && t.prompt_args
                 .iter()
@@ -1168,6 +1206,42 @@ mod opencode_tests {
             .find(|m| m.name == "opencode")
             .unwrap();
         Terminal::of(&m).unwrap()
+    }
+
+    #[test]
+    fn skill_targets_are_checked_and_declared_by_the_built_ins() {
+        let dirs: Vec<_> = ["claude-code", "opencode", "codex"]
+            .iter()
+            .map(|n| {
+                let m = crate::builtins()
+                    .into_iter()
+                    .find(|m| m.name == *n)
+                    .unwrap();
+                Terminal::of(&m).unwrap().skills.unwrap()
+            })
+            .map(|s| {
+                assert_eq!(s.format, SkillFormat::Skill);
+                s.dir
+            })
+            .collect();
+        assert_eq!(
+            dirs,
+            [".claude/skills", ".opencode/skills", ".agents/skills"]
+        );
+
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "claude-code")
+            .unwrap();
+        for bad in ["", "/etc", "../x", "a/../b", "a//b", ".", "a\\b"] {
+            m.data.get_mut("terminal").unwrap()["skills"] = json!({"dir": bad, "format": "skill"});
+            assert!(
+                Terminal::of(&m).unwrap_err().contains("skills: dir"),
+                "{bad:?}"
+            );
+        }
+        m.data.get_mut("terminal").unwrap()["skills"] = json!({"dir": "x", "format": "zip"});
+        assert!(Terminal::of(&m).is_err());
     }
 
     fn permission(argv: &[String]) -> Value {

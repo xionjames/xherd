@@ -104,7 +104,12 @@ export interface JobAgent {
   maxDiffLines?: number;
   jobTokenBudget?: number;
   stageOverrides?: Record<string, { human: boolean }>;
+  /** What became of each skill the agent lists, set at creation (R26, R27). */
+  skills?: SkillCopy[];
 }
+
+/** A skill copied into the job's worktree, or skipped with the reason. */
+export interface SkillCopy { name: string; sha256: string; installed: boolean; skipped?: string }
 
 /** A value a repo profile's ceiling lowered at creation or since (R12a). */
 export interface Lowered { field: 'autonomy' | 'permissionMode' | string; from: string; to: string; profile: string }

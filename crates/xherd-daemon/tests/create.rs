@@ -1003,3 +1003,196 @@ async fn a_busy_agent_counts_its_live_jobs_and_cannot_be_deleted() {
         "agent_busy"
     );
 }
+
+// ---- skills copied into the worktree (#141, T16) ----
+
+use xherd_daemon::skills::{NewSkill, NewSkillFile};
+
+/// A skill with a nested file, in the library.
+async fn add_skill(t: &T, name: &str) -> String {
+    let main = format!("---\nname: {name}\ndescription: Does {name}\n---\nSteps.\n");
+    t.d.create_skill(NewSkill {
+        name: name.into(),
+        text: None,
+        files: Some(vec![
+            NewSkillFile {
+                path: "SKILL.md".into(),
+                text: Some(main),
+                base64: None,
+            },
+            NewSkillFile {
+                path: "ref/notes.md".into(),
+                text: Some("notes".into()),
+                base64: None,
+            },
+        ]),
+        replace: false,
+    })
+    .await
+    .unwrap()
+    .info
+    .sha256
+}
+
+fn skilled(name: &str, runtime: &str, skills: &[&str]) -> AgentDef {
+    let mut v = serde_json::to_value(saved(name)).unwrap();
+    v["runtime"] = runtime.into();
+    v["skills"] = serde_json::json!(skills);
+    serde_json::from_value(v).unwrap()
+}
+
+fn worktree(j: &Job) -> &Path {
+    Path::new(j.workdir.as_deref().unwrap())
+}
+
+#[tokio::test]
+async fn an_agents_skills_are_copied_and_kept_out_of_git() {
+    let t = setup().await;
+    let sha = add_skill(&t, "lint-fix").await;
+    add_skill(&t, "other").await;
+    t.d.create_agent(skilled("rev", "claude-code", &["lint-fix", "other"]))
+        .await
+        .unwrap();
+    let exclude = t.repo.path().join(".git/info/exclude");
+    let before = std::fs::read_to_string(&exclude).unwrap_or_default();
+
+    let j =
+        t.d.new_agent_job("rev", from_agent(&t, "rev"))
+            .await
+            .unwrap();
+    let wt = worktree(&j);
+    let dir = wt.join(".claude/skills/lint-fix");
+    assert!(
+        std::fs::read_to_string(dir.join("SKILL.md"))
+            .unwrap()
+            .contains("Does lint-fix")
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("ref/notes.md")).unwrap(),
+        "notes"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+        "*\n"
+    );
+
+    // recorded on the job, hash included
+    let skills = j.agent.as_ref().unwrap().skills.clone();
+    assert_eq!(skills.len(), 2);
+    assert!(skills.iter().all(|s| s.installed && s.skipped.is_none()));
+    assert_eq!(
+        (skills[0].name.as_str(), skills[0].sha256.as_str()),
+        ("lint-fix", sha.as_str())
+    );
+    // and stored: the next read of the job has it
+    let again = t.d.action(&j.name, UserAction::Get).await.unwrap();
+    assert_eq!(again.agent.unwrap().skills, skills);
+
+    // git sees nothing, in the worktree or in the main checkout
+    for dir in [wt, t.repo.path()] {
+        let st = git(dir, &["status", "--porcelain", "--untracked-files=all"]);
+        let out = String::from_utf8_lossy(&st.stdout).into_owned();
+        assert!(!out.contains("skills"), "{dir:?}: {out}");
+    }
+    assert!(!t.repo.path().join(".claude").exists());
+    // xherd adds its own lines to the shared exclude at creation; none is for skills
+    let after = std::fs::read_to_string(&exclude).unwrap_or_default();
+    assert!(!after.contains("skills"), "{after}");
+    assert_eq!(after.lines().count(), before.lines().count() + 2, "{after}");
+
+    // the prompt never carries them
+    let prompt = j.next_prompt.unwrap_or_default();
+    assert!(!prompt.contains("Steps."), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_skill_the_repository_already_has_is_left_alone() {
+    let t = setup().await;
+    add_skill(&t, "lint-fix").await;
+    add_skill(&t, "other").await;
+    let own = t.repo.path().join(".claude/skills/lint-fix");
+    std::fs::create_dir_all(&own).unwrap();
+    std::fs::write(own.join("SKILL.md"), "the repo's own").unwrap();
+    assert!(git(t.repo.path(), &["add", "-A"]).status.success());
+    assert!(
+        git(t.repo.path(), &["commit", "-q", "-m", "skill"])
+            .status
+            .success()
+    );
+    t.d.create_agent(skilled("rev", "claude-code", &["lint-fix", "other"]))
+        .await
+        .unwrap();
+
+    let j =
+        t.d.new_agent_job("rev", from_agent(&t, "rev"))
+            .await
+            .unwrap();
+    let wt = worktree(&j);
+    assert_eq!(
+        std::fs::read_to_string(wt.join(".claude/skills/lint-fix/SKILL.md")).unwrap(),
+        "the repo's own"
+    );
+    assert!(!wt.join(".claude/skills/lint-fix/.gitignore").exists());
+    assert!(wt.join(".claude/skills/other/SKILL.md").is_file());
+    let skills = j.agent.clone().unwrap().skills;
+    assert_eq!(
+        (skills[0].installed, skills[0].skipped.as_deref()),
+        (false, Some("the repository has its own"))
+    );
+    assert!(skills[1].installed);
+    let st = git(wt, &["status", "--porcelain", "--untracked-files=all"]);
+    assert!(
+        st.stdout.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&st.stdout)
+    );
+}
+
+#[tokio::test]
+async fn a_runtime_without_a_skill_folder_skips_them_and_still_creates_the_job() {
+    // opencode with its target (built in), then without it
+    let t = setup().await;
+    add_skill(&t, "lint-fix").await;
+    t.d.create_agent(skilled("oc", "opencode", &["lint-fix"]))
+        .await
+        .unwrap();
+    let j = t.d.new_agent_job("oc", from_agent(&t, "oc")).await.unwrap();
+    assert!(
+        worktree(&j)
+            .join(".opencode/skills/lint-fix/SKILL.md")
+            .is_file()
+    );
+    assert!(j.agent.unwrap().skills[0].installed);
+
+    let t = setup_with(|o| {
+        let rt = o
+            .builtin_plugins
+            .iter_mut()
+            .find(|m| m.name == "opencode")
+            .unwrap();
+        rt.data
+            .get_mut("terminal")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("skills");
+    })
+    .await;
+    let sha = add_skill(&t, "lint-fix").await;
+    t.d.create_agent(skilled("oc", "opencode", &["lint-fix"]))
+        .await
+        .unwrap();
+    let j = t.d.new_agent_job("oc", from_agent(&t, "oc")).await.unwrap();
+    let wt = worktree(&j);
+    assert!(!wt.join(".opencode/skills").exists());
+    let s = j.agent.unwrap().skills;
+    assert_eq!(s.len(), 1);
+    assert_eq!(
+        (
+            s[0].installed,
+            s[0].skipped.as_deref(),
+            s[0].sha256.as_str()
+        ),
+        (false, Some("opencode has no skill folder"), sha.as_str())
+    );
+}

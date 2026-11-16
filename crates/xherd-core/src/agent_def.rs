@@ -117,6 +117,23 @@ pub struct JobAgent {
     pub job_token_budget: Option<u64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stage_overrides: BTreeMap<String, StageOverride>,
+    /// What became of each skill the agent lists (R26, R27): filled when the
+    /// job is created, never by `snapshot`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<SkillCopy>,
+}
+
+/// One skill of an agent at job creation: copied into the worktree for the
+/// job's runtime (`installed`), or skipped with the reason (R26, R27).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillCopy {
+    pub name: String,
+    /// Hash of the library copy that was installed, or looked at.
+    pub sha256: String,
+    pub installed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
 }
 
 impl AgentDef {
@@ -130,6 +147,7 @@ impl AgentDef {
             max_diff_lines: self.max_diff_lines,
             job_token_budget: self.job_token_budget,
             stage_overrides: self.stage_overrides.clone(),
+            skills: vec![],
         }
     }
 }
@@ -457,6 +475,32 @@ mod tests {
         assert_eq!(s.max_diff_lines, Some(200));
         assert!(s.stage_overrides["ship"].human);
         let back: JobAgent = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn skill_copies_round_trip_and_old_snapshots_have_none() {
+        let mut s = def().snapshot();
+        assert!(s.skills.is_empty());
+        assert!(!serde_json::to_string(&s).unwrap().contains("skills"));
+        s.skills = vec![
+            SkillCopy {
+                name: "a".into(),
+                sha256: "x".into(),
+                installed: true,
+                skipped: None,
+            },
+            SkillCopy {
+                name: "b".into(),
+                sha256: "y".into(),
+                installed: false,
+                skipped: Some("the repository has its own".into()),
+            },
+        ];
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["skills"][1]["skipped"], "the repository has its own");
+        assert!(json["skills"][0].get("skipped").is_none());
+        let back: JobAgent = serde_json::from_value(json).unwrap();
         assert_eq!(back, s);
     }
 }

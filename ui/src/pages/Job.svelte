@@ -119,6 +119,10 @@
 
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
 <TicketPrompt {agent} />
+{#if agent.agent?.skills?.some((s) => !s.installed)}
+  <Callout tone="info">{#each agent.agent.skills.filter((s) => !s.installed) as s (s.name)}<div>
+    Skill <b>{s.name}</b> was not installed: {s.skipped ?? 'skipped'}.</div>{/each}</Callout>
+{/if}
 {#if agent.lowered?.length}
   <Callout tone="info">{#each agent.lowered as l (l.field)}<div>
     {l.field === 'autonomy' ? 'Autonomy' : 'Tool permissions'} was lowered from <b>{l.from}</b> to <b>{l.to}</b> by the repository profile <b>{l.profile}</b> ("at most").</div>{/each}</Callout>
