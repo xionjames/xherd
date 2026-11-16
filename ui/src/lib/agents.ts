@@ -326,3 +326,10 @@ export function assignmentRows(edit: readonly { stage: string; agent: string; hu
   }
   return out;
 }
+
+/** The agent name a Board card shows: the job's agent for that stage, else
+ *  (a job with no workflow has no stages) its current agent. */
+export function agentFor(job: Pick<Job, 'agents' | 'stageAgents' | 'currentAgent'>, stage?: string): string | undefined {
+  const sa = stage ? job.stageAgents?.[stage] : undefined;
+  return (sa ? job.agents?.[sa.agent]?.name : undefined) ?? (stage ? undefined : jobAgent(job)?.name);
+}

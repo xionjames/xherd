@@ -15,15 +15,15 @@
   import { get } from '../lib/api';
   import { flowOf, steps, stageLabel } from '../lib/flow';
   import { agentHue, agoText, needsYou, repoName, waitsAtGate } from '../lib/format';
-  import { NO_AGENT_LANE } from '../lib/agents';
+  import { NO_AGENT_LANE, agentFor } from '../lib/agents';
   import { LANES, TODO_LANE, boardLane, laneOrder, todoLane } from '../lib/board';
   import type { Job, StageInfo, Task } from '../lib/types';
 
   type Todo = { id: string; title: string; due: number; status: 'open' | 'checking' | 'due' | 'done' | 'error'; condition?: string; completedAt?: number };
   type Col = 'pending' | 'doing' | 'done';
   type Card =
-    | { kind: 'stage'; key: string; lane: string; col: Col; agent: Job; label: string; tab: string; hint: string; needs: boolean }
-    | { kind: 'task'; key: string; lane: string; col: Col; agent: Job; task: Task; needs: boolean }
+    | { kind: 'stage'; key: string; lane: string; col: Col; agent: Job; by?: string; label: string; tab: string; hint: string; needs: boolean }
+    | { kind: 'task'; key: string; lane: string; col: Col; agent: Job; by?: string; task: Task; needs: boolean }
     | { kind: 'todo'; key: string; lane: string; col: Col; todo: Todo; needs: boolean };
 
   const lanes = $derived(LANES.find((l) => l === route.query.get('lanes')) ?? 'none');
@@ -82,7 +82,7 @@
     if (!flow) {
       // Flow `none`: the agent is the one unit of work.
       const col: Col = a.status === 'done' || a.status === 'watching' ? 'done' : a.status === 'queued' ? 'pending' : 'doing';
-      return [{ kind: 'stage', key: a.id, lane, col, agent: a, label: a.name, tab: 'terminal', hint: 'no workflow', needs: waits }];
+      return [{ kind: 'stage', key: a.id, lane, col, agent: a, by: agentFor(a), label: a.name, tab: 'terminal', hint: 'no workflow', needs: waits }];
     }
     const tasks = a.tasks ?? [];
     const gateTasks = a.gate?.kind === 'commit' ? a.gate.tasks : [];
@@ -101,7 +101,7 @@
         tasksShown = true;
         for (const t of tasks) {
           const needs = atTasks && waits && (gateTasks.length ? gateTasks.includes(t.id) : t.status === 'doing');
-          out.push({ kind: 'task', key: `${a.id}/${t.id}`, lane, col: TASK_COL[t.status], agent: a, task: t, needs });
+          out.push({ kind: 'task', key: `${a.id}/${t.id}`, lane, col: TASK_COL[t.status], agent: a, by: agentFor(a, stage.id), task: t, needs });
         }
         continue;
       }
@@ -113,11 +113,11 @@
       // A later stage already visited: the agent was sent back (review → fix).
       const again = state === 'todo' && (a.visitedStages ?? []).includes(stage.id);
       const hint = state === 'skip' ? 'skipped' : again ? 'again after the fixes' : current && waitsAtGate(a) ? 'waiting for you' : '';
-      out.push({ kind: 'stage', key: `${a.id}:${stage.id}`, lane, col, agent: a, label: stageLabel(stage), tab: stageTab(stage), hint, needs: current && waits });
+      out.push({ kind: 'stage', key: `${a.id}:${stage.id}`, lane, col, agent: a, by: agentFor(a, stage.id), label: stageLabel(stage), tab: stageTab(stage), hint, needs: current && waits });
     }
     // Fix tasks of a later stage (review, PR) when the implement stage had none.
     if (!flow.stages.some((s) => s.role === 'implement')) {
-      for (const t of tasks) out.push({ kind: 'task', key: `${a.id}/${t.id}`, lane, col: TASK_COL[t.status], agent: a, task: t, needs: false });
+      for (const t of tasks) out.push({ kind: 'task', key: `${a.id}/${t.id}`, lane, col: TASK_COL[t.status], agent: a, by: agentFor(a, a.stage), task: t, needs: false });
     }
     return out;
   }
@@ -200,6 +200,7 @@
                   <a class="card tk" class:needs={c.needs} style:--hue={agentHue(c.agent.name)} href={href(`/jobs/${c.agent.name}`, { s: c.tab })}>
                     {#if lanes !== 'agent'}<span class="hint mono who">{c.agent.name}</span>{/if}
                     <span><b>{c.label}</b></span>
+                    {#if c.by}<span class="hint">agent {c.by}</span>{/if}
                     {#if c.needs}<span class="hint">✋ {c.hint || 'needs you'}</span>{:else if c.hint}<span class="hint">{c.hint}</span>{/if}
                   </a>
                 {:else if c.kind === 'task'}
@@ -207,6 +208,7 @@
                   <a class="card tk" class:needs={c.needs} style:--hue={agentHue(c.agent.name)} href={href(`/jobs/${c.agent.name}`, { s: 'tasks' })}>
                     <span class="top"><span class="hint mono" class:who={lanes !== 'agent'}>{lanes === 'agent' ? '' : `${c.agent.name} · `}{c.task.id}</span>{#if c.task.source && SOURCE_TAG[c.task.source]}<span class="pill">{SOURCE_TAG[c.task.source]}</span>{/if}</span>
                     <span>{c.task.title}</span>
+                    {#if c.by}<span class="hint">agent {c.by}</span>{/if}
                     {#if after.length}<span class="hint">after {after.join(', ')}</span>{/if}
                     {#if c.task.status === 'blocked'}<span class="hint">⛔ Blocked{c.task.blockedReason ? `: ${c.task.blockedReason}` : ''}</span>{/if}
                     {#if c.needs}<span class="hint">✋ needs you</span>{/if}

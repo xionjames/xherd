@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  agentFor,
   FORM_DEFAULTS, agentLane, agentLaneOrder, canMarkDone, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
   profileMarks, slugify, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
 } from './agents';
@@ -189,4 +190,14 @@ describe('suggestions (R30…R32)', () => {
     expect(d).toMatchObject({ name: 'shop', description: 'Shop work', instructions: 'Run the linter.' });
     expect(fillFromJob({ ...j, agentDraft: { name: 'Bad Name', description: '', instructions: '', at: 1 } }).name).toBe('shop-api-feature');
   });
+});
+
+describe('agentFor', () => {
+  const job = { agents: { a1: { name: 'peter' }, a2: { name: 'ana' } }, stageAgents: { spec: { agent: 'a1', human: false }, review: { agent: 'a2', human: false } }, currentAgent: 'a1' } as unknown as Job;
+  it('names the agent of the stage', () => {
+    expect(agentFor(job, 'review')).toBe('ana');
+    expect(agentFor(job, 'spec')).toBe('peter');
+  });
+  it('has none for a stage without one', () => expect(agentFor(job, 'ship')).toBeUndefined());
+  it('uses the current agent for a job with no workflow', () => expect(agentFor(job)).toBe('peter'));
 });

@@ -176,7 +176,7 @@ One job can have an architect for the spec and design, a coder for the implement
 - A job keeps a snapshot of every agent its stages use, so later edits never change it. At each stage start the job takes that stage's agent: instructions, memory, skills, tool permissions, model and autonomy (a repo profile's ceilings still apply), always in a fresh session. The stepper names the agent of each stage when they differ; the header names the current one.
 - All agents of one job must use the same runtime (`mixed_runtime` otherwise) until a job can change runtime between steps. An agent may name a **fallback runtime**, used once at creation when its runtime is unusable; the job page says it fell back.
 - Choosing a model, tool permissions or autonomy on the job page pins the current agent: later stages keep it.
-- Limits and budgets follow the agent of the current stage. The **By agent** Herd view (`?layout=agents`, `?agent=NAME`, `?archived=1`) has a row per agent with its live jobs, waiting jobs, current stages and tokens today, and a *No agent* row.
+- Limits and budgets follow the agent of the current stage. The Herd shows jobs (List, By stage); what each agent is doing is on the **Agents** page, and Board cards name the agent of their stage.
 
 ## Saved agents
 

@@ -244,7 +244,7 @@ Issue #141 (second part, D26). An agent is a **persona**: who does the work. A *
 | R-046 | Budgets, time and live-job limits follow the agent running the job's current stage: tokens and time are booked to it, and `maxLiveJobs` counts a job against the agent of its current stage when it is spawned. The job's token budget is the request's, else the lowest `jobTokenBudget` among its agents, else the profile's, then the global one. |
 | R-047 | An agent memory proposal (R-039) made during a stage belongs to the agent of that stage. A job that has any agent is never suggested as one (R-040). |
 | R-048 | An agent may name one `fallbackRuntime` (its model is `models[<fallback>]`). It is used, once, when the agent's runtime is unusable at job creation (plugin missing, off, no terminal driver), and recorded in the job's snapshot (`fellBack`); it is never switched while the job runs (R-025) and a failing session does not trigger it. An agent is broken only when neither runtime is usable. |
-| R-049 | The Herd has a built-in view **By agent** (`?layout=agents`) beside List and By stage: one row per agent (version, runtime and model, live jobs against `maxLiveJobs`, jobs waiting, current stages, last job, tokens today, status), agents with jobs first, a **No agent** row, archived hidden unless asked. A job counts under the agent of its current stage (R-046); a row opens to its jobs. Read-only; the view plugin protocol is unchanged. |
+| R-049 | The Herd shows jobs only: List and By stage. There is no By agent view; what each agent is doing is on the Agents page (live jobs against `maxLiveJobs`, jobs, tokens today). Board cards name the agent of their stage. The view plugin protocol is unchanged. |
 
 ## 6. Gates, approvals and autonomy
 
