@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use xherd_core::Job;
 use xherd_core::agent_def::{self, AgentDef, AgentStatus};
 use xherd_core::permission::PermissionMode;
+use xherd_core::resolve::{self, Assignment};
 
 use crate::{ActionError, Change, Daemon};
 
@@ -85,6 +86,39 @@ impl TryFrom<RawImport> for Import {
 }
 
 /// The saved agent a job started from.
+/// One stage of a flow as the Flows page and `xherd flow show` read it
+/// (R35, R37): the agent it resolves to with nothing overridden, whether that
+/// is its own assignment, and the `human` flag.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageView {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub role: xherd_core::domain::Role,
+    pub class: xherd_core::domain::Class,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Set when the stage has an assignment row.
+    pub assigned: bool,
+    pub human: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Why the resolved agent cannot run now (archived, runtime off, gone).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub broken: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowView {
+    pub pack: String,
+    pub flow: String,
+    pub stages: Vec<StageView>,
+}
+
 fn job_agent(job: &Job) -> Option<&str> {
     job.agent.as_ref().map(|a| a.id.as_str())
 }
@@ -291,6 +325,9 @@ impl Daemon {
             ));
         }
         self.check_agent(&mut def)?;
+        if def.runtime != old.runtime {
+            self.refuse_mixed_by(&old.id, &def.runtime).await?;
+        }
         def.id = old.id.clone();
         def.version = old.version + 1;
         def.created_at = old.created_at;
@@ -309,6 +346,9 @@ impl Daemon {
     pub async fn archive_agent(&self, key: &str, archive: bool) -> Result<AgentView, ActionError> {
         let _w = self.agents_write.lock().await;
         let mut def = self.agent_def(key).await?;
+        if archive {
+            self.refuse_if_assigned(&def, "archive").await?;
+        }
         let now = self.clock.now();
         def.archived_at = archive.then_some(now);
         self.store.put_agent_def(&def).await.map_err(store)?;
@@ -322,6 +362,7 @@ impl Daemon {
     pub async fn delete_agent(&self, key: &str) -> Result<(), ActionError> {
         let _w = self.agents_write.lock().await;
         let def = self.agent_def(key).await?;
+        self.refuse_if_assigned(&def, "delete").await?;
         let jobs = self.jobs_of(&def.id).await?;
         if let Some(j) = jobs.iter().find(|j| j.status.is_live()) {
             return Err(err(
@@ -603,6 +644,195 @@ impl Daemon {
 }
 
 impl Daemon {
+    fn flow_of(&self, pack: &str, flow: &str) -> Result<&xherd_flow::Flow, ActionError> {
+        self.packs
+            .get(pack)
+            .ok_or_else(|| err("unknown_pack", format!("no flow pack named {pack:?}")))?
+            .flow(flow)
+            .ok_or_else(|| err("unknown_flow", format!("pack {pack} has no flow {flow:?}")))
+    }
+
+    async fn flow_view(
+        &self,
+        pack: &str,
+        flow: &str,
+        agents: &[AgentDef],
+    ) -> Result<FlowView, ActionError> {
+        let f = self.flow_of(pack, flow)?;
+        let rows = self
+            .store
+            .flow_assignments(pack, flow)
+            .await
+            .map_err(store)?;
+        let ids: Vec<&str> = f.stages.iter().map(|s| s.id.as_str()).collect();
+        let resolved = resolve::stage_agents(&ids, &rows, &Default::default(), None);
+        let stages = f
+            .stages
+            .iter()
+            .zip(resolved)
+            .map(|(s, id)| {
+                let row = rows.iter().find(|a| a.stage == s.id);
+                let def = id
+                    .as_ref()
+                    .and_then(|id| agents.iter().find(|a| &a.id == id));
+                let broken = match (&id, def) {
+                    (Some(id), None) => Some(format!("agent {id} no longer exists")),
+                    (_, Some(d)) if d.archived_at.is_some() => Some("the agent is archived".into()),
+                    (_, Some(d)) => self.agent_broken(d),
+                    _ => None,
+                };
+                StageView {
+                    id: s.id.clone(),
+                    label: s.label.clone(),
+                    role: s.role,
+                    class: s.class,
+                    command: s.command.clone(),
+                    assigned: row.is_some(),
+                    human: row.is_some_and(|a| a.human),
+                    agent_id: id,
+                    agent: def.map(|d| d.name.clone()),
+                    broken,
+                }
+            })
+            .collect();
+        Ok(FlowView {
+            pack: pack.to_string(),
+            flow: flow.to_string(),
+            stages,
+        })
+    }
+
+    /// Every flow of every pack with its stages and what runs each (R35).
+    pub async fn flows(&self) -> Result<Vec<FlowView>, ActionError> {
+        let agents = self.store.list_agent_defs().await.map_err(store)?;
+        let mut out = Vec::new();
+        for (pack, p) in self.packs.iter() {
+            for flow in p.flows.keys() {
+                out.push(self.flow_view(pack, flow, &agents).await?);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn flow(&self, pack: &str, flow: &str) -> Result<FlowView, ActionError> {
+        let agents = self.store.list_agent_defs().await.map_err(store)?;
+        self.flow_view(pack, flow, &agents).await
+    }
+
+    /// The stored assignments of one flow.
+    pub async fn assignments(
+        &self,
+        pack: &str,
+        flow: &str,
+    ) -> Result<Vec<Assignment>, ActionError> {
+        self.flow_of(pack, flow)?;
+        self.store.flow_assignments(pack, flow).await.map_err(store)
+    }
+
+    /// Replace a flow's assignments (R35, R38). Every stage must belong to the
+    /// flow, every agent exist and not be archived, and the agents of one flow
+    /// share a runtime until a job can change runtime in the middle (R-025).
+    /// Agents are named by id or name; the rows keep the id.
+    pub async fn set_assignments(
+        &self,
+        pack: &str,
+        flow: &str,
+        rows: Vec<Assignment>,
+    ) -> Result<FlowView, ActionError> {
+        let _w = self.agents_write.lock().await;
+        let f = self.flow_of(pack, flow)?;
+        let agents = self.store.list_agent_defs().await.map_err(store)?;
+        let mut out: Vec<Assignment> = Vec::new();
+        for r in rows {
+            if f.stage(&r.stage).is_none() {
+                return Err(err(
+                    "unknown_stage",
+                    format!("flow {flow} has no stage {:?}", r.stage),
+                ));
+            }
+            if out.iter().any(|o| o.stage == r.stage) {
+                return Err(err(
+                    "bad_assignment",
+                    format!("stage {} is given twice", r.stage),
+                ));
+            }
+            let a = agents
+                .iter()
+                .find(|a| a.id == r.agent_id || a.name == r.agent_id)
+                .ok_or_else(|| err("unknown_agent", format!("no agent {:?}", r.agent_id)))?;
+            if a.archived_at.is_some() {
+                return Err(err(
+                    "agent_archived",
+                    format!("agent {} is archived", a.name),
+                ));
+            }
+            out.push(Assignment {
+                agent_id: a.id.clone(),
+                ..r
+            });
+        }
+        let mut runtimes = out
+            .iter()
+            .filter_map(|r| agents.iter().find(|a| a.id == r.agent_id))
+            .map(|a| a.runtime.as_str());
+        if let Some(first) = runtimes.next()
+            && let Some(other) = runtimes.find(|r| *r != first)
+        {
+            return Err(err(
+                "mixed_runtime",
+                format!(
+                    "the agents of one flow must share a runtime ({first} and {other}); \
+                     a job cannot change runtime between stages yet"
+                ),
+            ));
+        }
+        out.sort_by(|a, b| a.stage.cmp(&b.stage));
+        self.store
+            .set_flow_assignments(pack, flow, &out)
+            .await
+            .map_err(store)?;
+        self.agents_changed();
+        self.flow_view(pack, flow, &agents).await
+    }
+
+    /// A runtime change that would leave a flow with agents on two runtimes.
+    async fn refuse_mixed_by(&self, id: &str, runtime: &str) -> Result<(), ActionError> {
+        let agents = self.store.list_agent_defs().await.map_err(store)?;
+        let all = self.store.all_flow_assignments().await.map_err(store)?;
+        for (pack, flow, a) in all.iter().filter(|(_, _, a)| a.agent_id == id) {
+            let other = all
+                .iter()
+                .filter(|(p, f, o)| p == pack && f == flow && o.agent_id != id)
+                .filter_map(|(_, _, o)| agents.iter().find(|d| d.id == o.agent_id))
+                .find(|d| d.runtime != runtime);
+            if let Some(d) = other {
+                return Err(err(
+                    "mixed_runtime",
+                    format!(
+                        "stage {} of {pack}/{flow} would run on {runtime} while {} runs on {}",
+                        a.stage, d.name, d.runtime
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `agent_assigned` when a flow gives a stage to this agent (R38).
+    async fn refuse_if_assigned(&self, def: &AgentDef, what: &str) -> Result<(), ActionError> {
+        let all = self.store.all_flow_assignments().await.map_err(store)?;
+        let Some((pack, flow, a)) = all.iter().find(|(_, _, a)| a.agent_id == def.id) else {
+            return Ok(());
+        };
+        Err(err(
+            "agent_assigned",
+            format!(
+                "{} runs stage {} of {pack}/{flow}: give that stage to another agent before you {what} it",
+                def.name, a.stage
+            ),
+        ))
+    }
+
     /// A job from a saved agent (`POST /agents/{id}/jobs`, R21): without a
     /// name it is `<agent>-<ticket key>`, else `<agent>-<n>`.
     pub async fn new_agent_job(

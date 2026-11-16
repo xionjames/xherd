@@ -1743,3 +1743,106 @@ async fn mark_done_and_save_as_agent_routes() {
     .await;
     assert_eq!(s, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn flow_assignment_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let (s, _) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/agents",
+            Some(json!({"name": "architect", "runtime": "claude-code"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/flows").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["flows"].as_array().unwrap().len(), 2);
+    let url = "/api/v1/flows/xherd/feature/assignments";
+    let put = |body| send("PUT", url, Some(body));
+    let (s, v) = call(
+        app.clone(),
+        put(json!({"assignments": [{"stage": "design", "agentId": "architect", "human": true}]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let design = v["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == "design")
+        .unwrap();
+    assert_eq!(
+        (
+            design["agent"].clone(),
+            design["human"].clone(),
+            design["assigned"].clone()
+        ),
+        (json!("architect"), json!(true), json!(true))
+    );
+    let (s, v) = call(app.clone(), get(url).body(Body::empty()).unwrap()).await;
+    assert_eq!(
+        (s, v["assignments"].as_array().unwrap().len()),
+        (StatusCode::OK, 1)
+    );
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/flows/xherd/feature")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!((s, v["flow"].clone()), (StatusCode::OK, json!("feature")));
+    // refusals and their statuses
+    for (body, status, code) in [
+        (
+            json!({"assignments": [{"stage": "nope", "agentId": "architect"}]}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_stage",
+        ),
+        (
+            json!({"assignments": [{"stage": "design", "agentId": "ghost"}]}),
+            StatusCode::NOT_FOUND,
+            "unknown_agent",
+        ),
+        (
+            json!({"assignments": [{"stage": "design", "agentId": "architect"}, {"stage": "design", "agentId": "architect"}]}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_assignment",
+        ),
+    ] {
+        let (s, v) = call(app.clone(), put(body)).await;
+        assert_eq!((s, v["code"].clone()), (status, json!(code)));
+    }
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "PUT",
+            "/api/v1/flows/xherd/nope/assignments",
+            Some(json!({"assignments": []})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("unknown_flow"))
+    );
+    // an assigned agent cannot be deleted (409)
+    let (s, v) = call(
+        app.clone(),
+        send("DELETE", "/api/v1/agents/architect", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("agent_assigned"))
+    );
+}

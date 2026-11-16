@@ -50,4 +50,12 @@ CREATE TABLE agent_memory (agent_id TEXT PRIMARY KEY, text TEXT NOT NULL, update
 UPDATE agents SET data = json_remove(data, '$.workflow', '$.repo', '$.baseBranch', '$.stageOverrides');
 UPDATE agent_versions SET data = json_remove(data, '$.workflow', '$.repo', '$.baseBranch', '$.stageOverrides');
 "#,
+    // 5: which saved agent runs which stage of a workflow (issue #141, D26).
+    // One row per assigned stage; a stage with no row keeps the default
+    // agent or the previous stage's.
+    r#"
+CREATE TABLE flow_assignments (pack TEXT NOT NULL, flow TEXT NOT NULL, stage TEXT NOT NULL, agent_id TEXT NOT NULL,
+                               human INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pack, flow, stage));
+CREATE INDEX flow_assignments_agent ON flow_assignments(agent_id);
+"#,
 ];

@@ -45,12 +45,12 @@ flows:
           - when: { frontmatter: { file: spec.md, key: design, equals: skip } }
             run: "{prefix}tasks"
           - run: "{prefix}design"
-      - { id: design, role: design, class: routine, gate: { docs: [design.md] }, next: [{ run: "{prefix}tasks" }] }
-      - { id: tasks, role: tasks, class: routine, gate: { docs: [tasks.md] }, next: [{ run: "{prefix}next" }] }
-      - { id: implement, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
-      - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
-      - { id: ship, role: ship, class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
-      - { id: pr-review, role: pr, class: human-only, gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
+      - { id: design, role: design, class: routine, command: "{prefix}design", gate: { docs: [design.md] }, next: [{ run: "{prefix}tasks" }] }
+      - { id: tasks, role: tasks, class: routine, command: "{prefix}tasks", gate: { docs: [tasks.md] }, next: [{ run: "{prefix}next" }] }
+      - { id: implement, role: implement, class: code, command: "{prefix}next", gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
+      - { id: review, role: review, class: routine, command: "{prefix}review", gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: ship, role: ship, class: critical, command: "{prefix}ship", gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: pr-review, role: pr, class: human-only, command: "{prefix}pr-review", gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
       - { id: pr, role: pr, class: human-only }
   # A bug: one analysis gate over the bug's spec.md and its short task list,
   # a commit with the failing reproduction test, then the fix (its id stays
@@ -60,9 +60,9 @@ flows:
     start: "{prefix}bugfix {key} {prompt}"
     stages:
       - { id: analysis, role: spec, class: critical, gate: { docs: [spec.md, tasks.md] }, next: [{ run: "{prefix}reproduce" }] }
-      - { id: reproduce, role: implement, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }] }
-      - { id: implement, role: implement, label: Fix, class: code, gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
-      - { id: review, role: review, class: routine, gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
-      - { id: ship, role: ship, class: critical, gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
-      - { id: pr-review, role: pr, class: human-only, gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
+      - { id: reproduce, role: implement, class: code, command: "{prefix}reproduce", gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }] }
+      - { id: implement, role: implement, label: Fix, class: code, command: "{prefix}next", gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
+      - { id: review, role: review, class: routine, command: "{prefix}review", gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: ship, role: ship, class: critical, command: "{prefix}ship", gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: pr-review, role: pr, class: human-only, command: "{prefix}pr-review", gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
       - { id: pr, role: pr, class: human-only }

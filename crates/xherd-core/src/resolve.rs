@@ -181,6 +181,63 @@ pub fn guardrails(global: &Guardrails, p: Option<&Profile>, a: Option<&JobAgent>
     g
 }
 
+/// One stage of a workflow given to a saved agent (D26, R35). `human` makes
+/// the stage's gate wait for the user whatever the autonomy level says.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Assignment {
+    pub stage: String,
+    pub agent_id: String,
+    #[serde(default)]
+    pub human: bool,
+}
+
+/// The agent that runs `stage` (R37): the request's override for that stage,
+/// else its assignment, else the job's default agent (`--agent A`), else the
+/// agent of the stage before. `None` = no agent (a plain job).
+pub fn stage_agent(
+    assignments: &[Assignment],
+    overrides: &BTreeMap<String, String>,
+    default: Option<&str>,
+    previous: Option<&str>,
+    stage: &str,
+) -> Option<String> {
+    overrides
+        .get(stage)
+        .map(String::as_str)
+        .or_else(|| {
+            assignments
+                .iter()
+                .find(|a| a.stage == stage)
+                .map(|a| a.agent_id.as_str())
+        })
+        .or(default)
+        .or(previous)
+        .map(str::to_string)
+}
+
+/// `stage_agent` for every stage of a flow in order, each stage's answer
+/// being the next one's `previous`.
+pub fn stage_agents(
+    stages: &[&str],
+    assignments: &[Assignment],
+    overrides: &BTreeMap<String, String>,
+    default: Option<&str>,
+) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = Vec::with_capacity(stages.len());
+    for stage in stages {
+        let previous = out.last().and_then(|p| p.as_deref());
+        out.push(stage_agent(
+            assignments,
+            overrides,
+            default,
+            previous,
+            stage,
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,5 +507,60 @@ mod tests {
         assert_eq!(g.max_diff_lines, 100);
         let g = guardrails(&global(), None, Some(&a.snapshot()));
         assert_eq!(g.job_token_budget, 0);
+    }
+
+    fn assign(stage: &str, agent: &str) -> Assignment {
+        Assignment {
+            stage: stage.into(),
+            agent_id: agent.into(),
+            human: false,
+        }
+    }
+
+    #[test]
+    fn a_stage_takes_override_then_assignment_then_default_then_previous() {
+        let asg = [assign("design", "arch"), assign("review", "rev")];
+        let ov = BTreeMap::from([("design".to_string(), "mine".to_string())]);
+        let none = BTreeMap::new();
+        let at = |ov: &BTreeMap<String, String>, d, p, s| stage_agent(&asg, ov, d, p, s);
+        // the override beats the assignment, the assignment beats the default
+        assert_eq!(
+            at(&ov, Some("dflt"), None, "design").as_deref(),
+            Some("mine")
+        );
+        assert_eq!(
+            at(&none, Some("dflt"), None, "design").as_deref(),
+            Some("arch")
+        );
+        // no assignment: the default, then the previous stage's agent
+        assert_eq!(
+            at(&none, Some("dflt"), Some("arch"), "tasks").as_deref(),
+            Some("dflt")
+        );
+        assert_eq!(
+            at(&none, None, Some("arch"), "tasks").as_deref(),
+            Some("arch")
+        );
+        assert_eq!(at(&none, None, None, "tasks"), None);
+    }
+
+    #[test]
+    fn stages_in_order_carry_the_previous_agent_forward() {
+        let asg = [assign("design", "arch"), assign("review", "rev")];
+        let stages = ["spec", "design", "tasks", "implement", "review", "ship"];
+        let got = stage_agents(&stages, &asg, &BTreeMap::new(), None);
+        let want: Vec<Option<&str>> = vec![
+            None,
+            Some("arch"),
+            Some("arch"),
+            Some("arch"),
+            Some("rev"),
+            Some("rev"),
+        ];
+        assert_eq!(got.iter().map(|a| a.as_deref()).collect::<Vec<_>>(), want);
+        // with a default, only the assigned stages differ from it
+        let got = stage_agents(&stages, &asg, &BTreeMap::new(), Some("dflt"));
+        let names: Vec<&str> = got.iter().map(|a| a.as_deref().unwrap()).collect();
+        assert_eq!(names, ["dflt", "arch", "dflt", "dflt", "rev", "dflt"]);
     }
 }

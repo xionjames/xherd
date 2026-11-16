@@ -660,9 +660,88 @@ impl Store {
             let tx = c.transaction()?;
             tx.execute("DELETE FROM agent_versions WHERE agent_id = ?1", [&id])?;
             tx.execute("DELETE FROM agent_memory WHERE agent_id = ?1", [&id])?;
+            tx.execute("DELETE FROM flow_assignments WHERE agent_id = ?1", [&id])?;
             let n = tx.execute("DELETE FROM agents WHERE id = ?1", [&id])?;
             tx.commit()?;
             Ok(n == 1)
+        })
+        .await
+    }
+
+    // ---- stage assignments ------------------------------------------------------
+
+    /// The assignments of one flow, in stage name order.
+    pub async fn flow_assignments(
+        &self,
+        pack: &str,
+        flow: &str,
+    ) -> Result<Vec<xherd_core::resolve::Assignment>> {
+        let (pack, flow) = (pack.to_string(), flow.to_string());
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT stage, agent_id, human FROM flow_assignments
+                 WHERE pack = ?1 AND flow = ?2 ORDER BY stage",
+            )?;
+            let rows = st.query_map([pack, flow], |r| {
+                Ok(xherd_core::resolve::Assignment {
+                    stage: r.get(0)?,
+                    agent_id: r.get(1)?,
+                    human: r.get::<_, i64>(2)? != 0,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+        .await
+    }
+
+    /// Every assignment of every flow: `(pack, flow, assignment)`.
+    pub async fn all_flow_assignments(
+        &self,
+    ) -> Result<Vec<(String, String, xherd_core::resolve::Assignment)>> {
+        self.read(|c| {
+            let mut st = c.prepare(
+                "SELECT pack, flow, stage, agent_id, human FROM flow_assignments
+                 ORDER BY pack, flow, stage",
+            )?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    xherd_core::resolve::Assignment {
+                        stage: r.get(2)?,
+                        agent_id: r.get(3)?,
+                        human: r.get::<_, i64>(4)? != 0,
+                    },
+                ))
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+        .await
+    }
+
+    /// Replace a flow's assignments in one transaction.
+    pub async fn set_flow_assignments(
+        &self,
+        pack: &str,
+        flow: &str,
+        rows: &[xherd_core::resolve::Assignment],
+    ) -> Result<()> {
+        let (pack, flow, rows) = (pack.to_string(), flow.to_string(), rows.to_vec());
+        self.write(move |c| {
+            let tx = c.transaction()?;
+            tx.execute(
+                "DELETE FROM flow_assignments WHERE pack = ?1 AND flow = ?2",
+                [&pack, &flow],
+            )?;
+            for a in &rows {
+                tx.execute(
+                    "INSERT INTO flow_assignments (pack, flow, stage, agent_id, human)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![pack, flow, a.stage, a.agent_id, a.human as i64],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
         })
         .await
     }
@@ -1161,6 +1240,54 @@ mod tests {
             updated_at: 10 + Millis::from(version),
             archived_at: None,
         }
+    }
+
+    /// Migration 5: assignments are replaced per flow, listed per flow and
+    /// overall, and leave with their agent.
+    #[tokio::test]
+    async fn flow_assignments_are_replaced_per_flow() {
+        use xherd_core::resolve::Assignment;
+        let (_d, s) = open();
+        let row = |stage: &str, agent: &str, human| Assignment {
+            stage: stage.into(),
+            agent_id: agent.into(),
+            human,
+        };
+        s.put_agent_def(&agent("a1", "architect", 1)).await.unwrap();
+        s.set_flow_assignments(
+            "xherd",
+            "feature",
+            &[row("tasks", "a1", false), row("design", "a1", true)],
+        )
+        .await
+        .unwrap();
+        s.set_flow_assignments("xherd", "bugfix", &[row("review", "a2", false)])
+            .await
+            .unwrap();
+        let feature = s.flow_assignments("xherd", "feature").await.unwrap();
+        assert_eq!(
+            feature,
+            [row("design", "a1", true), row("tasks", "a1", false)]
+        );
+        assert_eq!(s.all_flow_assignments().await.unwrap().len(), 3);
+        s.set_flow_assignments("xherd", "feature", &[row("ship", "a1", false)])
+            .await
+            .unwrap();
+        assert_eq!(
+            s.flow_assignments("xherd", "feature").await.unwrap(),
+            [row("ship", "a1", false)]
+        );
+        s.delete_agent_def("a1").await.unwrap();
+        assert!(
+            s.flow_assignments("xherd", "feature")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            s.flow_assignments("xherd", "bugfix").await.unwrap().len(),
+            1
+        );
     }
 
     /// Migration 4 (issue #141, D26): the dropped keys leave the agent's row

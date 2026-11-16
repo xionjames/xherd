@@ -12,6 +12,7 @@ use xherd_core::paths::Paths;
 mod agent;
 mod backup;
 mod docker;
+mod flow;
 mod git;
 mod guard;
 mod init;
@@ -97,6 +98,9 @@ enum Cmd {
     /// Saved agents: a named, versioned setup that jobs start from.
     #[command(subcommand)]
     Agent(agent::AgentCmd),
+    /// Which saved agent runs which stage of a workflow.
+    #[command(subcommand)]
+    Flow(flow::FlowCmd),
     /// List jobs.
     Ls,
     /// Install a pack's commands for job runtimes (default: xherd, every runtime switched on).
@@ -393,6 +397,7 @@ fn main() -> ExitCode {
         Cmd::Status => status(),
         Cmd::Ls => ls(),
         Cmd::Agent(c) => agent::run(c, json),
+        Cmd::Flow(c) => flow::run(c, json),
         Cmd::Install { runtime, pack } => install(runtime, pack),
         Cmd::New {
             name,

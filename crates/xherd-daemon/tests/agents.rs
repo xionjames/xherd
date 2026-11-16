@@ -320,3 +320,172 @@ async fn an_old_export_imports_without_the_dropped_keys() {
     assert_eq!(t.d.import_agents(again, false).await.unwrap()["added"], 1);
     assert_eq!(t.d.agent("old").await.unwrap().def.name, "old");
 }
+
+fn row(stage: &str, agent: &str, human: bool) -> xherd_core::resolve::Assignment {
+    xherd_core::resolve::Assignment {
+        stage: stage.into(),
+        agent_id: agent.into(),
+        human,
+    }
+}
+
+#[tokio::test]
+async fn stages_are_assigned_and_resolved_through_the_previous_one() {
+    let t = setup().await;
+    let arch = t.d.create_agent(agent("architect")).await.unwrap();
+    let rev = t.d.create_agent(agent("reviewer")).await.unwrap();
+    let mut rx = t.d.hub.subscribe();
+    // by name or id; the rows keep the id
+    let v =
+        t.d.set_assignments(
+            "xherd",
+            "feature",
+            vec![
+                row("design", "architect", false),
+                row("review", &rev.def.id, true),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(rx.recv().await.unwrap(), Change::Agents);
+    let by = |id: &str| v.stages.iter().find(|s| s.id == id).unwrap();
+    assert_eq!(by("spec").agent, None);
+    assert!(!by("spec").assigned);
+    assert_eq!(by("design").agent.as_deref(), Some("architect"));
+    assert_eq!(by("tasks").agent.as_deref(), Some("architect"));
+    assert!(!by("tasks").assigned);
+    assert_eq!(by("review").agent.as_deref(), Some("reviewer"));
+    assert!(by("review").human && by("review").assigned);
+    assert_eq!(by("ship").agent.as_deref(), Some("reviewer"));
+    assert_eq!(by("design").command.as_deref(), Some("{prefix}design"));
+    let stored = t.d.assignments("xherd", "feature").await.unwrap();
+    assert_eq!(stored[0].agent_id, arch.def.id);
+    // another flow is untouched; the listing has every flow
+    assert!(t.d.assignments("xherd", "bugfix").await.unwrap().is_empty());
+    assert_eq!(t.d.flows().await.unwrap().len(), 2);
+    // PUT replaces
+    t.d.set_assignments("xherd", "feature", vec![])
+        .await
+        .unwrap();
+    assert!(
+        t.d.assignments("xherd", "feature")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn assignments_are_checked() {
+    let t = setup().await;
+    let a = t.d.create_agent(agent("architect")).await.unwrap();
+    let mut other = agent("opencoder");
+    other.runtime = "opencode".into();
+    let o = t.d.create_agent(other).await.unwrap();
+    let code = |r: Result<_, ActionError>| r.map(|_: FlowViewAny| ()).unwrap_err().code;
+    type FlowViewAny = xherd_daemon::agents::FlowView;
+    let set = |rows| t.d.set_assignments("xherd", "feature", rows);
+    assert_eq!(
+        code(t.d.set_assignments("nope", "feature", vec![]).await),
+        "unknown_pack"
+    );
+    assert_eq!(
+        code(t.d.set_assignments("xherd", "nope", vec![]).await),
+        "unknown_flow"
+    );
+    assert_eq!(
+        code(set(vec![row("nope", "architect", false)]).await),
+        "unknown_stage"
+    );
+    assert_eq!(
+        code(set(vec![row("design", "ghost", false)]).await),
+        "unknown_agent"
+    );
+    assert_eq!(
+        code(
+            set(vec![
+                row("design", "architect", false),
+                row("design", "architect", false)
+            ])
+            .await
+        ),
+        "bad_assignment"
+    );
+    assert_eq!(
+        code(
+            set(vec![
+                row("design", "architect", false),
+                row("review", "opencoder", false)
+            ])
+            .await
+        ),
+        "mixed_runtime"
+    );
+    // one agent of the other runtime alone is fine
+    set(vec![
+        row("review", "opencoder", false),
+        row("ship", "opencoder", false),
+    ])
+    .await
+    .unwrap();
+    // the same agent in two flows is fine; archived ones are refused
+    t.d.set_assignments("xherd", "bugfix", vec![row("review", "opencoder", false)])
+        .await
+        .unwrap();
+    set(vec![]).await.unwrap();
+    t.d.set_assignments("xherd", "bugfix", vec![])
+        .await
+        .unwrap();
+    t.d.archive_agent(&a.def.id, true).await.unwrap();
+    assert_eq!(
+        code(set(vec![row("design", "architect", false)]).await),
+        "agent_archived"
+    );
+    let _ = o;
+}
+
+#[tokio::test]
+async fn an_assigned_agent_cannot_be_archived_deleted_or_moved_to_another_runtime() {
+    let t = setup().await;
+    let a = t.d.create_agent(agent("architect")).await.unwrap();
+    let b = t.d.create_agent(agent("reviewer")).await.unwrap();
+    t.d.set_assignments(
+        "xherd",
+        "feature",
+        vec![
+            row("design", "architect", false),
+            row("review", "reviewer", false),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        t.d.archive_agent("architect", true).await.unwrap_err().code,
+        "agent_assigned"
+    );
+    assert_eq!(
+        t.d.delete_agent("architect").await.unwrap_err().code,
+        "agent_assigned"
+    );
+    // reviewer moving to opencode would leave the flow on two runtimes
+    let mut moved = b.def.clone();
+    moved.runtime = "opencode".into();
+    assert_eq!(
+        t.d.update_agent("reviewer", moved).await.unwrap_err().code,
+        "mixed_runtime"
+    );
+    // both moving, one after the other, is refused at the first; so free one
+    t.d.set_assignments("xherd", "feature", vec![row("design", "architect", false)])
+        .await
+        .unwrap();
+    let mut moved = b.def.clone();
+    moved.runtime = "opencode".into();
+    t.d.update_agent("reviewer", moved).await.unwrap();
+    // releasing the stage frees the agent
+    t.d.set_assignments("xherd", "feature", vec![])
+        .await
+        .unwrap();
+    t.d.archive_agent("architect", true).await.unwrap();
+    t.d.delete_agent("architect").await.unwrap();
+    let _ = a;
+}

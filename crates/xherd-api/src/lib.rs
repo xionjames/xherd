@@ -135,6 +135,13 @@ pub fn router(d: Daemon) -> Router {
             get(agent_jobs).post(agent_new_job),
         )
         .route("/api/v1/agents/{id}/{*rest}", any(gone_job))
+        // Which saved agent runs which stage of a workflow (R35).
+        .route("/api/v1/flows", get(flows_list))
+        .route("/api/v1/flows/{pack}/{flow}", get(flow_one))
+        .route(
+            "/api/v1/flows/{pack}/{flow}/assignments",
+            get(flow_assignments).put(flow_assignments_put),
+        )
         // The skills library (R25).
         .route("/api/v1/skills", get(skills_list).post(skill_create))
         .route("/api/v1/skills/{name}", get(skill_get).delete(skill_delete))
@@ -215,7 +222,8 @@ impl From<ActionError> for ApiError {
             | "repo_url" | "not_a_repo" | "repo_required" | "base_unresolved"
             | "runtime_unusable" | "runtime_hooks" | "unknown_pack" | "unknown_runtime"
             | "bad_model" | "model_unavailable" | "bad_agent" | "unknown_stage" | "bad_skill"
-            | "bad_memory" | "unknown_skill" | "bad_fallback" => StatusCode::UNPROCESSABLE_ENTITY,
+            | "bad_memory" | "unknown_skill" | "bad_fallback" | "bad_assignment"
+            | "mixed_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_agent" | "no_such_skill" => StatusCode::NOT_FOUND,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "not_fixable" => StatusCode::NOT_FOUND,
@@ -1735,6 +1743,48 @@ async fn agent_new_job(
 #[derive(Deserialize)]
 struct AgentExportQuery {
     name: Option<String>,
+}
+
+// ---- stage assignments (R35) ------------------------------------------------
+
+async fn flows_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"flows": d.flows().await?})))
+}
+
+async fn flow_one(
+    _: User,
+    State(d): State<Daemon>,
+    Path((pack, flow)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.flow(&pack, &flow).await?)))
+}
+
+async fn flow_assignments(
+    _: User,
+    State(d): State<Daemon>,
+    Path((pack, flow)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        json!({"assignments": d.assignments(&pack, &flow).await?}),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssignmentsBody {
+    assignments: Vec<xherd_core::resolve::Assignment>,
+}
+
+/// Replaces the flow's assignments; answers the flow as `GET` does.
+async fn flow_assignments_put(
+    _: User,
+    State(d): State<Daemon>,
+    Path((pack, flow)): Path<(String, String)>,
+    Json(body): Json<AssignmentsBody>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(
+        d.set_assignments(&pack, &flow, body.assignments).await?
+    )))
 }
 
 async fn agents_export(
