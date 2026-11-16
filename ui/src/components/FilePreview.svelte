@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Preview of a changed file as it is in the worktree now (GET /agents/:id/file).
+  // Preview of a changed file as it is in the worktree now (GET /jobs/:id/file).
   // Agent-written content is untrusted: Markdown goes through lib/markdown.ts,
   // HTML into an iframe with an empty sandbox (no scripts, no same-origin),
   // images as <img> from a data URL (scripts in SVG do not run there).
@@ -18,7 +18,7 @@
 
   $effect(() => {
     const p = path; // read before the await so the effect depends on it
-    get<{ text: string; dataUrl: string | null }>(`/agents/${id}/file?path=${encodeURIComponent('./' + p)}`)
+    get<{ text: string; dataUrl: string | null }>(`/jobs/${id}/file?path=${encodeURIComponent('./' + p)}`)
       .then((r) => { text = r.text; dataUrl = r.dataUrl; error = null; })
       .catch((e) => { error = (e as Error).message; });
   });

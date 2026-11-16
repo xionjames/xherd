@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { acceptMessage, dataMessage, project } from './viewPlugin';
-import type { Agent, FlowInfo } from './types';
+import type { AgentView, Job, FlowInfo } from './types';
 
 const flows: FlowInfo[] = [
   {
@@ -13,7 +13,7 @@ const flows: FlowInfo[] = [
   },
 ];
 
-const agent = (extra: Partial<Agent> = {}): Agent => ({
+const agent = (extra: Partial<Job> = {}): Job => ({
   id: 'a1',
   name: 'cache',
   branch: 'PAY-1-cache',
@@ -85,7 +85,7 @@ describe('project', () => {
   });
 
   it('carries only the key and url of a ticket', () => {
-    const odd = { key: 'K', url: 'https://x', extra: 'leak' } as unknown as Agent['ticket'];
+    const odd = { key: 'K', url: 'https://x', extra: 'leak' } as unknown as Job['ticket'];
     expect(project(agent({ ticket: odd }), flows).ticket).toEqual({ key: 'K', url: 'https://x' });
   });
 
@@ -128,6 +128,14 @@ describe('acceptMessage', () => {
     expect(acceptMessage(ev({ xherdView: 1, kind: 'open', agentId: 'a1' }), frame, ids)).toEqual({ kind: 'open', id: 'a1' });
   });
 
+  it('takes open-agent of a known saved agent only', () => {
+    const names = new Set(['peter']);
+    expect(acceptMessage(ev({ xherdView: 1, kind: 'open-agent', name: 'peter' }), frame, ids, names)).toEqual({ kind: 'open-agent', name: 'peter' });
+    expect(acceptMessage(ev({ xherdView: 1, kind: 'open-agent', name: 'ana' }), frame, ids, names)).toBeNull();
+    expect(acceptMessage(ev({ xherdView: 1, kind: 'open-agent', name: 'peter' }), frame, ids)).toBeNull();
+    expect(acceptMessage(ev({ xherdView: 1, kind: 'open-agent', name: ['peter'] }), frame, ids, names)).toBeNull();
+  });
+
   it('refuses another source', () => {
     expect(acceptMessage(ev({ xherdView: 1, kind: 'ready' }, { source: {} }), frame, ids)).toBeNull();
     expect(acceptMessage(ev({ xherdView: 1, kind: 'ready' }, { source: null }), null, ids)).toBeNull();
@@ -153,4 +161,26 @@ describe('acceptMessage', () => {
     expect(acceptMessage(ev({ xherdView: 1, kind: 'open' }), frame, ids)).toBeNull();
     expect(acceptMessage(ev({ xherdView: 1, kind: 'open', agentId: ['a1'] }), frame, ids)).toBeNull();
   });
+});
+
+describe('saved agents in the data message', () => {
+  const def = {
+    id: 'g1', name: 'peter', description: 'code review', version: 3, runtime: 'claude-code', instructions: 'SECRET INSTRUCTIONS',
+    maxLiveJobs: 2, createdAt: 1, updatedAt: 2, status: 'working', liveJobs: 1, lastJob: 'cache', tokensToday: 120, skills: ['s'], models: { 'claude-code': 'opus' },
+  } as unknown as AgentView;
+  const job = agent({ agents: { g1: { name: 'peter' } }, currentAgent: 'g1' } as unknown as Partial<Job>);
+
+  it('projects only what is listed, with the jobs that use it', () => {
+    const m = dataMessage([job, agent({ id: 'a2', name: 'other' })], flows, 'light', [def]);
+    expect(m.savedAgents).toEqual([
+      { id: 'g1', name: 'peter', description: 'code review', version: 3, runtime: 'claude-code', status: 'working', archived: false, liveJobs: 1, maxLiveJobs: 2, tokensToday: 120, jobs: ['a1'] },
+    ]);
+    expect(JSON.stringify(m)).not.toContain('SECRET INSTRUCTIONS');
+  });
+  it('flags an archived agent and names the job\'s agent', () => {
+    const m = dataMessage([job], flows, 'dark', [{ ...def, archivedAt: 5 }]);
+    expect(m.savedAgents[0].archived).toBe(true);
+    expect(m.agents[0].agent).toBe('peter');
+  });
+  it('is empty without agents', () => expect(dataMessage([job], flows, 'light').savedAgents).toEqual([]));
 });

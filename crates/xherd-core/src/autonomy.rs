@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::domain::Class;
 
 /// How much xherd may approve without a human (R-109).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum Autonomy {
     /// Every gate waits for the user.

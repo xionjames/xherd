@@ -12,12 +12,12 @@
   import { stageLanes } from '../lib/stageLanes';
   import { agoText, needsYou, repoName } from '../lib/format';
   import type { HerdViewProps } from '../lib/herdViews';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
 
   let { agents, flows, open }: HerdViewProps = $props();
 
   // A card is a real link; a plain click goes through `open`.
-  function click(e: MouseEvent, a: Agent) {
+  function click(e: MouseEvent, a: Job) {
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     open(a);
@@ -25,7 +25,7 @@
 </script>
 
 <HerdSummary {agents}>
-  {#snippet children(shown: Agent[])}
+  {#snippet children(shown: Job[])}
     {#if shown.length}
       {#each stageLanes(shown, flows) as lane (lane.key)}
         <section class="lane" aria-label={lane.label || 'By stage'}>
@@ -35,7 +35,7 @@
               <section class="col" aria-label={col.label}>
                 <h3>{col.label} <span class="hint num">{col.agents.length}</span></h3>
                 {#each col.agents as a (a.id)}
-                  <a class="card tk" class:needs={needsYou(a)} href={href(`/agent/${a.name}`)} onclick={(e) => click(e, a)}>
+                  <a class="card tk" class:needs={needsYou(a)} href={href(`/jobs/${a.name}`)} onclick={(e) => click(e, a)}>
                     <span class="mono"><b>{a.name}</b> <TicketPill ticket={a.ticket} link={false} /></span>
                     <StatusPill agent={a} />
                     <span class="hint">{repoName(a)} · {agoText(a.statusSince)}</span>
@@ -47,8 +47,8 @@
         </section>
       {/each}
     {:else}
-      <Panel title="All agents">
-        <p class="empty">{#if agents.length}No agents match this filter.{:else}No agents yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.{/if}</p>
+      <Panel title="All jobs">
+        <p class="empty">{#if agents.length}No jobs match this filter.{:else}No jobs yet. <a href={href('/new')}>Start one</a> or run <span class="mono">xherd new</span>.{/if}</p>
       </Panel>
     {/if}
   {/snippet}

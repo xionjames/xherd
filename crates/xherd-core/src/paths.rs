@@ -76,6 +76,10 @@ impl Paths {
     pub fn scratch(&self) -> PathBuf {
         self.root.join("scratch")
     }
+    /// The skills library (R25), one folder per skill; created on first add.
+    pub fn skills(&self) -> PathBuf {
+        self.root.join("skills")
+    }
     pub fn backups(&self) -> PathBuf {
         self.root.join("backups")
     }

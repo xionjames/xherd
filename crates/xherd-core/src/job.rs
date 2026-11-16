@@ -1,5 +1,7 @@
 //! The agent record owned by its actor.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::autonomy::Autonomy;
@@ -8,6 +10,10 @@ use crate::status::{Status, Trigger, next_status};
 
 /// Milliseconds since the Unix epoch.
 pub type Millis = i64;
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
 
 pub fn now_ms() -> Millis {
     std::time::SystemTime::now()
@@ -27,6 +33,36 @@ pub fn new_id() -> String {
 pub struct MemoryProposal {
     pub file: String,
     pub reason: String,
+    pub at: Millis,
+    /// The saved agent whose memory this proposes to change (D26: a job may
+    /// have several). Empty in proposals made before stage agents: the job's
+    /// current agent then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+}
+
+/// Why and when xherd offers to save a job's setup as an agent (R30). Set
+/// once; `dismissed` is remembered for the job (R32).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Suggestion {
+    /// `done`, `marked-done` or `repeated` (the third job with this setup).
+    pub reason: String,
+    pub at: Millis,
+    #[serde(default)]
+    pub dismissed: bool,
+}
+
+/// What a job without an agent proposes to save as one (R31): written by
+/// `xherd agent propose`, read when the user accepts the suggestion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDraft {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub instructions: String,
     pub at: Millis,
 }
 
@@ -57,7 +93,7 @@ pub struct AskHold {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Agent {
+pub struct Job {
     pub id: String,
     /// A lowercase slug (#114): the tmux session, the worktree folder and
     /// what the UI shows. Unique.
@@ -139,6 +175,17 @@ pub struct Agent {
     /// §16.6), until the user accepts or dismisses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_proposal: Option<MemoryProposal>,
+    /// A pending update of the saved agent's memory (R29), until the user
+    /// accepts or dismisses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_memory_proposal: Option<MemoryProposal>,
+    /// Offer to save this job's setup as an agent (R30); never for a job that
+    /// has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<Suggestion>,
+    /// What the job proposes for that agent (R31).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_draft: Option<AgentDraft>,
     /// A pause is waiting for the agent's handoff note (R-026); cleared when
     /// the session ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -208,6 +255,30 @@ pub struct Agent {
     /// runtime's own default. `launch` already carries it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The saved agent this job started from, as it was then (#141): editing
+    /// the agent never changes a job that exists.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, crate::agent_def::JobAgent>,
+    /// The agent each stage of the workflow runs with, resolved at creation
+    /// (D26, R37); a stage with none keeps the one before.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stage_agents: BTreeMap<String, crate::agent_def::StageAgent>,
+    /// The agent for stages with no assignment (`--agent A`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
+    /// The agent the running session uses (D26): a key of `agents`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_agent: Option<String>,
+    /// An agent attached to a job that was already running (R32): stage
+    /// assignments never switch it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
+    /// Jobs stored before stage agents had one `agent`; `upgrade` moves it.
+    #[serde(default, rename = "agent", skip_serializing)]
+    legacy_agent: Option<crate::agent_def::JobAgent>,
+    /// Values a profile's ceiling lowered at creation or since (R12a).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lowered: Vec<crate::resolve::Lowered>,
     /// Gates approved automatically since a human last approved one (R-120).
     #[serde(default)]
     pub auto_in_row: u32,
@@ -225,10 +296,10 @@ pub struct Agent {
     pub auto_approve_pending: bool,
 }
 
-impl Agent {
+impl Job {
     /// A new agent with no ticket; its branch is its name.
-    pub fn new(name: &str, now: Millis) -> Agent {
-        Agent {
+    pub fn new(name: &str, now: Millis) -> Job {
+        Job {
             id: new_id(),
             name: name.to_string(),
             ticket: None,
@@ -260,6 +331,9 @@ impl Agent {
             pr_url: None,
             handoff_at: None,
             memory_proposal: None,
+            agent_memory_proposal: None,
+            suggestion: None,
+            agent_draft: None,
             pause_requested_at: None,
             last_message: None,
             screen_blocked: false,
@@ -273,6 +347,13 @@ impl Agent {
             autonomy: Autonomy::Ask,
             permission_mode: None,
             model: None,
+            agents: BTreeMap::new(),
+            stage_agents: BTreeMap::new(),
+            default_agent: None,
+            current_agent: None,
+            pinned: false,
+            legacy_agent: None,
+            lowered: Vec::new(),
             auto_in_row: 0,
             ask_hold: None,
             worktree_removed_at: None,
@@ -293,7 +374,7 @@ impl Agent {
 
     /// An agent as stored before #114: the ticket key moves into `ticket`
     /// and the branch was the name. Run on every agent read from the store.
-    pub fn upgrade(mut self) -> Agent {
+    pub fn upgrade(mut self) -> Job {
         if let Some(k) = self.legacy_ticket_key.take()
             && self.ticket.is_none()
             && !k.is_empty()
@@ -306,7 +387,36 @@ impl Agent {
         if self.branch.is_empty() {
             self.branch = self.name.clone();
         }
+        if let Some(a) = self.legacy_agent.take()
+            && self.agents.is_empty()
+        {
+            self.set_agent(a);
+        }
         self
+    }
+
+    /// The saved agent the running session uses (D26), if any.
+    pub fn agent(&self) -> Option<&crate::agent_def::JobAgent> {
+        self.agents.get(self.current_agent.as_deref()?)
+    }
+
+    pub fn agent_mut(&mut self) -> Option<&mut crate::agent_def::JobAgent> {
+        let id = self.current_agent.clone()?;
+        self.agents.get_mut(&id)
+    }
+
+    /// Make `a` the job's only agent, for every stage.
+    pub fn set_agent(&mut self, a: crate::agent_def::JobAgent) {
+        let id = a.id.clone();
+        self.agents = BTreeMap::from([(id.clone(), a)]);
+        self.stage_agents.clear();
+        self.default_agent = Some(id.clone());
+        self.current_agent = Some(id);
+    }
+
+    /// Whether the job was started with, or attached to, agent `id`.
+    pub fn uses_agent(&self, id: &str) -> bool {
+        self.agents.contains_key(id)
     }
 
     /// The ticket's short id (`PAY-412`, `#12`), if it has one.
@@ -365,12 +475,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_job_stored_with_one_agent_reads_as_that_agent_for_every_stage() {
+        let def = crate::agent_def::JobAgent {
+            id: "a1".into(),
+            name: "rev".into(),
+            version: 3,
+            runtime: String::new(),
+            fell_back: false,
+            autonomy: None,
+            permission_mode: None,
+            model: None,
+            launch: vec![],
+            instructions: None,
+            sensitive_paths: vec![],
+            max_diff_lines: None,
+            job_token_budget: None,
+            skills: vec![],
+            memory: None,
+        };
+        let mut v = serde_json::to_value(Job::new("j", 1)).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("agent".into(), serde_json::to_value(&def).unwrap());
+        let j: Job = serde_json::from_value(v).unwrap();
+        let j = j.upgrade();
+        assert_eq!(j.agent().map(|a| a.version), Some(3));
+        assert_eq!(j.default_agent.as_deref(), Some("a1"));
+        assert!(j.stage_agents.is_empty() && j.uses_agent("a1"));
+        // written back in the new shape only
+        let out = serde_json::to_value(&j).unwrap();
+        assert!(out.get("agent").is_none());
+        assert!(out["agents"]["a1"].is_object() && out["currentAgent"] == "a1");
+    }
+
+    #[test]
     fn an_agent_stored_before_names_keeps_its_ticket_and_branch() {
-        let mut v = serde_json::to_value(Agent::new("SC-1-login", 1)).unwrap();
+        let mut v = serde_json::to_value(Job::new("SC-1-login", 1)).unwrap();
         let o = v.as_object_mut().unwrap();
         o.remove("branch");
         o.insert("ticketKey".into(), "SC-1".into());
-        let a: Agent = serde_json::from_value(v).unwrap();
+        let a: Job = serde_json::from_value(v).unwrap();
         let a = a.upgrade();
         assert_eq!(a.branch, "SC-1-login");
         assert_eq!(a.ticket_key(), Some("SC-1"));
@@ -379,7 +523,7 @@ mod tests {
         assert!(out.get("ticketKey").is_none());
         assert_eq!(out["ticket"], serde_json::json!({"key": "SC-1"}));
 
-        let plain = Agent::new("refund-retry", 1).upgrade();
+        let plain = Job::new("refund-retry", 1).upgrade();
         assert_eq!(
             (plain.ticket_ref(), plain.work_item()),
             ("", "refund-retry")
@@ -388,15 +532,15 @@ mod tests {
 
     #[test]
     fn ask_hold_and_worktree_fields_are_camel_case_and_optional() {
-        let mut v = serde_json::to_value(Agent::new("x", 1)).unwrap();
+        let mut v = serde_json::to_value(Job::new("x", 1)).unwrap();
         let o = v.as_object_mut().unwrap();
         assert_eq!(o.get("autoApprovePending"), Some(&false.into()));
         assert!(o.get("askHold").is_none() && o.get("worktreeRemovedAt").is_none());
         o.remove("autoApprovePending");
-        let old: Agent = serde_json::from_value(v).unwrap();
+        let old: Job = serde_json::from_value(v).unwrap();
         assert!(old.ask_hold.is_none() && !old.auto_approve_pending);
 
-        let mut a = Agent::new("x", 1);
+        let mut a = Job::new("x", 1);
         a.ask_hold = Some(AskHold {
             at: 7,
             was_watching: true,
@@ -408,6 +552,6 @@ mod tests {
             serde_json::json!({"at": 7, "wasWatching": true})
         );
         assert_eq!(out["worktreeRemovedAt"], 9);
-        assert_eq!(serde_json::from_value::<Agent>(out).unwrap(), a);
+        assert_eq!(serde_json::from_value::<Job>(out).unwrap(), a);
     }
 }

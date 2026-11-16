@@ -10,7 +10,7 @@ use xherd_core::hash::content_sha256;
 use xherd_core::paths::Paths;
 use xherd_core::report::{Report, ReportEvent};
 use xherd_core::xap::{Refusal, XapCall};
-use xherd_core::{Agent, Status, queue};
+use xherd_core::{Job, Status, queue};
 use xherd_daemon::*;
 
 struct T {
@@ -18,7 +18,7 @@ struct T {
     wt: tempfile::TempDir,
     d: Daemon,
     drv: Arc<FakeDriver>,
-    a: Agent,
+    a: Job,
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -75,6 +75,16 @@ async fn setup_inner(
     profile: Option<xherd_core::profile::Profile>,
     flow: &str,
 ) -> T {
+    setup_tweaked(config, verify_timeout, profile, flow, |_| {}).await
+}
+
+async fn setup_tweaked(
+    config: Value,
+    verify_timeout: Option<Duration>,
+    profile: Option<xherd_core::profile::Profile>,
+    flow: &str,
+    tweak: impl FnOnce(&mut Job),
+) -> T {
     let home = tempfile::tempdir().unwrap();
     std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
     let wt = tempfile::tempdir().unwrap();
@@ -89,7 +99,7 @@ async fn setup_inner(
     }
     o.pr_poll = Some(Duration::from_millis(1));
     let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
-    let mut a = Agent::new("SC-1", 1);
+    let mut a = Job::new("SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(wt.path().to_string_lossy().into_owned());
     a.pack = Some("xherd".into());
@@ -98,7 +108,8 @@ async fn setup_inner(
     if let Some(p) = profile {
         a.profile = Some(d.create_profile(p).await.unwrap().id);
     }
-    let a = d.create_agent(a).await.unwrap();
+    tweak(&mut a);
+    let a = d.create_job(a).await.unwrap();
     for _ in 0..200 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -114,8 +125,8 @@ async fn setup_inner(
     }
 }
 
-fn call(a: &Agent, id: &str, cmd: &str, args: Value) -> XapCall {
-    serde_json::from_value(json!({"id": id, "agentId": a.id, "cmd": cmd, "args": args, "at": 1}))
+fn call(a: &Job, id: &str, cmd: &str, args: Value) -> XapCall {
+    serde_json::from_value(json!({"id": id, "jobId": a.id, "cmd": cmd, "args": args, "at": 1}))
         .unwrap()
 }
 
@@ -126,7 +137,7 @@ async fn xap(t: &T, id: &str, cmd: &str, args: Value) -> Result<Value, Refusal> 
 async fn stop(t: &T, seq: u64) {
     let r = Report {
         id: format!("stop-{seq}"),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: Value::Null,
         seq,
@@ -135,7 +146,7 @@ async fn stop(t: &T, seq: u64) {
     t.d.report(r).await;
 }
 
-async fn act(t: &T, a: UserAction) -> Result<Agent, ActionError> {
+async fn act(t: &T, a: UserAction) -> Result<Job, ActionError> {
     t.d.action("SC-1", a).await
 }
 
@@ -147,7 +158,7 @@ fn sends(t: &T) -> Vec<String> {
         .collect()
 }
 
-async fn get(t: &T) -> Agent {
+async fn get(t: &T) -> Job {
     t.d.action("SC-1", UserAction::Get).await.unwrap()
 }
 
@@ -185,7 +196,7 @@ async fn gate_open_then_stop_waits_for_input() {
 
     let stop = Report {
         id: "s1".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: Value::Null,
         seq: 1,
@@ -218,7 +229,7 @@ async fn already_approved_and_bad_frontmatter() {
     t.d.store
         .write(move |c| {
             c.execute(
-                "INSERT INTO approvals (agent_id, file, sha256, at, actor, auto) VALUES (?1, 'spec.md', ?2, 0, 'user', 0)",
+                "INSERT INTO approvals (job_id, file, sha256, at, actor, auto) VALUES (?1, 'spec.md', ?2, 0, 'user', 0)",
                 [&id, &sha],
             )?;
             Ok(())
@@ -388,9 +399,9 @@ async fn refused_when_not_live_or_without_flow() {
         .unwrap_err();
     assert_eq!(e.code, "not_live");
 
-    let mut b = Agent::new("SC-2", 2);
+    let mut b = Job::new("SC-2", 2);
     b.launch = Some(vec!["rt".into()]);
-    let b = t.d.create_agent(b).await.unwrap();
+    let b = t.d.create_job(b).await.unwrap();
     for _ in 0..200 {
         if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -403,10 +414,10 @@ async fn refused_when_not_live_or_without_flow() {
             .unwrap_err();
     assert_eq!(e.code, "no_flow");
     let e =
-        t.d.xap(call(&Agent::new("x", 0), "c3", "ask", json!({"text": "?"})))
+        t.d.xap(call(&Job::new("x", 0), "c3", "ask", json!({"text": "?"})))
             .await
             .unwrap_err();
-    assert_eq!(e.code, "unknown_agent");
+    assert_eq!(e.code, "unknown_job");
 }
 
 #[tokio::test]
@@ -761,7 +772,7 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
     stop(&t, 1).await;
     let mut a = get(&t).await;
     a.status = Status::Parked;
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let a = d
@@ -783,7 +794,7 @@ async fn approving_a_parked_agent_queues_it_with_the_next_command() {
 async fn parked(t: &T) -> Daemon {
     let mut a = get(t).await;
     a.status = Status::Parked;
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     Daemon::start(t.d.paths.clone(), o).await.unwrap()
 }
@@ -853,7 +864,7 @@ async fn a_parked_question_is_answered_with_send() {
 async fn session_start(t: &T, seq: u64) {
     let r = Report {
         id: format!("start-{seq}"),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::SessionStart,
         payload: json!({"session_id": format!("s-{seq}")}),
         seq,
@@ -944,7 +955,7 @@ async fn approval_starts_a_fresh_session_with_the_next_command() {
     assert_eq!(sends(&t).len(), 2);
     let submit = Report {
         id: "submit-5".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::UserPromptSubmit,
         payload: json!({"prompt": "/xherd:design"}),
         seq: 5,
@@ -973,7 +984,7 @@ async fn resume_starts_with_the_resume_command_unless_a_prompt_is_pending() {
     let mut a = get(&t).await;
     a.status = Status::Paused;
     a.next_prompt = Some("/xherd:pr-review".into());
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let a = d.action("SC-1", UserAction::Resume).await.unwrap();
@@ -1018,7 +1029,7 @@ async fn diff_shows_the_proposed_commit_or_every_change() {
 
     assert_eq!(
         t.d.diff("nobody", None, None).await.unwrap_err().code,
-        "unknown_agent"
+        "unknown_job"
     );
 }
 
@@ -1066,7 +1077,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     // Stopped with a question: still live, the user answers first.
     let ask = Report {
         id: "ask".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"message": "Update the ticket too?"}),
         seq: 3,
@@ -1079,7 +1090,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
         .unwrap();
     let typed = Report {
         id: "typed".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::UserPromptSubmit,
         payload: json!({"prompt": "no"}),
         seq: 4,
@@ -1090,7 +1101,7 @@ async fn ship_gate_shows_the_branch_then_the_agent_watches_its_pr() {
     // Nothing left to do: the session ends and the agent watches its PR (R-301).
     let done = Report {
         id: "done".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"message": "Draft PR opened."}),
         seq: 5,
@@ -1166,7 +1177,7 @@ async fn a_stop_with_a_background_task_running_keeps_the_session() {
     .unwrap();
     let busy = Report {
         id: "busy".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"background_tasks": [
             {"agent_type": "reviewer", "id": "a39", "status": "running", "type": "subagent"}
@@ -1183,7 +1194,7 @@ async fn a_stop_with_a_background_task_running_keeps_the_session() {
     // The reviewer is done: this stop ends the session.
     let done = Report {
         id: "done".into(),
-        agent_id: t.a.id.clone(),
+        job_id: t.a.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"background_tasks": [
             {"agent_type": "reviewer", "id": "a39", "status": "completed", "type": "subagent"}
@@ -1213,7 +1224,7 @@ fn fake_gh(dir: &Path, answer: &str) -> std::path::PathBuf {
     bin
 }
 
-async fn until(t: &T, what: impl Fn(&Agent) -> bool) -> Agent {
+async fn until(t: &T, what: impl Fn(&Job) -> bool) -> Job {
     for _ in 0..400 {
         let a = get(t).await;
         if what(&a) {
@@ -1379,14 +1390,14 @@ async fn visited_stages_show_skipped_ones_and_are_rebuilt_from_events() {
     // An agent saved before the field existed: rebuilt at the next start.
     let mut a = get(&t).await;
     a.visited_stages.clear();
-    t.d.store.put_agent(&a).await.unwrap();
+    t.d.store.put_job(&a).await.unwrap();
     let o = Options::new(t.drv.clone(), Arc::new(SystemClock));
     let d = Daemon::start(t.d.paths.clone(), o).await.unwrap();
     let mut seen = Vec::new();
     for _ in 0..100 {
         seen = d
             .store
-            .get_agent(&t.a.id)
+            .get_job(&t.a.id)
             .await
             .unwrap()
             .unwrap()
@@ -1572,7 +1583,7 @@ async fn task_done_runs_the_verify_command() {
     .unwrap();
     std::fs::write(wt.join("marker"), "").unwrap();
     xap(&t, "v0", "tasks.sync", json!({})).await.unwrap();
-    let task = |a: &Agent, id: &str| a.tasks.iter().find(|x| x.id == id).unwrap().clone();
+    let task = |a: &Job, id: &str| a.tasks.iter().find(|x| x.id == id).unwrap().clone();
 
     // Passing: runs in the worktree; the note and the run are both kept.
     xap(&t, "v1", "task.start", json!({"id": "T01"}))
@@ -1716,10 +1727,10 @@ async fn memory_is_not_checked_without_a_flow() {
     let t = setup().await;
     std::fs::remove_file(t.wt.path().join(".xherd/spec/memory.md")).unwrap();
     // Flow none is refused for its own reason, never as memory_invalid.
-    let mut a = Agent::new("SC-2", 2);
+    let mut a = Job::new("SC-2", 2);
     a.launch = Some(vec!["rt".into()]);
     a.workdir = Some(t.wt.path().to_string_lossy().into_owned());
-    let a = t.d.create_agent(a).await.unwrap();
+    let a = t.d.create_job(a).await.unwrap();
     for _ in 0..200 {
         if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -2701,7 +2712,7 @@ async fn important_approves_a_routine_gate_and_records_it() {
 }
 
 /// Writes the gate document and opens the gate, without a stop.
-async fn open_running(t: &T, id: &str, stage: &str, file: &str, extra: Value) -> Agent {
+async fn open_running(t: &T, id: &str, stage: &str, file: &str, extra: Value) -> Job {
     std::fs::write(
         t.wt.path().join(".xherd/spec").join(file),
         format!("# {stage}\n"),
@@ -3197,13 +3208,13 @@ async fn a_dismissed_starter_agents_md_is_not_proposed_again() {
     let t = setup().await;
     let wt = t.wt.path();
     // A second agent of the same repository.
-    let mut b = Agent::new("SC-2", 1);
+    let mut b = Job::new("SC-2", 1);
     b.workdir = t.a.workdir.clone();
     b.pack = Some("xherd".into());
     b.flow = Some("feature".into());
     b.repo = Some(wt.to_string_lossy().into_owned());
     b.launch = Some(vec!["rt".into()]);
-    let b = t.d.create_agent(b).await.unwrap();
+    let b = t.d.create_job(b).await.unwrap();
     for _ in 0..200 {
         if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -3328,7 +3339,7 @@ async fn ask_then_finish_on_a_paused_agent_pauses_it_again() {
 #[tokio::test]
 async fn ask_refusals() {
     let t = setup().await;
-    let code = |r: Result<Agent, ActionError>| r.unwrap_err().code;
+    let code = |r: Result<Job, ActionError>| r.unwrap_err().code;
     let ask = |s: &str| UserAction::Ask { text: s.into() };
     // A live agent has a session: Send is the way.
     assert_eq!(code(act(&t, ask("Status?")).await), "not_allowed");
@@ -3702,4 +3713,563 @@ async fn a_merge_proposal_is_held_for_a_human() {
         why.contains("merges the base branch: check the conflict resolution"),
         "{why}"
     );
+}
+
+/// Agent memory (R29): only a job with a saved agent may propose; accepting
+/// writes the agent's memory (version + 1) and clears the proposal; the job's
+/// snapshot is untouched; dismissing changes nothing.
+#[tokio::test]
+async fn agent_memory_proposal_is_saved_on_accept() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    let propose = |j: &Job, id: &str| {
+        t.d.xap(call(
+            j,
+            id,
+            "agent.memory.propose",
+            json!({"reason": "Run the linter first"}),
+        ))
+    };
+    // This job has no saved agent.
+    std::fs::write(wt.join(".xherd/agent-memory.proposed.md"), "- lint first").unwrap();
+    assert_eq!(propose(&t.a, "n0").await.unwrap_err().code, "no_agent");
+
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "reviewer",
+        "description": "Reviews",
+        "runtime": "claude-code",
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+    let mut b = Job::new("SC-2", 1);
+    b.workdir = t.a.workdir.clone();
+    b.pack = Some("xherd".into());
+    b.flow = Some("feature".into());
+    b.repo = Some(wt.to_string_lossy().into_owned());
+    b.launch = Some(vec!["rt".into()]);
+    b.set_agent(def.snapshot());
+    let b = t.d.create_job(b).await.unwrap();
+
+    std::fs::remove_file(wt.join(".xherd/agent-memory.proposed.md")).unwrap();
+    assert_eq!(propose(&b, "n1").await.unwrap_err().code, "doc_missing");
+    std::fs::write(wt.join(".xherd/agent-memory.proposed.md"), "x".repeat(4001)).unwrap();
+    assert_eq!(propose(&b, "n2").await.unwrap_err().code, "doc_schema");
+    std::fs::write(wt.join(".xherd/agent-memory.proposed.md"), "- lint first").unwrap();
+    propose(&b, "n3").await.unwrap();
+    // the proposal names the agent it is about (a job may have several)
+    let now = t.d.action("SC-2", UserAction::Get).await.unwrap();
+    assert_eq!(
+        now.agent_memory_proposal.unwrap().agent,
+        Some(def.id.clone())
+    );
+
+    let view = t.d.agent_memory_proposal("SC-2").await.unwrap();
+    assert_eq!(view["proposed"], "- lint first");
+    assert_eq!(view["agent"]["name"], "reviewer");
+
+    // Dismiss: the memory stays as it was.
+    let a =
+        t.d.action("SC-2", UserAction::AgentMemoryClear)
+            .await
+            .unwrap();
+    assert!(a.agent_memory_proposal.is_none());
+    assert_eq!(t.d.agent_memory("reviewer").await.unwrap()["text"], "");
+
+    propose(&b, "n4").await.unwrap();
+    let saved =
+        t.d.agent_memory_accept("SC-2", Some("- lint first, then test\n".into()))
+            .await
+            .unwrap();
+    assert_eq!(saved["text"], "- lint first, then test");
+    assert_eq!(saved["version"], 1);
+    let a = t.d.action("SC-2", UserAction::Get).await.unwrap();
+    assert!(a.agent_memory_proposal.is_none());
+    assert_eq!(a.agent().unwrap().memory, None);
+    assert_eq!(
+        t.d.agent_memory_accept("SC-2", None)
+            .await
+            .unwrap_err()
+            .code,
+        "no_proposal"
+    );
+}
+
+/// A second job on the same daemon with no workflow (flow `none`), running.
+async fn flow_none_job(t: &T, name: &str) -> Job {
+    let mut b = Job::new(name, 2);
+    b.workdir = t.a.workdir.clone();
+    b.repo = t.a.workdir.clone();
+    b.launch = Some(vec!["rt".into()]);
+    b.base = Some("main".into());
+    let b = t.d.create_job(b).await.unwrap();
+    wait_status(t, name, Status::Running).await;
+    b
+}
+
+async fn wait_status(t: &T, name: &str, to: Status) -> Job {
+    for _ in 0..400 {
+        let a = t.d.action(name, UserAction::Get).await.unwrap();
+        if a.status == to {
+            return a;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    t.d.action(name, UserAction::Get).await.unwrap()
+}
+
+async fn stop_job(t: &T, j: &Job, seq: u64) {
+    t.d.report(Report {
+        id: format!("stop-{}-{seq}", j.name),
+        job_id: j.id.clone(),
+        event: ReportEvent::Stop,
+        payload: Value::Null,
+        seq,
+        at: 0,
+    })
+    .await;
+}
+
+fn suggestion_notices(
+    rx: &mut tokio::sync::broadcast::Receiver<xherd_daemon::support::Change>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind, text, .. } = c
+            && kind == "suggestion"
+        {
+            out.push(text);
+        }
+    }
+    out
+}
+
+/// R30: Mark done is for a job with no workflow, from idle (or waiting,
+/// paused, parked); the session ends, the job is done and offers its setup
+/// as an agent, once, with one notice.
+#[tokio::test]
+async fn marking_a_job_without_a_workflow_done_suggests_an_agent() {
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    // A workflow job is done when its PR is merged.
+    assert_eq!(
+        act(&t, UserAction::MarkDone).await.unwrap_err().code,
+        "not_allowed"
+    );
+    let b = flow_none_job(&t, "SC-3").await;
+    // Still running: not yet.
+    assert_eq!(
+        t.d.action("SC-3", UserAction::MarkDone)
+            .await
+            .unwrap_err()
+            .code,
+        "not_allowed"
+    );
+    stop_job(&t, &b, 1).await;
+    wait_status(&t, "SC-3", Status::Idle).await;
+    let done = t.d.action("SC-3", UserAction::MarkDone).await.unwrap();
+    assert_eq!(done.status, Status::Done);
+    let s = done.suggestion.expect("a suggestion");
+    assert_eq!(s.reason, "marked-done");
+    assert!(!s.dismissed);
+    assert_eq!(suggestion_notices(&mut rx).len(), 1);
+    assert!(t.drv.calls().iter().any(|c| c.starts_with("stop")));
+
+    // Dismiss is remembered.
+    let d = t.d.dismiss_suggestion("SC-3").await.unwrap();
+    assert!(d.suggestion.unwrap().dismissed);
+}
+
+#[tokio::test]
+async fn no_suggestion_when_it_is_off_or_the_job_is_cancelled_or_has_an_agent() {
+    let t = setup_config(json!({"freshSessions": true, "suggestAgents": false})).await;
+    let b = flow_none_job(&t, "SC-3").await;
+    stop_job(&t, &b, 1).await;
+    wait_status(&t, "SC-3", Status::Idle).await;
+    let done = t.d.action("SC-3", UserAction::MarkDone).await.unwrap();
+    assert!(done.suggestion.is_none());
+
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    let b = flow_none_job(&t, "SC-3").await;
+    t.d.action(
+        "SC-3",
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+    let c = wait_status(&t, "SC-3", Status::Cancelled).await;
+    assert!(c.suggestion.is_none());
+    let _ = b;
+
+    // A job of a saved agent has nothing to suggest.
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "keeper", "runtime": "claude-code",
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+    let mut e = Job::new("SC-4", 3);
+    e.workdir = t.a.workdir.clone();
+    e.launch = Some(vec!["rt".into()]);
+    e.base = Some("main".into());
+    e.set_agent(def.snapshot());
+    let e = t.d.create_job(e).await.unwrap();
+    wait_status(&t, "SC-4", Status::Running).await;
+    stop_job(&t, &e, 1).await;
+    wait_status(&t, "SC-4", Status::Idle).await;
+    let done = t.d.action("SC-4", UserAction::MarkDone).await.unwrap();
+    assert!(done.suggestion.is_none());
+    assert!(suggestion_notices(&mut rx).is_empty());
+}
+
+/// R32: accepting creates the agent (version 1) from the edited form and
+/// attaches the job, which keeps its own settings; "save as agent" needs no
+/// suggestion; a job with an agent is refused.
+#[tokio::test]
+async fn accepting_a_suggestion_creates_the_agent_and_attaches_the_job() {
+    let t = setup().await;
+    let b = flow_none_job(&t, "SC-3").await;
+    stop_job(&t, &b, 1).await;
+    wait_status(&t, "SC-3", Status::Idle).await;
+    let form = || -> xherd_core::agent_def::AgentDef {
+        serde_json::from_value(json!({
+            "name": "shop-notes", "description": "Notes on the shop",
+            "runtime": "claude-code", "instructions": "Run the linter first.",
+        }))
+        .unwrap()
+    };
+    // No suggestion yet: accept is refused, save-as-agent is not.
+    assert_eq!(
+        t.d.save_as_agent("SC-3", form(), true)
+            .await
+            .unwrap_err()
+            .code,
+        "no_suggestion"
+    );
+    t.d.action("SC-3", UserAction::MarkDone).await.unwrap();
+    let r = t.d.save_as_agent("SC-3", form(), true).await.unwrap();
+    assert_eq!(r["agent"]["version"], 1);
+    assert_eq!(r["agent"]["name"], "shop-notes");
+    let job = t.d.action("SC-3", UserAction::Get).await.unwrap();
+    let snap = job.agent().cloned().expect("attached");
+    assert_eq!(snap.name, "shop-notes");
+    assert_eq!(snap.version, 1);
+    assert_eq!(snap.instructions.as_deref(), Some("Run the linter first."));
+    assert!(job.suggestion.is_none());
+    assert_eq!(job.status, Status::Done);
+    assert_eq!(
+        t.d.save_as_agent("SC-3", form(), false)
+            .await
+            .unwrap_err()
+            .code,
+        "has_agent"
+    );
+    // The agent lists the job.
+    assert_eq!(t.d.agent_jobs("shop-notes").await.unwrap().len(), 1);
+}
+
+/// R31: `agent propose` is for a job without an agent; the instructions
+/// come from a file; the user's own texts are kept and written to
+/// `user-notes.md` when a ship-role stage starts.
+#[tokio::test]
+async fn an_agent_draft_and_the_users_notes() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    let propose = |id: &'static str, args: Value| xap(&t, id, "agent.propose", args);
+    std::fs::write(wt.join(".xherd/draft.md"), "Run the linter first.\n").unwrap();
+    // Name and file are checked.
+    assert_eq!(
+        propose("p1", json!({"name": "Bad Name"}))
+            .await
+            .unwrap_err()
+            .code,
+        "usage"
+    );
+    assert_eq!(
+        propose(
+            "p2",
+            json!({"name": "shop", "instructionsFile": "./.xherd/none.md"})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "doc_missing"
+    );
+    std::fs::write(wt.join(".xherd/big.md"), "x".repeat(4001)).unwrap();
+    assert_eq!(
+        propose(
+            "p3",
+            json!({"name": "shop", "instructionsFile": "./.xherd/big.md"})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        "doc_schema"
+    );
+    propose(
+        "p4",
+        json!({"name": "shop", "description": "Shop work", "instructionsFile": "./.xherd/draft.md"}),
+    )
+    .await
+    .unwrap();
+    let d = get(&t).await.agent_draft.expect("a draft");
+    assert_eq!(d.name, "shop");
+    assert_eq!(d.description, "Shop work");
+    assert_eq!(d.instructions, "Run the linter first.");
+    // No file = no instructions.
+    propose("p5", json!({"name": "shop"})).await.unwrap();
+    assert_eq!(get(&t).await.agent_draft.unwrap().instructions, "");
+
+    // The user's texts are kept, nothing else.
+    act(
+        &t,
+        UserAction::Send {
+            text: "Use tabs, not spaces".into(),
+        },
+    )
+    .await
+    .unwrap();
+    xap(&t, "s1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    let notes = std::fs::read_to_string(wt.join(".xherd/spec/user-notes.md")).unwrap();
+    assert!(notes.contains("- Use tabs, not spaces"), "{notes}");
+}
+
+#[tokio::test]
+async fn a_job_with_an_agent_cannot_propose_one() {
+    let t = setup().await;
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "keeper", "runtime": "claude-code",
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+    let mut b = Job::new("SC-2", 1);
+    b.workdir = t.a.workdir.clone();
+    b.pack = Some("xherd".into());
+    b.flow = Some("feature".into());
+    b.launch = Some(vec!["rt".into()]);
+    b.set_agent(def.snapshot());
+    let b = t.d.create_job(b).await.unwrap();
+    let r =
+        t.d.xap(call(&b, "h1", "agent.propose", json!({"name": "other"})))
+            .await;
+    assert_eq!(r.unwrap_err().code, "has_agent");
+}
+
+// ---- Stage agents (D26, R39, R40) ----
+
+fn job_agent(id: &str, extra: Value) -> xherd_core::agent_def::JobAgent {
+    let mut v = json!({"id": id, "name": id, "version": 1, "runtime": "claude-code"});
+    for (k, x) in extra.as_object().unwrap() {
+        v[k] = x.clone();
+    }
+    serde_json::from_value(v).unwrap()
+}
+
+/// An architect on the spec stage and a coder on the design stage.
+fn two_agents(j: &mut Job) {
+    let architect = job_agent(
+        "architect",
+        json!({"instructions": "Be an architect", "launch": ["rt", "--architect"],
+               "autonomy": "ask", "skills": [{"name": "alpha", "sha256": "", "installed": true}]}),
+    );
+    let coder = job_agent(
+        "coder",
+        json!({"instructions": "Be a coder", "launch": ["rt", "--coder"],
+               "autonomy": "important", "model": "haiku",
+               "skills": [{"name": "beta", "sha256": "", "installed": false}]}),
+    );
+    for g in [architect, coder] {
+        j.agents.insert(g.id.clone(), g);
+    }
+    for (stage, agent) in [("spec", "architect"), ("design", "coder")] {
+        j.stage_agents.insert(
+            stage.into(),
+            xherd_core::agent_def::StageAgent {
+                agent: agent.into(),
+                human: false,
+            },
+        );
+    }
+    j.current_agent = Some("architect".into());
+    j.launch = Some(vec!["rt".into(), "--architect".into()]);
+}
+
+fn skill_dir(t: &T, name: &str) -> std::path::PathBuf {
+    t.wt.path().join(".claude/skills").join(name)
+}
+
+fn put_skill(t: &T, name: &str) {
+    let dir = t._home.path().join("skills").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Does {name}\n---\nSteps.\n"),
+    )
+    .unwrap();
+}
+
+async fn approve_spec(t: &T) -> Job {
+    session_start(t, 1).await;
+    std::fs::write(t.wt.path().join(".xherd/spec/spec.md"), "# v1\n").unwrap();
+    xap(t, "c1", "gate.open", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    stop(t, 2).await;
+    act(
+        t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn approving_into_another_stage_switches_to_that_stages_agent() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    // alpha was copied for the architect at creation; beta is in the library.
+    let alpha = skill_dir(&t, "alpha");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::write(alpha.join("SKILL.md"), "x").unwrap();
+    std::fs::write(alpha.join(".gitignore"), "*\n").unwrap();
+    put_skill(&t, "beta");
+
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("coder"));
+    assert_eq!(a.autonomy, xherd_core::autonomy::Autonomy::Important);
+    assert_eq!(a.model.as_deref(), Some("haiku"));
+    assert_eq!(a.launch.as_deref().unwrap()[1], "--coder");
+    // The new session starts with the coder's launch line.
+    assert!(
+        t.drv
+            .calls()
+            .contains(&"respawn SC-1 rt --coder".to_string()),
+        "{:?}",
+        t.drv.calls()
+    );
+    // Its instructions replace the architect's; its skills replace theirs.
+    let ins = std::fs::read_to_string(t.wt.path().join(".xherd/instructions.md")).unwrap();
+    assert!(ins.contains("Be a coder") && !ins.contains("Be an architect"));
+    assert!(!alpha.exists());
+    assert!(skill_dir(&t, "beta").join("SKILL.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(skill_dir(&t, "beta").join(".gitignore")).unwrap(),
+        "*\n"
+    );
+    assert!(a.agents["coder"].skills[0].installed);
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    let sw = events.iter().find(|e| e.kind == "agent-switch").unwrap();
+    assert_eq!(
+        sw.payload,
+        Some(json!({"stage": "design", "from": "architect", "to": "coder"}))
+    );
+
+    // `stage enter` in the running session changes nothing about the agent.
+    session_start(&t, 3).await;
+    xap(&t, "c2", "stage.enter", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    assert_eq!(get(&t).await.current_agent.as_deref(), Some("coder"));
+}
+
+#[tokio::test]
+async fn a_repository_skill_folder_survives_a_switch() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    // alpha is the repository's own: no `.gitignore` marker of xherd's.
+    let alpha = skill_dir(&t, "alpha");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::write(alpha.join("SKILL.md"), "mine").unwrap();
+    put_skill(&t, "beta");
+    approve_spec(&t).await;
+    assert_eq!(
+        std::fs::read_to_string(alpha.join("SKILL.md")).unwrap(),
+        "mine"
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_job_and_a_job_without_fresh_sessions_keep_their_agent() {
+    let t = setup_tweaked(json!({"freshSessions": true}), None, None, "feature", |j| {
+        two_agents(j);
+        j.pinned = true;
+    })
+    .await;
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("architect"));
+    assert_eq!(a.launch.as_deref().unwrap()[1], "--architect");
+
+    // A running session is never switched: the command is typed into it.
+    let t = setup_tweaked(
+        json!({"freshSessions": false}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("architect"));
+}
+
+#[tokio::test]
+async fn setting_the_autonomy_by_hand_pins_the_agent() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        None,
+        "feature",
+        two_agents,
+    )
+    .await;
+    act(
+        &t,
+        UserAction::SetAutonomy {
+            level: xherd_core::autonomy::Autonomy::Important,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(get(&t).await.pinned);
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("architect"));
+}
+
+#[tokio::test]
+async fn the_profiles_ceiling_still_lowers_the_arriving_agents_autonomy() {
+    let t = setup_tweaked(
+        json!({"freshSessions": true}),
+        None,
+        Some(test_profile(|p| {
+            p.autonomy = Some(xherd_core::autonomy::Autonomy::Ask)
+        })),
+        "feature",
+        two_agents,
+    )
+    .await;
+    let a = approve_spec(&t).await;
+    assert_eq!(a.current_agent.as_deref(), Some("coder"));
+    assert_eq!(a.autonomy, xherd_core::autonomy::Autonomy::Ask);
+    assert_eq!(a.lowered.len(), 1);
+    assert_eq!(a.lowered[0].field, "autonomy");
+    assert_eq!(a.lowered[0].to, "ask");
 }

@@ -113,7 +113,7 @@ impl Daemon {
         }))
     }
 
-    /// Replace the user's decisions (`PUT /agents/:id/pr-decisions`). Ids must
+    /// Replace the user's decisions (`PUT /jobs/:id/pr-decisions`). Ids must
     /// be comments of this round; completeness and reply texts are checked
     /// when the gate is approved.
     pub async fn set_pr_decisions(

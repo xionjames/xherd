@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use xherd_core::Agent;
+use xherd_core::Job;
 use xherd_core::domain::{Gate, HashedFile, Task, TaskStatus};
 
 use crate::{Facts, Flow, Pack, frontmatter};
@@ -51,7 +51,7 @@ pub fn spec_dir(workdir: &Path) -> PathBuf {
 /// runtime, with the Enters it needs. `None`: nothing to hand on.
 pub fn next_command(
     pack: &Pack,
-    a: &Agent,
+    a: &Job,
     gate: &Gate,
     facts: &dyn Facts,
     auto: bool,
@@ -85,6 +85,33 @@ pub fn next_command(
         &[("key", a.ticket_ref()), ("prompt", ""), ("commit", commit)],
     )?;
     Ok(Some((cmd, enters)))
+}
+
+/// The stage the command [`next_command`] hands on starts (D26, R39): the
+/// stage whose `command` is that template. `None` when nothing is handed on
+/// or the command belongs to no stage (a commit, a PR round): the session
+/// stays in the same stage.
+pub fn next_stage(
+    pack: &Pack,
+    a: &Job,
+    gate: &Gate,
+    facts: &dyn Facts,
+    auto: bool,
+) -> Option<String> {
+    let flow = pack.flow(a.flow.as_deref()?)?;
+    let tpl = match gate {
+        Gate::Docs { next: Some(n), .. } => Some(n.clone()),
+        Gate::Docs { stage, .. } => flow
+            .stage(stage)?
+            .next_template(facts, auto)
+            .map(str::to_string),
+        Gate::Commit(_) => flow
+            .commit_stage(a.stage.as_deref())
+            .and_then(|d| d.next_template(facts, auto))
+            .map(str::to_string),
+        _ => None,
+    }?;
+    flow.stage_for_command(&tpl).map(|s| s.id.clone())
 }
 
 /// Text typed to the agent for a change request (R-105).
@@ -201,8 +228,8 @@ mod tests {
         }
     }
 
-    fn agent() -> Agent {
-        let mut a = Agent::new("SC-1", 0);
+    fn agent() -> Job {
+        let mut a = Job::new("SC-1", 0);
         a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
         a
@@ -277,7 +304,7 @@ mod tests {
         let p = crate::xap::tests::two_commit_stages();
         let mut a = agent();
         a.flow = Some("f".into());
-        let n = |a: &Agent| next_command(&p, a, &commit(), &F(false), false).unwrap();
+        let n = |a: &Job| next_command(&p, a, &commit(), &F(false), false).unwrap();
         a.stage = Some("reproduce".into());
         assert_eq!(n(&a), Some(("/t:commit C02".into(), 1)));
         a.stage = Some("implement".into());

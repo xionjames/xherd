@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { agentHue, hollow } from '../lib/format';
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   const c = $derived(agentHue(agent.name));
 </script>
 

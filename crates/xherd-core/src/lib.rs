@@ -1,7 +1,7 @@
 //! xherd domain: agent statuses and lifecycle, status reports, flow types,
 //! paths and config, and the external command runner.
 
-pub mod agent;
+pub mod agent_def;
 pub mod autonomy;
 pub mod config;
 pub mod container;
@@ -10,6 +10,7 @@ pub mod exec;
 pub mod git_auth;
 pub mod guard;
 pub mod hash;
+pub mod job;
 pub mod model;
 pub mod new;
 pub mod paths;
@@ -18,6 +19,7 @@ pub mod pr;
 pub mod profile;
 pub mod queue;
 pub mod report;
+pub mod resolve;
 pub mod runner;
 pub mod status;
 pub mod ticket;
@@ -27,7 +29,7 @@ pub mod untrusted;
 pub mod usage;
 pub mod xap;
 
-pub use agent::{Agent, Millis, Ticket, new_id, now_ms};
+pub use job::{Job, Millis, Ticket, new_id, now_ms};
 pub use status::{Status, Trigger};
 
 /// The Cargo version: what compatibility checks and the store compare.

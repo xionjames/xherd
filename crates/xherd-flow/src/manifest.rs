@@ -95,6 +95,11 @@ pub struct StageDef {
     pub label: Option<String>,
     pub role: Role,
     pub class: Class,
+    /// The command template that starts this stage's session
+    /// (`{prefix}design`): how the daemon, which sees only the next command
+    /// of an approved gate, tells which stage comes next (D26).
+    #[serde(default)]
+    pub command: Option<String>,
     #[serde(default)]
     pub gate: Option<GateSpec>,
     /// First matching rule gives the command sent after approval.
@@ -293,6 +298,13 @@ impl Flow {
             .or_else(|| self.stages.iter().find(|s| s.is_commit_gate()))
     }
 
+    /// The stage whose `command` is exactly `tpl` (the first one).
+    pub fn stage_for_command(&self, tpl: &str) -> Option<&StageDef> {
+        self.stages
+            .iter()
+            .find(|s| s.command.as_deref() == Some(tpl))
+    }
+
     /// The stage after `id` in declaration order.
     pub fn after(&self, id: &str) -> Option<&StageDef> {
         let i = self.stages.iter().position(|s| s.id == id)?;
@@ -449,6 +461,16 @@ impl Pack {
                     }
                     if let Some(d) = g.docs.iter().find(|d| !relative_path_ok(d)) {
                         return Err(format!("{at}: doc path {d:?} must be relative"));
+                    }
+                }
+                if let Some(c) = &s.command {
+                    check(&at, c)?;
+                    if flow
+                        .stages
+                        .iter()
+                        .any(|o| o.id != s.id && o.command == s.command)
+                    {
+                        return Err(format!("{at}: command {c:?} is also another stage's"));
                     }
                 }
                 for r in &s.next {
@@ -779,6 +801,35 @@ mod tests {
         );
         let none = with("      - { id: a, role: spec, class: critical }\n").unwrap();
         assert!(none.flow("f").unwrap().commit_stage(Some("a")).is_none());
+    }
+
+    #[test]
+    fn a_stage_is_found_by_its_command() {
+        let f = feature();
+        let at = |t| f.stage_for_command(t).map(|s| s.id.as_str());
+        assert_eq!(at("{prefix}design"), Some("design"));
+        assert_eq!(at("{prefix}tasks"), Some("tasks"));
+        assert_eq!(at("{prefix}next"), Some("implement"));
+        assert_eq!(at("{prefix}review"), Some("review"));
+        assert_eq!(at("{prefix}ship"), Some("ship"));
+        assert_eq!(at("{prefix}pr-review"), Some("pr-review"));
+        assert_eq!(at("{prefix}pr-apply"), None);
+        assert_eq!(at("{prefix}commit {commit}"), None);
+        let bug = crate::builtin().flow("bugfix").unwrap().clone();
+        assert_eq!(
+            bug.stage_for_command("{prefix}reproduce")
+                .map(|s| s.id.as_str()),
+            Some("reproduce")
+        );
+        assert_eq!(
+            bug.stage_for_command("{prefix}next").map(|s| s.id.as_str()),
+            Some("implement")
+        );
+        let dup = with(concat!(
+            "      - { id: a, role: spec, class: critical, command: '{prefix}x' }\n",
+            "      - { id: b, role: tasks, class: routine, command: '{prefix}x' }\n",
+        ));
+        assert!(dup.unwrap_err().message.contains("also another stage's"));
     }
 
     #[test]

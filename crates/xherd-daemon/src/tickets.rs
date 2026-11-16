@@ -61,7 +61,7 @@ struct Resolved {
     host: Arc<xherd_plugin::host::Host>,
 }
 
-fn no_tracker(a: &xherd_core::agent::Agent) -> ActionError {
+fn no_tracker(a: &xherd_core::job::Job) -> ActionError {
     ActionError {
         code: "no_tracker",
         message: match a.ticket_ref() {
@@ -182,7 +182,7 @@ impl Daemon {
     async fn resolve_ticket(
         &self,
         who: &str,
-    ) -> Result<(xherd_core::agent::Agent, Option<Resolved>), ActionError> {
+    ) -> Result<(xherd_core::job::Job, Option<Resolved>), ActionError> {
         let a = self.action(who, crate::actor::UserAction::Get).await?;
         // Once the worktree is removed, the main checkout has the same
         // `origin`, so the ticket can still be read and commented on (R14).
@@ -237,7 +237,7 @@ impl Daemon {
         ))
     }
 
-    /// `GET /agents/{id}/ticket`: `{tracker, issue, ticket}`, or
+    /// `GET /jobs/{id}/ticket`: `{tracker, issue, ticket}`, or
     /// `{tracker: null, ticket}` when the agent has no ticket or no enabled
     /// tracker reads it.
     pub async fn agent_ticket(&self, who: &str) -> Result<Value, ActionError> {
@@ -256,7 +256,7 @@ impl Daemon {
         Ok(json!({"tracker": r.tracker, "issue": r.issue, "ticket": ticket}))
     }
 
-    /// `GET /agents/{id}/ticket-status`: which tracker reads the agent's
+    /// `GET /jobs/{id}/ticket-status`: which tracker reads the agent's
     /// ticket and whether a summary was already posted (the event
     /// `ticket-comment`). Cheap: no tracker CLI is run, so the agent page can
     /// ask it every time it opens.
@@ -274,7 +274,7 @@ impl Daemon {
         })
     }
 
-    /// `GET /agents/{id}/ticket-summary`: the draft summary of what the agent
+    /// `GET /jobs/{id}/ticket-summary`: the draft summary of what the agent
     /// has done, for the user to read and edit. Nothing is posted.
     pub async fn ticket_summary(&self, who: &str) -> Result<Value, ActionError> {
         let (a, r) = self.resolve_ticket(who).await?;
@@ -286,7 +286,7 @@ impl Daemon {
         }))
     }
 
-    /// `POST /agents/{id}/ticket-comment`: post `body`, which the user has
+    /// `POST /jobs/{id}/ticket-comment`: post `body`, which the user has
     /// read and accepted (R-308), as a comment on the ticket. Logged as the
     /// event `ticket-comment` (its length, never its text).
     pub async fn post_ticket_comment(&self, who: &str, body: &str) -> Result<Value, ActionError> {
@@ -301,7 +301,7 @@ impl Daemon {
             })?;
         let event = xherd_store::Event {
             id: xherd_core::new_id(),
-            agent_id: a.id.clone(),
+            job_id: a.id.clone(),
             kind: "ticket-comment".into(),
             payload: Some(json!({
                 "tracker": r.tracker,

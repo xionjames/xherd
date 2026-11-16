@@ -1,6 +1,6 @@
 # Docker
 
-Docker is the recommended way to run xherd. The daemon, the web UI, tmux, Claude Code, opencode, Codex, `git`, `gh`, `glab` and the toolchain managers all live in one container. Only your workspace folder is shared with the host, so agents cannot reach the rest of your files.
+Docker is the recommended way to run xherd. The daemon, the web UI, tmux, Claude Code, opencode, Codex, `git`, `gh`, `glab` and the toolchain managers all live in one container. Only your workspace folder is shared with the host, so jobs cannot reach the rest of your files.
 
 ## Topology
 
@@ -15,7 +15,7 @@ flowchart LR
         Port[":4740"] --> D["daemon<br/>(user xherd-daemon)"]
         D <-->|unix socket| R["runner<br/>(host-mapped user)"]
         R --> TM[tmux server]
-        TM --> AG[agent sessions<br/>Claude Code, opencode or Codex]
+        TM --> AG[job sessions<br/>Claude Code, opencode or Codex]
         WS2[("~/xherd (same path)")]
         H[(xherd-home volume<br/>logins, toolchains, caches)]
         DD[(xherd-data volume<br/>config, secrets, database)]
@@ -29,7 +29,7 @@ flowchart LR
 
 | Volume / mount | Holds | Who can write |
 |---|---|---|
-| `${XHERD_WORKSPACE}` mounted at the **same path** | `repos/`, `worktrees/` | Agents (as your user id) and you |
+| `${XHERD_WORKSPACE}` mounted at the **same path** | `repos/`, `worktrees/` | Jobs (as your user id) and you |
 | `xherd-home` at `/home/xherd` | Runtime logins, installed toolchains, caches | The agents' user |
 | `xherd-data` at `/var/lib/xherd-daemon` | `config.json`, `secrets.json`, the database | The daemon's user only |
 
@@ -43,12 +43,12 @@ Repositories outside the workspace are refused, with a message telling you to cl
 
 `xherd init` (the entrypoint, the only root process) creates two unprivileged users and starts everything under `tini`:
 
-- **Agents' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files agents write are yours. Runs Claude Code, opencode or Codex, git, plugin commands and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
-- **Daemon's user** (`xherd-daemon`): runs the daemon with a system-only `PATH`. It owns the configuration, secrets and database in a volume the agents cannot read, and asks the runner to do anything that must happen as the agents' user (git commands, `verify:` commands, plugin commands and checks).
+- **Jobs' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files jobs write are yours. Runs Claude Code, opencode or Codex, git, plugin commands and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
+- **Daemon's user** (`xherd-daemon`): runs the daemon with a system-only `PATH`. It owns the configuration, secrets and database in a volume the jobs cannot read, and asks the runner to do anything that must happen as the agents' user (git commands, `verify:` commands, plugin commands and checks).
 
-An agent therefore cannot read your tokens or edit the daemon's configuration. Other consequences:
+A job therefore cannot read your tokens or edit the daemon's configuration. Other consequences:
 
-- Loopback inside the container is where the agents are, so only the gateway the published port arrives through gets local-user rights. To use the CLI inside the container run it as the daemon's user: `docker exec -u xherd-daemon xherd xherd …`.
+- Loopback inside the container is where the jobs are, so only the gateway the published port arrives through gets local-user rights. To use the CLI inside the container run it as the daemon's user: `docker exec -u xherd-daemon xherd xherd …`.
 - The daemon reads worktree files as itself, so they must be group- or world-readable.
 - File permissions between the two users are enforced on a Linux host. Colima's mounts do not enforce ownership, so test isolation on Linux.
 
@@ -72,31 +72,31 @@ See [Getting started](getting-started.md#run-with-docker) for the first start wi
 
 ### Git access
 
-Settings → Git access stores a token per host (HTTPS) or lets you use SSH. On Docker Desktop and OrbStack, uncomment the SSH agent mount in `compose.yaml` to forward your agent. SSH agent forwarding for Colima is not supported yet. `xherd git doctor [host]` checks access in order and gives the fix for the first failure. Host keys for GitHub, GitLab and Bitbucket are pre-seeded and checked against their published fingerprints when the image is built.
+Settings → Git access stores a token per host (HTTPS) or lets you use SSH. On Docker Desktop and OrbStack, uncomment the SSH job mount in `compose.yaml` to forward your job. SSH job forwarding for Colima is not supported yet. `xherd git doctor [host]` checks access in order and gives the fix for the first failure. Host keys for GitHub, GitLab and Bitbucket are pre-seeded and checked against their published fingerprints when the image is built.
 
 ### Toolchains
 
-Agents get the languages a repository asks for (a native install installs nothing and uses your `PATH`). At every session start the daemon reads the worktree's version files (`.sdkmanrc`, `.nvmrc`, `.node-version`, `go.mod`, `rust-toolchain.toml`, `rust-toolchain`, `.python-version`, `pyproject.toml`) and starts the runtime through `xherd toolchain exec`, which installs missing tools into the `xherd-home` volume first. Nothing is baked into the image except the version managers' seeds. Settings → Plugins → a language shows its installed versions, sets a default for repositories without a version file (`toolchainDefaults`), and installs a version in a terminal in the browser.
+Jobs get the languages a repository asks for (a native install installs nothing and uses your `PATH`). At every session start the daemon reads the worktree's version files (`.sdkmanrc`, `.nvmrc`, `.node-version`, `go.mod`, `rust-toolchain.toml`, `rust-toolchain`, `.python-version`, `pyproject.toml`) and starts the runtime through `xherd toolchain exec`, which installs missing tools into the `xherd-home` volume first. Nothing is baked into the image except the version managers' seeds. Settings → Plugins → a language shows its installed versions, sets a default for repositories without a version file (`toolchainDefaults`), and installs a version in a terminal in the browser.
 
 Tools a plugin needs that the image does not carry (for example Atlassian's `acli` for the Jira tracker) are installed the same way from the plugin's options, into the agents' home.
 
 ### Open in your IDE
 
-Because paths are identical, `xherd open <agent>` or the UI's Open in menu starts your editor on the worktree directly (VS Code, Cursor, Zed; Dev Containers when running in Docker). `xherd attach` and `xherd shell` run in the container for you.
+Because paths are identical, `xherd open <job>` or the UI's Open in menu starts your editor on the worktree directly (VS Code, Cursor, Zed; Dev Containers when running in Docker). `xherd attach` and `xherd shell` run in the container for you.
 
 ## Operating
 
 | Task | Command |
 |---|---|
 | Check the setup | `xherd docker doctor` (each finding has a fix) |
-| Update | `xherd docker update` pauses live agents, pulls and recreates the container, waits for health, resumes them. `--no-pull` skips the pull |
+| Update | `xherd docker update` pauses live jobs, pulls and recreates the container, waits for health, resumes them. `--no-pull` skips the pull |
 | Logs | `docker logs xherd` (JSON on stderr; `XHERD_LOG=debug` for more) |
-| Restart | `docker restart xherd`: agents waiting at a gate are parked, the others resumed |
+| Restart | `docker restart xherd`: jobs waiting at a gate are parked, the others resumed |
 
 When building from the repository instead of a published image, rebuild with `XHERD_VERSION=dev-$(git rev-parse --short HEAD) docker compose up -d --build`. The image has no `.git`, so the version it shows is `XHERD_VERSION` (passed to the build by `deploy/compose/compose.yaml`), or `dev` without it.
 
 ## Known limits
 
-- Docker-in-Docker is not supported; agents share the container's network. Each live agent gets a block of 10 ports, passed to it as `XHERD_PORT_BASE`.
+- Docker-in-Docker is not supported; jobs share the container's network. Each live job gets a block of 10 ports, passed to it as `XHERD_PORT_BASE`.
 - Browser-traffic detection through the gateway was checked on Colima, **not yet on Docker Desktop or Linux**.
 - macOS bind mounts can be slow for very large repositories.

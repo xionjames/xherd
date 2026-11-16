@@ -15,7 +15,7 @@ For people changing xherd itself. Read [Architecture](architecture.md) first; [R
 |---|---|
 | `crates/` | The Rust workspace (see [Architecture](architecture.md#crates)) |
 | `ui/` | Web UI: Svelte 5, Vite, TypeScript, pnpm |
-| `packs/xherd/` | The built-in flow pack: `xherd-flow.yaml`, `FORMAT.md` (document formats), `commands/*.md` (agent prompts) |
+| `packs/xherd/` | The built-in flow pack: `xherd-flow.yaml`, `FORMAT.md` (document formats), `commands/*.md` (job prompts) |
 | `plugins/` | Built-in plugin manifests: runtimes `claude-code`, `opencode`, `codex`; hosts `github`, `gitlab`, `bitbucket`; trackers `jira`, `github-issues`, `gitlab-issues`; toolchains `sdkman`, `nvm`, `uv`, `go`, `rustup` |
 | `deploy/docker`, `deploy/compose`, `deploy/nfpm` | Dockerfile, the compose files (build from source, and the release one), `.deb`/`.rpm` packaging |
 | `scripts/` | `demo.sh` and its seed data, for screenshots |
@@ -47,7 +47,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 ### Demo data for screenshots
 
-`scripts/demo.sh [dir]` runs a throwaway daemon on <http://127.0.0.1:4741/> with fake agents (`scripts/demo-seed.py`): two waiting at a gate, one watching a PR, one paused, one done. It uses its own data root, workspace and `HOME` plus stub `claude`/`gh` commands, so nothing of yours is touched. It needs a built daemon and `ui/dist`. Agents are never "running" (that needs a live tmux session). Warnings about "restored worktree not prepared" are expected: the fake worktrees are plain folders.
+`scripts/demo.sh [dir]` runs a throwaway daemon on <http://127.0.0.1:4741/> with fake jobs (`scripts/demo-seed.py`): two waiting at a gate, one watching a PR, one paused, one done. It uses its own data root, workspace and `HOME` plus stub `claude`/`gh` commands, so nothing of yours is touched. It needs a built daemon and `ui/dist`. Jobs are never "running" (that needs a live tmux session). Warnings about "restored worktree not prepared" are expected: the fake worktrees are plain folders.
 
 ### Tests
 
@@ -61,18 +61,18 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 - Workspace lints: `unsafe_code = "forbid"`; clippy `all` is a warning. CI (`.github/workflows/ci.yml`) runs fmt, clippy with `-D warnings`, the tests, the UI check/test/build and an image build on pushes to main and PRs into main; run the same checks before pushing.
 - External commands only through `xherd_core::exec::run`. Exceptions: the interactive tmux client of the browser terminal (`xherd_term::pty`), processes that replace the CLI (`toolchain exec`, `attach`, `shell`, `init` → daemon), and long-lived helpers (`socat`, apps launched by `open`).
-- Agent state changes only inside the agent's actor, through pure functions in `xherd-core`. Slow work returns as `WorkDone` tagged with the generation.
+- Job state changes only inside the job's actor, through pure functions in `xherd-core`. Slow work returns as `WorkDone` tagged with the generation.
 - `xherd hook` and `xherd report` must never print to stdout or exit non-zero, and must not start tokio. `hook` is handled before clap, inside `catch_unwind`.
 - JSON on the wire and in files is camelCase; enum values are kebab-case.
 - Files the daemon writes go through `paths::write_atomic`; secrets are mode 0600.
 - Pack manifests and `ConfigPatch` use `deny_unknown_fields`.
 - Keep code minimal: no abstraction for a single use. Cite a requirement id in doc comments where code implements one.
-- UI: tokens and component classes live in `ui/src/app.css`. `--gate` (ember orange) means "needs a human" and nothing else. Status is never colour alone. Agent-written Markdown goes through `lib/markdown.ts` (marked + DOMPurify), never raw. UI panels key effects on `const id = $derived(agent.id)`, not `agent.id`.
+- UI: tokens and component classes live in `ui/src/app.css`. `--gate` (ember orange) means "needs a human" and nothing else. Status is never colour alone. Job-written Markdown goes through `lib/markdown.ts` (marked + DOMPurify), never raw. UI panels key effects on `const id = $derived(job.id)`, not `job.id`.
 - Dependencies: `rusqlite` is pinned to the version `rusqlite_migration` uses; bump both together.
 
 ## Common changes
 
-**Add a XAP command** — add the wire type in `xherd-core::xap`, validation in `xherd_flow::xap::apply`, observation in `Actor::on_xap`, the CLI subcommand in `xherd-cli/src/xap.rs`, the prompt text where agents learn it, and document it in [xap.md](../reference/xap.md). Calls are de-duplicated by call id.
+**Add a XAP command** — add the wire type in `xherd-core::xap`, validation in `xherd_flow::xap::apply`, observation in `Actor::on_xap`, the CLI subcommand in `xherd-cli/src/xap.rs`, the prompt text where jobs learn it, and document it in [xap.md](../reference/xap.md). Calls are de-duplicated by call id.
 
 **Change a flow or prompt** — edit `packs/xherd/`. A new file must be added to `xherd_flow::install::BUILTIN_FILES` (a test compares the folder to the list). Prompts teach plain `xherd <call>` on one line inside backticks, never through a variable.
 
@@ -82,7 +82,7 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 **Change the database** — append a migration in `xherd-store/src/schema.rs`; never edit an existing one. The store copies the database with `VACUUM INTO` before migrating.
 
-**Change the UI** — add the type to `lib/types.ts` (mirrors the wire JSON), call through `lib/api.ts`, and register panels in `lib/panels.ts`. A Herd view (a layout of the Herd page) is a component registered in `HERD_VIEWS` in `lib/herdViews.ts` with an `id` and a `label`; it takes `agents` (all of them, unfiltered), `flows` and `open(agent)`, owns the whole page body below the head (wrap it in `HerdSummary` to keep the counts, Needs you and the filter), and only reads. The first entry is the default; the others are chosen with `?layout=<id>`. `herdViews(plugins)` gives the list the page shows: the built-ins, then one entry per enabled view plugin with an entry page (`id` `plugin:<name>`, the plugin's `label`, component `HerdPluginView`, which also gets `plugin`, `entry` and `label`); `pickView(id, plugins)` falls back to the first. A layout that does not need xherd's own components is better written as a [view plugin](../extend/plugins.md#herd-view-plugins) (`plugins/herd-tiles` is the example); its page-side protocol is `lib/viewPlugin.ts` and the view side `ui/view-kit/xherd-view.js`, kept in step. A new file in a built-in view plugin's folder must be added to `xherd_plugin::view::BUILTIN_FILES` (a test compares the folders with the table). Only screens for features that exist are shown. Use the components listed at the top of `app.css` (`PageHead`, `Panel`, `SaveBar`, `Tabs`, `Seg`, `Callout`, `Dialog`), never `alert`/`confirm`.
+**Change the UI** — add the type to `lib/types.ts` (mirrors the wire JSON), call through `lib/api.ts`, and register panels in `lib/panels.ts`. A Herd view (a layout of the Herd page) is a component registered in `HERD_VIEWS` in `lib/herdViews.ts` with an `id` and a `label`; it takes `jobs` (all of them, unfiltered), `flows` and `open(job)`, owns the whole page body below the head (wrap it in `HerdSummary` to keep the counts, Needs you and the filter), and only reads. The first entry is the default; the others are chosen with `?layout=<id>`. `herdViews(plugins)` gives the list the page shows: the built-ins, then one entry per enabled view plugin with an entry page (`id` `plugin:<name>`, the plugin's `label`, component `HerdPluginView`, which also gets `plugin`, `entry` and `label`); `pickView(id, plugins)` falls back to the first. A layout that does not need xherd's own components is better written as a [view plugin](../extend/plugins.md#herd-view-plugins) (`plugins/herd-tiles` is the example); its page-side protocol is `lib/viewPlugin.ts` and the view side `ui/view-kit/xherd-view.js`, kept in step. A new file in a built-in view plugin's folder must be added to `xherd_plugin::view::BUILTIN_FILES` (a test compares the folders with the table). Only screens for features that exist are shown. Use the components listed at the top of `app.css` (`PageHead`, `Panel`, `SaveBar`, `Tabs`, `Seg`, `Callout`, `Dialog`), never `alert`/`confirm`.
 
 **Add an API route** — in `crates/xherd-api/src/lib.rs`, with the `User` or `AgentAuth` extractor, and list it in [HTTP API](../reference/http-api.md).
 
@@ -126,5 +126,5 @@ Write for the reader of that folder: user docs name screens and commands, not ty
 - [XAP reference](../reference/xap.md): the agent protocol
 - [HTTP API](../reference/http-api.md)
 - [Plugins](../extend/plugins.md) and [Flow packs](../extend/flow-packs.md)
-- `packs/xherd/FORMAT.md`: formats of the documents agents write
+- `packs/xherd/FORMAT.md`: formats of the documents jobs write
 - `ROADMAP.md`: what is left, by theme

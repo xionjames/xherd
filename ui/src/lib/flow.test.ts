@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { conflictsAction, prGate, stageLabel, stageNow, steps } from './flow';
-import type { Agent, FlowInfo } from './types';
+import type { Job, FlowInfo } from './types';
 
 describe('steps', () => {
   const f: FlowInfo = {
     pack: 'xherd', flow: 'feature',
     stages: ['spec', 'design', 'tasks', 'implement'].map((id) => ({ id, role: id as never, class: 'routine', gate: true })),
   };
-  const a = (over: Partial<Agent>): Agent => ({ id: 'x', name: 'x', branch: 'x', status: 'waiting-input', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
+  const a = (over: Partial<Job>): Job => ({ id: 'x', name: 'x', branch: 'x', status: 'waiting-input', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
   it('marks stages never entered as skipped', () => {
     const s = steps(a({ stage: 'tasks', visitedStages: ['spec', 'tasks'], gate: { kind: 'question', text: '?' } }), f);
     expect(s.map((x) => x.state)).toEqual(['ok', 'skip', 'now', 'todo']);
@@ -59,7 +59,7 @@ describe('stageNow', () => {
       { id: 'pr-review', role: 'pr', class: 'human-only', gate: true },
     ],
   };
-  const a = (over: Partial<Agent>): Agent =>
+  const a = (over: Partial<Job>): Job =>
     ({ id: 'x', name: 'x', branch: 'x', status: 'idle', createdAt: 0, statusSince: 0, lastActivity: 0, pack: 'xherd', flow: 'feature', ...over });
   it('names the stage and what waits at its gate', () => {
     expect(stageNow(a({ stage: 'ship', gate: { kind: 'docs', stage: 'ship', role: 'ship', files: [{ path: '.xherd/spec/pr.md', sha256: 's' }] } }), [f]))
@@ -84,7 +84,7 @@ describe('prGate', () => {
 });
 
 describe('conflictsAction', () => {
-  const a = (over: Partial<Agent>): Agent => ({
+  const a = (over: Partial<Job>): Job => ({
     id: 'x', name: 'x', branch: 'x', status: 'watching', createdAt: 0, statusSince: 0, lastActivity: 0,
     flow: 'feature', prUrl: 'https://github.com/o/r/pull/1', prState: 'open', prMergeable: 'no', ...over,
   });

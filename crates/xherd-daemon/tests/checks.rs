@@ -65,16 +65,16 @@ async fn checks_report_and_fix_the_pack_install() {
     assert!(v["config"].get("userToken").is_none());
     let patch = serde_json::from_value(json!({"welcomed": true})).unwrap();
     assert_eq!(d.save_config(patch).unwrap()["restartNeeded"], false);
-    let patch = serde_json::from_value(json!({"maxConcurrentAgents": 2})).unwrap();
+    let patch = serde_json::from_value(json!({"maxConcurrentJobs": 2})).unwrap();
     let v = d.save_config(patch).unwrap();
     assert_eq!(
         (
-            v["config"]["maxConcurrentAgents"].as_u64(),
+            v["config"]["maxConcurrentJobs"].as_u64(),
             v["restartNeeded"].as_bool()
         ),
         (Some(2), Some(true))
     );
-    assert_eq!(v["running"]["maxConcurrentAgents"], 4);
+    assert_eq!(v["running"]["maxConcurrentJobs"], 4);
 
     // Most settings apply at once: the actors' snapshot changes, no restart.
     let patch =

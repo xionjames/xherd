@@ -27,6 +27,10 @@
           "bypassPermissions"
         ]
       },
+      "skills": {
+        "dir": ".claude/skills",
+        "format": "skill"
+      },
       "modelArgs": [
         "--model",
         "{model}"

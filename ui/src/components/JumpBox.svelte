@@ -1,5 +1,5 @@
 <script lang="ts">
-  // ⌘K / Ctrl+K: filter agents by name or ticket and open the agent page.
+  // ⌘K / Ctrl+K: filter jobs by name or ticket, and saved agents by name.
   import Icon from './Icon.svelte';
   import { app } from '../lib/store.svelte';
   import { go } from '../lib/router.svelte';
@@ -9,11 +9,19 @@
   let sel = $state(0);
   let input: HTMLInputElement;
 
-  const hits = $derived(
-    (app.state?.agents ?? [])
-      .filter((a) => q && [a.name, a.ticket?.key ?? '', a.ticket?.url ?? ''].join(' ').toLowerCase().includes(q.toLowerCase()))
-      .slice(0, 8),
-  );
+  // Jobs by name or ticket, then saved agents by name (#/agents/<name>).
+  type Hit = { id: string; name: string; note: string; path: string };
+  const hits = $derived.by((): Hit[] => {
+    if (!q) return [];
+    const has = (s: string) => s.toLowerCase().includes(q.toLowerCase());
+    const jobs = (app.state?.jobs ?? [])
+      .filter((a) => has([a.name, a.ticket?.key ?? '', a.ticket?.url ?? ''].join(' ')))
+      .map((a) => ({ id: a.id, name: a.name, note: a.status as string, path: `/jobs/${a.name}` }));
+    const agents = (app.state?.agents ?? [])
+      .filter((a) => has(a.name))
+      .map((a) => ({ id: `agent:${a.id}`, name: a.name, note: 'agent', path: `/agents/${a.name}` }));
+    return [...jobs, ...agents].slice(0, 8);
+  });
 
   function onGlobalKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -29,7 +37,7 @@
     q = '';
     open = false;
     input.blur();
-    go(`/agent/${a.name}`);
+    go(a.path);
   }
 
   function onKey(e: KeyboardEvent) {
@@ -45,7 +53,7 @@
 <div class="jwrap">
   <label class="jump">
     <Icon name="search" />
-    <input bind:this={input} bind:value={q} placeholder="Jump to an agent or ticket…" aria-label="Jump to an agent or ticket"
+    <input bind:this={input} bind:value={q} placeholder="Jump to a job, ticket or agent…" aria-label="Jump to a job, ticket or agent"
       onfocus={() => (open = true)} onblur={() => setTimeout(() => (open = false), 120)}
       oninput={() => (sel = 0)} onkeydown={onKey} role="combobox" aria-expanded={open && hits.length > 0}
       aria-controls="jump-list" />
@@ -56,7 +64,7 @@
       {#each hits as a, i (a.id)}
         <li role="option" aria-selected={i === sel}>
           <button class:on={i === sel} onmousedown={() => pick(i)}>
-            <span class="mono">{a.name}</span><span class="muted">{a.status}</span>
+            <span class="mono">{a.name}</span><span class="muted">{a.note}</span>
           </button>
         </li>
       {/each}

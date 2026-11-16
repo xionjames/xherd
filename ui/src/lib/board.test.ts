@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { boardLane, laneOrder, todoLane } from './board';
-import type { Agent } from './types';
+import type { Job } from './types';
 
-const a = (over: Partial<Agent>): Agent =>
+const a = (over: Partial<Job>): Job =>
   ({ id: 'x', name: 'fix-login', branch: 'b', status: 'running', createdAt: 0, statusSince: 0, lastActivity: 0, repo: '/w/app', ...over });
 
 describe('board lanes', () => {
@@ -22,5 +22,14 @@ describe('board lanes', () => {
     expect(todoLane('flow')).toBe('TODOs');
     expect(todoLane('none')).toBe('');
     expect(laneOrder(['TODOs', 'No workflow', 'Feature', 'Bugfix', 'Feature'])).toEqual(['Bugfix', 'Feature', 'No workflow', 'TODOs']);
+  });
+});
+
+describe('board lanes by saved agent', () => {
+  it('?lanes=agent-def groups by the job\'s agent snapshot, No agent last', () => {
+    const withAgent = a({ agents: { g1: { id: 'g1', name: 'reviewer', version: 2 } }, currentAgent: 'g1' });
+    expect(boardLane(withAgent, 'agent-def')).toBe('reviewer');
+    expect(boardLane(a({}), 'agent-def')).toBe('No agent');
+    expect(laneOrder(['TODOs', 'No agent', 'zed', 'reviewer'])).toEqual(['reviewer', 'zed', 'No agent', 'TODOs']);
   });
 });

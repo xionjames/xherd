@@ -2,13 +2,13 @@
   // A Herd view plugin (R9, R12): its page in a sandboxed frame with an
   // opaque origin, fed protocol v1 `data` messages (`lib/viewPlugin.ts`).
   // The frame fills the viewport below its top; the view scrolls inside.
-  // Only `ready` and `open` of a known agent are taken back.
+  // Only `ready`, `open` of a known job and `open-agent` of a known saved agent are taken back.
   import { onMount } from 'svelte';
   import { acceptMessage, dataMessage } from '../lib/viewPlugin';
   import { isDark } from '../lib/theme.svelte';
   import type { HerdViewProps } from '../lib/herdViews';
 
-  let { agents, flows, open, plugin = '', entry = '', label = '' }: HerdViewProps = $props();
+  let { agents, flows, savedAgents = [], open, openAgent, plugin = '', entry = '', label = '' }: HerdViewProps = $props();
 
   let frame = $state<HTMLIFrameElement>();
   let ready = $state(false);
@@ -19,8 +19,9 @@
   );
   const ids = $derived(new Set(agents.map((a) => a.id)));
   const byId = $derived(new Map(agents.map((a) => [a.id, a])));
+  const names = $derived(new Set(savedAgents.map((d) => d.name)));
 
-  const message = () => dataMessage(agents, flows, isDark() ? 'dark' : 'light');
+  const message = () => dataMessage(agents, flows, isDark() ? 'dark' : 'light', savedAgents);
   // Only to the frame's window; its origin is opaque, so `*`.
   const post = () => frame?.contentWindow?.postMessage(message(), '*');
 
@@ -48,13 +49,15 @@
   }
 
   function onmessage(e: MessageEvent) {
-    const req = acceptMessage(e, frame?.contentWindow, ids);
+    const req = acceptMessage(e, frame?.contentWindow, ids, names);
     if (!req) return;
     if (req.kind === 'ready') {
       // Setting `ready` again would not rerun the effect: send now (F02).
       ready = true;
       readySinceLoad = true;
       post();
+    } else if (req.kind === 'open-agent') {
+      openAgent?.(req.name);
     } else {
       const a = byId.get(req.id);
       if (a) open(a);

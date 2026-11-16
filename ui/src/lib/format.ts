@@ -1,4 +1,4 @@
-import type { Agent, Status } from './types';
+import type { Job, Status } from './types';
 
 /** "now", "42m", "3h", "2d" since `ms`. */
 export function ago(ms: number, now = Date.now()): string {
@@ -37,17 +37,17 @@ export function hollow(s: Status): boolean {
 }
 
 /** An open gate for the user: not one autonomy will approve at the next stop (R4). */
-export function waitsAtGate(a: Agent): boolean {
+export function waitsAtGate(a: Job): boolean {
   return !!a.gate && !a.autoApprovePending;
 }
 
 /** Needs you = waiting for input, blocked, or an open gate (R-007). */
-export function needsYou(a: Agent): boolean {
+export function needsYou(a: Job): boolean {
   return a.status === 'waiting-input' || a.status === 'blocked' || waitsAtGate(a);
 }
 
 /** One-line description of what waits on the human. */
-export function waitText(a: Agent): string {
+export function waitText(a: Job): string {
   const g = a.gate;
   if (!g) return a.status === 'blocked' ? (a.blockReason ? `Blocked: ${a.blockReason}.` : 'The agent is blocked.') : 'The agent is waiting for your answer.';
   switch (g.kind) {
@@ -60,7 +60,7 @@ export function waitText(a: Agent): string {
 }
 
 /** Since when the agent waits on you (oldest first in lists). */
-export const waitingSince = (a: Agent) => a.statusSince;
+export const waitingSince = (a: Job) => a.statusSince;
 
 /** Stable per-agent hue (never in the coral range reserved for "needs you"). */
 export function agentHue(name: string): string {
@@ -71,11 +71,11 @@ export function agentHue(name: string): string {
   return `hsl(${hue} 62% 48%)`;
 }
 
-export function repoName(a: Agent): string {
+export function repoName(a: Job): string {
   return a.repo?.split('/').filter(Boolean).pop() ?? 'folder';
 }
 
-export function shortBase(a: Agent): string {
+export function shortBase(a: Job): string {
   return a.base?.replace(/^origin\//, '') ?? '';
 }
 

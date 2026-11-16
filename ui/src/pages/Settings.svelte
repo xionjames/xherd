@@ -9,6 +9,7 @@
   import GitIdentity from '../components/GitIdentity.svelte';
   import GitHosts from '../components/GitHosts.svelte';
   import Backups from '../components/Backups.svelte';
+  import Skills from '../components/Skills.svelte';
   import Profiles from '../components/Profiles.svelte';
   import OpenIn from '../components/OpenIn.svelte';
   import PluginList from '../components/PluginList.svelte';
@@ -21,14 +22,14 @@
   import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
   import { runtimes, runtimeLabel } from '../lib/runtimes';
 
-  const TABS = ['general', 'gates', 'notifications', 'openin', 'git', 'profiles', 'backups', 'plugins', 'about'];
+  const TABS = ['general', 'gates', 'notifications', 'openin', 'git', 'profiles', 'skills', 'backups', 'plugins', 'about'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentAgents', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications'];
+  const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications', 'suggestAgents'];
   let form = $state<Form>({});
-  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'An agent is blocked'], ['idle', 'An agent went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due']];
+  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due'], ['suggestion', 'Save a job\'s setup as an agent']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
   function toggleKind(k: string, on: boolean) {
     const next = new Set(muted);
@@ -67,14 +68,14 @@
       saving = false;
     }
   }
-  const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', openin: 'Open in', git: 'Git access', profiles: 'Repo profiles', backups: 'Backups', plugins: 'Plugins', about: 'About' };
+  const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', openin: 'Open in', git: 'Git access', profiles: 'Repo profiles', skills: 'Skills', backups: 'Backups', plugins: 'Plugins', about: 'About' };
   const tabItems = $derived(TABS.map((t) => ({
     id: t, label: TAB_LABEL[t], href: href('/settings', t === 'general' ? {} : { tab: t }),
     badge: t === 'plugins' && broken.length ? { n: `${broken.length} error${broken.length > 1 ? 's' : ''}`, tone: 'h' as const } : undefined,
   })));
 </script>
 
-<PageHead width="mid" title="Settings" sub="How many agents run at once, how long xherd waits for you, git access, and the plugins it uses.">
+<PageHead width="mid" title="Settings" sub="How many jobs run at once, how long xherd waits for you, git access, and the plugins it uses.">
   {#snippet tabs()}<Tabs label="Settings" items={tabItems} current={tab} />{/snippet}
 </PageHead>
 
@@ -89,6 +90,8 @@
     <OpenIn />
   {:else if tab === 'profiles'}
     <Profiles />
+  {:else if tab === 'skills'}
+    <Skills />
   {:else if tab === 'backups'}
     <Backups />
   {:else if tab === 'about'}
@@ -104,9 +107,9 @@
     <p class="empty">Loading…</p>
   {:else if tab === 'general'}
     <div class="secs">
-      <Panel title="Agents" hint="How many run at once.">
-        <label class="f">Max agents running at once
-          <span class="unit"><input type="number" min="1" max="64" bind:value={form.maxConcurrentAgents} /><span>agents</span></span>
+      <Panel title="Jobs" hint="How many run at once.">
+        <label class="f">Max jobs running at once
+          <span class="unit"><input type="number" min="1" max="64" bind:value={form.maxConcurrentJobs} /><span>jobs</span></span>
           <span class="hint">More wait in Queued.</span></label>
         <label class="f">Pause timeout
           <span class="unit"><input type="number" min="5" max="3600" bind:value={form.pauseTimeoutSec} /><span>sec</span></span>
@@ -129,7 +132,7 @@
         <label class="f">Park at a gate after
           <span class="unit"><input type="number" min="0" bind:value={form.gateParkMinutes} /><span>min</span></span>
           <span class="hint">Frees the slot; stays in Needs you. 0 never parks.</span></label>
-        {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.']] as [k, title, hint] (k)}
+        {#each [['freshSessions', 'Fresh session after each approved gate', 'The next step starts a new session that reloads everything from .xherd/.'], ['suggestAgents', 'Suggest saving a job\'s setup as an agent', 'When a job without an agent is done, or you start the same setup a third time. Never blocks anything; Save as agent is always in the job\'s menu.']] as [k, title, hint] (k)}
           <div class="tog">
             <button class="sw" class:on={form[k] === true} role="switch" aria-checked={form[k] === true} aria-label={title}
               onclick={() => (form[k] = !form[k])}></button>

@@ -8,7 +8,7 @@ use xherd_term::Tmux;
 
 /// Everything a driver needs to know about the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentCtx {
+pub struct JobCtx {
     pub id: String,
     /// Session name (the agent name).
     pub name: String,
@@ -26,18 +26,18 @@ pub type Result<T> = std::result::Result<T, DriverError>;
 #[async_trait]
 pub trait Driver: Send + Sync + 'static {
     /// Start a new session running `argv`. Fails if one already exists.
-    async fn start(&self, a: &AgentCtx, argv: &[String]) -> Result<()>;
+    async fn start(&self, a: &JobCtx, argv: &[String]) -> Result<()>;
     /// Replace the agent's process with a fresh one, keeping other windows (R-023).
-    async fn respawn(&self, a: &AgentCtx, argv: &[String]) -> Result<()>;
+    async fn respawn(&self, a: &JobCtx, argv: &[String]) -> Result<()>;
     /// Type text and press Enter `enters` times (R-020).
-    async fn send(&self, a: &AgentCtx, text: &str, enters: u32) -> Result<()>;
-    async fn interrupt(&self, a: &AgentCtx) -> Result<()>;
+    async fn send(&self, a: &JobCtx, text: &str, enters: u32) -> Result<()>;
+    async fn interrupt(&self, a: &JobCtx) -> Result<()>;
     /// End the session. Not an error when it is already gone.
-    async fn stop(&self, a: &AgentCtx) -> Result<()>;
+    async fn stop(&self, a: &JobCtx) -> Result<()>;
     /// Names of sessions that are alive (reconcile, R-011).
     async fn sessions(&self) -> Result<Vec<String>>;
     /// Last lines of the agent's screen (screen rules, R-018).
-    async fn capture(&self, a: &AgentCtx, lines: u32) -> Result<String>;
+    async fn capture(&self, a: &JobCtx, lines: u32) -> Result<String>;
 }
 
 pub const AGENT_WINDOW: &str = "agent";
@@ -52,7 +52,7 @@ fn err(e: impl std::fmt::Display) -> DriverError {
 
 #[async_trait]
 impl Driver for TerminalDriver {
-    async fn start(&self, a: &AgentCtx, argv: &[String]) -> Result<()> {
+    async fn start(&self, a: &JobCtx, argv: &[String]) -> Result<()> {
         if self.tmux.has_session(&a.name).await {
             return Err(DriverError(format!(
                 "a tmux session named {} already exists",
@@ -65,28 +65,28 @@ impl Driver for TerminalDriver {
             .map_err(err)
     }
 
-    async fn respawn(&self, a: &AgentCtx, argv: &[String]) -> Result<()> {
+    async fn respawn(&self, a: &JobCtx, argv: &[String]) -> Result<()> {
         self.tmux
             .respawn_window(&a.name, Some(AGENT_WINDOW), &a.workdir, argv)
             .await
             .map_err(err)
     }
 
-    async fn send(&self, a: &AgentCtx, text: &str, enters: u32) -> Result<()> {
+    async fn send(&self, a: &JobCtx, text: &str, enters: u32) -> Result<()> {
         self.tmux
             .send_text(&a.name, Some(AGENT_WINDOW), text, enters)
             .await
             .map_err(err)
     }
 
-    async fn interrupt(&self, a: &AgentCtx) -> Result<()> {
+    async fn interrupt(&self, a: &JobCtx) -> Result<()> {
         self.tmux
             .send_key(&a.name, Some(AGENT_WINDOW), "C-c")
             .await
             .map_err(err)
     }
 
-    async fn stop(&self, a: &AgentCtx) -> Result<()> {
+    async fn stop(&self, a: &JobCtx) -> Result<()> {
         if !self.tmux.has_session(&a.name).await {
             return Ok(());
         }
@@ -97,7 +97,7 @@ impl Driver for TerminalDriver {
         self.tmux.list_sessions().await.map_err(err)
     }
 
-    async fn capture(&self, a: &AgentCtx, lines: u32) -> Result<String> {
+    async fn capture(&self, a: &JobCtx, lines: u32) -> Result<String> {
         self.tmux
             .capture(&a.name, Some(AGENT_WINDOW), lines)
             .await
@@ -125,7 +125,7 @@ impl FakeDriver {
 
 #[async_trait]
 impl Driver for FakeDriver {
-    async fn start(&self, a: &AgentCtx, argv: &[String]) -> Result<()> {
+    async fn start(&self, a: &JobCtx, argv: &[String]) -> Result<()> {
         self.log(format!("start {} {}", a.name, argv.join(" ")));
         if self.fail_start.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(DriverError("boom".into()));
@@ -133,19 +133,19 @@ impl Driver for FakeDriver {
         self.alive.lock().unwrap().insert(a.name.clone());
         Ok(())
     }
-    async fn respawn(&self, a: &AgentCtx, argv: &[String]) -> Result<()> {
+    async fn respawn(&self, a: &JobCtx, argv: &[String]) -> Result<()> {
         self.log(format!("respawn {} {}", a.name, argv.join(" ")));
         Ok(())
     }
-    async fn send(&self, a: &AgentCtx, text: &str, enters: u32) -> Result<()> {
+    async fn send(&self, a: &JobCtx, text: &str, enters: u32) -> Result<()> {
         self.log(format!("send {} {text:?} {enters}", a.name));
         Ok(())
     }
-    async fn interrupt(&self, a: &AgentCtx) -> Result<()> {
+    async fn interrupt(&self, a: &JobCtx) -> Result<()> {
         self.log(format!("interrupt {}", a.name));
         Ok(())
     }
-    async fn stop(&self, a: &AgentCtx) -> Result<()> {
+    async fn stop(&self, a: &JobCtx) -> Result<()> {
         self.log(format!("stop {}", a.name));
         self.alive.lock().unwrap().remove(&a.name);
         Ok(())
@@ -153,7 +153,7 @@ impl Driver for FakeDriver {
     async fn sessions(&self) -> Result<Vec<String>> {
         Ok(self.alive.lock().unwrap().iter().cloned().collect())
     }
-    async fn capture(&self, _a: &AgentCtx, _lines: u32) -> Result<String> {
+    async fn capture(&self, _a: &JobCtx, _lines: u32) -> Result<String> {
         Ok(self.screen.lock().unwrap().clone())
     }
 }

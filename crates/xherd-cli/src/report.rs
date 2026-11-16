@@ -13,30 +13,41 @@ use xherd_core::report::{Report, ReportEvent};
 pub const DEFAULT_URL: &str = "http://127.0.0.1:4740";
 const STDIN_LIMIT: u64 = 1024 * 1024;
 
+/// The files that name a job in `.xherd/`, new name first.
+const JOB_FILES: [&str; 2] = ["job.json", "agent.json"];
+
 pub struct Target {
-    pub agent_id: String,
+    pub job_id: String,
     /// The agent's `.xherd/` folder, when found (sequence counter lives there).
     pub xherd_dir: Option<PathBuf>,
 }
 
-/// `XHERD_AGENT_ID`, else `.xherd/agent.json` in the current directory or a parent.
-pub fn find_agent() -> Option<Target> {
+/// The first non-empty of the job variable and the one older sessions have
+/// (`XHERD_JOB_*`, else `XHERD_AGENT_*`; #141).
+pub fn job_env(name: &str) -> Option<String> {
+    ["JOB", "AGENT"]
+        .iter()
+        .filter_map(|k| std::env::var(format!("XHERD_{k}_{name}")).ok())
+        .find(|s| !s.is_empty())
+}
+
+/// `XHERD_JOB_ID` (else `XHERD_AGENT_ID`), else `.xherd/job.json` (else
+/// `agent.json`) in the current directory or a parent.
+pub fn find_job() -> Option<Target> {
     let cwd = std::env::current_dir().ok();
     let found = cwd.as_deref().and_then(|d| {
         d.ancestors()
             .map(|a| a.join(".xherd"))
-            .find(|x| x.join("agent.json").is_file())
+            .find(|x| JOB_FILES.iter().any(|f| x.join(f).is_file()))
     });
     let from_file = found.as_ref().and_then(|x| {
-        let v: Value = serde_json::from_slice(&std::fs::read(x.join("agent.json")).ok()?).ok()?;
+        let file = JOB_FILES.iter().map(|f| x.join(f)).find(|p| p.is_file())?;
+        let v: Value = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
         v.get("id")?.as_str().map(str::to_string)
     });
-    let agent_id = std::env::var("XHERD_AGENT_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or(from_file)?;
+    let job_id = job_env("ID").or(from_file)?;
     Some(Target {
-        agent_id,
+        job_id,
         xherd_dir: found,
     })
 }
@@ -90,10 +101,7 @@ pub fn deliver(r: &Report) -> Delivered {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| DEFAULT_URL.into());
-    if let Some(token) = std::env::var("XHERD_AGENT_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(token) = job_env("TOKEN") {
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_connect(Some(Duration::from_millis(300)))
@@ -124,7 +132,7 @@ pub fn deliver(r: &Report) -> Delivered {
 fn build(t: &Target, event: ReportEvent, payload: Value, seq: Option<u64>) -> Report {
     Report {
         id: xherd_core::new_id(),
-        agent_id: t.agent_id.clone(),
+        job_id: t.job_id.clone(),
         event,
         payload,
         seq: seq.unwrap_or_else(|| next_seq(t.xherd_dir.as_deref())),
@@ -151,7 +159,7 @@ pub fn hook(event: &str) {
     if !stdin.is_terminal() {
         let _ = stdin.lock().take(STDIN_LIMIT).read_to_string(&mut raw);
     }
-    let Some(target) = find_agent() else { return };
+    let Some(target) = find_job() else { return };
     let payload = match serde_json::from_str::<Value>(&raw) {
         Ok(v) => v,
         Err(_) if raw.trim().is_empty() => Value::Null,
@@ -186,11 +194,11 @@ pub fn report(a: ReportArgs) -> i32 {
         }
     };
     let under_xherd = std::env::var("XHERD_ENV").is_ok_and(|v| v == "1");
-    let Some(target) = find_agent() else {
+    let Some(target) = find_job() else {
         if !under_xherd {
             eprintln!("xherd report: not running under xherd");
         } else {
-            eprintln!("xherd report: XHERD_ENV=1 but no XHERD_AGENT_ID or .xherd/agent.json");
+            eprintln!("xherd report: XHERD_ENV=1 but no XHERD_JOB_ID or .xherd/job.json");
         }
         return 4;
     };

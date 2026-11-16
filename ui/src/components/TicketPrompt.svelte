@@ -7,9 +7,9 @@
   import { get } from '../lib/api';
   import { href, route } from '../lib/router.svelte';
   import Callout from './Callout.svelte';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
   const name = $derived(agent.name);
@@ -27,7 +27,7 @@
     hidden = dismissed();
     status = null;
     if (!open) return;
-    get<{ tracker: string | null; issue?: string; posted: boolean }>(`/agents/${id}/ticket-status`)
+    get<{ tracker: string | null; issue?: string; posted: boolean }>(`/jobs/${id}/ticket-status`)
       .then((s) => (status = s))
       .catch(() => (status = null));
   });
@@ -41,7 +41,7 @@
   <Callout tone="info">
     The pull request is open. Post a short summary of the work to the ticket ({status.tracker} #{status.issue})?
     You read and edit it first; nothing is posted until you press Post.
-    <a class="btn sm" href={href(`/agent/${name}`, { s: 'ticket', draft: '1' })}>Draft a summary</a>
+    <a class="btn sm" href={href(`/jobs/${name}`, { s: 'ticket', draft: '1' })}>Draft a summary</a>
     <button class="btn ghost sm" onclick={later}>Not now</button>
   </Callout>
 {/if}

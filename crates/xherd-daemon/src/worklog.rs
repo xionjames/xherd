@@ -15,6 +15,10 @@ use crate::{ActionError, Daemon};
 /// that was suspended must not book hours.
 const MAX_SPAN_MS: u64 = 120_000;
 
+/// Prefix of the work log rows kept per saved agent (the key column holds a
+/// ticket otherwise).
+const AGENT_KEY: &str = "agent:";
+
 /// Auto-approvals (`approval` events with `auto: true`) later followed by a
 /// change request on the same gate (`change-request` events), per agent.
 /// Both lists are oldest first.
@@ -27,11 +31,11 @@ pub fn rework(approvals: &[Event], requests: &[Event]) -> BTreeMap<String, (u32,
         }
         let gate = p.and_then(|p| p["gate"].as_str()).unwrap_or("");
         let redone = requests.iter().any(|r| {
-            r.agent_id == a.agent_id
+            r.job_id == a.job_id
                 && r.at >= a.at
                 && r.payload.as_ref().and_then(|p| p["gate"].as_str()) == Some(gate)
         });
-        let e = out.entry(a.agent_id.clone()).or_default();
+        let e = out.entry(a.job_id.clone()).or_default();
         e.0 += 1;
         e.1 += u32::from(redone);
     }
@@ -50,7 +54,7 @@ impl Daemon {
             return;
         }
         let ms = ((now - last).max(0) as u64).min(MAX_SPAN_MS);
-        let Ok(agents) = self.store.list_agents().await else {
+        let Ok(agents) = self.store.list_jobs().await else {
             return;
         };
         for a in agents.iter().filter(|a| a.status == Status::Running) {
@@ -61,19 +65,30 @@ impl Daemon {
             {
                 tracing::warn!(error = %e, "work log not written");
             }
+            self.book_agent(&day(now), a, "agent", ms).await;
+        }
+    }
+
+    /// The same time under the saved agent the job came from (R24), as a row
+    /// keyed `agent:<id>`; the per-ticket listing leaves those out.
+    async fn book_agent(&self, day: &str, job: &xherd_core::Job, kind: &str, ms: u64) {
+        if let Some(a) = job.agent()
+            && let Err(e) = self
+                .store
+                .add_worklog(day, &format!("{AGENT_KEY}{}", a.id), kind, ms)
+                .await
+        {
+            tracing::warn!(error = %e, "work log not written");
         }
     }
 
     /// The agent page was open and visible for `ms` (a heartbeat from the UI).
     pub async fn add_user_time(&self, who: &str, ms: u64) -> Result<(), ActionError> {
         let a = self.action(who, crate::actor::UserAction::Get).await?;
+        let (today, ms) = (day(self.clock.now()), ms.min(MAX_SPAN_MS));
+        self.book_agent(&today, &a, "user", ms).await;
         self.store
-            .add_worklog(
-                &day(self.clock.now()),
-                a.work_item(),
-                "user",
-                ms.min(MAX_SPAN_MS),
-            )
+            .add_worklog(&today, a.work_item(), "user", ms)
             .await
             .map_err(|e| ActionError {
                 code: "store",
@@ -82,8 +97,9 @@ impl Daemon {
     }
 
     /// `GET /worklog`: time per day and ticket, and delivery metrics per
-    /// ticket (cycle time, review rounds, rework).
-    pub async fn worklog(&self, days: u32) -> Result<Value, ActionError> {
+    /// ticket (cycle time, review rounds, rework). With `by_agent` the days
+    /// list saved agents (by name) instead of tickets.
+    pub async fn worklog(&self, days: u32, by_agent: bool) -> Result<Value, ActionError> {
         let io = |e: xherd_store::StoreError| ActionError {
             code: "store",
             message: e.to_string(),
@@ -92,7 +108,18 @@ impl Daemon {
         let since = day(now - i64::from(days.clamp(1, 366)) * 86_400_000);
         let rows = self.store.worklog(&since).await.map_err(io)?;
         let mut by_day: BTreeMap<String, BTreeMap<String, (u64, u64)>> = BTreeMap::new();
+        let names: BTreeMap<String, String> = if by_agent {
+            let defs = self.store.list_agent_defs().await.map_err(io)?;
+            defs.into_iter().map(|a| (a.id, a.name)).collect()
+        } else {
+            BTreeMap::new()
+        };
         for (d, t, kind, ms) in rows {
+            let t = match (t.strip_prefix(AGENT_KEY), by_agent) {
+                (Some(id), true) => names.get(id).cloned().unwrap_or_else(|| id.to_string()),
+                (None, false) => t,
+                _ => continue,
+            };
             let e = by_day.entry(d).or_default().entry(t).or_default();
             if kind == "user" {
                 e.1 += ms;
@@ -118,7 +145,7 @@ impl Daemon {
             .await
             .map_err(io)?;
         let rw = rework(&approvals, &requests);
-        let agents = self.store.list_agents().await.map_err(io)?;
+        let agents = self.store.list_jobs().await.map_err(io)?;
         let tickets: Vec<Value> = agents
             .iter()
             .map(|a| {
@@ -126,7 +153,7 @@ impl Daemon {
                 let finished = a.status == Status::Done;
                 json!({
                     "ticket": a.work_item(),
-                    "agent": a.name,
+                    "job": a.name,
                     "status": a.status,
                     "cycleMs": finished.then(|| (a.status_since - a.created_at).max(0)),
                     "reviewRounds": a.review_rounds,
@@ -146,7 +173,7 @@ mod tests {
     fn ev(agent: &str, kind: &str, at: i64, gate: &str, auto: bool) -> Event {
         Event {
             id: format!("{kind}{at}"),
-            agent_id: agent.into(),
+            job_id: agent.into(),
             kind: kind.into(),
             payload: Some(json!({"gate": gate, "auto": auto})),
             at,

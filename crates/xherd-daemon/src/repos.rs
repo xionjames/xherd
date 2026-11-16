@@ -110,7 +110,7 @@ impl Daemon {
     pub async fn known_repos(&self) -> Result<Vec<KnownRepo>, ActionError> {
         let agents = self
             .store
-            .list_agents()
+            .list_jobs()
             .await
             .map_err(|e| refuse("store", e.to_string()))?;
         let mut used: BTreeMap<String, Option<Millis>> = BTreeMap::new();

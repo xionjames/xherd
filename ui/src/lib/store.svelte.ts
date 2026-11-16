@@ -2,7 +2,7 @@
 // reloaded on every (re)connect (design §13.1).
 import { get } from './api';
 import { setLinkRules } from './links';
-import type { Agent, AppState } from './types';
+import type { Job, AppState, AgentView } from './types';
 import { addNotice, settle } from './notices.svelte';
 
 export const app = $state<{
@@ -15,27 +15,27 @@ export async function reload() {
   try {
     app.state = await get<AppState>('/state');
     setLinkRules(app.state.trackerLinks ?? []);
-    for (const a of app.state.agents) settle(a);
+    for (const a of app.state.jobs) settle(a);
     app.error = null;
   } catch (e) {
     app.error = (e as Error).message;
   }
 }
 
-export function upsertAgent(a: Agent) {
+export function upsertJob(a: Job) {
   const s = app.state;
   if (!s) return;
-  const i = s.agents.findIndex((x) => x.id === a.id);
-  if (i >= 0) s.agents[i] = a;
-  else s.agents.push(a);
+  const i = s.jobs.findIndex((x) => x.id === a.id);
+  if (i >= 0) s.jobs[i] = a;
+  else s.jobs.push(a);
   settle(a);
 }
 
-export function agentByName(idOrName: string): Agent | undefined {
-  return app.state?.agents.find((a) => a.id === idOrName || a.name === idOrName);
+export function jobByName(idOrName: string): Job | undefined {
+  return app.state?.jobs.find((a) => a.id === idOrName || a.name === idOrName);
 }
 
-type WsMsg = { type: 'agent'; agent: Agent } | { type: 'notify'; agentId: string; kind: string; text: string };
+type WsMsg = { type: 'job'; job: Job } | { type: 'agents' } | { type: 'notify'; jobId: string; kind: string; text: string };
 
 let retry = 500;
 let opened = false;
@@ -58,8 +58,9 @@ function connect() {
   };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data) as WsMsg;
-    if (m.type === 'agent') upsertAgent(m.agent);
-    else if (m.type === 'notify') addNotice(m.agentId, m.kind, m.text);
+    if (m.type === 'job') upsertJob(m.job);
+    else if (m.type === 'agents') reloadAgents();
+    else if (m.type === 'notify') addNotice(m.jobId, m.kind, m.text);
   };
   ws.onclose = () => {
     app.connected = false;
@@ -67,3 +68,16 @@ function connect() {
     retry = Math.min(retry * 2, 10_000);
   };
 }
+
+/** The saved agents changed (`{"type": "agents"}`): fetch the list again. */
+export async function reloadAgents() {
+  try {
+    const r = await get<{ agents: AgentView[] }>('/agents');
+    if (app.state) app.state.agents = r.agents;
+  } catch {
+    // the next full reload brings them
+  }
+}
+
+export const agentByName = (idOrName: string): AgentView | undefined =>
+  app.state?.agents?.find((a) => a.id === idOrName || a.name === idOrName);

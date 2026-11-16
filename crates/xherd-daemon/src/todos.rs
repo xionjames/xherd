@@ -125,7 +125,7 @@ impl Daemon {
     fn todo_notify(&self, t: &Todo, text: String) {
         if !self.todo_muted() {
             let _ = self.hub.send(Change::Notify {
-                agent_id: format!("todo:{}", t.id),
+                job_id: format!("todo:{}", t.id),
                 kind: "todo".into(),
                 text,
             });

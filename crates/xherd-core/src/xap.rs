@@ -3,15 +3,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::Millis;
 use crate::domain::Role;
+use crate::job::Millis;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct XapCall {
     /// Client-generated id; replays are de-duplicated by it.
     pub id: String,
-    pub agent_id: String,
+    #[serde(alias = "agentId")]
+    pub job_id: String,
     #[serde(flatten)]
     pub cmd: XapCmd,
     pub at: Millis,
@@ -106,6 +107,24 @@ pub enum XapCmd {
         file: Option<String>,
         reason: String,
     },
+    /// Propose the saved agent's memory (R29): `file` holds the whole new
+    /// text. Refused `no_agent` for a job without a saved agent.
+    #[serde(rename = "agent.memory.propose")]
+    AgentMemoryPropose {
+        #[serde(default)]
+        file: Option<String>,
+        reason: String,
+    },
+    /// Propose the saved agent a job without one could become (R31): the
+    /// instructions are in `instructions_file`. Refused `has_agent`.
+    #[serde(rename = "agent.propose")]
+    AgentPropose {
+        name: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        instructions_file: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +153,8 @@ impl XapCmd {
             XapCmd::HandoffWritten { .. } => "handoff.written",
             XapCmd::IssueAdd { .. } => "issue.add",
             XapCmd::MemoryPropose { .. } => "memory.propose",
+            XapCmd::AgentMemoryPropose { .. } => "agent.memory.propose",
+            XapCmd::AgentPropose { .. } => "agent.propose",
         }
     }
 
@@ -167,7 +188,9 @@ impl XapCmd {
             XapCmd::Ask { .. }
             | XapCmd::HandoffWritten { .. }
             | XapCmd::IssueAdd { .. }
-            | XapCmd::MemoryPropose { .. } => false,
+            | XapCmd::MemoryPropose { .. }
+            | XapCmd::AgentMemoryPropose { .. }
+            | XapCmd::AgentPropose { .. } => false,
         }
     }
 }

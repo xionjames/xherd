@@ -1,4 +1,4 @@
-import type { Agent, FlowInfo, StageInfo } from './types';
+import type { Job, FlowInfo, StageInfo } from './types';
 
 export type StepState = 'ok' | 'skip' | 'now' | 'cur' | 'todo';
 
@@ -9,11 +9,11 @@ export const STAGE_LABEL: Record<string, string> = {
 
 /** A docs gate of a PR stage: the agent's plan for a round of PR comments.
  *  It is decided comment by comment in the Pull request tab, not read in Spec. */
-export function prGate(g: Agent['gate']): boolean {
+export function prGate(g: Job['gate']): boolean {
   return g?.kind === 'docs' && g.role === 'pr';
 }
 
-export function flowOf(a: Agent, flows: FlowInfo[]): FlowInfo | undefined {
+export function flowOf(a: Job, flows: FlowInfo[]): FlowInfo | undefined {
   if (!a.flow) return undefined;
   return flows.find((f) => f.flow === a.flow && (!a.pack || f.pack === a.pack));
 }
@@ -34,7 +34,7 @@ export function stageLabel(s: StageInfo): string {
  *  at the flow's last PR stage (watching the PR is that stage's work), with
  *  the stages it went through done. Agents without a record of visited
  *  stages show all done. */
-export function steps(a: Agent, f: FlowInfo): { stage: StageInfo; state: StepState }[] {
+export function steps(a: Job, f: FlowInfo): { stage: StageInfo; state: StepState }[] {
   const cur = a.stage ? f.stages.findIndex((s) => s.id === a.stage) : -1;
   const visited = a.visitedStages ?? [];
   const passed = (id: string): StepState => (visited.length && !visited.includes(id) ? 'skip' : 'ok');
@@ -55,7 +55,7 @@ export function steps(a: Agent, f: FlowInfo): { stage: StageInfo; state: StepSta
 
 /** The agent's current stage as the Herd shows it: its name ("Ship") and,
  *  while its gate is open, what waits there ("pr.md", "C05"). */
-export function stageNow(a: Agent, flows: FlowInfo[]): { name: string; waits?: string } | undefined {
+export function stageNow(a: Job, flows: FlowInfo[]): { name: string; waits?: string } | undefined {
   if (!a.stage) return undefined;
   const s = flowOf(a, flows)?.stages.find((x) => x.id === a.stage);
   const name = s ? stageLabel(s) : a.stage;
@@ -72,7 +72,7 @@ export function stageNow(a: Agent, flows: FlowInfo[]): { name: string; waits?: s
 /** The Resolve conflicts button of the Pull request tab (#139): shown when an
  *  open flow agent's PR conflicts with its base, usable when the agent has no
  *  turn under way and no gate open (the daemon refuses otherwise). */
-export function conflictsAction(a: Agent): { show: boolean; enabled: boolean; why?: string } {
+export function conflictsAction(a: Job): { show: boolean; enabled: boolean; why?: string } {
   const merge = a.prMergeable ?? (a.prConflict ? 'no' : undefined);
   const show = !!a.prUrl && !!a.flow && a.prState !== 'merged' && a.prState !== 'closed' && merge === 'no' && !a.worktreeRemovedAt;
   if (!show) return { show, enabled: false };

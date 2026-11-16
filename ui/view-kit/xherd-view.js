@@ -3,10 +3,11 @@
 // A Herd view plugin loads this classic script before its own. It defines the
 // global `xherdView`:
 //
-//   xherdView.onData(cb)   cb({agents, flows, theme}) for every `data` message
+//   xherdView.onData(cb)   cb({agents, savedAgents, flows, theme}) for every `data` message
 //                          from the Herd page; a callback added late gets the
 //                          last one at once.
-//   xherdView.open(id)     ask the Herd page to open that agent's page.
+//   xherdView.open(id)     ask the Herd page to open that job's page (`agents` holds jobs).
+//   xherdView.openAgent(name)  ask it to open that saved agent's page.
 //
 // Before each callback it sets `data-theme` on <html> to the page's visible
 // theme, so the kit stylesheet (xherd.css) follows it. It accepts only
@@ -32,6 +33,7 @@
     if (m.kind !== 'data') return;
     last = {
       agents: Array.isArray(m.agents) ? m.agents : [],
+      savedAgents: Array.isArray(m.savedAgents) ? m.savedAgents : [],
       flows: Array.isArray(m.flows) ? m.flows : [],
       theme: m.theme === 'dark' ? 'dark' : 'light'
     };
@@ -49,6 +51,10 @@
     open: function (agentId) {
       if (typeof agentId !== 'string' || !agentId) return;
       post({ kind: 'open', agentId: agentId });
+    },
+    openAgent: function (name) {
+      if (typeof name !== 'string' || !name) return;
+      post({ kind: 'open-agent', name: name });
     }
   });
 

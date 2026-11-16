@@ -1,18 +1,18 @@
 import { flowOf, stageLabel } from './flow';
-import type { Agent, FlowInfo } from './types';
+import type { Job, FlowInfo } from './types';
 
-export interface StageCol { key: string; label: string; agents: Agent[] }
+export interface StageCol { key: string; label: string; agents: Job[] }
 /** One workflow's agents by stage. `label` is empty when it is the only lane. */
 export interface Lane { key: string; label: string; cols: StageCol[] }
 
 const NO_FLOW = 'none';
 
-function laneKey(a: Agent): string {
+function laneKey(a: Job): string {
   if (!a.flow) return NO_FLOW;
   return `${a.pack ?? ''}/${a.flow}`;
 }
 
-function finished(a: Agent): boolean {
+function finished(a: Job): boolean {
   return a.status === 'done' || a.status === 'cancelled';
 }
 
@@ -22,8 +22,8 @@ function finished(a: Agent): boolean {
  *  started (only when used), the stages, Watching PR, Finished. An agent at a
  *  stage its flow does not list gets a column named by the stage id. Agents
  *  without a workflow have In progress, Watching PR and Finished. */
-export function stageLanes(agents: Agent[], flows: FlowInfo[]): Lane[] {
-  const groups = new Map<string, Agent[]>();
+export function stageLanes(agents: Job[], flows: FlowInfo[]): Lane[] {
+  const groups = new Map<string, Job[]>();
   for (const a of agents) {
     const k = laneKey(a);
     groups.set(k, [...(groups.get(k) ?? []), a]);
@@ -60,19 +60,19 @@ export function stageLanes(agents: Agent[], flows: FlowInfo[]): Lane[] {
   });
 }
 
-function tail(list: Agent[]): StageCol[] {
+function tail(list: Job[]): StageCol[] {
   return [
     { key: 'watching', label: 'Watching PR', agents: list.filter((a) => a.status === 'watching') },
     { key: 'finished', label: 'Finished', agents: list.filter(finished) },
   ];
 }
 
-function plainCols(list: Agent[]): StageCol[] {
+function plainCols(list: Job[]): StageCol[] {
   const active = list.filter((a) => a.status !== 'watching' && !finished(a));
   return [{ key: 'active', label: 'In progress', agents: active }, ...tail(list)];
 }
 
-function flowCols(list: Agent[], flows: FlowInfo[]): StageCol[] {
+function flowCols(list: Job[], flows: FlowInfo[]): StageCol[] {
   const f = flowOf(list[0], flows);
   const active = list.filter((a) => a.status !== 'watching' && !finished(a));
   const cols: StageCol[] = [];

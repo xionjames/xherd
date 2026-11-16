@@ -10,7 +10,7 @@ use xherd_core::domain::Role;
 use xherd_core::paths::Paths;
 use xherd_core::xap::{Severity, XapCall, XapCmd};
 
-use crate::report::{DEFAULT_URL, find_agent};
+use crate::report::{DEFAULT_URL, find_job};
 
 fn role(s: &str) -> Result<Role, String> {
     serde_json::from_value(Value::String(s.to_string())).map_err(|_| {
@@ -151,6 +151,47 @@ pub enum MemoryCmd {
     },
 }
 
+#[derive(Subcommand)]
+pub enum AgentMemoryCmd {
+    /// Propose a new memory for the job's saved agent (full text in --file).
+    Propose {
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        reason: String,
+    },
+}
+
+#[derive(clap::Args)]
+pub struct AgentProposeArgs {
+    /// Slug for the agent (like a job's name).
+    #[arg(long)]
+    name: String,
+    /// One line about what the agent is for.
+    #[arg(long, default_value = "")]
+    description: String,
+    /// File with the agent's instructions (what the user had to repeat).
+    #[arg(long)]
+    instructions_file: Option<String>,
+}
+
+impl From<AgentProposeArgs> for XapCmd {
+    fn from(a: AgentProposeArgs) -> XapCmd {
+        XapCmd::AgentPropose {
+            name: a.name,
+            description: a.description,
+            instructions_file: a.instructions_file,
+        }
+    }
+}
+
+impl From<AgentMemoryCmd> for XapCmd {
+    fn from(c: AgentMemoryCmd) -> XapCmd {
+        let AgentMemoryCmd::Propose { file, reason } = c;
+        XapCmd::AgentMemoryPropose { file, reason }
+    }
+}
+
 impl From<MemoryCmd> for XapCmd {
     fn from(c: MemoryCmd) -> XapCmd {
         let MemoryCmd::Propose { file, reason } = c;
@@ -268,11 +309,8 @@ enum Posted {
 }
 
 fn post(call: &XapCall) -> Posted {
-    let Some(token) = std::env::var("XHERD_AGENT_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty())
-    else {
-        return Posted::Unreachable("no XHERD_AGENT_TOKEN in this environment".into());
+    let Some(token) = crate::report::job_env("TOKEN") else {
+        return Posted::Unreachable("no XHERD_JOB_TOKEN in this environment".into());
     };
     let url = std::env::var("XHERD_URL")
         .ok()
@@ -310,14 +348,14 @@ fn post(call: &XapCall) -> Posted {
 
 pub fn run(cmd: XapCmd, json: bool) -> i32 {
     let name = cmd.name();
-    let Some(target) = find_agent() else {
+    let Some(target) = find_job() else {
         eprintln!("xherd {name}: not running under xherd");
         return 4;
     };
     let report_only = cmd.is_report_only();
     let call = XapCall {
         id: xherd_core::new_id(),
-        agent_id: target.agent_id,
+        job_id: target.job_id,
         cmd,
         at: xherd_core::now_ms(),
     };

@@ -1,6 +1,6 @@
 # xherd document formats (v0)
 
-All documents live in the agent's spec folder, `.xherd/spec/` in the worktree
+All documents live in the job's spec folder, `.xherd/spec/` in the worktree
 (never committed). They are Markdown with a YAML frontmatter block. Approval is
 by content: xherd records the hash of what the user approved, so there is no
 `approved` key, and editing an approved document re-opens its gate.

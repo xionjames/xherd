@@ -7,13 +7,13 @@
   import TicketPill from './TicketPill.svelte';
   import { href, go } from '../lib/router.svelte';
   import { ago, repoName, waitText } from '../lib/format';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { prGate } from '../lib/flow';
 
-  let { agents }: { agents: Agent[] } = $props();
+  let { agents }: { agents: Job[] } = $props();
 
   /** The tab that holds the decision for a waiting agent. */
-  function decisionTab(a: Agent): string {
+  function decisionTab(a: Job): string {
     const g = a.gate;
     if (!g) return 'terminal';
     if (g.kind === 'commit') return 'changes';
@@ -22,7 +22,7 @@
     if (g.kind === 'docs') return 'spec';
     return 'pr';
   }
-  function actionLabel(a: Agent): string {
+  function actionLabel(a: Job): string {
     const g = a.gate;
     if (!g || g.kind === 'question') return 'Answer';
     if (g.kind === 'commit') return 'Review changes';
@@ -30,7 +30,7 @@
     if (g.kind === 'docs') return 'Review';
     return 'Decide';
   }
-  function meta(a: Agent): string {
+  function meta(a: Job): string {
     const g = a.gate;
     const parts = [repoName(a)];
     if (g?.kind === 'commit') parts.push(`${g.files.length} files`);
@@ -46,13 +46,13 @@
   {#each agents as a (a.id)}
     <article class="card need cb tight">
       <div class="row">
-        <AgentDot agent={a} /><a class="mono nyname" href={href(`/agent/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
+        <AgentDot agent={a} /><a class="mono nyname" href={href(`/jobs/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
         <span class="grow"></span><span class="muted num">{ago(a.statusSince)}</span>
       </div>
       <p class="wrap-any nytext" class:mono={a.gate?.kind === 'commit'} title={waitText(a)}>{waitText(a)}</p>
       <p class="hint nymeta" title={meta(a)}>{meta(a)}</p>
       <div class="row end">
-        <button class="btn gate" onclick={() => go(`/agent/${a.name}`, { s: decisionTab(a) })}>{actionLabel(a)}</button>
+        <button class="btn gate" onclick={() => go(`/jobs/${a.name}`, { s: decisionTab(a) })}>{actionLabel(a)}</button>
       </div>
     </article>
   {/each}

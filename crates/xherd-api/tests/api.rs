@@ -9,17 +9,17 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use xherd_core::paths::Paths;
-use xherd_core::{Agent, Status};
+use xherd_core::{Job, Status};
 use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER, mint_token};
 use xherd_daemon::*;
 
-async fn setup() -> (tempfile::TempDir, Daemon, Agent) {
+async fn setup() -> (tempfile::TempDir, Daemon, Job) {
     setup_with(|_| {}).await
 }
 
 /// `setup`, with `prep` run on the data root before the daemon starts (to
 /// add external plugins).
-async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Agent) {
+async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Job) {
     let dir = tempfile::tempdir().unwrap();
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.scheduler = None;
@@ -47,9 +47,9 @@ async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Ag
     .unwrap();
     prep(&paths);
     let d = Daemon::start(paths, o).await.unwrap();
-    let mut a = Agent::new("SC-1", 1);
+    let mut a = Job::new("SC-1", 1);
     a.launch = Some(vec!["rt".into()]);
-    let a = d.create_agent(a).await.unwrap();
+    let a = d.create_job(a).await.unwrap();
     for _ in 0..100 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -90,20 +90,20 @@ async fn auth_rules() {
 
     let (s, _) = call(
         remote.clone(),
-        get("/api/v1/agents").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
     let (s, v) = call(
         local.clone(),
-        get("/api/v1/agents").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["agents"][0]["name"], "SC-1");
+    assert_eq!(v["jobs"][0]["name"], "SC-1");
 
     // Proxied requests are not local even from loopback.
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("x-forwarded-for", "1.2.3.4")
         .body(Body::empty())
         .unwrap();
@@ -127,7 +127,7 @@ async fn auth_rules() {
     assert_eq!(call(remote, req).await.0, StatusCode::UNAUTHORIZED);
     // Locally an unknown token (another install's) changes nothing; an
     // agent's token never becomes the user's.
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", "Bearer xh_other_install")
         .body(Body::empty())
         .unwrap();
@@ -141,7 +141,7 @@ async fn auth_rules() {
     )
     .await
     .unwrap();
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", format!("Bearer {agent_t}"))
         .body(Body::empty())
         .unwrap();
@@ -152,7 +152,7 @@ async fn auth_rules() {
     d2.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
     let gw =
         xherd_api::router(d2).layer(MockConnectInfo(SocketAddr::from(([172, 17, 0, 1], 5555))));
-    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    let req = get("/api/v1/jobs").body(Body::empty()).unwrap();
     assert_eq!(call(gw, req).await.0, StatusCode::OK);
 
     // There, loopback is where the agents are: no rights without a token,
@@ -162,9 +162,9 @@ async fn auth_rules() {
     d3.local_peers = Arc::new(vec!["172.17.0.1".parse().unwrap()]);
     let inside = xherd_api::router(d3.clone())
         .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
-    let req = get("/api/v1/agents").body(Body::empty()).unwrap();
+    let req = get("/api/v1/jobs").body(Body::empty()).unwrap();
     assert_eq!(call(inside.clone(), req).await.0, StatusCode::UNAUTHORIZED);
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", "Bearer never-issued")
         .body(Body::empty())
         .unwrap();
@@ -173,7 +173,7 @@ async fn auth_rules() {
     let user_t = mint_token(&d3.store, TOKEN_USER, None, &[], 1)
         .await
         .unwrap();
-    let req = get("/api/v1/agents")
+    let req = get("/api/v1/jobs")
         .header("authorization", format!("Bearer {user_t}"))
         .body(Body::empty())
         .unwrap();
@@ -203,7 +203,7 @@ async fn hooks_need_the_agents_own_token() {
     )
     .await
     .unwrap();
-    let body = json!({"id": "r1", "agentId": a.id, "event": "stop", "payload": {"message": "ok"}, "seq": 1, "at": 0});
+    let body = json!({"id": "r1", "jobId": a.id, "event": "stop", "payload": {"message": "ok"}, "seq": 1, "at": 0});
     let post = |tok: &str, b: &Value| {
         Request::post("/api/v1/hooks")
             .header("authorization", format!("Bearer {tok}"))
@@ -257,24 +257,24 @@ async fn agent_actions() {
     };
     let (s, v) = call(
         app.clone(),
-        post("/api/v1/agents/SC-1/send", Some(json!({"text": "hi"}))),
+        post("/api/v1/jobs/SC-1/send", Some(json!({"text": "hi"}))),
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    let (s, v) = call(app.clone(), post("/api/v1/agents/SC-1/pause", None)).await;
+    let (s, v) = call(app.clone(), post("/api/v1/jobs/SC-1/pause", None)).await;
     assert_eq!(
-        (s, v["agent"]["status"].clone()),
+        (s, v["job"]["status"].clone()),
         (StatusCode::OK, json!("paused"))
     );
-    let (s, v) = call(app.clone(), post("/api/v1/agents/SC-1/pause", None)).await;
+    let (s, v) = call(app.clone(), post("/api/v1/jobs/SC-1/pause", None)).await;
     assert_eq!(
         (s, v["code"].clone()),
         (StatusCode::CONFLICT, json!("not_allowed"))
     );
-    let (s, _) = call(app.clone(), post("/api/v1/agents/NOPE/pause", None)).await;
+    let (s, _) = call(app.clone(), post("/api/v1/jobs/NOPE/pause", None)).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     // Check now (issue #131): refused without a pull request URL.
-    let (s, v) = call(app.clone(), post("/api/v1/agents/SC-1/pr-check", None)).await;
+    let (s, v) = call(app.clone(), post("/api/v1/jobs/SC-1/pr-check", None)).await;
     assert_eq!(
         (s, v["code"].clone()),
         (StatusCode::CONFLICT, json!("no_pr"))
@@ -282,7 +282,7 @@ async fn agent_actions() {
     // Resolve conflicts (issue #139): refused without a pull request URL too.
     let (s, v) = call(
         app.clone(),
-        post("/api/v1/agents/SC-1/resolve-conflicts", None),
+        post("/api/v1/jobs/SC-1/resolve-conflicts", None),
     )
     .await;
     assert_eq!(
@@ -301,13 +301,13 @@ async fn agent_actions() {
     );
     let (s, v) = call(
         app.clone(),
-        get("/api/v1/agents/SC-1").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs/SC-1").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
     let (s, d) = call(
         app.clone(),
-        get("/api/v1/agents/SC-1/diff").body(Body::empty()).unwrap(),
+        get("/api/v1/jobs/SC-1/diff").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(
@@ -349,7 +349,7 @@ async fn xap_endpoint() {
             .unwrap()
     };
     let ask =
-        json!({"id": "x1", "agentId": a.id, "cmd": "ask", "args": {"text": "which db?"}, "at": 0});
+        json!({"id": "x1", "jobId": a.id, "cmd": "ask", "args": {"text": "which db?"}, "at": 0});
 
     let (s, v) = call(app.clone(), post(&hooks_only, ask.to_string())).await;
     assert_eq!(
@@ -358,11 +358,11 @@ async fn xap_endpoint() {
     );
 
     let mut other = ask.clone();
-    other["agentId"] = json!("someone-else");
+    other["jobId"] = json!("someone-else");
     let (s, v) = call(app.clone(), post(&token, other.to_string())).await;
     assert_eq!(
         (s, v["code"].clone()),
-        (StatusCode::FORBIDDEN, json!("wrong_agent"))
+        (StatusCode::FORBIDDEN, json!("wrong_job"))
     );
 
     let (s, v) = call(app.clone(), post(&token, "{\"cmd\": 1}".into())).await;
@@ -376,7 +376,7 @@ async fn xap_endpoint() {
     assert_eq!(v["result"]["gate"]["kind"], "question");
 
     // The setup agent has no flow: stage calls are refused with 422.
-    let stage = json!({"id": "x2", "agentId": a.id, "cmd": "stage.enter", "args": {"stage": "spec"}, "at": 0});
+    let stage = json!({"id": "x2", "jobId": a.id, "cmd": "stage.enter", "args": {"stage": "spec"}, "at": 0});
     let (s, v) = call(app.clone(), post(&token, stage.to_string())).await;
     assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
@@ -392,7 +392,7 @@ async fn create_agent_endpoint() {
     let app =
         xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
     let post = |body: Value| {
-        Request::post("/api/v1/agents")
+        Request::post("/api/v1/jobs")
             .header("host", "127.0.0.1:4740")
             .header("content-type", "application/json")
             .body(Body::from(body.to_string()))
@@ -445,11 +445,7 @@ async fn create_agent_endpoint() {
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(
-        (
-            &v["agent"]["name"],
-            &v["agent"]["ticket"],
-            &v["agent"]["branch"]
-        ),
+        (&v["job"]["name"], &v["job"]["ticket"], &v["job"]["branch"]),
         (
             &json!("refund-retry"),
             &json!({"key": "SC-9"}),
@@ -473,7 +469,7 @@ async fn create_agent_endpoint() {
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(
-        (&v["agent"]["name"], &v["agent"]["branch"]),
+        (&v["job"]["name"], &v["job"]["branch"]),
         (&json!("sc-10"), &json!("SC-10"))
     );
     // A ticket URL no tracker reads is kept as a link, with no key.
@@ -484,7 +480,7 @@ async fn create_agent_endpoint() {
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(
-        (&v["agent"]["ticket"], &v["agent"]["branch"]),
+        (&v["job"]["ticket"], &v["job"]["branch"]),
         (&json!({"url": "https://example.org/t/1"}), &json!("linked"))
     );
 }
@@ -575,14 +571,14 @@ async fn websocket_streams_agent_changes() {
         loop {
             let m = ws.next().await.unwrap().unwrap();
             let v: Value = serde_json::from_str(m.to_text().unwrap()).unwrap();
-            if v["type"] == "agent" && v["agent"]["status"] == "paused" {
+            if v["type"] == "job" && v["job"]["status"] == "paused" {
                 return v;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(msg["agent"]["name"], "SC-1");
+    assert_eq!(msg["job"]["name"], "SC-1");
 }
 
 #[tokio::test]
@@ -776,14 +772,14 @@ async fn findings_endpoint_reads_review_md() {
     let wt = dir.path().join("wt");
     let spec = wt.join(".xherd/spec");
     std::fs::create_dir_all(&spec).unwrap();
-    let mut b = Agent::new("SC-2", 2);
+    let mut b = Job::new("SC-2", 2);
     b.launch = Some(vec!["rt".into()]);
     b.workdir = Some(wt.to_string_lossy().into_owned());
-    d.create_agent(b).await.unwrap();
+    d.create_job(b).await.unwrap();
     let local =
         xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
     let req = || {
-        get("/api/v1/agents/SC-2/findings")
+        get("/api/v1/jobs/SC-2/findings")
             .body(Body::empty())
             .unwrap()
     };
@@ -1022,7 +1018,7 @@ async fn opaque_origin_gets_no_rights() {
     let (_dir, d, _a) = setup_with(external_views).await;
     let local = xherd_api::router(d.clone())
         .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
-    for uri in ["/api/v1/state", "/api/v1/agents"] {
+    for uri in ["/api/v1/state", "/api/v1/jobs"] {
         let req = get(uri)
             .header("origin", "null")
             .body(Body::empty())
@@ -1065,7 +1061,7 @@ async fn companion_routes_are_gone() {
     let local = xherd_api::router(d.clone())
         .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
     // Now only the generic action route matches: no such action.
-    let req = Request::post("/api/v1/agents/SC-1/open")
+    let req = Request::post("/api/v1/jobs/SC-1/open")
         .header("host", "127.0.0.1:4740")
         .body(Body::empty())
         .unwrap();
@@ -1080,7 +1076,7 @@ async fn companion_routes_are_gone() {
     assert_eq!(call(local.clone(), req).await.0, StatusCode::NOT_FOUND);
 
     // The test agent has no worktree.
-    let req = get("/api/v1/agents/SC-1/open-targets")
+    let req = get("/api/v1/jobs/SC-1/open-targets")
         .body(Body::empty())
         .unwrap();
     let (s, v) = call(local, req).await;
@@ -1156,13 +1152,13 @@ async fn terminal_handler_reports_are_kept() {
     assert_eq!(v["native"], json!(true));
 
     // An agent with a worktree: no Terminal entry before a report.
-    let mut a = Agent::new("SC-2", 2);
+    let mut a = Job::new("SC-2", 2);
     a.workdir = Some(format!("{}/app/sc-2", d.worktrees_root()));
-    d.create_agent(a).await.unwrap();
+    d.create_job(a).await.unwrap();
     let targets = |app: axum::Router| async move {
         let (s, v) = call(
             app,
-            get("/api/v1/agents/SC-2/open-targets")
+            get("/api/v1/jobs/SC-2/open-targets")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1288,4 +1284,569 @@ async fn terminal_handler_install_is_native_only() {
     )
     .await;
     assert!(s.is_client_error(), "{s}");
+}
+
+/// R3: the old `/agents/…` routes answer `410 moved` for a job and `404`
+/// for anything else.
+#[tokio::test]
+async fn old_agent_routes_are_gone() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    for (method, uri, location) in [
+        ("POST", "/api/v1/agents/pause-all", "/api/v1/jobs/pause-all"),
+        ("GET", "/api/v1/agents/SC-1", "/api/v1/jobs/SC-1"),
+        (
+            "POST",
+            "/api/v1/agents/SC-1/pause",
+            "/api/v1/jobs/SC-1/pause",
+        ),
+        (
+            "GET",
+            "/api/v1/agents/SC-1/ticket-status",
+            "/api/v1/jobs/SC-1/ticket-status",
+        ),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "127.0.0.1:4740")
+            .body(Body::empty())
+            .unwrap();
+        let (s, v) = call(app.clone(), req).await;
+        assert_eq!(
+            (s, v["code"].clone(), v["location"].clone()),
+            (StatusCode::GONE, json!("moved"), json!(location)),
+            "{method} {uri}"
+        );
+    }
+    let (s, v) = call(
+        app,
+        get("/api/v1/agents/NOPE/diff").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_job"))
+    );
+}
+
+fn send(method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
+    let b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("host", "127.0.0.1:4740");
+    match body {
+        Some(v) => b
+            .header("content-type", "application/json")
+            .body(Body::from(v.to_string()))
+            .unwrap(),
+        None => b.body(Body::empty()).unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn saved_agent_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let new = json!({"name": "reviewer", "runtime": "claude-code"});
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents", Some(new.clone())),
+    )
+    .await;
+    assert_eq!(
+        (s, v["version"].clone(), v["status"].clone()),
+        (StatusCode::OK, json!(1), json!("idle"))
+    );
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["liveJobs"], 0);
+    // refusals have their codes and statuses
+    for (body, status, code) in [
+        (new.clone(), StatusCode::CONFLICT, "name_taken"),
+        (
+            json!({"name": "x", "runtime": "claude-code", "fallbackRuntime": "claude-code"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_fallback",
+        ),
+        (
+            json!({"name": "Bad Name", "runtime": "claude-code"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_name",
+        ),
+    ] {
+        let (s, v) = call(app.clone(), send("POST", "/api/v1/agents", Some(body))).await;
+        assert_eq!((s, v["code"].clone()), (status, json!(code)));
+    }
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["agents"].as_array().unwrap().len()),
+        (StatusCode::OK, 1)
+    );
+    let (_, st) = call(
+        app.clone(),
+        get("/api/v1/state").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(st["agents"][0]["name"], "reviewer");
+    assert_eq!(st["jobs"].as_array().unwrap().len(), 1, "jobs stay jobs");
+
+    // by name and by id; edit; versions; archive
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!((s, v["id"].clone()), (StatusCode::OK, json!(id)));
+    let mut edit = new.clone();
+    edit["description"] = json!("more");
+    let (s, v) = call(
+        app.clone(),
+        send("PUT", &format!("/api/v1/agents/{id}"), Some(edit.clone())),
+    )
+    .await;
+    assert_eq!((s, v["version"].clone()), (StatusCode::OK, json!(2)));
+    edit["name"] = json!("renamed");
+    let (s, v) = call(
+        app.clone(),
+        send("PUT", "/api/v1/agents/reviewer", Some(edit)),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("name_fixed"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send("PUT", "/api/v1/agents/reviewer", Some(json!({"nope": 1}))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!("bad_request"))
+    );
+    let (_, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/versions")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v["versions"].as_array().unwrap().len(), 2);
+    let (_, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/jobs")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v["jobs"], json!([]));
+    // memory (R28)
+    let (_, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/memory")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v, json!({"text": "", "version": 0}));
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "PUT",
+            "/api/v1/agents/reviewer/memory",
+            Some(json!({"text": "Use qa/."})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v),
+        (StatusCode::OK, json!({"text": "Use qa/.", "version": 1}))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "PUT",
+            "/api/v1/agents/reviewer/memory",
+            Some(json!({"text": "x".repeat(4001)})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("bad_memory"))
+    );
+    let (_, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/reviewer/archive", None),
+    )
+    .await;
+    assert_eq!(v["status"], "archived");
+    let (_, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/reviewer/unarchive", None),
+    )
+    .await;
+    assert_eq!(v["status"], "idle");
+
+    // export and import
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents/export?name=reviewer")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["agents"].as_array().unwrap().len()),
+        (StatusCode::OK, 1)
+    );
+    let mut copy = v.clone();
+    copy["agents"][0]["name"] = json!("copy");
+    let (_, dry) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/import?dryRun=1", Some(copy.clone())),
+    )
+    .await;
+    assert_eq!(dry["agents"][0]["agent"]["name"], "copy");
+    assert_eq!(
+        d.agents().await.unwrap().len(),
+        1,
+        "a dry run writes nothing"
+    );
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/import", Some(copy)),
+    )
+    .await;
+    assert_eq!((s, v["added"].clone()), (StatusCode::OK, json!(1)));
+
+    // a job with the same name as no agent still gets the 410, an agent route
+    // that does not exist the 404, and a job name on an agent path the 410
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/ticket")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("no_such_route"))
+    );
+    for (method, uri, location) in [
+        ("GET", "/api/v1/agents/SC-1", "/api/v1/jobs/SC-1"),
+        (
+            "POST",
+            "/api/v1/agents/SC-1/archive",
+            "/api/v1/jobs/SC-1/archive",
+        ),
+        (
+            "GET",
+            "/api/v1/agents/SC-1/versions",
+            "/api/v1/jobs/SC-1/versions",
+        ),
+    ] {
+        let (s, v) = call(app.clone(), send(method, uri, None)).await;
+        assert_eq!(
+            (s, v["code"].clone(), v["location"].clone()),
+            (StatusCode::GONE, json!("moved"), json!(location)),
+            "{method} {uri}"
+        );
+    }
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/NOPE/archive", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_job"))
+    );
+
+    // delete
+    let (s, _) = call(app.clone(), send("DELETE", "/api/v1/agents/copy", None)).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = call(app, send("DELETE", "/api/v1/agents/copy", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_job"))
+    );
+}
+
+/// R25: the skills library routes and their refusals.
+#[tokio::test]
+async fn skill_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let md = "---\nname: lint-fix\ndescription: Fixes lint\n---\nSteps\n";
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/skills",
+            Some(json!({"name": "lint-fix", "text": md})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["description"].clone()),
+        (StatusCode::OK, json!("Fixes lint"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/skills",
+            Some(json!({"name": "lint-fix", "text": md})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("name_taken"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/skills",
+            Some(json!({"name": "x", "text": "no header"})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("bad_skill"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/skills").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["skills"][0]["name"].clone()),
+        (StatusCode::OK, json!("lint-fix"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/skills/lint-fix").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!((s, v["text"].clone()), (StatusCode::OK, json!(md)));
+    // an agent needs the skill to exist; the skill cannot go while it is used
+    let agent = |skills: Value| {
+        json!({"name": "rev", "runtime": "claude-code",
+               "skills": skills})
+    };
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents", Some(agent(json!(["nope"])))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("unknown_skill"))
+    );
+    let (s, _) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents", Some(agent(json!(["lint-fix"])))),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = call(app.clone(), send("DELETE", "/api/v1/skills/lint-fix", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("skill_in_use"))
+    );
+    let (s, v) = call(app, send("DELETE", "/api/v1/skills/nope", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("no_such_skill"))
+    );
+}
+
+/// Mark done, suggestion and save-as-agent (R30…R32).
+#[tokio::test]
+async fn mark_done_and_save_as_agent_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let form = json!({"agent": {"name": "shop", "description": "Shop",
+        "runtime": "claude-code", "instructions": "Run the linter."}});
+    // SC-1 is running: it can be neither marked done nor accepted.
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/jobs/SC-1/mark-done", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("not_allowed"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/jobs/SC-1/suggestion/accept",
+            Some(form.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("no_suggestion"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/jobs/SC-1/save-as-agent",
+            Some(json!({"nope": 1})),
+        ),
+    )
+    .await;
+    // Like the agent routes: a body of the wrong shape is axum's 422.
+    assert_eq!((s, v), (StatusCode::UNPROCESSABLE_ENTITY, Value::Null));
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/jobs/SC-1/save-as-agent",
+            Some(form.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["agent"]["name"], "shop");
+    let id = v["job"]["currentAgent"].as_str().unwrap().to_string();
+    assert_eq!(v["job"]["agents"][id.as_str()]["name"], "shop");
+    assert_eq!(v["job"]["defaultAgent"], id.as_str());
+    assert_eq!(v["job"]["pinned"], true);
+    assert!(v["job"].get("agent").is_none());
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/jobs/SC-1/save-as-agent", Some(form)),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("has_agent"))
+    );
+    // Dismissing with nothing to dismiss is a no-op.
+    let (s, _) = call(
+        app,
+        send("POST", "/api/v1/jobs/SC-1/suggestion/dismiss", None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn flow_assignment_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let (s, _) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/agents",
+            Some(json!({"name": "architect", "runtime": "claude-code"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/flows").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["flows"].as_array().unwrap().len(), 2);
+    let url = "/api/v1/flows/xherd/feature/assignments";
+    let put = |body| send("PUT", url, Some(body));
+    let (s, v) = call(
+        app.clone(),
+        put(json!({"assignments": [{"stage": "design", "agentId": "architect", "human": true}]})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let design = v["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == "design")
+        .unwrap();
+    assert_eq!(
+        (
+            design["agent"].clone(),
+            design["human"].clone(),
+            design["assigned"].clone()
+        ),
+        (json!("architect"), json!(true), json!(true))
+    );
+    let (s, v) = call(app.clone(), get(url).body(Body::empty()).unwrap()).await;
+    assert_eq!(
+        (s, v["assignments"].as_array().unwrap().len()),
+        (StatusCode::OK, 1)
+    );
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/flows/xherd/feature")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!((s, v["flow"].clone()), (StatusCode::OK, json!("feature")));
+    // refusals and their statuses
+    for (body, status, code) in [
+        (
+            json!({"assignments": [{"stage": "nope", "agentId": "architect"}]}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_stage",
+        ),
+        (
+            json!({"assignments": [{"stage": "design", "agentId": "ghost"}]}),
+            StatusCode::NOT_FOUND,
+            "unknown_agent",
+        ),
+        (
+            json!({"assignments": [{"stage": "design", "agentId": "architect"}, {"stage": "design", "agentId": "architect"}]}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_assignment",
+        ),
+    ] {
+        let (s, v) = call(app.clone(), put(body)).await;
+        assert_eq!((s, v["code"].clone()), (status, json!(code)));
+    }
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "PUT",
+            "/api/v1/flows/xherd/nope/assignments",
+            Some(json!({"assignments": []})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("unknown_flow"))
+    );
+    // an assigned agent cannot be deleted (409)
+    let (s, v) = call(
+        app.clone(),
+        send("DELETE", "/api/v1/agents/architect", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("agent_assigned"))
+    );
 }

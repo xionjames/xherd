@@ -253,7 +253,7 @@ pub fn agent_targets(
 }
 
 impl Daemon {
-    /// `GET /agents/:id/open-targets`: what works for this agent from a
+    /// `GET /jobs/:id/open-targets`: what works for this agent from a
     /// local browser (R-671), minus what Settings hides (R-706).
     pub async fn open_targets(&self, who: &str) -> Result<Vec<Target>, ActionError> {
         let a = self.action(who, UserAction::Get).await?;

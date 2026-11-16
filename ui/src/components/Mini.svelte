@@ -1,9 +1,9 @@
 <script lang="ts">
   // One dot per stage: green done, ember waiting, cobalt running, grey to do.
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { app } from '../lib/store.svelte';
   import { flowOf, steps, stageLabel } from '../lib/flow';
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   const f = $derived(flowOf(agent, app.state?.flows ?? []));
   const COLOR = { ok: 'var(--live)', now: 'var(--gate)', cur: 'var(--accent)', todo: 'var(--fence-strong)', skip: 'transparent' };
 </script>

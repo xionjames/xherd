@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast;
-use xherd_core::{Agent, Millis};
+use xherd_core::{Job, Millis};
 use xherd_store::Store;
 
 pub trait Clock: Send + Sync + 'static {
@@ -47,16 +47,18 @@ impl Clock for ManualClock {
     rename_all_fields = "camelCase"
 )]
 pub enum Change {
-    Agent {
-        agent: Box<Agent>,
+    Job {
+        job: Box<Job>,
     },
     /// `kind` (`gate`, `blocked`, `idle`…) tells which notification a new one
     /// replaces: one per agent and kind (spec §16.3).
     Notify {
-        agent_id: String,
+        job_id: String,
         kind: String,
         text: String,
     },
+    /// A saved agent was created, changed, archived or deleted; the UI refetches `/agents`.
+    Agents,
 }
 
 pub type Hub = broadcast::Sender<Change>;
@@ -66,6 +68,9 @@ pub fn hub() -> Hub {
 }
 
 pub const TOKEN_USER: &str = "user";
+/// Tokens of a job's session. Kind `agent` is what sessions started before
+/// #141 hold; it is still accepted but never minted.
+pub const TOKEN_JOB: &str = "job";
 pub const TOKEN_AGENT: &str = "agent";
 pub const SCOPE_HOOKS: &str = "hooks";
 pub const SCOPE_XAP: &str = "xap";

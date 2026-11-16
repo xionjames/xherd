@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use xherd_core::paths::Paths;
-use xherd_core::{Agent, Status};
+use xherd_core::{Job, Status};
 use xherd_daemon::backup::{self, RestoreOptions};
 use xherd_git::Git;
 use xherd_store::Store;
@@ -69,18 +69,63 @@ async fn backup_and_restore_on_another_machine() {
     .unwrap();
     std::fs::write(p1.secrets(), r#"{"git":{"token":"nope"}}"#).unwrap();
     let store = Store::open(&p1.db(), &p1.backups()).unwrap();
-    let mut a = Agent::new("ag1", 1);
+    let mut a = Job::new("ag1", 1);
     a.status = Status::Running;
     a.workdir = Some(wt1.to_string_lossy().into_owned());
     a.repo = Some(repo1.to_string_lossy().into_owned());
     a.base = Some("origin/main".into());
-    store.put_agent(&a).await.unwrap();
+    store.put_job(&a).await.unwrap();
+
+    // A saved agent (issue #141): two versions, a memory and a skill in the
+    // library. They live in the database snapshot and `data/skills`.
+    let mut def = xherd_core::agent_def::AgentDef {
+        id: "ad1".into(),
+        name: "reviewer".into(),
+        description: String::new(),
+        version: 1,
+        runtime: "claude-code".into(),
+        models: Default::default(),
+        fallback_runtime: None,
+        autonomy: None,
+        permission_mode: None,
+        instructions: Some("Be brief.".into()),
+        job_token_budget: None,
+        sensitive_paths: vec![],
+        max_diff_lines: None,
+        skills: vec!["lint".into()],
+        max_live_jobs: 1,
+        created_at: 1,
+        updated_at: 10,
+        archived_at: None,
+    };
+    store.put_agent_def(&def).await.unwrap();
+    def.version = 2;
+    def.updated_at = 20;
+    store.put_agent_def(&def).await.unwrap();
+    store
+        .set_flow_assignments(
+            "xherd",
+            "feature",
+            &[xherd_core::resolve::Assignment {
+                stage: "review".into(),
+                agent_id: "ad1".into(),
+                human: true,
+            }],
+        )
+        .await
+        .unwrap();
+    store
+        .put_agent_memory("ad1", "Use cargo nextest.", 30)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(p1.skills().join("lint")).unwrap();
+    std::fs::write(p1.skills().join("lint/SKILL.md"), "---\nname: lint\n---\n").unwrap();
 
     let dest = t.join("out");
     let made = backup::create(&p1, &ws1, &store, &g, &dest, "manual", 1_000_000)
         .await
         .unwrap();
-    assert_eq!(made.agents, 1, "{:?}", made.warnings);
+    assert_eq!(made.jobs, 1, "{:?}", made.warnings);
     assert!(made.path.is_file());
     // Nothing is left beside the archive.
     assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 1);
@@ -88,8 +133,10 @@ async fn backup_and_restore_on_another_machine() {
     let m = backup::verify(&made.path, &p1.scratch(), &g, 1)
         .await
         .unwrap();
-    assert!(m.agents[0].bundle && m.agents[0].patch);
+    assert!(m.jobs[0].bundle && m.jobs[0].patch);
     assert!(!m.files.keys().any(|k| k.contains("secrets")));
+    assert!(m.files.keys().any(|k| k.starts_with("jobs/ag1/")));
+    assert!(!m.files.keys().any(|k| k.starts_with("agents/")));
 
     // The second machine: no repository, another workspace.
     let ws2 = t.join("ws2");
@@ -101,7 +148,7 @@ async fn backup_and_restore_on_another_machine() {
     let r = backup::restore(&p2, &g, &made.path, &opts, 2)
         .await
         .unwrap();
-    assert_eq!(r.agents, ["ag1"]);
+    assert_eq!(r.jobs, ["ag1"]);
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);
 
     let wt2 = ws2.join("worktrees/r/ag1");
@@ -124,13 +171,31 @@ async fn backup_and_restore_on_another_machine() {
     );
 
     let s2 = Store::open(&p2.db(), &p2.backups()).unwrap();
-    let back = s2.get_agent(&a.id).await.unwrap().unwrap();
+    let back = s2.get_job(&a.id).await.unwrap().unwrap();
     assert_eq!(back.status, Status::Paused);
     assert_eq!(back.workdir.as_deref(), Some(wt2.to_str().unwrap()));
     assert_eq!(
         back.repo.as_deref(),
         Some(ws2.join("repos/r").to_str().unwrap())
     );
+    let ad = s2.get_agent_def("ad1").await.unwrap().unwrap();
+    assert_eq!((ad.name.as_str(), ad.version), ("reviewer", 2));
+    assert_eq!(s2.agent_versions("ad1").await.unwrap().len(), 2);
+    assert_eq!(
+        s2.agent_memory("ad1").await.unwrap().map(|m| m.0),
+        Some("Use cargo nextest.".into())
+    );
+    let asg = s2.flow_assignments("xherd", "feature").await.unwrap();
+    assert_eq!(asg.len(), 1);
+    assert_eq!(
+        (
+            asg[0].stage.as_str(),
+            asg[0].agent_id.as_str(),
+            asg[0].human
+        ),
+        ("review", "ad1", true)
+    );
+    assert!(p2.skills().join("lint/SKILL.md").is_file());
     let cfg: serde_json::Value =
         serde_json::from_slice(&std::fs::read(p2.config()).unwrap()).unwrap();
     assert!(cfg.get("userToken").is_none());
@@ -140,6 +205,54 @@ async fn backup_and_restore_on_another_machine() {
     // A second restore over a database needs --force.
     let again = backup::restore(&p2, &g, &made.path, &opts, 3).await;
     assert!(again.unwrap_err().contains("--force"));
+
+    // An archive made before the rename (`agents/<name>`, manifest key `agents`).
+    let old = legacy_archive(&made.path, &t.join("legacy"));
+    let ws3 = t.join("ws3");
+    let p3 = Paths::at(t.join("data3"));
+    let opts3 = RestoreOptions {
+        workspace: Some(ws3.to_string_lossy().into_owned()),
+        ..RestoreOptions::default()
+    };
+    let m3 = backup::verify(&old, &p3.scratch(), &g, 4).await.unwrap();
+    assert_eq!(m3.jobs.len(), 1);
+    let r3 = backup::restore(&p3, &g, &old, &opts3, 5).await.unwrap();
+    assert_eq!(r3.jobs, ["ag1"]);
+    assert!(r3.warnings.is_empty(), "{:?}", r3.warnings);
+    let wt3 = ws3.join("worktrees/r/ag1");
+    assert_eq!(git(&g, &wt3, &["log", "-1", "--format=%s"]).await, "work");
+    assert_eq!(
+        std::fs::read_to_string(wt3.join(".xherd/spec/spec.md")).unwrap(),
+        "# spec\n"
+    );
+}
+
+/// Repack `archive` the way xherd made them before jobs: `agents/<name>` folders and
+/// `agents` in the manifest.
+fn legacy_archive(archive: &Path, work: &Path) -> std::path::PathBuf {
+    let dir = work.join("tree");
+    std::fs::create_dir_all(&dir).unwrap();
+    let dec = zstd::Decoder::new(std::fs::File::open(archive).unwrap()).unwrap();
+    tar::Archive::new(dec).unpack(&dir).unwrap();
+    std::fs::rename(dir.join("jobs"), dir.join("agents")).unwrap();
+    let mp = dir.join("manifest.json");
+    let mut m: serde_json::Value = serde_json::from_slice(&std::fs::read(&mp).unwrap()).unwrap();
+    let o = m.as_object_mut().unwrap();
+    let jobs = o.remove("jobs").unwrap();
+    o.insert("agents".into(), jobs);
+    let files = o["files"].as_object().unwrap().clone();
+    let renamed: serde_json::Map<String, serde_json::Value> = files
+        .into_iter()
+        .map(|(k, v)| (k.replacen("jobs/", "agents/", 1), v))
+        .collect();
+    o.insert("files".into(), renamed.into());
+    std::fs::write(&mp, serde_json::to_vec(&m).unwrap()).unwrap();
+    let out = work.join("old.tar.zst");
+    let enc = zstd::Encoder::new(std::fs::File::create(&out).unwrap(), 3).unwrap();
+    let mut b = tar::Builder::new(enc);
+    b.append_dir_all(".", &dir).unwrap();
+    b.into_inner().unwrap().finish().unwrap();
+    out
 }
 
 #[tokio::test]

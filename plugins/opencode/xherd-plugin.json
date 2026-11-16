@@ -34,6 +34,10 @@
           }
         }
       },
+      "skills": {
+        "dir": ".opencode/skills",
+        "format": "skill"
+      },
       "modelArgs": [
         "--model",
         "{model}"

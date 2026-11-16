@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Agent page: your-call band, hero (name, meta, actions, progress), tabs of
+  // Job page: your-call band, hero (name, meta, actions, progress), tabs of
   // panels from the registry.
   import Icon from '../components/Icon.svelte';
   import TicketPill from '../components/TicketPill.svelte';
@@ -10,8 +10,9 @@
   import Dialog from '../components/Dialog.svelte';
   import Callout from '../components/Callout.svelte';
   import TicketPrompt from '../components/TicketPrompt.svelte';
-  import type { Agent } from '../lib/types';
-  import { app, upsertAgent } from '../lib/store.svelte';
+  import SuggestAgent from '../components/SuggestAgent.svelte';
+  import type { Job } from '../lib/types';
+  import { app, upsertJob } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
   import { flowOf, prGate } from '../lib/flow';
@@ -21,19 +22,21 @@
   import { MODE_HINT, modes } from '../lib/modes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
+  import { agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
   // daemon every 30 s so the user's time on the agent is counted.
   const timeId = $derived(agent.id);
   $effect(() => {
     const id = timeId;
     const t = setInterval(() => {
-      if (document.visibilityState === 'visible' && document.hasFocus()) post(`/agents/${id}/user-time`, { ms: 30000 }).catch(() => {});
+      if (document.visibilityState === 'visible' && document.hasFocus()) post(`/jobs/${id}/user-time`, { ms: 30000 }).catch(() => {});
     }, 30000);
     return () => clearInterval(t);
   });
   let confirmCancel = $state(false);
+  let saveOpen = $state(false);
   let menu = $state(false);
   // Open in… (R-701, R-702, R-706, R-707): links that work because the
   // workspace has the same path on this computer; the browser opens them.
@@ -43,11 +46,17 @@
   async function toggleOpen() {
     openMenu = !openMenu;
     if (!openMenu) return;
-    try { targets = (await get<{ targets: Target[] }>(`/agents/${agent.id}/open-targets`)).targets; }
+    try { targets = (await get<{ targets: Target[] }>(`/jobs/${agent.id}/open-targets`)).targets; }
     catch (e) { openMenu = false; showError('Could not list editors', e); }
   }
 
   const flow = $derived(flowOf(agent, app.state?.flows ?? []));
+  // The saved agent this job started from (R23): a link while it exists, plain
+  // text after it was deleted; "changed since" opens the diff of its versions.
+  const curAgent = $derived(jobAgent(agent));
+  const def = $derived(agentOf(agent, app.state?.agents));
+  const newer = $derived(changedSince(agent, def));
+  const queuedForAgent = $derived(waitsForAgent(agent, app.state?.agents ?? []));
   const tabs = $derived(agentTabs(agent));
   const fallback = $derived.by(() => {
     const g = agent.gate;
@@ -73,19 +82,26 @@
     }
     if (id === 'commits' && agent.commits?.length) return { n: agent.commits.length, tone: '' };
     if (id === 'memory' && agent.memoryProposal) return { n: '✋', tone: 'g' };
+    if (id === 'agent-memory' && agent.agentMemoryProposal) return { n: '✋', tone: 'g' };
     return undefined;
   }
 
   const finished = $derived(['done', 'cancelled'].includes(agent.status));
+  // A job with agents gets its runtime, model, autonomy and tools from them:
+  // shown as facts. Changing one here pins the job to the current agent (it
+  // stops switching agents per stage), so it takes a deliberate click.
+  let override = $state(false);
+  $effect(() => { void agent.id; override = false; });
+  const owned = $derived(hasAgents(agent) && !agent.pinned && !override && !finished);
   async function setAutonomy(e: Event) {
     const level = (e.currentTarget as HTMLSelectElement).value;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/autonomy`, { level })).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/autonomy`, { level })).job); }
     catch (err) { showError('Could not change the autonomy', err); }
   }
 
   async function setMode(e: Event) {
     const mode = (e.currentTarget as HTMLSelectElement).value;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/mode`, { mode })).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/mode`, { mode })).job); }
     catch (err) { showError('Could not change the tool permissions', err); }
   }
 
@@ -93,13 +109,13 @@
   async function setModel(model: string) {
     if (!validModel(model)) { showError('Could not change the model', new Error('Letters, digits and . _ : / @ - [ ] only')); return; }
     if (model.trim() === (agent.model ?? '')) return;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/model`, { model: model.trim() })).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/model`, { model: model.trim() })).job); }
     catch (err) { showError('Could not change the model', err); }
   }
 
   async function act(action: string, label: string, body?: unknown) {
     menu = false;
-    try { upsertAgent((await post<{ agent: Agent }>(`/agents/${agent.id}/${action}`, body)).agent); }
+    try { upsertJob((await post<{ job: Job }>(`/jobs/${agent.id}/${action}`, body)).job); }
     catch (e) { showError(label, e); }
   }
 
@@ -113,6 +129,15 @@
 
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
 <TicketPrompt {agent} />
+<SuggestAgent {agent} bind:open={saveOpen} />
+{#if curAgent?.skills?.some((s) => !s.installed)}
+  <Callout tone="info">{#each curAgent.skills.filter((s) => !s.installed) as s (s.name)}<div>
+    Skill <b>{s.name}</b> was not installed: {s.skipped ?? 'skipped'}.</div>{/each}</Callout>
+{/if}
+{#if agent.lowered?.length}
+  <Callout tone="info">{#each agent.lowered as l (l.field)}<div>
+    {l.field === 'autonomy' ? 'Autonomy' : 'Tool permissions'} was lowered from <b>{l.from}</b> to <b>{l.to}</b> by the repository profile <b>{l.profile}</b> ("at most").</div>{/each}</Callout>
+{/if}
 
 <header class="hero">
   <div class="htop">
@@ -124,13 +149,27 @@
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
         <div class="hfacts">
+          {#if curAgent}
+            <span>agent {#if def}<a href={href(`/agents/${def.name}`)}>{curAgent.name}</a>{:else}{curAgent.name}{/if} <span class="muted">v{curAgent.version}</span>
+              {#if newer && def}<a class="hint" href={href(`/agents/${def.name}`, { s: 'versions', since: String(curAgent.version) })} title="This job keeps the settings it started with">· agent changed since this job started (now v{def.version})</a>{/if}
+              {#if curAgent.fellBack}<span class="hint" title="The agent's runtime was off when the job started"> · fell back to {curAgent.runtime}</span>{/if}
+              {#if queuedForAgent}<span class="hint"> · waits for its agent: {def?.liveJobs} of {def?.maxLiveJobs} live jobs</span>{/if}</span>
+          {/if}
           {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
           <span>{agent.runtime ?? 'claude-code'}</span>
           {#if !canModel && agent.model}<span class="mono">{agent.model}</span>{/if}
+          {#if owned}
+            {#if canModel && agent.model}<span class="mono" title="Model">{agent.model}</span>{/if}
+            {#if agent.flow && agent.flow !== 'none'}<span title="Autonomy">autonomy {agent.autonomy ?? 'ask'}</span>{/if}
+            {#if agent.permissionMode}<span title={MODE_HINT[agent.permissionMode]}>tools {agent.permissionMode}</span>{/if}
+          {/if}
           <span>started {agoText(agent.createdAt)}</span>
           <span>active {agoText(agent.lastActivity)}</span>
         </div>
         <div class="hctl">
+          {#if owned}
+            <button class="btn ghost" title="Set the model, autonomy or tools for this job only. The job then stops switching agents at each stage." onclick={() => (override = true)}>Override for this job</button>
+          {:else}
           {#if canModel}
             {#key agent.model}
               <label class="hfield" title="Empty = the runtime's default. A change applies from the next session start (approved gate, resume)."><span>model</span>
@@ -148,6 +187,7 @@
               <select aria-label="Tool permissions" value={agent.permissionMode} disabled={finished} onchange={setMode}>
                 {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
               </select></label>
+          {/if}
           {/if}
         </div>
       </div>
@@ -181,7 +221,13 @@
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>
         {#if menu}
           <div class="pop" role="menu">
-            <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel agent…</button>
+            {#if canMarkDone(agent)}
+              <button role="menuitem" class="btn ghost" title="This job has no pull request to merge: end it here" onclick={() => act('mark-done', 'Could not mark it done')}>Mark done</button>
+            {/if}
+            {#if !hasAgents(agent)}
+              <button role="menuitem" class="btn ghost" onclick={() => { menu = false; saveOpen = true; }}>Save as agent…</button>
+            {/if}
+            <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel job…</button>
             {#if canRemove}
               <button role="menuitem" class="btn ghost danger" onclick={() => { menu = false; confirmRemove = true; }}>Remove worktree…</button>
             {/if}
@@ -194,11 +240,11 @@
 </header>
 
 <div class="aview">
-  <nav class="vnav" aria-label="Agent">
+  <nav class="vnav" aria-label="Job">
     {#each tabs as t (t.id)}
       {@const b = badge(t.id)}
       <a class="vtb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
-        href={href(`/agent/${agent.name}`, { s: t.id })}>
+        href={href(`/jobs/${agent.name}`, { s: t.id })}>
         <Icon name={t.icon} />{t.label}{#if b?.n === '✋'}<span class="tc mark {b.tone}" title="Needs you"><Icon name="handSolid" size={16} solid /></span>{:else if b}<span class="tc {b.tone}">{b.n}</span>{/if}
       </a>
     {/each}

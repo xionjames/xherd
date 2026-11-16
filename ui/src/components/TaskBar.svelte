@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { Agent } from '../lib/types';
-  let { agent }: { agent: Agent } = $props();
+  import type { Job } from '../lib/types';
+  let { agent }: { agent: Job } = $props();
   const t = $derived(agent.tasks ?? []);
   const n = (s: string) => t.filter((x) => x.status === s).length;
 </script>

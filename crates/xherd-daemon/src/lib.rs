@@ -9,12 +9,13 @@ use xherd_core::paths::Paths;
 use xherd_core::queue::Queued;
 use xherd_core::report::{Origin, Report};
 use xherd_core::xap::{Refusal, XapCall};
-use xherd_core::{Agent, Status, queue};
+use xherd_core::{Job, Status, queue};
 use xherd_flow::Pack;
 use xherd_plugin::Registry;
 use xherd_store::Store;
 
 pub mod actor;
+pub mod agents;
 pub mod backup;
 pub mod checks;
 mod create;
@@ -30,6 +31,7 @@ pub mod repos;
 pub mod scheduler;
 pub mod security;
 pub mod settings;
+pub mod skills;
 pub mod supervisor;
 pub mod support;
 pub mod tickets;
@@ -39,7 +41,7 @@ pub mod worklog;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
 pub use create::{Resumer, RuntimeKit, TrustWriter};
-pub use driver::{AgentCtx, Driver, FakeDriver, TerminalDriver};
+pub use driver::{Driver, FakeDriver, JobCtx, TerminalDriver};
 pub use supervisor::SupervisorHandle;
 pub use support::{Change, Clock, Hub, ManualClock, SCOPE_CREDENTIAL, SystemClock, hash_token};
 
@@ -173,6 +175,8 @@ pub struct Daemon {
     pub secrets_write: Arc<std::sync::Mutex<()>>,
     /// The same for `config.json` (Settings and Git access both save it).
     pub config_write: Arc<std::sync::Mutex<()>>,
+    /// Held while saved agents are changed (create, edit, archive, delete, import).
+    pub agents_write: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// `GET /runtimes/{name}/models`.
@@ -287,9 +291,16 @@ impl Daemon {
             secrets: paths.secrets(),
             toolchains: Arc::new(toolchains),
             runtimes,
+            skills: paths.skills(),
         };
-        let agents = store.list_agents().await?;
-        let sup = supervisor::spawn(agents, config.max_concurrent_agents, env);
+        let agents = store.list_jobs().await?;
+        let limits = store
+            .list_agent_defs()
+            .await?
+            .into_iter()
+            .map(|d| (d.id, d.max_live_jobs))
+            .collect();
+        let sup = supervisor::spawn(agents, limits, config.max_concurrent_jobs, env);
 
         let d = Daemon {
             paths,
@@ -310,6 +321,7 @@ impl Daemon {
             worklog_flushed: Arc::default(),
             secrets_write: Arc::default(),
             config_write: Arc::default(),
+            agents_write: Arc::default(),
         };
         d.import_ledgers().await;
         d.repair_restored().await;
@@ -336,13 +348,13 @@ impl Daemon {
         Ok(d)
     }
 
-    pub async fn create_agent(&self, a: Agent) -> Result<Agent, ActionError> {
+    pub async fn create_job(&self, a: Job) -> Result<Job, ActionError> {
         self.sup.create(a).await
     }
 
     /// Route a report from an agent. `None` = unknown agent.
     pub async fn report(&self, r: Report) -> Option<ReportResult> {
-        self.sup.report(r, Origin::Agent).await
+        self.sup.report(r, Origin::Job).await
     }
 
     /// Route an XAP call from an agent (design §6.5).
@@ -350,7 +362,7 @@ impl Daemon {
         self.sup.xap(call).await
     }
 
-    pub async fn action(&self, who: &str, a: UserAction) -> Result<Agent, ActionError> {
+    pub async fn action(&self, who: &str, a: UserAction) -> Result<Job, ActionError> {
         self.sup.action(who, a).await
     }
 
@@ -360,7 +372,7 @@ impl Daemon {
         &self,
         who: &str,
         mode: xherd_core::permission::PermissionMode,
-    ) -> Result<Agent, ActionError> {
+    ) -> Result<Job, ActionError> {
         let a = self.action(who, UserAction::Get).await?;
         let launch = self.agent_launch(&a, mode, a.model.as_deref())?;
         self.action(who, UserAction::SetMode { mode, launch }).await
@@ -369,7 +381,7 @@ impl Daemon {
     /// Change an agent's model (issue #112; `None` or empty = the runtime's
     /// default). Like the mode, the running session keeps its model and the
     /// next start uses the new one.
-    pub async fn set_model(&self, who: &str, model: Option<&str>) -> Result<Agent, ActionError> {
+    pub async fn set_model(&self, who: &str, model: Option<&str>) -> Result<Job, ActionError> {
         let model = create::clean_model(model)?;
         let a = self.action(who, UserAction::Get).await?;
         let mode = a.permission_mode.unwrap_or_default();
@@ -443,7 +455,7 @@ impl Daemon {
     /// An agent's launch argv rebuilt for a mode and model.
     fn agent_launch(
         &self,
-        a: &Agent,
+        a: &Job,
         mode: xherd_core::permission::PermissionMode,
         model: Option<&str>,
     ) -> Result<Vec<String>, ActionError> {
@@ -466,7 +478,7 @@ impl Daemon {
     /// The kill switch (R-032): pause every live agent now, without asking
     /// for handoff notes. Returns the names paused.
     pub async fn pause_all(&self) -> Result<Vec<String>, ActionError> {
-        let agents = self.store.list_agents().await.map_err(|e| ActionError {
+        let agents = self.store.list_jobs().await.map_err(|e| ActionError {
             code: "store",
             message: e.to_string(),
         })?;
@@ -568,7 +580,7 @@ impl Daemon {
         Ok(out)
     }
 
-    /// `GET /agents/:id/memory` (spec §16.6): the pending shared-memory
+    /// `GET /jobs/:id/memory` (spec §16.6): the pending shared-memory
     /// proposal with the proposed text, the repo's `AGENTS.md` in the
     /// worktree, and the `CLAUDE.md` an accept would write (`null` = left
     /// as it is). Read-only, outside the actor.
@@ -738,7 +750,7 @@ impl Daemon {
             Some("uncommitted") => {
                 let diff = git.diff_proposed(wd, &changed).await.map_err(git_err)?;
                 return Ok(serde_json::json!({
-                    "agent": a.name, "head": head, "view": "uncommitted", "files": changed,
+                    "job": a.name, "head": head, "view": "uncommitted", "files": changed,
                     "others": Vec::<String>::new(), "diff": diff,
                 }));
             }
@@ -775,7 +787,7 @@ impl Daemon {
                 files.sort();
                 files.dedup();
                 return Ok(serde_json::json!({
-                    "agent": a.name, "head": head, "view": "branch", "branch": format!("{base}...HEAD"),
+                    "job": a.name, "head": head, "view": "branch", "branch": format!("{base}...HEAD"),
                     "files": files, "others": Vec::<String>::new(), "diff": diff,
                 }));
             }
@@ -804,7 +816,7 @@ impl Daemon {
                     ),
                 };
                 return Ok(serde_json::json!({
-                    "agent": a.name, "head": head, "view": "commit", "commit": c,
+                    "job": a.name, "head": head, "view": "commit", "commit": c,
                     "files": files, "others": Vec::<String>::new(), "diff": diff,
                 }));
             }
@@ -830,7 +842,7 @@ impl Daemon {
                 .collect();
             let diff = git.diff(wd, Some(&range), &[]).await.map_err(git_err)?;
             return Ok(serde_json::json!({
-                "agent": a.name, "head": head, "branch": range, "files": files,
+                "job": a.name, "head": head, "branch": range, "files": files,
                 "others": changed, "diff": diff,
             }));
         }
@@ -846,7 +858,7 @@ impl Daemon {
         };
         let diff = git.diff_proposed(wd, &files).await.map_err(git_err)?;
         Ok(serde_json::json!({
-            "agent": a.name, "head": head, "commit": commit, "files": files,
+            "job": a.name, "head": head, "commit": commit, "files": files,
             "others": others, "diff": diff,
         }))
     }
@@ -883,7 +895,7 @@ impl Daemon {
     /// Re-read approval ledgers of agents with a workspace: rows missing from
     /// the database are added, so the file wins (design §3.4).
     async fn import_ledgers(&self) {
-        let Ok(agents) = self.store.list_agents().await else {
+        let Ok(agents) = self.store.list_jobs().await else {
             return;
         };
         for a in agents {
@@ -908,7 +920,7 @@ impl Daemon {
                     continue;
                 };
                 let row = xherd_store::Approval {
-                    agent_id: a.id.clone(),
+                    job_id: a.id.clone(),
                     file: file.into(),
                     sha256: sha.into(),
                     at: v["at"].as_i64().unwrap_or(0),
@@ -948,7 +960,7 @@ impl Daemon {
     }
 }
 
-pub(crate) fn workdir_of(a: &Agent) -> Result<&std::path::Path, ActionError> {
+pub(crate) fn workdir_of(a: &Job) -> Result<&std::path::Path, ActionError> {
     if a.worktree_removed_at.is_some() {
         return Err(ActionError {
             code: "worktree_removed",

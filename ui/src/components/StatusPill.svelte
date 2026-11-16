@@ -1,7 +1,7 @@
 <script lang="ts">
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { needsYou, STATUS_LABEL, waitsAtGate } from '../lib/format';
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   const tone = $derived(
     needsYou(agent) ? 'gate'
       : agent.status === 'running' ? 'live'

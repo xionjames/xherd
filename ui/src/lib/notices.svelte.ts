@@ -2,10 +2,11 @@
 // kind: a new one replaces the previous. Browser notifications are opt-in
 // (permission is asked on the click, never on load).
 import { go } from './router.svelte';
-import { agentByName } from './store.svelte';
-import type { Agent } from './types';
+import { jobByName } from './store.svelte';
+import type { Job } from './types';
+import { hasAgents } from './agents';
 
-export interface Notice { key: string; agentId: string; kind: string; text: string; at: number; read: boolean }
+export interface Notice { key: string; jobId: string; kind: string; text: string; at: number; read: boolean }
 
 const KEY = 'xherd.notify';
 const saved = (): boolean => { try { return localStorage.getItem(KEY) === '1'; } catch { return false; } };
@@ -47,9 +48,9 @@ export const browserEnv = (): BrowserEnv => ({
   permission: supported() ? Notification.permission : undefined,
 });
 
-export function addNotice(agentId: string, kind: string, text: string) {
-  const key = `${agentId}:${kind}`;
-  const n: Notice = { key, agentId, kind, text, at: Date.now(), read: false };
+export function addNotice(jobId: string, kind: string, text: string) {
+  const key = `${jobId}:${kind}`;
+  const n: Notice = { key, jobId, kind, text, at: Date.now(), read: false };
   notices.list = [n, ...notices.list.filter((x) => x.key !== key)].slice(0, 50);
   if (notices.browser && supported() && Notification.permission === 'granted') {
     show(text, key, () => open(n));
@@ -80,23 +81,24 @@ export function testBrowser() {
 
 export function open(n: Notice) {
   n.read = true;
-  if (n.agentId.startsWith('todo:')) return go('/todos');
-  const a = agentByName(n.agentId);
-  if (a) go(`/agent/${a.name}`);
+  if (n.jobId.startsWith('todo:')) return go('/todos');
+  const a = jobByName(n.jobId);
+  if (a) go(`/jobs/${a.name}`);
 }
 
 // A notice that the agent waits for you is read once it no longer waits:
 // the gate was approved or changes were requested (it runs again), the
 // dialog was answered, the idle agent got work.
-const over: Record<string, (a: Agent) => boolean> = {
+const over: Record<string, (a: Job) => boolean> = {
   gate: (a) => !a.gate || a.status === 'running',
   blocked: (a) => a.status !== 'blocked',
   idle: (a) => a.status !== 'idle',
+  suggestion: (a) => !a.suggestion || a.suggestion.dismissed || hasAgents(a),
 };
 
 /** Marks read the agent's notices that its new state has settled. */
-export function settle(a: Agent) {
-  for (const n of notices.list) if (!n.read && n.agentId === a.id && over[n.kind]?.(a)) n.read = true;
+export function settle(a: Job) {
+  for (const n of notices.list) if (!n.read && n.jobId === a.id && over[n.kind]?.(a)) n.read = true;
 }
 
 export const markAllRead = () => { for (const n of notices.list) n.read = true; };

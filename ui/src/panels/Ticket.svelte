@@ -5,14 +5,14 @@
   // written by other people, so it is sanitised and rendered with nothing in
   // it loading by itself (external).
   import Panel from '../components/Panel.svelte';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { render } from '../lib/markdown';
   import { route } from '../lib/router.svelte';
   import { agoText } from '../lib/format';
 
-  let { agent }: { agent: Agent } = $props();
+  let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
   const id = $derived(agent.id);
 
@@ -27,7 +27,7 @@
   async function load() {
     loading = true;
     try {
-      answer = await get<Answer>(`/agents/${id}/ticket`);
+      answer = await get<Answer>(`/jobs/${id}/ticket`);
       error = null;
     } catch (e) {
       answer = null;
@@ -54,7 +54,7 @@
   let posted = $state(false);
   async function makeDraft() {
     try {
-      draft = (await get<{ text: string }>(`/agents/${id}/ticket-summary`)).text;
+      draft = (await get<{ text: string }>(`/jobs/${id}/ticket-summary`)).text;
       posted = false;
     } catch (e) { showError('Could not draft a summary', e); }
   }
@@ -62,7 +62,7 @@
     if (!draft?.trim()) return;
     posting = true;
     try {
-      await post(`/agents/${id}/ticket-comment`, { body: draft });
+      await post(`/jobs/${id}/ticket-comment`, { body: draft });
       posted = true;
       draft = null;
       await load();

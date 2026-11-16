@@ -18,11 +18,15 @@
 <header class="bar">
   <a class="logo" href={href('/')} aria-label="xherd home"><Logo /><b>XHERD</b>{#if app.state?.buildVersion}<span class="ver mono" title="xherd version">{app.state.buildVersion}</span>{/if}</a>
   <nav class="gnav" aria-label="Main">
-    <a class="gt home" class:on={route.path === '/' || route.path.startsWith('/agent')}
+    <a class="gt home" class:on={route.path === '/' || route.path.startsWith('/jobs')}
        aria-current={route.path === '/' ? 'page' : undefined}
        aria-disabled={blocked} href={blocked ? undefined : href('/')}>Herd</a>
     {#if !blocked}<a class="gt" class:on={route.path === '/board'} aria-current={route.path === '/board' ? 'page' : undefined}
        href={href('/board')}>Board</a>{/if}
+    {#if !blocked}<a class="gt" class:on={route.path.startsWith('/agents')} aria-current={route.path.startsWith('/agents') ? 'page' : undefined}
+       href={href('/agents')}>Agents</a>{/if}
+    {#if !blocked}<a class="gt" class:on={route.path.startsWith('/flows')} aria-current={route.path.startsWith('/flows') ? 'page' : undefined}
+       href={href('/flows')}>Flows</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/time'} aria-current={route.path === '/time' ? 'page' : undefined}
        href={href('/time')}>Time</a>{/if}
     {#if !blocked}<a class="gt" class:on={route.path === '/todos'} aria-current={route.path === '/todos' ? 'page' : undefined}
@@ -39,6 +43,6 @@
   <a class="bb" class:on={route.path === '/settings'} href={href('/settings')} aria-label="Settings"
      aria-current={route.path === '/settings' ? 'page' : undefined}><Icon name="settings" /></a>
   {#if !blocked}
-    <a class="btn primary newb" href={href('/new')} aria-label="New agent"><Icon name="plus" /><span class="nl">New agent</span></a>
+    <a class="btn primary newb" href={href('/new')} aria-label="New job"><Icon name="plus" /><span class="nl">New job</span></a>
   {/if}
 </header>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import Panel from '../components/Panel.svelte';
-  import type { Agent } from '../lib/types';
-  let { agent }: { agent: Agent } = $props();
+  import type { Job } from '../lib/types';
+  let { agent }: { agent: Job } = $props();
   const GLYPH = { todo: '○', doing: '●', done: '✓', blocked: '✕' };
   const TONE = { todo: '', doing: 'acc', done: 'live', blocked: 'halt' };
 </script>

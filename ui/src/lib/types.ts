@@ -93,7 +93,73 @@ export type Gate =
 /** An agent's ticket (#114): a key (`PAY-412`, `#12`), an issue URL, or both. */
 export interface Ticket { key?: string; url?: string }
 
-export interface Agent {
+
+/** What a job keeps of the saved agent it started from (R12). */
+export interface StageAgent { agent: string; human: boolean }
+
+export interface JobAgent {
+  id: string;
+  name: string;
+  version: number;
+  instructions?: string;
+  sensitivePaths?: string[];
+  maxDiffLines?: number;
+  jobTokenBudget?: number;
+  /** What the job runs this agent on; the agent's fallback when its runtime was off (R36, R40). */
+  runtime?: string;
+  fellBack?: boolean;
+  autonomy?: string;
+  permissionMode?: string;
+  model?: string;
+  launch?: string[];
+  /** What became of each skill the agent lists, set at creation (R26, R27). */
+  skills?: SkillCopy[];
+  /** The agent's memory when the job was created (R28). */
+  memory?: string;
+}
+
+/** A skill copied into the job's worktree, or skipped with the reason. */
+export interface SkillCopy { name: string; sha256: string; installed: boolean; skipped?: string }
+
+/** A value a repo profile's ceiling lowered at creation or since (R12a). */
+export interface Lowered { field: 'autonomy' | 'permissionMode' | string; from: string; to: string; profile: string }
+
+/** A saved agent (R10): a named, versioned setup that jobs start from. */
+export interface AgentDef {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  runtime: string;
+  models?: Record<string, string>;
+  /** Used once, at job creation, when `runtime` is switched off (R36). */
+  fallbackRuntime?: string;
+  autonomy?: 'ask' | 'important' | 'never';
+  permissionMode?: import('./modes').PermissionMode;
+  instructions?: string;
+  jobTokenBudget?: number;
+  sensitivePaths?: string[];
+  maxDiffLines?: number;
+  skills?: string[];
+  maxLiveJobs: number;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number;
+}
+
+export type AgentStatus = 'archived' | 'needs-you' | 'working' | 'idle';
+
+/** `GET /agents` row: the settings plus what is derived from its jobs (R17, R19). */
+export interface AgentView extends AgentDef {
+  status: AgentStatus;
+  /** Why jobs cannot start from it now (R15). */
+  broken?: string;
+  liveJobs: number;
+  lastJob: string | null;
+  tokensToday: number;
+}
+
+export interface Job {
   id: string;
   /** Lowercase slug: what the UI shows, the tmux session and worktree folder. */
   name: string;
@@ -121,6 +187,11 @@ export interface Agent {
   prUrl?: string;
   /** A pending update of the repo's AGENTS.md (spec §16.6). */
   memoryProposal?: { file: string; reason: string; at: number };
+  agentMemoryProposal?: { file: string; reason: string; at: number };
+  /** Offer to save this job's setup as an agent (R30); never for a job with an agent. */
+  suggestion?: { reason: string; at: number; dismissed: boolean };
+  /** What the job proposes for that agent (R31). */
+  agentDraft?: { name: string; description: string; instructions: string; at: number };
   /** What the last poll of the pull request found (R-303). */
   prState?: 'open' | 'merged' | 'closed';
   prCi?: 'pending' | 'failing' | 'passing';
@@ -147,6 +218,18 @@ export interface Agent {
   worktreeRemovedAt?: number;
   /** The open gate is one autonomy will approve at the next stop (R4): it does not wait for you. */
   autoApprovePending?: boolean;
+  /** The saved agent it started from (R12): a snapshot, so later edits do not change it. */
+  agents?: Record<string, JobAgent>;
+  /** The agent each stage of the workflow runs with, and whether its gate always waits for you (D26). */
+  stageAgents?: Record<string, StageAgent>;
+  /** The agent for stages with no assignment. */
+  defaultAgent?: string;
+  /** The agent the running session uses: a key of `agents`. */
+  currentAgent?: string;
+  /** An agent attached to a running job: stage assignments never switch it. */
+  pinned?: boolean;
+  /** Values the repo profile lowered (R12a). */
+  lowered?: Lowered[];
 }
 
 /** `label`: the pack's own name for the stage ("Fix"), when it sets one. */
@@ -190,7 +273,8 @@ export interface AppState {
   buildVersion: string;
   platform: string;
   config: Record<string, unknown>;
-  agents: Agent[];
+  jobs: Job[];
+  agents: AgentView[];
   plugins: PluginInfo[];
   /** Link rules of the enabled tracker plugins. */
   trackerLinks: { plugin: string; pattern: string; url: string }[];
@@ -201,7 +285,7 @@ export interface AppState {
 }
 
 export interface DiffAnswer {
-  agent: string;
+  job: string;
   head: string;
   commit?: Commit;
   view?: 'uncommitted' | 'branch' | 'commit';
@@ -296,3 +380,40 @@ export interface OpenInView {
   native: boolean;
   handler: { shipped: number; installed: HandlerRecord | null; updateAvailable: boolean; rootChanged: boolean };
 }
+
+/** `GET /skills` row (R25). */
+export interface SkillInfo {
+  name: string;
+  description: string;
+  files: number;
+  bytes: number;
+  sha256: string;
+  /** Names of the agents that list it. */
+  usedBy: string[];
+}
+
+/** `GET /skills/{name}`. */
+export interface SkillDetail extends SkillInfo {
+  fileList: { path: string; bytes: number }[];
+  /** The text of SKILL.md. */
+  text: string;
+}
+
+/** One stage of a workflow as `GET /flows` shows it (D26, R35): the agent it
+ *  resolves to (its assignment, else the stage before's) and why it cannot run. */
+export interface FlowStageView {
+  id: string;
+  label?: string;
+  role: Role;
+  class: string;
+  command?: string;
+  /** The stage has an assignment row of its own. */
+  assigned: boolean;
+  human: boolean;
+  agentId?: string;
+  agent?: string;
+  broken?: string;
+}
+export interface FlowView { pack: string; flow: string; stages: FlowStageView[] }
+/** A row of `PUT /flows/{pack}/{flow}/assignments`. */
+export interface AssignmentRow { stage: string; agentId: string; human: boolean }

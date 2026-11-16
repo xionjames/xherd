@@ -23,4 +23,39 @@ CREATE TABLE worklog     (day TEXT NOT NULL, ticket_key TEXT NOT NULL, kind TEXT
 CREATE TABLE budgets     (scope TEXT NOT NULL, day TEXT NOT NULL, tokens INTEGER NOT NULL, cost_micros INTEGER, PRIMARY KEY (scope, day));
 CREATE TABLE memory_declined (repo TEXT NOT NULL, path TEXT NOT NULL, PRIMARY KEY (repo, path));
 "#,
+    // 2: an agent became a job (issue #141): `agents` -> `jobs`, `agent_id` -> `job_id`.
+    // Rows, keys and indexes are kept (SQLite renames them in place).
+    r#"
+ALTER TABLE agents RENAME TO jobs;
+ALTER TABLE events RENAME COLUMN agent_id TO job_id;
+ALTER TABLE notes RENAME COLUMN agent_id TO job_id;
+ALTER TABLE approvals RENAME COLUMN agent_id TO job_id;
+ALTER TABLE reviewed RENAME COLUMN agent_id TO job_id;
+ALTER TABLE diff_viewed RENAME COLUMN agent_id TO job_id;
+DROP INDEX events_agent;
+CREATE INDEX events_job ON events(job_id, at);
+"#,
+    // 3: saved agents (issue #141): the name `agents` is free after migration 2.
+    // Every version, the current one included, is in `agent_versions`.
+    r#"
+CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, archived_at INTEGER, data TEXT NOT NULL);
+CREATE TABLE agent_versions (agent_id TEXT NOT NULL, version INTEGER NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL,
+                             PRIMARY KEY (agent_id, version));
+CREATE TABLE agent_memory (agent_id TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL);
+"#,
+    // 4: an agent no longer names a workflow, repository, base branch or
+    // stage overrides (issue #141, second part, D26). `AgentDef` refuses
+    // unknown fields, so the keys go from the row and from every version.
+    r#"
+UPDATE agents SET data = json_remove(data, '$.workflow', '$.repo', '$.baseBranch', '$.stageOverrides');
+UPDATE agent_versions SET data = json_remove(data, '$.workflow', '$.repo', '$.baseBranch', '$.stageOverrides');
+"#,
+    // 5: which saved agent runs which stage of a workflow (issue #141, D26).
+    // One row per assigned stage; a stage with no row keeps the default
+    // agent or the previous stage's.
+    r#"
+CREATE TABLE flow_assignments (pack TEXT NOT NULL, flow TEXT NOT NULL, stage TEXT NOT NULL, agent_id TEXT NOT NULL,
+                               human INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pack, flow, stage));
+CREATE INDEX flow_assignments_agent ON flow_assignments(agent_id);
+"#,
 ];

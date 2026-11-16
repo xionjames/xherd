@@ -3,7 +3,7 @@
   "kind": "view",
   "version": "0.1.0",
   "label": "Tiles",
-  "description": "A Herd view: one tile per active agent, grouped by repository. A small example of a view plugin.",
+  "description": "A Herd view: saved agents, then one tile per active job grouped by repository (each names its agent). A small example of a view plugin.",
   "data": {
     "view": { "entry": "index.html" }
   }

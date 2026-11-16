@@ -1,4 +1,4 @@
-//! One actor per agent (design §3.2). The actor owns the `Agent` value, applies
+//! One actor per agent (design §3.2). The actor owns the `Job` value, applies
 //! messages one at a time with the pure functions of `xherd-core`, persists,
 //! and publishes. Slow work runs in spawned tasks and comes back as `WorkDone`
 //! tagged with the agent's generation; stale results are dropped.
@@ -16,21 +16,22 @@ use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
 use xherd_core::xap::{Refusal, XapCall, XapCmd, refuse as refusal};
-use xherd_core::{Agent, Status, Trigger};
+use xherd_core::{Job, Status, Trigger};
 use xherd_flow::Pack;
 use xherd_flow::xap::{CommitFact, DocFact, DocState, Observed, VerifyFact};
 use xherd_store::{Event, Store};
 use xherd_term::ScreenRules;
 
-use crate::driver::{AgentCtx, Driver};
+use crate::driver::{Driver, JobCtx};
 use crate::support::{
-    Change, Clock, Hub, SCOPE_CREDENTIAL, SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, mint_token,
+    Change, Clock, Hub, SCOPE_CREDENTIAL, SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_JOB,
+    mint_token,
 };
 
 #[derive(Debug)]
 pub enum Msg {
     Report(Report, Origin, Option<oneshot::Sender<ReportResult>>),
-    User(UserAction, oneshot::Sender<Result<Agent, ActionError>>),
+    User(UserAction, oneshot::Sender<Result<Job, ActionError>>),
     Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
     WorkDone { generation: u64, result: WorkResult },
@@ -100,6 +101,19 @@ pub enum UserAction {
         text: Option<String>,
     },
     MemoryDismiss,
+    /// Drop the pending agent-memory proposal (R29): after an accept, which
+    /// `Daemon::agent_memory_accept` wrote, or a dismiss. Memory is untouched.
+    AgentMemoryClear,
+    /// End a job without a workflow by hand (R30): it has no PR to merge.
+    MarkDone,
+    /// The job now belongs to this saved agent (R32): accepting a
+    /// suggestion or "Save as agent". Only `Job.agent` changes, to the
+    /// agent's version 1 snapshot; the job keeps its own settings.
+    AttachAgent {
+        snapshot: Box<xherd_core::agent_def::JobAgent>,
+    },
+    /// Remember that the user does not want this job's suggestion (R32).
+    SuggestionDismiss,
     /// Check the agent's pull request now (issue #131): the automatic poll
     /// without its guards, refused `no_pr` without a PR URL.
     CheckPr,
@@ -182,7 +196,16 @@ fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
 /// Sent by actors to the supervisor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupEvent {
-    StatusChanged { id: String, to: Status },
+    StatusChanged {
+        id: String,
+        to: Status,
+    },
+    /// The job's current agent changed (D26, R40): the supervisor counts
+    /// its live jobs against the new one from now on.
+    AgentChanged {
+        id: String,
+        agent: Option<String>,
+    },
 }
 
 /// The settings actors read, replaced as a whole when the config is saved
@@ -230,7 +253,7 @@ pub struct ActorSettings {
     pub max_review_loops: u32,
     /// Consecutive automatic approvals allowed (R-120); 0 = no limit.
     pub max_auto_approvals_in_row: u32,
-    pub agent_token_budget: u64,
+    pub job_token_budget: u64,
     pub daily_token_budget: u64,
     pub max_diff_lines: usize,
     pub sensitive_paths: Vec<String>,
@@ -238,6 +261,8 @@ pub struct ActorSettings {
     /// and the toolchain plugins skip them while running.
     pub disabled_plugins: Vec<String>,
     /// Notification kinds that are not published (`mutedNotifications`).
+    /// Offer to save a job's setup as an agent (`suggestAgents`, R30).
+    pub suggest_agents: bool,
     pub muted_notifications: Vec<String>,
 }
 
@@ -260,13 +285,14 @@ impl ActorSettings {
             max_session_minutes: c.max_session_minutes,
             max_review_loops: c.max_review_loops,
             max_auto_approvals_in_row: c.max_auto_approvals_in_row,
-            agent_token_budget: c.agent_token_budget,
+            job_token_budget: c.job_token_budget,
             daily_token_budget: c.daily_token_budget,
             max_diff_lines: c.max_diff_lines,
             sensitive_paths: c.sensitive_paths.clone(),
             disabled_plugins: c.disabled_plugins.clone(),
             git_hosts: c.git_hosts.clone(),
             muted_notifications: c.muted_notifications.clone(),
+            suggest_agents: c.suggest_agents,
             ..base
         }
     }
@@ -404,12 +430,13 @@ impl Default for ActorSettings {
             max_session_minutes: 0,
             max_review_loops: 3,
             max_auto_approvals_in_row: 10,
-            agent_token_budget: 0,
+            job_token_budget: 0,
             daily_token_budget: 0,
             max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
             sensitive_paths: Vec::new(),
             disabled_plugins: Vec::new(),
             muted_notifications: Vec::new(),
+            suggest_agents: true,
         }
     }
 }
@@ -438,6 +465,8 @@ pub struct Env {
     /// drop the entry), how to continue its last conversation, and how to
     /// read token usage from its transcript (R-1205).
     pub runtimes: Arc<BTreeMap<String, crate::RuntimeKit>>,
+    /// The skills library (`<data>/skills`), copied from at a switch of agent.
+    pub skills: std::path::PathBuf,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -449,7 +478,7 @@ const AUTO_RESUME_WINDOW_MS: i64 = 3_600_000;
 
 pub type AgentTx = mpsc::UnboundedSender<Msg>;
 
-pub fn spawn(agent: Agent, env: Env) -> AgentTx {
+pub fn spawn(agent: Job, env: Env) -> AgentTx {
     let (tx, rx) = mpsc::unbounded_channel();
     // Earlier builds also scanned a stopped agent's screen and could block
     // one waiting at a gate on its own words; the scan clears such a block
@@ -458,7 +487,7 @@ pub fn spawn(agent: Agent, env: Env) -> AgentTx {
         && agent.gate.is_some()
         && agent.block_reason.as_deref() == Some("git access");
     let actor = Actor {
-        agent,
+        job: agent,
         env,
         tx: tx.clone(),
         delivery: None,
@@ -492,7 +521,7 @@ enum AutoCheck {
 }
 
 struct Actor {
-    agent: Agent,
+    job: Job,
     env: Env,
     /// Own mailbox, for spawned work to report back.
     tx: AgentTx,
@@ -529,10 +558,10 @@ impl Actor {
     /// Agents from before `visited_stages`: rebuild it once from their
     /// `stage.enter` / `gate.open` events, oldest first.
     async fn backfill_stages(&mut self) {
-        if !self.agent.visited_stages.is_empty() || self.agent.stage.is_none() {
+        if !self.job.visited_stages.is_empty() || self.job.stage.is_none() {
             return;
         }
-        let Ok(mut events) = self.env.store.events(&self.agent.id, 100_000).await else {
+        let Ok(mut events) = self.env.store.events(&self.job.id, 100_000).await else {
             return;
         };
         events.reverse();
@@ -542,14 +571,14 @@ impl Actor {
             }
             let stage = e.payload.as_ref().and_then(|p| p["args"]["stage"].as_str());
             if let Some(s) = stage
-                && !self.agent.visited_stages.iter().any(|v| v == s)
+                && !self.job.visited_stages.iter().any(|v| v == s)
             {
-                self.agent.visited_stages.push(s.to_string());
+                self.job.visited_stages.push(s.to_string());
             }
         }
-        self.agent.note_stage();
-        if let Err(err) = self.env.store.put_agent(&self.agent).await {
-            tracing::error!(agent = %self.agent.name, %err, "agent not stored");
+        self.job.note_stage();
+        if let Err(err) = self.env.store.put_job(&self.job).await {
+            tracing::error!(agent = %self.job.name, %err, "agent not stored");
         }
     }
 
@@ -564,7 +593,7 @@ impl Actor {
                     }
                 }
                 Msg::User(action, reply) => {
-                    let res = self.on_user(action).await.map(|()| self.agent.clone());
+                    let res = self.on_user(action).await.map(|()| self.job.clone());
                     let _ = reply.send(res);
                 }
                 Msg::Xap(call, reply) => {
@@ -572,8 +601,8 @@ impl Actor {
                 }
                 Msg::Tick(t) => self.on_tick(t).await,
                 Msg::WorkDone { generation, result } => {
-                    if generation != self.agent.generation {
-                        tracing::debug!(agent = %self.agent.name, "dropping stale async result");
+                    if generation != self.job.generation {
+                        tracing::debug!(agent = %self.job.name, "dropping stale async result");
                         continue;
                     }
                     self.on_work(result).await;
@@ -582,11 +611,11 @@ impl Actor {
         }
     }
 
-    fn ctx(&self) -> AgentCtx {
-        AgentCtx {
-            id: self.agent.id.clone(),
-            name: self.agent.name.clone(),
-            workdir: PathBuf::from(self.agent.workdir.clone().unwrap_or_else(|| ".".into())),
+    fn ctx(&self) -> JobCtx {
+        JobCtx {
+            id: self.job.id.clone(),
+            name: self.job.name.clone(),
+            workdir: PathBuf::from(self.job.workdir.clone().unwrap_or_else(|| ".".into())),
             env: Vec::new(),
         }
     }
@@ -598,13 +627,13 @@ impl Actor {
     async fn log(&self, id: Option<String>, kind: &str, payload: Option<Value>) {
         let e = Event {
             id: id.unwrap_or_else(xherd_core::new_id),
-            agent_id: self.agent.id.clone(),
+            job_id: self.job.id.clone(),
             kind: kind.to_string(),
             payload,
             at: self.now(),
         };
         if let Err(err) = self.env.store.insert_event(e).await {
-            tracing::error!(agent = %self.agent.name, %err, "event not stored");
+            tracing::error!(agent = %self.job.name, %err, "event not stored");
         }
     }
 
@@ -616,7 +645,7 @@ impl Actor {
             return false;
         };
         let host = self
-            .agent
+            .job
             .pr_url
             .as_deref()
             .and_then(|u| u.split("//").nth(1))
@@ -631,12 +660,12 @@ impl Actor {
         .await;
         let msg = format!(
             "{}: git access failed ({line}). Run `xherd git doctor {host}` or open Settings → Git access",
-            self.agent.name
+            self.job.name
         );
-        let before = self.agent.status;
-        if self.agent.fire(Trigger::Blocked, self.now()).is_some() {
-            self.agent.screen_blocked = false;
-            self.agent.block_reason = Some("git access".into());
+        let before = self.job.status;
+        if self.job.fire(Trigger::Blocked, self.now()).is_some() {
+            self.job.screen_blocked = false;
+            self.job.block_reason = Some("git access".into());
             self.commit(before).await;
         }
         self.notify("blocked", msg);
@@ -648,14 +677,14 @@ impl Actor {
     /// waiting, not to running.
     async fn git_access_ok(&mut self) {
         self.auth_screen_block = false;
-        if self.agent.block_reason.as_deref() == Some("git access") {
-            let before = self.agent.status;
-            let t = if self.agent.gate.is_some() {
+        if self.job.block_reason.as_deref() == Some("git access") {
+            let before = self.job.status;
+            let t = if self.job.gate.is_some() {
                 Trigger::StoppedAtGate
             } else {
                 Trigger::Working
             };
-            self.agent.fire(t, self.now());
+            self.job.fire(t, self.now());
             self.commit(before).await;
         }
     }
@@ -675,7 +704,7 @@ impl Actor {
 
     /// The host plugin for the agent's pull request.
     fn host(&self) -> Option<Arc<xherd_plugin::host::Host>> {
-        let url = self.agent.pr_url.as_deref();
+        let url = self.job.pr_url.as_deref();
         self.host_for(url.and_then(crate::git_access::remote_host).as_deref())
     }
 
@@ -691,7 +720,7 @@ impl Actor {
             return;
         }
         let _ = self.env.hub.send(Change::Notify {
-            agent_id: self.agent.id.clone(),
+            job_id: self.job.id.clone(),
             kind: kind.into(),
             text,
         });
@@ -701,16 +730,16 @@ impl Actor {
     /// after a stop's auto-approval, so a gate autonomy approved is gone by
     /// then and sends nothing. Never document or question text.
     fn notify_gate(&mut self) {
-        if !matches!(self.agent.status, Status::WaitingInput | Status::Idle) {
+        if !matches!(self.job.status, Status::WaitingInput | Status::Idle) {
             return;
         }
-        let Some(gate) = &self.agent.gate else {
+        let Some(gate) = &self.job.gate else {
             return;
         };
         if self.notified_gate.as_ref() == Some(gate) {
             return;
         }
-        let mut text = format!("{}: {} waits for you", self.agent.name, gate.label());
+        let mut text = format!("{}: {} waits for you", self.job.name, gate.label());
         if let Some(hold) = gate.hold() {
             let hold = hold.split_whitespace().collect::<Vec<_>>().join(" ");
             text.push_str(": ");
@@ -720,78 +749,159 @@ impl Actor {
         self.notify("gate", text);
     }
 
+    /// Offer to save this job's setup as an agent (R30): once, for a job with
+    /// no agent, while `suggestAgents` is on. One notice, never a modal.
+    fn offer_agent(&mut self, reason: &str) {
+        if !self.job.agents.is_empty()
+            || self.job.suggestion.is_some()
+            || !self.env.settings.get().suggest_agents
+        {
+            return;
+        }
+        self.job.suggestion = Some(xherd_core::job::Suggestion {
+            reason: reason.into(),
+            at: self.now(),
+            dismissed: false,
+        });
+        self.notify(
+            "suggestion",
+            format!("{}: save this setup as an agent?", self.job.name),
+        );
+    }
+
+    /// Keep a text the user wrote to this job, for the agent draft (R31).
+    /// Only jobs without an agent: those are the ones that may become one.
+    async fn keep_note(&self, text: &str) {
+        let text = text.trim();
+        if !self.job.agents.is_empty() || text.is_empty() {
+            return;
+        }
+        if let Err(e) = self
+            .env
+            .store
+            .add_note(&self.job.id, text, self.now())
+            .await
+        {
+            tracing::warn!(job = %self.job.name, error = %e, "note not stored");
+        }
+    }
+
+    /// `.xherd/spec/user-notes.md` (R31): what the user told this job, for
+    /// the ship prompt's agent draft. Only the user's own texts; ticket and
+    /// PR text never go in.
+    async fn write_user_notes(&self) {
+        if !self.job.agents.is_empty() {
+            return;
+        }
+        let Ok(wd) = self.workdir() else {
+            return;
+        };
+        let notes = self.env.store.notes(&self.job.id).await.unwrap_or_default();
+        let mut text = String::from(
+            "# What the user told this job\n\nOne item per message, oldest first.\n\n",
+        );
+        for (n, _) in &notes {
+            let one: String = n.split_whitespace().collect::<Vec<_>>().join(" ");
+            text.push_str("- ");
+            text.extend(one.chars().take(500));
+            text.push('\n');
+        }
+        if notes.is_empty() {
+            text.push_str("None.\n");
+        }
+        let dir = wd.join(xherd_flow::xap::SPEC_DIR);
+        let written = std::fs::create_dir_all(&dir).and_then(|()| {
+            xherd_core::paths::write_atomic(&dir.join("user-notes.md"), text.as_bytes(), None)
+        });
+        if let Err(e) = written {
+            tracing::warn!(job = %self.job.name, error = %e, "user-notes.md not written");
+        }
+    }
+
     /// Persist and publish; tell the supervisor when the status moved.
     async fn commit(&mut self, before: Status) {
-        self.agent.note_stage();
-        if !self.agent.status.is_live() {
-            self.agent.pause_requested_at = None;
+        self.job.note_stage();
+        if !self.job.status.is_live() {
+            self.job.pause_requested_at = None;
         }
         // Every end of the session ends an Ask hold (queued = still starting).
-        if !self.agent.status.is_live() && self.agent.status != Status::Queued {
-            self.agent.ask_hold = None;
+        if !self.job.status.is_live() && self.job.status != Status::Queued {
+            self.job.ask_hold = None;
         }
         // R4: a gate autonomy will approve at the stop does not wait for the
         // user while the agent still runs.
-        self.agent.auto_approve_pending = self.agent.status == Status::Running
+        self.job.auto_approve_pending = self.job.status == Status::Running
             && matches!(self.auto_check(), AutoCheck::Approve { .. });
-        if self.agent.gate.is_none() {
+        if self.job.gate.is_none() {
             self.notified_gate = None;
         }
-        if let Err(err) = self.env.store.put_agent(&self.agent).await {
-            tracing::error!(agent = %self.agent.name, %err, "agent not stored");
+        // R30: a job without an agent that is done (merged, or marked done)
+        // offers to save its setup. Cancelled and failed jobs never do.
+        if self.job.status == Status::Done && before != Status::Done {
+            let reason = if self.job.flow.is_none() {
+                "marked-done"
+            } else {
+                "done"
+            };
+            self.offer_agent(reason);
         }
-        let _ = self.env.hub.send(Change::Agent {
-            agent: Box::new(self.agent.clone()),
+        if let Err(err) = self.env.store.put_job(&self.job).await {
+            tracing::error!(agent = %self.job.name, %err, "agent not stored");
+        }
+        let _ = self.env.hub.send(Change::Job {
+            job: Box::new(self.job.clone()),
         });
-        if self.agent.status != before {
-            tracing::info!(agent = %self.agent.name, from = %before, to = %self.agent.status, "status");
+        if self.job.status != before {
+            tracing::info!(agent = %self.job.name, from = %before, to = %self.job.status, "status");
             let _ = self.env.sup.send(SupEvent::StatusChanged {
-                id: self.agent.id.clone(),
-                to: self.agent.status,
+                id: self.job.id.clone(),
+                to: self.job.status,
             });
         }
     }
 
     async fn end_session(&mut self) {
         if let Err(e) = self.env.driver.stop(&self.ctx()).await {
-            tracing::warn!(agent = %self.agent.name, error = %e, "stopping session failed");
+            tracing::warn!(agent = %self.job.name, error = %e, "stopping session failed");
         }
         self.revoke_tokens().await;
         self.delivery = None;
     }
 
     async fn revoke_tokens(&self) {
-        if let Err(e) = self
-            .env
-            .store
-            .revoke_tokens(TOKEN_AGENT, &self.agent.id, self.now())
-            .await
-        {
-            tracing::error!(agent = %self.agent.name, error = %e, "revoking agent tokens failed");
+        for kind in [TOKEN_JOB, TOKEN_AGENT] {
+            if let Err(e) = self
+                .env
+                .store
+                .revoke_tokens(kind, &self.job.id, self.now())
+                .await
+            {
+                tracing::error!(job = %self.job.name, error = %e, "revoking job tokens failed");
+            }
         }
     }
 
     // ---- reports -------------------------------------------------------------
 
     async fn on_report(&mut self, r: Report, origin: Origin) -> ReportResult {
-        if origin == Origin::Agent && !r.event.is_frequent() {
+        if origin == Origin::Job && !r.event.is_frequent() {
             match self.env.store.event_exists(&r.id).await {
                 Ok(true) => return ReportResult::Duplicate,
                 Ok(false) => {}
                 Err(e) => tracing::error!(%e, "event lookup failed"),
             }
         }
-        if origin == Origin::Agent
+        if origin == Origin::Job
             && matches!(r.event, ReportEvent::Stop | ReportEvent::Idle)
-            && self.agent.status.is_live()
-            && self.agent.gate.is_none()
-            && r.seq > self.agent.last_seq
+            && self.job.status.is_live()
+            && self.job.gate.is_none()
+            && r.seq > self.job.last_seq
         {
             self.infer_gate().await;
         }
-        let before = self.agent.status;
+        let before = self.job.status;
         let now = self.now();
-        let outcome = apply_report(&mut self.agent, &r, origin, now);
+        let outcome = apply_report(&mut self.job, &r, origin, now);
         let (result, effects) = match outcome {
             Outcome::Stale => (ReportResult::Stale, Vec::new()),
             Outcome::Dormant => (ReportResult::Dormant, Vec::new()),
@@ -799,10 +909,10 @@ impl Actor {
         };
         if result != ReportResult::Applied || !r.event.is_frequent() {
             let kind = match origin {
-                Origin::Agent => format!("report.{}", r.event.as_str()),
+                Origin::Job => format!("report.{}", r.event.as_str()),
                 Origin::Daemon => format!("screen.{}", r.event.as_str()),
             };
-            let id = (origin == Origin::Agent).then(|| r.id.clone());
+            let id = (origin == Origin::Job).then(|| r.id.clone());
             let payload = json!({"seq": r.seq, "result": result, "payload": r.payload});
             self.log(id, &kind, Some(payload)).await;
         }
@@ -821,8 +931,8 @@ impl Actor {
                     self.delivery = None;
                     if self.first_unacked {
                         self.first_unacked = false;
-                        self.agent.next_prompt = None;
-                        self.commit(self.agent.status).await;
+                        self.job.next_prompt = None;
+                        self.commit(self.job.status).await;
                     }
                 }
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
@@ -831,8 +941,8 @@ impl Actor {
                     // A pause waits for the handoff note; the stop after it
                     // ends the session. Earlier stops (the turn that was
                     // running) change nothing, and no approval happens now.
-                    if let Some(asked) = self.agent.pause_requested_at {
-                        if self.agent.handoff_at.is_some_and(|h| h >= asked) {
+                    if let Some(asked) = self.job.pause_requested_at {
+                        if self.job.handoff_at.is_some_and(|h| h >= asked) {
                             self.finish_pause(false).await;
                         }
                         continue;
@@ -848,7 +958,7 @@ impl Actor {
                     }
                     // R7: an Ask session stays open while the agent only
                     // answers; flow work ends the hold.
-                    if self.agent.ask_hold.is_some() {
+                    if self.job.ask_hold.is_some() {
                         continue;
                     }
                     self.try_auto_approve().await;
@@ -862,12 +972,12 @@ impl Actor {
         }
         if result == ReportResult::Applied
             && r.event == ReportEvent::SessionStart
-            && self.agent.next_prompt.is_some()
+            && self.job.next_prompt.is_some()
         {
             if std::mem::take(&mut self.prompt_on_launch) {
                 // Submitted by the runtime; the ack clears `next_prompt`.
                 self.first_unacked = true;
-                let text = self.agent.next_prompt.clone();
+                let text = self.job.next_prompt.clone();
                 self.log(
                     None,
                     "first-prompt",
@@ -888,13 +998,13 @@ impl Actor {
     fn measure_usage(&self) {
         let kit = self.runtime_kit();
         let (Some(session), Some(r), Some(usage)) = (
-            self.agent.session.clone(),
+            self.job.session.clone(),
             kit.and_then(|k| k.resume.clone()),
             kit.and_then(|k| k.usage.clone()),
         ) else {
             return;
         };
-        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
         let scratch = self.workdir().ok().map(|w| w.join(".xherd"));
         tokio::spawn(async move {
             // The transcript is in the agent user's home (R-1203).
@@ -917,19 +1027,19 @@ impl Actor {
         let every = self.env.settings.get().pr_poll;
         let now = self.now();
         let due = self
-            .agent
+            .job
             .pr_polled_at
             .is_none_or(|t| now - t >= every.as_millis() as i64);
         let (Some(host), Ok(wd), Some(url), true) = (
             self.host(),
             self.workdir(),
-            self.agent.pr_url.clone(),
-            self.agent.status == Status::Watching && !every.is_zero() && due,
+            self.job.pr_url.clone(),
+            self.job.status == Status::Watching && !every.is_zero() && due,
         ) else {
             return;
         };
         // Set here so a slow host is not asked again by the next tick.
-        self.agent.pr_polled_at = Some(now);
+        self.job.pr_polled_at = Some(now);
         self.spawn_pr_poll(host, wd, url);
     }
 
@@ -937,10 +1047,10 @@ impl Actor {
     /// mergeability, comments and `on_pr_poll` handling as the automatic
     /// poll (R2), with only `pr_url`, a workdir and a host required (R3).
     fn check_pr(&mut self) -> Result<(), ActionError> {
-        let Some(url) = self.agent.pr_url.clone() else {
+        let Some(url) = self.job.pr_url.clone() else {
             return Err(refuse(
                 "no_pr",
-                format!("{} has no pull request to check", self.agent.name),
+                format!("{} has no pull request to check", self.job.name),
             ));
         };
         let (Some(host), Ok(wd)) = (self.host(), self.workdir()) else {
@@ -948,13 +1058,13 @@ impl Actor {
                 "no_pr",
                 format!(
                     "no host plugin to check the pull request of {}",
-                    self.agent.name
+                    self.job.name
                 ),
             ));
         };
         // Set here so a slow host is not asked twice and the next scheduled
         // poll waits a full interval from it.
-        self.agent.pr_polled_at = Some(self.now());
+        self.job.pr_polled_at = Some(self.now());
         self.spawn_pr_poll(host, wd, url);
         Ok(())
     }
@@ -962,8 +1072,8 @@ impl Actor {
     /// Ask the host for the PR snapshot and comments (slow: spawned, back as
     /// `WorkResult::PrPoll`, which `on_pr_poll` applies).
     fn spawn_pr_poll(&mut self, host: Arc<xherd_plugin::host::Host>, wd: PathBuf, url: String) {
-        let (tx, generation) = (self.tx.clone(), self.agent.generation);
-        let (git, agent_base) = (self.env.git.clone(), self.agent.base.clone());
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
+        let (git, agent_base) = (self.env.git.clone(), self.job.base.clone());
         tokio::spawn(async move {
             let result = match host.pr_snapshot(&wd, &url).await {
                 Ok(mut snap) => {
@@ -998,12 +1108,12 @@ impl Actor {
         comments: Option<Vec<xherd_core::pr::Comment>>,
     ) {
         use xherd_core::pr::{Event, PrState};
-        let before = self.agent.status;
-        let name = self.agent.name.clone();
-        for e in self.agent.apply_pr(&snap) {
+        let before = self.job.status;
+        let name = self.job.name.clone();
+        for e in self.job.apply_pr(&snap) {
             let text = match e {
                 Event::Finished(state) => {
-                    self.agent.fire(Trigger::PrFinished, self.now());
+                    self.job.fire(Trigger::PrFinished, self.now());
                     let what = if state == PrState::Merged {
                         "merged"
                     } else {
@@ -1021,10 +1131,10 @@ impl Actor {
             };
             self.notify("pr", text);
         }
-        if self.agent.status == Status::Watching
+        if self.job.status == Status::Watching
             && let Some(all) = comments
         {
-            let fresh = self.agent.new_comments(&all);
+            let fresh = self.job.new_comments(&all);
             if !fresh.is_empty() {
                 self.on_new_comments(fresh).await;
             }
@@ -1038,12 +1148,12 @@ impl Actor {
     /// flow (flow `none`) the user is only told.
     async fn on_new_comments(&mut self, fresh: Vec<xherd_core::pr::Comment>) {
         let n = fresh.len();
-        let name = self.agent.name.clone();
+        let name = self.job.name.clone();
         let written = self.write_pr_comments(&fresh);
         let command = self.pack_command("prReview");
         if let Err(e) = &written {
             // Not handled: they are new again at the next poll.
-            self.agent
+            self.job
                 .pr_comments_seen
                 .retain(|id| !fresh.iter().any(|c| &c.id == id));
             tracing::warn!(agent = %name, error = %e, "pr-comments.json not written");
@@ -1054,8 +1164,8 @@ impl Actor {
         let s = if n == 1 { "" } else { "s" };
         match command {
             Some(cmd) => {
-                self.agent.next_prompt = Some(cmd);
-                self.agent.fire(Trigger::PrComments, self.now());
+                self.job.next_prompt = Some(cmd);
+                self.job.fire(Trigger::PrComments, self.now());
                 self.notify(
                     "pr-comments",
                     format!("{name}: {n} new PR comment{s}; the agent will triage them"),
@@ -1095,32 +1205,39 @@ impl Actor {
     /// agent's stop, so "at its next stop" is now).
     async fn on_usage(&mut self, session: &str, tokens: u64) {
         use xherd_core::usage::{Level, day, level};
-        let delta = self.agent.record_usage(session, tokens);
+        let delta = self.job.record_usage(session, tokens);
         let today = day(self.now());
         if delta > 0
             && let Err(e) = self.env.store.add_usage("all", &today, delta).await
         {
-            tracing::warn!(agent = %self.agent.name, %e, "usage not stored");
+            tracing::warn!(agent = %self.job.name, %e, "usage not stored");
+        }
+        // Recorded per saved agent (R24), shown but not enforced.
+        if delta > 0
+            && let Some(a) = self.job.agent()
+            && let Err(e) = self
+                .env
+                .store
+                .add_usage(&format!("agent:{}", a.id), &today, delta)
+                .await
+        {
+            tracing::warn!(agent = %self.job.name, %e, "agent usage not stored");
         }
         let daily = self.env.store.usage("all", &today).await.unwrap_or(0);
         let s = self.env.settings.get();
-        let agent_budget = self
-            .profile()
-            .await
-            .and_then(|p| p.agent_token_budget)
-            .unwrap_or(s.agent_token_budget);
+        let agent_budget = self.guardrails(&s).await.job_token_budget;
         let checks = [
-            ("agent", self.agent.tokens_total(), agent_budget),
+            ("agent", self.job.tokens_total(), agent_budget),
             ("daily", daily, s.daily_token_budget),
         ];
-        let before = self.agent.status;
+        let before = self.job.status;
         let hit = checks
             .iter()
             .find(|(_, used, budget)| level(*used, *budget) == Level::Exceeded);
         if let Some((scope, used, budget)) = hit {
-            if next_status(self.agent.status, Trigger::Pause).is_some() {
+            if next_status(self.job.status, Trigger::Pause).is_some() {
                 self.end_session().await;
-                self.agent.fire(Trigger::Pause, self.now());
+                self.job.fire(Trigger::Pause, self.now());
                 self.log(
                     None,
                     "budget-exhausted",
@@ -1131,21 +1248,21 @@ impl Actor {
                     "budget",
                     format!(
                         "{} paused: the {scope} token budget is used up ({used} of {budget})",
-                        self.agent.name
+                        self.job.name
                     ),
                 );
             }
-        } else if !self.agent.budget_warned
+        } else if !self.job.budget_warned
             && let Some((scope, used, budget)) = checks
                 .iter()
                 .find(|(_, used, budget)| level(*used, *budget) == Level::Warn)
         {
-            self.agent.budget_warned = true;
+            self.job.budget_warned = true;
             self.notify(
                 "budget",
                 format!(
                     "{}: 80% of the {scope} token budget is used ({used} of {budget})",
-                    self.agent.name
+                    self.job.name
                 ),
             );
         }
@@ -1164,20 +1281,17 @@ impl Actor {
     /// opened (a new review, say) keeps its session: a stop there means
     /// the turn ended, not the work (it may wait on a background task).
     async fn after_ship(&mut self) {
-        if self.agent.status != Status::Idle
-            || self.agent.gate.is_some()
-            || self.agent.pack.is_none()
-        {
+        if self.job.status != Status::Idle || self.job.gate.is_some() || self.job.pack.is_none() {
             return;
         }
         use xherd_core::domain::Role;
-        let pack = self.agent.pack.as_ref().and_then(|p| self.env.packs.get(p));
+        let pack = self.job.pack.as_ref().and_then(|p| self.env.packs.get(p));
         let role = self
-            .agent
+            .job
             .stage
             .as_deref()
             .and_then(|s| self.stage_role(pack, s));
-        if self.agent.pr_url.is_none() {
+        if self.job.pr_url.is_none() {
             if role == Some(Role::Ship) {
                 self.find_pr();
             }
@@ -1185,20 +1299,16 @@ impl Actor {
         }
         let over = match role {
             Some(Role::Ship | Role::Pr) => true,
-            Some(Role::Implement) => self
-                .agent
-                .tasks
-                .iter()
-                .all(|t| t.status == TaskStatus::Done),
+            Some(Role::Implement) => self.job.tasks.iter().all(|t| t.status == TaskStatus::Done),
             _ => false,
         };
         if !over {
             return;
         }
-        let before = self.agent.status;
+        let before = self.job.status;
         self.end_session().await;
-        self.agent.fire(Trigger::Watch, self.now());
-        self.log(None, "watching", Some(json!({"pr": self.agent.pr_url})))
+        self.job.fire(Trigger::Watch, self.now());
+        self.log(None, "watching", Some(json!({"pr": self.job.pr_url})))
             .await;
         self.commit(before).await;
     }
@@ -1212,8 +1322,8 @@ impl Actor {
         };
         let (tx, generation, branch) = (
             self.tx.clone(),
-            self.agent.generation,
-            self.agent.branch.clone(),
+            self.job.generation,
+            self.job.branch.clone(),
         );
         let settings = self.env.settings.get();
         let hosts = self.env.hosts.clone();
@@ -1249,7 +1359,7 @@ impl Actor {
     /// commands, else one.
     fn enters_for(&self, cmd: &str) -> u32 {
         let runtime = self.runtime_name();
-        self.agent
+        self.job
             .pack
             .as_deref()
             .and_then(|p| self.env.packs.get(p))
@@ -1259,11 +1369,11 @@ impl Actor {
     }
 
     async fn send_first_prompt(&mut self) {
-        let Some(cmd) = self.agent.next_prompt.clone() else {
+        let Some(cmd) = self.job.next_prompt.clone() else {
             return;
         };
         let enters = self.enters_for(&cmd);
-        let before = self.agent.status;
+        let before = self.job.status;
         match self.send(&cmd, enters).await {
             Ok(()) => {
                 self.first_unacked = true;
@@ -1280,7 +1390,7 @@ impl Actor {
                 .await;
                 self.notify(
                     "delivery",
-                    format!("{}: could not send {cmd:?}: {}", self.agent.name, e.message),
+                    format!("{}: could not send {cmd:?}: {}", self.job.name, e.message),
                 );
             }
         }
@@ -1291,10 +1401,10 @@ impl Actor {
     /// Validate and apply one XAP call (design §6.5). Accepted calls are logged
     /// as `xap.<cmd>` under the call id, which also de-duplicates replays.
     async fn on_xap(&mut self, mut call: XapCall) -> Result<Value, Refusal> {
-        if !self.agent.status.is_live() {
+        if !self.job.status.is_live() {
             return Err(refusal(
                 "not_live",
-                format!("{} is {}", self.agent.name, self.agent.status),
+                format!("{} is {}", self.job.name, self.job.status),
             ));
         }
         if self.env.store.event_exists(&call.id).await.unwrap_or(false) {
@@ -1302,7 +1412,7 @@ impl Actor {
         }
         self.commit_tripwires(&mut call.cmd).await;
         let packs = self.env.packs.clone();
-        let pack = self.agent.pack.as_deref().and_then(|p| packs.get(p));
+        let pack = self.job.pack.as_deref().and_then(|p| packs.get(p));
         self.review_hold(&mut call.cmd, pack)?;
         self.pr_review_check(&call.cmd)?;
         // A sync carrying edits to an approved task list re-opens its gate at
@@ -1310,7 +1420,7 @@ impl Actor {
         // (R-116); with another gate open it waits for that one.
         let reopen =
             matches!(call.cmd, XapCmd::TasksSync { .. }) && self.approved_tasks_edited(pack).await;
-        if reopen && self.agent.gate.is_some() {
+        if reopen && self.job.gate.is_some() {
             return Err(refusal(
                 "tasks_approved",
                 "tasks.md was approved and has changed, so it needs the user's approval again; \
@@ -1318,11 +1428,11 @@ impl Actor {
             ));
         }
         let obs = self.observe(pack, &call.cmd).await?;
-        let (before, now) = (self.agent.status, self.now());
-        let mut changed = xherd_flow::xap::apply(&mut self.agent, pack, &call.cmd, obs, now)?;
+        let (before, now) = (self.job.status, self.now());
+        let mut changed = xherd_flow::xap::apply(&mut self.job, pack, &call.cmd, obs, now)?;
         if reopen {
             self.infer_gate().await;
-            changed |= self.agent.gate.is_some();
+            changed |= self.job.gate.is_some();
         }
         if let XapCmd::IssueAdd { .. } = &call.cmd {
             self.append_issue(&call)
@@ -1342,9 +1452,10 @@ impl Actor {
             && self.stage_role(pack, stage) == Some(xherd_core::domain::Role::Ship)
         {
             self.fetch_templates();
+            self.write_user_notes().await;
         }
         // R8: flow work after an Ask ends its hold.
-        let hold_ended = call.cmd.is_flow_work() && self.agent.ask_hold.take().is_some();
+        let hold_ended = call.cmd.is_flow_work() && self.job.ask_hold.take().is_some();
         if hold_ended {
             self.log(None, "ask-hold-ended", Some(json!({"by": call.cmd.name()})))
                 .await;
@@ -1352,7 +1463,7 @@ impl Actor {
         if changed || hold_ended {
             self.commit(before).await;
         }
-        Ok(json!({"changed": changed, "stage": self.agent.stage, "gate": self.agent.gate}))
+        Ok(json!({"changed": changed, "stage": self.job.stage, "gate": self.job.gate}))
     }
 
     /// Approving the `pr-review` gate (R-306): settle one decision per comment
@@ -1376,7 +1487,7 @@ impl Actor {
             if state.posted.contains(&v.id) {
                 continue;
             }
-            let (Some(host), Some(url)) = (self.host(), self.agent.pr_url.clone()) else {
+            let (Some(host), Some(url)) = (self.host(), self.job.pr_url.clone()) else {
                 return Err(refuse(
                     "no_host",
                     "no host plugin or pull request to reply on",
@@ -1422,7 +1533,7 @@ impl Actor {
         pack: Option<&xherd_flow::Pack>,
         stage: &str,
     ) -> Option<xherd_core::domain::Role> {
-        pack.zip(self.agent.flow.as_deref())
+        pack.zip(self.job.flow.as_deref())
             .and_then(|(p, f)| p.flow(f))
             .and_then(|f| f.stage(stage))
             .map(|s| s.role)
@@ -1434,7 +1545,7 @@ impl Actor {
         let Ok(wd) = self.workdir() else {
             return;
         };
-        let (tx, generation) = (self.tx.clone(), self.agent.generation);
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
         let settings = self.env.settings.get();
         let hosts = self.env.hosts.clone();
         let secrets = self.env.secrets.clone();
@@ -1474,7 +1585,7 @@ impl Actor {
             return Ok(());
         };
         let is_review = pack
-            .zip(self.agent.flow.as_deref())
+            .zip(self.job.flow.as_deref())
             .and_then(|(p, f)| p.flow(f))
             .and_then(|f| f.stage(stage))
             .is_some_and(|s| s.role == Role::Review);
@@ -1492,24 +1603,21 @@ impl Actor {
             Err(_) => Vec::new(),
         };
         let open_findings: Vec<String> =
-            xherd_flow::review::open_findings(&findings, &self.agent.tasks)
+            xherd_flow::review::open_findings(&findings, &self.job.tasks)
                 .iter()
                 .map(|f| format!("{} ({})", f.id, f.severity.label()))
                 .collect();
         let open: Vec<&str> = self
-            .agent
+            .job
             .tasks
             .iter()
             .filter(|t| t.source == TaskSource::Review && t.status != TaskStatus::Done)
             .map(|t| t.id.as_str())
             .collect();
         let max = self.env.settings.get().max_review_loops;
-        if let Some(why) = xherd_core::tripwire::review_summary(
-            &open_findings,
-            &open,
-            self.agent.review_rounds,
-            max,
-        ) {
+        if let Some(why) =
+            xherd_core::tripwire::review_summary(&open_findings, &open, self.job.review_rounds, max)
+        {
             *needs_human = Some(match needs_human.take() {
                 Some(own) => format!("{own}; {why}"),
                 None => why,
@@ -1532,14 +1640,8 @@ impl Actor {
         let st = self.env.settings.get();
         // The profile's values replace the global ones (R-115).
         let profile = self.profile().await;
-        let sensitive = profile
-            .as_ref()
-            .and_then(|p| p.sensitive_paths.as_ref())
-            .unwrap_or(&st.sensitive_paths);
-        let max_lines = profile
-            .as_ref()
-            .and_then(|p| p.max_diff_lines)
-            .unwrap_or(st.max_diff_lines);
+        let guard = self.guardrails(&st).await;
+        let (sensitive, max_lines) = (&guard.sensitive_paths, guard.max_diff_lines);
         hits.extend(tw::sensitive_summary(files, sensitive));
         if let Ok(wd) = self.workdir() {
             // A merge commit (#139, R16): a human checks how the conflicts
@@ -1559,7 +1661,7 @@ impl Actor {
                     );
                 }
                 Err(e) => {
-                    tracing::debug!(agent = %self.agent.name, %e, "commit tripwires: no diff");
+                    tracing::debug!(agent = %self.job.name, %e, "commit tripwires: no diff");
                 }
             }
             // Lint first: it is the faster of the two.
@@ -1587,10 +1689,25 @@ impl Actor {
         }
     }
 
+    /// The limits this job runs under: the profile's (else the global
+    /// ones), tightened by its saved agent's (R13).
+    async fn guardrails(&self, st: &ActorSettings) -> xherd_core::resolve::Guardrails {
+        xherd_core::resolve::guardrails(
+            &xherd_core::resolve::Guardrails {
+                sensitive_paths: st.sensitive_paths.clone(),
+                max_diff_lines: st.max_diff_lines,
+                job_token_budget: st.job_token_budget,
+            },
+            self.profile().await.as_ref(),
+            self.job.agent(),
+            &self.job.agents,
+        )
+    }
+
     /// The profile the agent was created on, read at each use so a change in
     /// Settings applies at once; `None` when unset or deleted.
     async fn profile(&self) -> Option<xherd_core::profile::Profile> {
-        let id = self.agent.profile.as_deref()?;
+        let id = self.job.profile.as_deref()?;
         self.env
             .store
             .list_profiles()
@@ -1630,7 +1747,7 @@ impl Actor {
             XapCmd::TaskStart { id }
             | XapCmd::TaskDone { id, .. }
             | XapCmd::TaskBlock { id, .. } => {
-                let Some(t) = self.agent.tasks.iter().find(|t| &t.id == id) else {
+                let Some(t) = self.job.tasks.iter().find(|t| &t.id == id) else {
                     return;
                 };
                 let evidence = (t.status == TaskStatus::Done)
@@ -1649,7 +1766,7 @@ impl Actor {
 
     /// `status:` and `sha:` of a commit entry in `commits.md`.
     fn write_commit_progress(&self, id: &str) {
-        let Some(c) = self.agent.commits.iter().find(|c| c.id == id) else {
+        let Some(c) = self.job.commits.iter().find(|c| c.id == id) else {
             return;
         };
         let status = match c.status {
@@ -1667,39 +1784,35 @@ impl Actor {
         let Ok(wd) = self.workdir() else { return };
         let path = wd.join(xherd_flow::xap::SPEC_DIR).join(name);
         let Ok(text) = std::fs::read_to_string(&path) else {
-            tracing::debug!(agent = %self.agent.name, name, "no file for progress lines");
+            tracing::debug!(agent = %self.job.name, name, "no file for progress lines");
             return;
         };
         match edit(&text) {
             Some(new) if new != text => {
                 if let Err(e) = xherd_core::paths::write_atomic(&path, new.as_bytes(), None) {
-                    tracing::warn!(agent = %self.agent.name, name, %e, "progress lines not written");
+                    tracing::warn!(agent = %self.job.name, name, %e, "progress lines not written");
                 }
             }
             Some(_) => {}
             None => {
-                tracing::debug!(agent = %self.agent.name, name, "entry not found for progress lines")
+                tracing::debug!(agent = %self.job.name, name, "entry not found for progress lines")
             }
         }
     }
 
     fn workdir(&self) -> Result<PathBuf, Refusal> {
-        if self.agent.worktree_removed_at.is_some() {
+        if self.job.worktree_removed_at.is_some() {
             return Err(refusal(
                 "worktree_removed",
-                format!("{}'s worktree was removed", self.agent.name),
+                format!("{}'s worktree was removed", self.job.name),
             ));
         }
-        self.agent
-            .workdir
-            .as_ref()
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                refusal(
-                    "no_workspace",
-                    format!("{} has no workspace", self.agent.name),
-                )
-            })
+        self.job.workdir.as_ref().map(PathBuf::from).ok_or_else(|| {
+            refusal(
+                "no_workspace",
+                format!("{} has no workspace", self.job.name),
+            )
+        })
     }
 
     /// Look at the files and git for calls that need it. Small local reads,
@@ -1709,7 +1822,7 @@ impl Actor {
         // Every gate and commit proposal of an xherd flow leaves a valid memory.md.
         if matches!(cmd, XapCmd::GateOpen { .. } | XapCmd::CommitPropose { .. })
             && pack.is_some_and(|p| p.name == xherd_flow::BUILTIN)
-            && xherd_flow::xap::flow_of(&self.agent, pack).is_ok()
+            && xherd_flow::xap::flow_of(&self.job, pack).is_ok()
         {
             let file = self.workdir()?.join(SPEC_DIR).join("memory.md");
             xherd_flow::memory::check(std::fs::read_to_string(file).ok().as_deref())?;
@@ -1718,7 +1831,7 @@ impl Actor {
             XapCmd::GateOpen { .. } => {
                 let wd = self.workdir()?;
                 let mut facts = Vec::new();
-                for d in gate_docs(&self.agent, pack, cmd, &wd)? {
+                for d in gate_docs(&self.job, pack, cmd, &wd)? {
                     facts.push(self.doc_fact(&wd, d).await);
                 }
                 Observed::Docs(facts)
@@ -1741,7 +1854,7 @@ impl Actor {
             XapCmd::TaskDone { id, .. } => {
                 // Unknown task or none to run: `apply` decides.
                 let verify = self
-                    .agent
+                    .job
                     .tasks
                     .iter()
                     .find(|t| &t.id == id && t.status != TaskStatus::Done)
@@ -1757,7 +1870,7 @@ impl Actor {
             XapCmd::MemoryPropose { file, .. } => {
                 let wd = self.workdir()?;
                 if !wd.join("AGENTS.md").exists()
-                    && let Some(repo) = &self.agent.repo
+                    && let Some(repo) = &self.job.repo
                     && self
                         .env
                         .store
@@ -1771,6 +1884,22 @@ impl Actor {
                     ));
                 }
                 let f = file.as_deref().unwrap_or(xherd_flow::xap::MEMORY_PROPOSAL);
+                let d = doc_path(f, &wd)?;
+                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+            }
+            XapCmd::AgentMemoryPropose { file, .. } => {
+                let wd = self.workdir()?;
+                let f = file
+                    .as_deref()
+                    .unwrap_or(xherd_flow::xap::AGENT_MEMORY_PROPOSAL);
+                let d = doc_path(f, &wd)?;
+                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+            }
+            XapCmd::AgentPropose {
+                instructions_file: Some(f),
+                ..
+            } => {
+                let wd = self.workdir()?;
                 let d = doc_path(f, &wd)?;
                 Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
             }
@@ -1853,11 +1982,11 @@ impl Actor {
     /// tasks document does not count, R-107).
     fn doc_sha256(&self, wd: &Path, path: &str, bytes: &[u8]) -> String {
         let flow = self
-            .agent
+            .job
             .pack
             .as_deref()
             .and_then(|p| self.env.packs.get(p))
-            .and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()));
+            .and_then(|p| p.flow(self.job.flow.as_deref().unwrap_or_default()));
         xherd_flow::approve::doc_sha256(flow, wd, path, bytes)
     }
 
@@ -1881,7 +2010,7 @@ impl Actor {
                     let approved = self
                         .env
                         .store
-                        .approved(&self.agent.id, &path, &sha256)
+                        .approved(&self.job.id, &path, &sha256)
                         .await
                         .unwrap_or(false);
                     DocState::Present {
@@ -1930,7 +2059,7 @@ impl Actor {
     // ---- user actions --------------------------------------------------------
 
     async fn on_user(&mut self, action: UserAction) -> Result<(), ActionError> {
-        let before = self.agent.status;
+        let before = self.job.status;
         let now = self.now();
         let mut payload = None;
         let kind = match &action {
@@ -1940,10 +2069,10 @@ impl Actor {
                 return Ok(());
             }
             UserAction::Pause => {
-                if next_status(self.agent.status, Trigger::Pause).is_none() {
+                if next_status(self.job.status, Trigger::Pause).is_none() {
                     return Err(refuse(
                         "not_allowed",
-                        format!("{} is {}", self.agent.name, self.agent.status),
+                        format!("{} is {}", self.job.name, self.job.status),
                     ));
                 }
                 if self.begin_pause().await {
@@ -1953,53 +2082,53 @@ impl Actor {
                 }
             }
             UserAction::PauseNow => {
-                if next_status(self.agent.status, Trigger::Pause).is_none() {
+                if next_status(self.job.status, Trigger::Pause).is_none() {
                     return Err(refuse(
                         "not_allowed",
-                        format!("{} is {}", self.agent.name, self.agent.status),
+                        format!("{} is {}", self.job.name, self.job.status),
                     ));
                 }
-                if self.agent.status.is_live() {
+                if self.job.status.is_live() {
                     self.end_session().await;
                 }
-                self.agent.pause_requested_at = None;
-                self.agent.fire(Trigger::Pause, now);
+                self.job.pause_requested_at = None;
+                self.job.fire(Trigger::Pause, now);
                 "user.pause-all"
             }
             UserAction::Resume => {
-                if self.agent.worktree_removed_at.is_some() {
+                if self.job.worktree_removed_at.is_some() {
                     return Err(refuse(
                         "worktree_removed",
-                        format!("{}'s worktree was removed", self.agent.name),
+                        format!("{}'s worktree was removed", self.job.name),
                     ));
                 }
-                if self.agent.fire(Trigger::Resume, now).is_none() {
+                if self.job.fire(Trigger::Resume, now).is_none() {
                     return Err(refuse(
                         "not_allowed",
-                        format!("{} is {}", self.agent.name, self.agent.status),
+                        format!("{} is {}", self.job.name, self.job.status),
                     ));
                 }
                 self.prepare_resume(true).await;
                 "user.resume"
             }
             UserAction::Cancel { remove_worktree } => {
-                if next_status(self.agent.status, Trigger::Cancel).is_some() {
-                    if self.agent.status.is_live() {
+                if next_status(self.job.status, Trigger::Cancel).is_some() {
+                    if self.job.status.is_live() {
                         self.end_session().await;
                     }
-                    self.agent.pause_requested_at = None;
-                    self.agent.fire(Trigger::Cancel, now);
+                    self.job.pause_requested_at = None;
+                    self.job.fire(Trigger::Cancel, now);
                 } else {
                     return Err(refuse(
                         "not_allowed",
-                        format!("{} is {}", self.agent.name, self.agent.status),
+                        format!("{} is {}", self.job.name, self.job.status),
                     ));
                 }
                 if *remove_worktree {
                     // The cancel stands whatever the removal does.
                     self.log(None, "user.cancel", None).await;
                     self.commit(before).await;
-                    let before = self.agent.status;
+                    let before = self.job.status;
                     if let Err(e) = self.remove_worktree().await {
                         self.log(
                             None,
@@ -2011,7 +2140,7 @@ impl Actor {
                             "error",
                             format!(
                                 "{} was cancelled, but its worktree could not be removed: {}",
-                                self.agent.name, e.message
+                                self.job.name, e.message
                             ),
                         );
                     }
@@ -2021,33 +2150,34 @@ impl Actor {
                 "user.cancel"
             }
             UserAction::RemoveWorktree => {
-                if !matches!(self.agent.status, Status::Done | Status::Cancelled) {
+                if !matches!(self.job.status, Status::Done | Status::Cancelled) {
                     return Err(refuse(
                         "not_allowed",
                         format!(
                             "{} is {}: only a done or cancelled agent's worktree can be removed",
-                            self.agent.name, self.agent.status
+                            self.job.name, self.job.status
                         ),
                     ));
                 }
-                if self.agent.worktree_removed_at.is_some() {
+                if self.job.worktree_removed_at.is_some() {
                     return Ok(());
                 }
                 self.remove_worktree().await?;
                 "user.remove-worktree"
             }
             UserAction::Send { text } => {
-                if self.agent.status == Status::Parked {
+                if self.job.status == Status::Parked {
                     self.unpark_with(text.clone()).await;
                 } else {
                     self.send(text, 1).await?;
                 }
+                self.keep_note(text).await;
                 // A message while a question is open is its answer (xap.md `ask`).
-                if matches!(self.agent.gate, Some(Gate::Question { .. })) {
-                    self.agent.gate = None;
-                    self.agent.generation += 1;
+                if matches!(self.job.gate, Some(Gate::Question { .. })) {
+                    self.job.gate = None;
+                    self.job.generation += 1;
                     // No-op for a parked agent (already queued).
-                    self.agent.fire(Trigger::UserInput, self.now());
+                    self.job.fire(Trigger::UserInput, self.now());
                     "user.answer"
                 } else {
                     "user.send"
@@ -2055,30 +2185,31 @@ impl Actor {
             }
             UserAction::Ask { text } => {
                 self.ask(text).await?;
+                self.keep_note(text).await;
                 payload = Some(json!({"chars": text.trim().chars().count()}));
                 "user.ask"
             }
             UserAction::Finish => {
-                let Some(hold) = self.agent.ask_hold.take() else {
+                let Some(hold) = self.job.ask_hold.take() else {
                     return Err(refuse(
                         "not_asked",
-                        format!("{} has no Ask session to finish", self.agent.name),
+                        format!("{} has no Ask session to finish", self.job.name),
                     ));
                 };
-                if self.agent.status.is_live() {
+                if self.job.status.is_live() {
                     self.end_session().await;
                 }
-                self.agent.pause_requested_at = None;
+                self.job.pause_requested_at = None;
                 // Still queued, the Ask text was never delivered: drop it so
                 // a later Resume types the pack's `resume` command and a new
                 // Ask is not refused `prompt_pending`.
-                self.agent.next_prompt = None;
-                let trigger = if hold.was_watching && self.agent.pr_url.is_some() {
+                self.job.next_prompt = None;
+                let trigger = if hold.was_watching && self.job.pr_url.is_some() {
                     Trigger::Finish
                 } else {
                     Trigger::Pause
                 };
-                self.agent.fire(trigger, now);
+                self.job.fire(trigger, now);
                 "user.finish"
             }
             UserAction::Approve {
@@ -2089,12 +2220,13 @@ impl Actor {
                 self.approve(reason.clone(), expect, message.clone(), false)
                     .await?;
                 // The user moved the flow on: an Ask session ends (R8).
-                self.agent.ask_hold = None;
+                self.job.ask_hold = None;
                 "user.approve"
             }
             UserAction::RequestChanges { comment } => {
                 self.request_changes(comment).await?;
-                self.agent.ask_hold = None;
+                self.keep_note(comment).await;
+                self.job.ask_hold = None;
                 "user.request-changes"
             }
             UserAction::SetAutonomy { level } => {
@@ -2106,16 +2238,69 @@ impl Actor {
                 "user.memory-accept"
             }
             UserAction::MemoryDismiss => {
-                if self.agent.memory_proposal.take().is_none() {
+                if self.job.memory_proposal.take().is_none() {
                     return Ok(());
                 }
                 // A starter AGENTS.md declined: no more proposals for the repo.
-                if let (Ok(wd), Some(repo)) = (self.workdir(), self.agent.repo.clone())
+                if let (Ok(wd), Some(repo)) = (self.workdir(), self.job.repo.clone())
                     && !wd.join("AGENTS.md").exists()
                 {
                     let _ = self.env.store.put_memory_declined(&repo, "AGENTS.md").await;
                 }
                 "user.memory-dismiss"
+            }
+            UserAction::AgentMemoryClear => {
+                if self.job.agent_memory_proposal.take().is_none() {
+                    return Ok(());
+                }
+                "user.agent-memory-clear"
+            }
+            UserAction::MarkDone => {
+                if self.job.flow.is_some() {
+                    return Err(refuse(
+                        "not_allowed",
+                        format!(
+                            "{} has a workflow: it is done when its PR is merged",
+                            self.job.name
+                        ),
+                    ));
+                }
+                if next_status(self.job.status, Trigger::MarkDone).is_none() {
+                    return Err(refuse(
+                        "not_allowed",
+                        format!(
+                            "{} is {}: only an idle, waiting, paused or parked job can be marked done",
+                            self.job.name, self.job.status
+                        ),
+                    ));
+                }
+                if self.job.status.is_live() {
+                    self.end_session().await;
+                }
+                self.job.pause_requested_at = None;
+                self.job.fire(Trigger::MarkDone, now);
+                "user.mark-done"
+            }
+            UserAction::AttachAgent { snapshot } => {
+                if !self.job.agents.is_empty() {
+                    return Err(refuse(
+                        "has_agent",
+                        format!("{} already belongs to an agent", self.job.name),
+                    ));
+                }
+                payload = Some(json!({"agent": snapshot.id, "version": snapshot.version}));
+                self.job.set_agent((**snapshot).clone());
+                self.job.pinned = true;
+                self.job.suggestion = None;
+                self.job.agent_draft = None;
+                "user.attach-agent"
+            }
+            UserAction::SuggestionDismiss => {
+                match self.job.suggestion.as_mut() {
+                    Some(s) if !s.dismissed => s.dismissed = true,
+                    _ => return Ok(()),
+                }
+                "user.suggestion-dismiss"
             }
             UserAction::CheckPr => {
                 self.check_pr()?;
@@ -2126,19 +2311,33 @@ impl Actor {
                 "user.resolve-conflicts"
             }
             UserAction::SetMode { mode, launch } => {
-                if self.agent.permission_mode == Some(*mode) {
+                if self.job.permission_mode == Some(*mode) {
                     return Ok(());
                 }
-                self.agent.permission_mode = Some(*mode);
-                self.agent.launch = Some(launch.clone());
+                if let Some(p) = self.profile().await
+                    && let Some(cap) = p.permission_mode
+                    && *mode > cap
+                {
+                    return Err(above_profile(
+                        "tool permission mode",
+                        &mode.to_string(),
+                        &cap.to_string(),
+                        &p.name,
+                    ));
+                }
+                self.job.lowered.retain(|l| l.field != "permissionMode");
+                self.job.permission_mode = Some(*mode);
+                self.job.pinned = true;
+                self.job.launch = Some(launch.clone());
                 "user.mode"
             }
             UserAction::SetModel { model, launch } => {
-                if self.agent.model == *model {
+                if self.job.model == *model {
                     return Ok(());
                 }
-                self.agent.model = model.clone();
-                self.agent.launch = Some(launch.clone());
+                self.job.model = model.clone();
+                self.job.pinned = true;
+                self.job.launch = Some(launch.clone());
                 "user.model"
             }
         };
@@ -2156,13 +2355,13 @@ impl Actor {
         if text.is_empty() {
             return Err(refuse("usage", "say what to ask"));
         }
-        if self.agent.worktree_removed_at.is_some() {
+        if self.job.worktree_removed_at.is_some() {
             return Err(refuse(
                 "worktree_removed",
-                format!("{}'s worktree was removed", self.agent.name),
+                format!("{}'s worktree was removed", self.job.name),
             ));
         }
-        let status = self.agent.status;
+        let status = self.job.status;
         if !matches!(
             status,
             Status::Paused | Status::Parked | Status::Watching | Status::Error
@@ -2171,23 +2370,23 @@ impl Actor {
                 "not_allowed",
                 format!(
                     "{} is {status}: Ask needs an agent with no session",
-                    self.agent.name
+                    self.job.name
                 ),
             ));
         }
         // A command waits (after an approval, say): Resume delivers it; Ask
         // would replace it.
-        if self.agent.next_prompt.is_some() {
+        if self.job.next_prompt.is_some() {
             return Err(refuse(
                 "prompt_pending",
-                format!("{} has a command waiting: resume it first", self.agent.name),
+                format!("{} has a command waiting: resume it first", self.job.name),
             ));
         }
         let now = self.now();
-        self.agent.next_prompt = Some(text.to_string());
-        self.agent.fire(Trigger::Resume, now);
+        self.job.next_prompt = Some(text.to_string());
+        self.job.fire(Trigger::Resume, now);
         self.prepare_resume(false).await;
-        self.agent.ask_hold = Some(xherd_core::agent::AskHold {
+        self.job.ask_hold = Some(xherd_core::job::AskHold {
             at: now,
             was_watching: status == Status::Watching,
         });
@@ -2198,14 +2397,14 @@ impl Actor {
     /// `conflicts` command, which merges the PR's base into the branch. The
     /// base goes through `pr::base_ref`, since it is typed into the terminal.
     async fn resolve_conflicts(&mut self) -> Result<(), ActionError> {
-        let name = self.agent.name.clone();
-        if self.agent.pr_url.is_none() {
+        let name = self.job.name.clone();
+        if self.job.pr_url.is_none() {
             return Err(refuse(
                 "no_pr",
                 format!("{name} has no pull request to update"),
             ));
         }
-        if self.agent.worktree_removed_at.is_some() {
+        if self.job.worktree_removed_at.is_some() {
             return Err(refuse(
                 "worktree_removed",
                 format!("{name}'s worktree was removed"),
@@ -2218,7 +2417,7 @@ impl Actor {
             )
         };
         if !self
-            .agent
+            .job
             .pack
             .as_deref()
             .and_then(|p| self.env.packs.get(p))
@@ -2226,7 +2425,7 @@ impl Actor {
         {
             return Err(no_command());
         }
-        let status = self.agent.status;
+        let status = self.job.status;
         if next_status(status, Trigger::ResolveConflicts).is_none() {
             return Err(refuse(
                 "not_allowed",
@@ -2235,20 +2434,20 @@ impl Actor {
                 ),
             ));
         }
-        if self.agent.gate.is_some() {
+        if self.job.gate.is_some() {
             return Err(refuse(
                 "not_allowed",
                 format!("{name} waits at a gate: decide the open gate first"),
             ));
         }
-        if self.agent.next_prompt.is_some() {
+        if self.job.next_prompt.is_some() {
             return Err(refuse(
                 "prompt_pending",
                 format!("{name} has a command waiting: resume it first"),
             ));
         }
         let Some(base) =
-            xherd_core::pr::base_ref(self.agent.pr_base.as_deref(), self.agent.base.as_deref())
+            xherd_core::pr::base_ref(self.job.pr_base.as_deref(), self.job.base.as_deref())
         else {
             return Err(refuse(
                 "not_allowed",
@@ -2261,12 +2460,12 @@ impl Actor {
         if status == Status::Idle {
             self.end_session().await;
         }
-        self.agent.pause_requested_at = None;
-        self.agent.next_prompt = Some(command);
+        self.job.pause_requested_at = None;
+        self.job.next_prompt = Some(command);
         // A clean session: the merge needs no earlier conversation.
         self.resume_session = None;
-        self.agent.ask_hold = None;
-        self.agent.fire(Trigger::ResolveConflicts, self.now());
+        self.job.ask_hold = None;
+        self.job.fire(Trigger::ResolveConflicts, self.now());
         Ok(())
     }
 
@@ -2274,10 +2473,10 @@ impl Actor {
     /// agents' user, or `git worktree prune` when the folder is already gone.
     /// The branch, `workdir` and the record stay. Inline: the user waits.
     async fn remove_worktree(&mut self) -> Result<(), ActionError> {
-        let (Some(wd), Some(repo)) = (self.agent.workdir.clone(), self.agent.repo.clone()) else {
+        let (Some(wd), Some(repo)) = (self.job.workdir.clone(), self.job.repo.clone()) else {
             return Err(refuse(
                 "no_workspace",
-                format!("{} has no worktree", self.agent.name),
+                format!("{} has no worktree", self.job.name),
             ));
         };
         let (wd, repo) = (PathBuf::from(wd), PathBuf::from(repo));
@@ -2291,7 +2490,7 @@ impl Actor {
                 .map(drop)
         };
         res.map_err(|e| refuse("git", e.to_string()))?;
-        self.agent.worktree_removed_at = Some(self.now());
+        self.job.worktree_removed_at = Some(self.now());
         self.log(
             None,
             "worktree-removed",
@@ -2302,23 +2501,23 @@ impl Actor {
     }
 
     async fn start(&mut self, port_base: u16) -> Result<(), ActionError> {
-        let before = self.agent.status;
+        let before = self.job.status;
         let now = self.now();
-        if self.agent.fire(Trigger::SlotFree, now).is_none() {
+        if self.job.fire(Trigger::SlotFree, now).is_none() {
             return Err(refuse(
                 "not_allowed",
-                format!("{} is {}", self.agent.name, self.agent.status),
+                format!("{} is {}", self.job.name, self.job.status),
             ));
         }
         let res = self.launch(port_base).await;
         if let Err(e) = &res {
             self.revoke_tokens().await;
-            self.agent.fire(Trigger::SessionLost, self.now());
+            self.job.fire(Trigger::SessionLost, self.now());
             self.log(None, "start-failed", Some(json!({"error": e.message})))
                 .await;
             self.notify(
                 "error",
-                format!("{} could not start: {}", self.agent.name, e.message),
+                format!("{} could not start: {}", self.job.name, e.message),
             );
         } else {
             self.log(
@@ -2333,8 +2532,13 @@ impl Actor {
     }
 
     async fn launch(&mut self, port_base: u16) -> Result<(), ActionError> {
+        // A session that starts on a stage other than its agent's (the job
+        // moved on in a running session) starts on the stage's agent.
+        if let Some(stage) = self.job.stage.clone() {
+            self.switch_agent(&stage).await;
+        }
         let argv = self
-            .agent
+            .job
             .launch
             .clone()
             .filter(|a| !a.is_empty())
@@ -2347,7 +2551,7 @@ impl Actor {
                     // A continued session takes its prompt from `promptEnv`
                     // or the resume `promptArgs` when the runtime has them,
                     // else it is typed.
-                    let prompt = self.agent.next_prompt.as_deref();
+                    let prompt = self.job.next_prompt.as_deref();
                     let env = prompt.and_then(|p| r.0.prompt_env_argv(&id, p));
                     let args = prompt.and_then(|p| r.0.prompt_argv(p));
                     self.prompt_on_launch = env.is_some() || args.is_some();
@@ -2365,8 +2569,8 @@ impl Actor {
         self.revoke_tokens().await;
         let token = mint_token(
             &self.env.store,
-            TOKEN_AGENT,
-            Some(&self.agent.id),
+            TOKEN_JOB,
+            Some(&self.job.id),
             &[SCOPE_HOOKS, SCOPE_XAP, SCOPE_CREDENTIAL],
             self.now(),
         )
@@ -2378,8 +2582,8 @@ impl Actor {
             ("XHERD_ENV".into(), "1".into()),
             ("XHERD_BIN".into(), s.xherd_bin.clone()),
             ("XHERD_URL".into(), s.xherd_url.clone()),
-            ("XHERD_AGENT_ID".into(), self.agent.id.clone()),
-            ("XHERD_AGENT_TOKEN".into(), token),
+            ("XHERD_JOB_ID".into(), self.job.id.clone()),
+            ("XHERD_JOB_TOKEN".into(), token),
             ("XHERD_PORT_BASE".into(), port_base.to_string()),
         ];
         // The prompts call plain `xherd …`: a command with a variable in it
@@ -2399,7 +2603,7 @@ impl Actor {
             .start(&ctx, &self.session_argv(argv).await)
             .await
             .map_err(|e| refuse("driver", e.0))?;
-        self.agent.session_since = Some(self.now());
+        self.job.session_since = Some(self.now());
         Ok(())
     }
 
@@ -2411,7 +2615,7 @@ impl Actor {
             .map(|k| k.prompt_args.clone())
             .unwrap_or_default();
         let extra = self
-            .agent
+            .job
             .next_prompt
             .as_deref()
             .and_then(|p| xherd_plugin::runtime::Terminal::prompt_argv(&args, p));
@@ -2427,7 +2631,7 @@ impl Actor {
     /// is written at every start, so version files edited since count.
     async fn session_argv(&self, launch: Vec<String>) -> Vec<String> {
         use xherd_plugin::toolchain::{PLAN_FILE, plan};
-        let Some(wd) = self.agent.workdir.as_deref().map(Path::new) else {
+        let Some(wd) = self.job.workdir.as_deref().map(Path::new) else {
             return launch;
         };
         let settings = self.env.settings.get();
@@ -2436,7 +2640,7 @@ impl Actor {
             && !off(self.runtime_name())
             && let Err(e) = t.ensure(wd).await
         {
-            tracing::warn!(agent = %self.agent.name, error = %e, "runtime trust not written");
+            tracing::warn!(agent = %self.job.name, error = %e, "runtime trust not written");
         }
         let on: Vec<_> = self
             .env
@@ -2458,7 +2662,7 @@ impl Actor {
         }
         let json = serde_json::to_vec_pretty(&p).expect("json");
         if let Err(e) = xherd_core::paths::write_atomic(&file, &json, None) {
-            tracing::warn!(agent = %self.agent.name, error = %e, "toolchain plan not written; starting without it");
+            tracing::warn!(agent = %self.job.name, error = %e, "toolchain plan not written; starting without it");
             return launch;
         }
         let mut argv = vec![
@@ -2472,7 +2676,7 @@ impl Actor {
     }
 
     async fn send(&mut self, text: &str, enters: u32) -> Result<(), ActionError> {
-        match self.agent.status {
+        match self.job.status {
             Status::Blocked => {
                 return Err(refuse(
                     "agent_blocked",
@@ -2480,7 +2684,7 @@ impl Actor {
                 ));
             }
             s if !s.is_live() => {
-                return Err(refuse("not_live", format!("{} is {s}", self.agent.name)));
+                return Err(refuse("not_live", format!("{} is {s}", self.job.name)));
             }
             _ => {}
         }
@@ -2499,7 +2703,7 @@ impl Actor {
         let (tx, wait, generation) = (
             self.tx.clone(),
             self.env.settings.get().delivery_ack,
-            self.agent.generation,
+            self.job.generation,
         );
         tokio::spawn(async move {
             tokio::time::sleep(wait).await;
@@ -2515,24 +2719,25 @@ impl Actor {
     /// The open gate, if it is one the user can approve or change, and the
     /// agent stopped for it.
     fn gate_for_user(&self, parked_ok: bool) -> Result<Gate, ActionError> {
-        let gate =
-            self.agent.gate.clone().ok_or_else(|| {
-                refuse("no_gate", format!("{} has no open gate", self.agent.name))
-            })?;
+        let gate = self
+            .job
+            .gate
+            .clone()
+            .ok_or_else(|| refuse("no_gate", format!("{} has no open gate", self.job.name)))?;
         if let Gate::Question { .. } = gate {
             return Err(refuse(
                 "no_gate",
                 "the agent asked a question; answer it with `xherd send`",
             ));
         }
-        match self.agent.status {
+        match self.job.status {
             Status::WaitingInput | Status::Idle => Ok(gate),
             Status::Parked if parked_ok => Ok(gate),
             s => Err(refuse(
                 "not_waiting",
                 format!(
                     "{} is {s}; act on the gate once it stops there",
-                    self.agent.name
+                    self.job.name
                 ),
             )),
         }
@@ -2544,13 +2749,15 @@ impl Actor {
     /// says.
     fn gate_class(&self, gate: &Gate) -> Option<xherd_core::domain::Class> {
         use xherd_core::domain::{Class, Role};
-        let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
-        let flow = pack.flow(self.agent.flow.as_deref()?)?;
+        let pack = self.env.packs.get(self.job.pack.as_deref()?)?;
+        let flow = pack.flow(self.job.flow.as_deref()?)?;
         let stage = match gate {
             Gate::Docs { stage, .. } => flow.stage(stage)?,
-            Gate::Commit(_) => flow.commit_stage(self.agent.stage.as_deref())?,
+            Gate::Commit(_) => flow.commit_stage(self.job.stage.as_deref())?,
             _ => return None,
         };
+        // Human-only by the pack (role `pr`). A stage the user marked human
+        // comes back with stage assignments (D26).
         Some(if stage.role == Role::Pr {
             Class::HumanOnly
         } else {
@@ -2564,18 +2771,16 @@ impl Actor {
     /// the settings snapshot only.
     fn auto_check(&self) -> AutoCheck {
         use xherd_core::autonomy::{may_auto_approve, run_limit};
-        if self.agent.autonomy == xherd_core::autonomy::Autonomy::Ask
-            || self.agent.ask_hold.is_some()
-        {
+        if self.job.autonomy == xherd_core::autonomy::Autonomy::Ask || self.job.ask_hold.is_some() {
             return AutoCheck::No;
         }
-        let Some(gate) = &self.agent.gate else {
+        let Some(gate) = &self.job.gate else {
             return AutoCheck::No;
         };
         let Some(class) = self.gate_class(gate) else {
             return AutoCheck::No;
         };
-        if !may_auto_approve(self.agent.autonomy, class) {
+        if !may_auto_approve(self.job.autonomy, class) {
             return AutoCheck::No;
         }
         let (label, held) = match gate {
@@ -2599,7 +2804,7 @@ impl Actor {
             return AutoCheck::Held(label, held);
         }
         if let Some(why) = run_limit(
-            self.agent.auto_in_row,
+            self.job.auto_in_row,
             self.env.settings.get().max_auto_approvals_in_row,
         ) {
             return AutoCheck::Limit(label, why);
@@ -2615,10 +2820,10 @@ impl Actor {
     /// runs inline in the actor on the stop itself, so the gate cannot change
     /// meanwhile and a user message queued behind it is handled afterwards.
     async fn try_auto_approve(&mut self) {
-        if !matches!(self.agent.status, Status::WaitingInput | Status::Idle) {
+        if !matches!(self.job.status, Status::WaitingInput | Status::Idle) {
             return;
         }
-        let level = self.agent.autonomy;
+        let level = self.job.autonomy;
         let (label, class) = match self.auto_check() {
             AutoCheck::No => return,
             AutoCheck::Held(label, held) => {
@@ -2629,27 +2834,27 @@ impl Actor {
             }
             AutoCheck::Limit(label, why) => {
                 // Make the reason visible on the gate, and say so once.
-                match &mut self.agent.gate {
+                match &mut self.job.gate {
                     Some(Gate::Docs { needs_human, .. }) => *needs_human = Some(why.clone()),
                     Some(Gate::Commit(c)) => c.needs_human = Some(why.clone()),
                     _ => {}
                 }
-                if let Some(Gate::Commit(c)) = &self.agent.gate
-                    && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
+                if let Some(Gate::Commit(c)) = &self.job.gate
+                    && let Some(mine) = self.job.commits.iter_mut().find(|x| x.id == c.id)
                 {
                     mine.needs_human = Some(why.clone());
                 }
-                self.agent.generation += 1;
+                self.job.generation += 1;
                 // The caller's `notify_gate` says so, with `why` as the hold.
                 self.log(None, "auto-held", Some(json!({"gate": label, "why": why})))
                     .await;
-                let status = self.agent.status;
+                let status = self.job.status;
                 self.commit(status).await;
                 return;
             }
             AutoCheck::Approve { label, class } => (label, class),
         };
-        let before = self.agent.status;
+        let before = self.job.status;
         let reason =
             format!("autonomy {level}: {label} is a {class:?} gate and no tripwire held it");
         // No notice on success (#135): Needs attention lists it (R-111).
@@ -2667,11 +2872,11 @@ impl Actor {
                 "error",
                 format!(
                     "{}: could not approve {label} automatically: {}",
-                    self.agent.name, e.message
+                    self.job.name, e.message
                 ),
             );
             // That notice covers this gate: no `gate` notice for it too.
-            self.notified_gate = self.agent.gate.clone();
+            self.notified_gate = self.job.gate.clone();
         }
         self.commit(before).await;
     }
@@ -2679,6 +2884,153 @@ impl Actor {
     /// Change the autonomy level (R-109): rewrite `instructions.md`, and
     /// approve at once a gate the agent is already waiting at that the new
     /// level allows (no further stop would come).
+    /// Rewrite `.xherd/instructions.md` from the job as it is now.
+    async fn write_instructions(&self) {
+        let Ok(wd) = self.workdir() else { return };
+        let file = wd.join(".xherd").join("instructions.md");
+        let extra = self.profile().await.and_then(|p| p.instructions);
+        if let Err(e) = xherd_core::paths::write_atomic(
+            &file,
+            xherd_core::new::instructions_md(&self.job, extra.as_deref()).as_bytes(),
+            None,
+        ) {
+            tracing::warn!(agent = %self.job.name, %e, "instructions.md not rewritten");
+        }
+    }
+
+    /// The agent of `stage` takes over when the next session starts (D26,
+    /// R39, R40): instructions and memory, skills, launch line, autonomy,
+    /// mode and model become its own (the profile's ceilings still apply),
+    /// and limits, budgets and the work log follow `current_agent`. A job the
+    /// user attached an agent to by hand (`pinned`), a stage with no agent
+    /// and the agent already in charge change nothing. Never called for a
+    /// running session: only where a new one is about to start.
+    async fn switch_agent(&mut self, stage: &str) {
+        if self.job.pinned {
+            return;
+        }
+        let Some(to) = self.job.stage_agents.get(stage).map(|s| s.agent.clone()) else {
+            return;
+        };
+        if self.job.current_agent.as_deref() == Some(to.as_str()) {
+            return;
+        }
+        let Some(new) = self.job.agents.get(&to).cloned() else {
+            return;
+        };
+        let from = self.job.current_agent.clone();
+        let profile = self.profile().await;
+        let target = self
+            .runtime_kit()
+            .and_then(|k| k.terminal.as_ref())
+            .cloned();
+        // Skills: those of the agent leaving go, those of the one arriving
+        // come (a repository's own folder is left alone).
+        if let Some(wd) = self.job.workdir.clone().map(std::path::PathBuf::from) {
+            let skills = target.as_ref().and_then(|t| t.skills.as_ref());
+            if let Some(old) = from.as_ref().and_then(|f| self.job.agents.get(f)) {
+                crate::skills::remove(&wd, skills, &old.skills).await;
+            }
+            let wanted: Vec<(String, Option<String>)> =
+                new.skills.iter().map(|s| (s.name.clone(), None)).collect();
+            let rt = self.runtime_name().to_string();
+            match crate::skills::install(&self.env.skills, &wd, &rt, skills, &wanted).await {
+                Ok(done) => {
+                    if let Some(g) = self.job.agents.get_mut(&to) {
+                        g.skills = done;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(job = %self.job.name, error = %e.message, "skills not installed");
+                    self.log(
+                        None,
+                        "skills-failed",
+                        Some(json!({"agent": to, "error": e.message})),
+                    )
+                    .await;
+                }
+            }
+        }
+        // Autonomy, mode, model and launch: the agent's baked values under
+        // the profile's ceilings as they are now.
+        self.job
+            .lowered
+            .retain(|l| l.field != "autonomy" && l.field != "permissionMode");
+        let want_autonomy = new.autonomy.unwrap_or(self.job.autonomy);
+        let cap = profile.as_ref().and_then(|p| p.autonomy);
+        let (autonomy, low) = xherd_core::resolve::ceiling(want_autonomy, cap);
+        if let (true, Some(p)) = (low, &profile) {
+            self.job.lowered.push(xherd_core::resolve::Lowered {
+                field: "autonomy".into(),
+                from: want_autonomy.to_string(),
+                to: autonomy.to_string(),
+                profile: p.name.clone(),
+            });
+        }
+        if autonomy != self.job.autonomy {
+            self.job.auto_in_row = 0;
+        }
+        self.job.autonomy = autonomy;
+        let want_mode = new.permission_mode.or(self.job.permission_mode);
+        self.job.model = new.model.clone();
+        if let Some(want) = want_mode {
+            let cap = profile.as_ref().and_then(|p| p.permission_mode);
+            let (mode, low) = xherd_core::resolve::ceiling(want, cap);
+            if let (true, Some(p)) = (low, &profile) {
+                self.job.lowered.push(xherd_core::resolve::Lowered {
+                    field: "permissionMode".into(),
+                    from: want.to_string(),
+                    to: mode.to_string(),
+                    profile: p.name.clone(),
+                });
+            }
+            self.job.permission_mode = Some(mode);
+            let rebuilt = match (&target, low) {
+                (Some(t), true) => crate::create::mode_launch(
+                    t,
+                    mode,
+                    new.model.as_deref(),
+                    self.env.settings.get().toolchain_install, // = running in the container
+                )
+                .ok(),
+                _ => None,
+            };
+            match rebuilt {
+                Some(l) => self.job.launch = Some(l),
+                None if !new.launch.is_empty() => self.job.launch = Some(new.launch.clone()),
+                None => {}
+            }
+        } else if !new.launch.is_empty() {
+            self.job.launch = Some(new.launch.clone());
+        }
+        self.job.current_agent = Some(to.clone());
+        self.write_instructions().await;
+        let _ = self.env.sup.send(SupEvent::AgentChanged {
+            id: self.job.id.clone(),
+            agent: Some(to.clone()),
+        });
+        self.log(
+            None,
+            "agent-switch",
+            Some(json!({"stage": stage, "from": from, "to": to})),
+        )
+        .await;
+    }
+
+    /// The stage the approved gate's next command starts, if it starts one.
+    fn next_stage_of(&self, wd: &Path, gate: &Gate) -> Option<String> {
+        let pack = self
+            .job
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))?;
+        let facts = xherd_flow::approve::DirFacts {
+            spec_dir: xherd_flow::approve::spec_dir(wd),
+            tasks: &self.job.tasks,
+        };
+        xherd_flow::approve::next_stage(pack, &self.job, gate, &facts, false)
+    }
+
     async fn set_autonomy(
         &mut self,
         level: xherd_core::autonomy::Autonomy,
@@ -2689,26 +3041,29 @@ impl Actor {
                 "autonomy never is not available yet (v1.x, R-1209)",
             ));
         }
-        if self.agent.autonomy == level {
+        if self.job.autonomy == level {
             return Ok(());
         }
-        self.agent.autonomy = level;
-        self.agent.auto_in_row = 0;
-        self.agent.generation += 1;
-        if let Ok(wd) = self.workdir() {
-            let file = wd.join(".xherd").join("instructions.md");
-            let extra = self.profile().await.and_then(|p| p.instructions);
-            if let Err(e) = xherd_core::paths::write_atomic(
-                &file,
-                xherd_core::new::instructions_md(&self.agent, extra.as_deref()).as_bytes(),
-                None,
-            ) {
-                tracing::warn!(agent = %self.agent.name, %e, "instructions.md not rewritten");
-            }
+        if let Some(p) = self.profile().await
+            && let Some(cap) = p.autonomy
+            && level > cap
+        {
+            return Err(above_profile(
+                "autonomy",
+                &level.to_string(),
+                &cap.to_string(),
+                &p.name,
+            ));
         }
+        self.job.lowered.retain(|l| l.field != "autonomy");
+        self.job.autonomy = level;
+        self.job.pinned = true;
+        self.job.auto_in_row = 0;
+        self.job.generation += 1;
+        self.write_instructions().await;
         self.log(None, "autonomy", Some(json!({"level": level})))
             .await;
-        let before = self.agent.status;
+        let before = self.job.status;
         self.commit(before).await;
         // The agent learns the new level when its next session starts and
         // reads instructions.md; a running session keeps what it was told.
@@ -2788,7 +3143,7 @@ impl Actor {
         append_ledger(&wd, &lines).map_err(|e| refuse("ledger", e.to_string()))?;
         for (file, sha, text) in &approved {
             let row = xherd_store::Approval {
-                agent_id: self.agent.id.clone(),
+                job_id: self.job.id.clone(),
                 file: file.clone(),
                 sha256: sha.clone(),
                 at: now,
@@ -2799,7 +3154,7 @@ impl Actor {
             let stored = self.env.store.insert_approval(row).await;
             let reviewed = match text {
                 Some(t) if matches!(gate, Gate::Docs { .. }) => {
-                    self.env.store.put_reviewed(&self.agent.id, file, t).await
+                    self.env.store.put_reviewed(&self.job.id, file, t).await
                 }
                 _ => Ok(()),
             };
@@ -2809,14 +3164,14 @@ impl Actor {
         }
 
         if let Gate::Commit(c) = &gate
-            && let Some(mine) = self.agent.commits.iter_mut().find(|x| x.id == c.id)
+            && let Some(mine) = self.job.commits.iter_mut().find(|x| x.id == c.id)
         {
             mine.status = CommitStatus::Approved;
         }
-        self.agent.gate = None;
-        self.agent.generation += 1;
+        self.job.gate = None;
+        self.job.generation += 1;
         // A human approval restarts the run-limit count (R-120).
-        self.agent.auto_in_row = if auto { self.agent.auto_in_row + 1 } else { 0 };
+        self.job.auto_in_row = if auto { self.job.auto_in_row + 1 } else { 0 };
         self.log(
             None,
             "approval",
@@ -2828,16 +3183,23 @@ impl Actor {
         if let Gate::Commit(c) = &gate {
             self.commit_for_user(&wd, &c.id, message).await;
         }
-        match (self.agent.status, next) {
+        // The next session starts on the next stage's agent (D26, R39).
+        if (self.fresh_sessions_on() || self.job.status == Status::Parked)
+            && next.is_some()
+            && let Some(stage) = self.next_stage_of(&wd, &gate)
+        {
+            self.switch_agent(&stage).await;
+        }
+        match (self.job.status, next) {
             (Status::Parked, next) => {
                 // The next session starts with it once a slot is free (R-028).
-                self.agent.next_prompt = next.map(|n| n.0);
-                self.agent.fire(Trigger::Unpark, now);
+                self.job.next_prompt = next.map(|n| n.0);
+                self.job.fire(Trigger::Unpark, now);
             }
             (_, Some((cmd, _))) if self.fresh_sessions_on() => {
                 match self.fresh_session(&cmd).await {
                     Ok(()) => {
-                        self.agent.fire(Trigger::UserInput, now);
+                        self.job.fire(Trigger::UserInput, now);
                     }
                     Err(e) => {
                         self.log(
@@ -2850,7 +3212,7 @@ impl Actor {
                             "delivery",
                             format!(
                                 "{}: approved, but could not start a fresh session for {cmd:?}: {}",
-                                self.agent.name, e.message
+                                self.job.name, e.message
                             ),
                         );
                     }
@@ -2859,7 +3221,7 @@ impl Actor {
             // The approval stands even if typing fails; the user is told the command.
             (_, Some((cmd, enters))) => match self.send(&cmd, enters).await {
                 Ok(()) => {
-                    self.agent.fire(Trigger::UserInput, now);
+                    self.job.fire(Trigger::UserInput, now);
                 }
                 Err(e) => {
                     self.log(
@@ -2872,7 +3234,7 @@ impl Actor {
                         "delivery",
                         format!(
                             "{}: approved, but could not send {cmd:?}: {}",
-                            self.agent.name, e.message
+                            self.job.name, e.message
                         ),
                     );
                 }
@@ -2892,20 +3254,20 @@ impl Actor {
     /// so they ship with its PR. The user's accept is the approval of exactly
     /// these files, as at a commit gate.
     async fn memory_accept(&mut self, edited: Option<String>) -> Result<(), ActionError> {
-        let name = self.agent.name.clone();
-        let Some(p) = self.agent.memory_proposal.clone() else {
+        let name = self.job.name.clone();
+        let Some(p) = self.job.memory_proposal.clone() else {
             return Err(refuse(
                 "no_proposal",
                 format!("{name} has no memory proposal"),
             ));
         };
-        if self.agent.status == Status::Running {
+        if self.job.status == Status::Running {
             return Err(refuse(
                 "not_allowed",
                 format!("{name} is working; accept when it stops"),
             ));
         }
-        if self.agent.pr_url.is_some() {
+        if self.job.pr_url.is_some() {
             return Err(refuse(
                 "pr_open",
                 format!(
@@ -2949,7 +3311,7 @@ impl Actor {
                 format!("git refused the commit ({}): {e}", files.join(", ")),
             )
         })?;
-        self.agent.memory_proposal = None;
+        self.job.memory_proposal = None;
         self.log(
             None,
             "memory-accepted",
@@ -2960,16 +3322,16 @@ impl Actor {
     }
 
     async fn commit_for_user(&mut self, wd: &Path, id: &str, edited: Option<String>) {
-        let Some(i) = self.agent.commits.iter().position(|c| c.id == id) else {
+        let Some(i) = self.job.commits.iter().position(|c| c.id == id) else {
             return;
         };
         if let Some(m) = edited
             .map(|m| m.trim().to_string())
             .filter(|m| !m.is_empty())
         {
-            self.agent.commits[i].message = Some(m);
+            self.job.commits[i].message = Some(m);
         }
-        let c = self.agent.commits[i].clone();
+        let c = self.job.commits[i].clone();
         let message = c.message.clone().unwrap_or_else(|| c.subject.clone());
         // Hooks (lint, tests) can take a while.
         let git = self.env.git.clone().with_timeout(Duration::from_secs(300));
@@ -2977,8 +3339,8 @@ impl Actor {
         match git.commit_paths(wd, &c.files, &message).await {
             Ok(sha) => {
                 let _ = std::fs::remove_file(&error_file);
-                self.agent.commits[i].sha = Some(sha.clone());
-                self.agent.commits[i].status = CommitStatus::Done;
+                self.job.commits[i].sha = Some(sha.clone());
+                self.job.commits[i].status = CommitStatus::Done;
                 self.write_commit_progress(id);
                 self.log(None, "commit-made", Some(json!({"id": id, "sha": sha})))
                     .await;
@@ -2996,7 +3358,7 @@ impl Actor {
                     "error",
                     format!(
                         "{}: git refused commit {id}; the agent will fix it",
-                        self.agent.name
+                        self.job.name
                     ),
                 );
             }
@@ -3007,7 +3369,7 @@ impl Actor {
     /// on and the agent follows a flow (R-024; flow `none` has no gates).
     /// Background tasks (also R-024) are not tracked yet.
     fn fresh_sessions_on(&self) -> bool {
-        self.env.settings.get().fresh_sessions && self.agent.pack.is_some()
+        self.env.settings.get().fresh_sessions && self.job.pack.is_some()
     }
 
     /// Replace the runtime process in the agent window by a new session
@@ -3016,12 +3378,12 @@ impl Actor {
     /// session keeps its environment and agent token.
     async fn fresh_session(&mut self, cmd: &str) -> Result<(), ActionError> {
         let argv = self
-            .agent
+            .job
             .launch
             .clone()
             .filter(|a| !a.is_empty())
             .ok_or_else(|| refuse("no_launch", "no runtime command to start"))?;
-        self.agent.next_prompt = Some(cmd.to_string());
+        self.job.next_prompt = Some(cmd.to_string());
         let argv = self.with_launch_prompt(argv);
         self.env
             .driver
@@ -3029,8 +3391,8 @@ impl Actor {
             .await
             .map_err(|e| refuse("driver", e.0))?;
         self.delivery = None;
-        self.agent.session = None;
-        self.agent.session_since = Some(self.now());
+        self.job.session = None;
+        self.job.session_since = Some(self.now());
         self.log(None, "fresh-session", Some(json!({"next": cmd})))
             .await;
         Ok(())
@@ -3048,18 +3410,18 @@ impl Actor {
     /// command that cannot be sent, pauses at once. Returns whether it waits.
     async fn begin_pause(&mut self) -> bool {
         let now = self.now();
-        if self.agent.pause_requested_at.is_some() {
+        if self.job.pause_requested_at.is_some() {
             return true;
         }
         if matches!(
-            self.agent.status,
+            self.job.status,
             Status::Running | Status::Idle | Status::WaitingInput
         ) && let Some(cmd) = self.pack_command("handoff")
         {
             let enters = self.enters_for(&cmd);
             match self.send(&cmd, enters).await {
                 Ok(()) => {
-                    self.agent.pause_requested_at = Some(now);
+                    self.job.pause_requested_at = Some(now);
                     return true;
                 }
                 Err(e) => {
@@ -3067,25 +3429,25 @@ impl Actor {
                         "error",
                         format!(
                             "{}: could not ask for a handoff ({}); paused without one",
-                            self.agent.name, e.message
+                            self.job.name, e.message
                         ),
                     );
                 }
             }
         }
-        if self.agent.status.is_live() {
+        if self.job.status.is_live() {
             self.end_session().await;
         }
-        self.agent.fire(Trigger::Pause, now);
+        self.job.fire(Trigger::Pause, now);
         false
     }
 
     /// End the session of a pause that waited for a handoff.
     async fn finish_pause(&mut self, timed_out: bool) {
-        let before = self.agent.status;
+        let before = self.job.status;
         self.end_session().await;
-        self.agent.pause_requested_at = None;
-        self.agent.fire(Trigger::Pause, self.now());
+        self.job.pause_requested_at = None;
+        self.job.fire(Trigger::Pause, self.now());
         self.log(
             None,
             "user.pause",
@@ -3098,7 +3460,7 @@ impl Actor {
                 "limit",
                 format!(
                     "{}: paused without a handoff note (none within {s} s)",
-                    self.agent.name
+                    self.job.name
                 ),
             );
         }
@@ -3109,15 +3471,15 @@ impl Actor {
     /// (R-027), using the note up; Ask passes false, keeping the note and
     /// continuing the last conversation, since its question needs the context.
     async fn prepare_resume(&mut self, after_handoff_fresh: bool) {
-        if self.agent.next_prompt.is_none() {
-            self.agent.next_prompt = self.resume_command();
+        if self.job.next_prompt.is_none() {
+            self.job.next_prompt = self.resume_command();
         }
         // After a handoff the next session starts fresh from the note (R-027).
         let handed_off = after_handoff_fresh
-            && self.agent.handoff_at.take().is_some()
+            && self.job.handoff_at.take().is_some()
             && self.env.settings.get().fresh_sessions;
         let resume = self.runtime_kit().and_then(|k| k.resume.clone());
-        self.resume_session = match (&resume, &self.agent.session) {
+        self.resume_session = match (&resume, &self.job.session) {
             (Some(r), Some(id))
                 if !handed_off
                     && !self.resume_unconfirmed
@@ -3131,7 +3493,7 @@ impl Actor {
 
     /// The agent's runtime plugin (agents from before the choice: Claude Code).
     fn runtime_name(&self) -> &str {
-        self.agent
+        self.job
             .runtime
             .as_deref()
             .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME)
@@ -3153,29 +3515,22 @@ impl Actor {
 
     /// `pack_command` with template variables (`{base}`…) besides `{prefix}`.
     fn pack_command_with(&self, key: &str, vars: &[(&str, &str)]) -> Option<String> {
-        let pack = self.env.packs.get(self.agent.pack.as_deref()?)?;
+        let pack = self.env.packs.get(self.job.pack.as_deref()?)?;
         let runtime = self.runtime_name();
         pack.command(runtime, pack.commands.get(key)?, vars)
-            .map_err(
-                |e| tracing::warn!(agent = %self.agent.name, key, error = %e, "no pack command"),
-            )
+            .map_err(|e| tracing::warn!(agent = %self.job.name, key, error = %e, "no pack command"))
             .ok()
     }
 
     fn next_command(&self, wd: &Path, gate: &Gate) -> Result<Option<(String, u32)>, ActionError> {
-        let Some(pack) = self
-            .agent
-            .pack
-            .as_deref()
-            .and_then(|p| self.env.packs.get(p))
-        else {
+        let Some(pack) = self.job.pack.as_deref().and_then(|p| self.env.packs.get(p)) else {
             return Ok(None);
         };
         let facts = xherd_flow::approve::DirFacts {
             spec_dir: xherd_flow::approve::spec_dir(wd),
-            tasks: &self.agent.tasks,
+            tasks: &self.job.tasks,
         };
-        xherd_flow::approve::next_command(pack, &self.agent, gate, &facts, false)
+        xherd_flow::approve::next_command(pack, &self.job, gate, &facts, false)
             .map_err(|e| refuse("flow", e))
     }
 
@@ -3192,7 +3547,7 @@ impl Actor {
                     let text = String::from_utf8_lossy(&bytes);
                     self.env
                         .store
-                        .put_reviewed(&self.agent.id, &f.path, &text)
+                        .put_reviewed(&self.job.id, &f.path, &text)
                         .await
                         .map_err(|e| refuse("store", e.to_string()))?;
                 }
@@ -3201,7 +3556,7 @@ impl Actor {
         let text = xherd_flow::approve::changes_message(&gate, comment);
         // The revised gate may notify again, even if it comes back unchanged.
         self.notified_gate = None;
-        let parked = self.agent.status == Status::Parked;
+        let parked = self.job.status == Status::Parked;
         if parked {
             self.unpark_with(text).await;
         } else {
@@ -3216,7 +3571,7 @@ impl Actor {
         self.log(None, "change-request", Some(json!({"gate": label})))
             .await;
         if !parked {
-            self.agent.fire(Trigger::UserInput, self.now());
+            self.job.fire(Trigger::UserInput, self.now());
         }
         Ok(())
     }
@@ -3225,8 +3580,8 @@ impl Actor {
     /// again and the text is typed when its next session starts, which
     /// continues the last conversation when the runtime can find it.
     async fn unpark_with(&mut self, text: String) {
-        self.agent.next_prompt = Some(text);
-        self.agent.fire(Trigger::Unpark, self.now());
+        self.job.next_prompt = Some(text);
+        self.job.fire(Trigger::Unpark, self.now());
         self.prepare_resume(true).await;
     }
 
@@ -3236,19 +3591,19 @@ impl Actor {
     /// agent is past that stage. In that stage the agent rewrites it on
     /// purpose and declares the gate itself.
     async fn approved_tasks_edited(&self, pack: Option<&Pack>) -> bool {
-        let Some(flow) = pack.and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()))
+        let Some(flow) = pack.and_then(|p| p.flow(self.job.flow.as_deref().unwrap_or_default()))
         else {
             return false;
         };
         let Ok(wd) = self.workdir() else { return false };
-        let stage = self.agent.stage.as_deref().and_then(|s| flow.stage(s));
+        let stage = self.job.stage.as_deref().and_then(|s| flow.stage(s));
         if stage.is_some_and(|s| s.gates_tasks()) {
             return false;
         }
         let ever = self
             .env
             .store
-            .approved_files(&self.agent.id)
+            .approved_files(&self.job.id)
             .await
             .unwrap_or_default();
         for s in &flow.stages {
@@ -3263,7 +3618,7 @@ impl Actor {
                     continue;
                 };
                 let sha = xherd_flow::approve::doc_sha256(Some(flow), &wd, &path, &bytes);
-                let approved = self.env.store.approved(&self.agent.id, &path, &sha).await;
+                let approved = self.env.store.approved(&self.job.id, &path, &sha).await;
                 if !approved.unwrap_or(true) {
                     return true;
                 }
@@ -3277,11 +3632,11 @@ impl Actor {
     async fn infer_gate(&mut self) {
         let packs = self.env.packs.clone();
         let Some(flow) = self
-            .agent
+            .job
             .pack
             .as_deref()
             .and_then(|p| packs.get(p))
-            .and_then(|p| p.flow(self.agent.flow.as_deref().unwrap_or_default()))
+            .and_then(|p| p.flow(self.job.flow.as_deref().unwrap_or_default()))
         else {
             return;
         };
@@ -3289,7 +3644,7 @@ impl Actor {
         let ever = self
             .env
             .store
-            .approved_files(&self.agent.id)
+            .approved_files(&self.job.id)
             .await
             .unwrap_or_default();
         let mut seen = Vec::new();
@@ -3312,7 +3667,7 @@ impl Actor {
                     Some(h) => self
                         .env
                         .store
-                        .approved(&self.agent.id, &path, h)
+                        .approved(&self.job.id, &path, h)
                         .await
                         .unwrap_or(false),
                     None => false,
@@ -3343,53 +3698,53 @@ impl Actor {
                 "gate-inferred"
             };
             if let Gate::Docs { stage, .. } = &gate {
-                self.agent.stage = Some(stage.clone());
+                self.job.stage = Some(stage.clone());
             }
             self.log(None, kind, Some(json!({"gate": gate}))).await;
-            self.agent.gate = Some(gate);
+            self.job.gate = Some(gate);
         }
     }
 
     // ---- ticks and async work --------------------------------------------------
 
     async fn on_tick(&mut self, t: TickKind) {
-        let before = self.agent.status;
+        let before = self.job.status;
         let now = self.now();
         let minutes = |m: u64| (m as i64) * 60_000;
         match t {
             TickKind::SessionCheck { alive, recover } => {
-                if self.agent.status.is_live() && !alive {
+                if self.job.status.is_live() && !alive {
                     self.revoke_tokens().await;
                     self.delivery = None;
                     // Waiting at a gate you can approve: park, which is what
                     // a long wait does (approving starts a fresh session).
-                    let at_gate = self.agent.status == Status::WaitingInput
-                        && matches!(self.agent.gate, Some(Gate::Docs { .. } | Gate::Commit(_)));
+                    let at_gate = self.job.status == Status::WaitingInput
+                        && matches!(self.job.gate, Some(Gate::Docs { .. } | Gate::Commit(_)));
                     if recover && at_gate {
-                        self.agent.fire(Trigger::Park, now);
+                        self.job.fire(Trigger::Park, now);
                         self.log(None, "parked", Some(json!({"why": "interrupted"})))
                             .await;
                         self.notify(
                             "recovery",
                             format!(
                                 "{}: xherd restarted; approve the gate to continue",
-                                self.agent.name
+                                self.job.name
                             ),
                         );
                     } else {
-                        self.agent.fire(Trigger::SessionLost, now);
+                        self.job.fire(Trigger::SessionLost, now);
                         // Every end of the session ends an Ask hold, also
                         // when it is resumed at once below (no `commit()`
                         // sees the error status in between).
-                        self.agent.ask_hold = None;
+                        self.job.ask_hold = None;
                         self.log(None, "session-lost", None).await;
                         if recover {
                             // Same as Resume: a new session reloads the state.
-                            self.agent.fire(Trigger::Resume, now);
+                            self.job.fire(Trigger::Resume, now);
                             self.prepare_resume(true).await;
                             self.notify(
                                 "recovery",
-                                format!("{}: xherd restarted; resuming", self.agent.name),
+                                format!("{}: xherd restarted; resuming", self.job.name),
                             );
                         } else {
                             // A session that vanishes while xherd runs is
@@ -3400,7 +3755,7 @@ impl Actor {
                                 .retain(|t| now - t < AUTO_RESUME_WINDOW_MS);
                             if self.auto_resumes.len() < AUTO_RESUMES {
                                 self.auto_resumes.push(now);
-                                self.agent.fire(Trigger::Resume, now);
+                                self.job.fire(Trigger::Resume, now);
                                 self.prepare_resume(true).await;
                                 self.log(
                                     None,
@@ -3412,7 +3767,7 @@ impl Actor {
                                     "recovery",
                                     format!(
                                         "{}: terminal session disappeared; resuming ({}/{})",
-                                        self.agent.name,
+                                        self.job.name,
                                         self.auto_resumes.len(),
                                         AUTO_RESUMES
                                     ),
@@ -3422,7 +3777,7 @@ impl Actor {
                                     "recovery",
                                     format!(
                                         "{}: terminal session disappeared again; press Resume",
-                                        self.agent.name
+                                        self.job.name
                                     ),
                                 );
                             }
@@ -3433,16 +3788,16 @@ impl Actor {
             }
             TickKind::IdleCheck => {
                 let m = self.env.settings.get().idle_alert_minutes;
-                if self.agent.status == Status::Idle
+                if self.job.status == Status::Idle
                     && m > 0
-                    && !self.agent.idle_alerted
-                    && now - self.agent.status_since >= minutes(m)
+                    && !self.job.idle_alerted
+                    && now - self.job.status_since >= minutes(m)
                 {
-                    self.agent.idle_alerted = true;
+                    self.job.idle_alerted = true;
                     self.log(None, "idle-alert", None).await;
                     self.notify(
                         "idle",
-                        format!("{} has been idle for {m} min", self.agent.name),
+                        format!("{} has been idle for {m} min", self.job.name),
                     );
                     self.commit(before).await;
                 }
@@ -3450,10 +3805,10 @@ impl Actor {
             TickKind::SessionLimit => {
                 let m = self.env.settings.get().max_session_minutes;
                 if m > 0
-                    && self.agent.status.is_live()
-                    && self.agent.pause_requested_at.is_none()
+                    && self.job.status.is_live()
+                    && self.job.pause_requested_at.is_none()
                     && self
-                        .agent
+                        .job
                         .session_since
                         .is_some_and(|s| now - s >= minutes(m))
                 {
@@ -3464,7 +3819,7 @@ impl Actor {
                         "limit",
                         format!(
                             "{} {}: its session ran longer than {m} min",
-                            self.agent.name,
+                            self.job.name,
                             if waits {
                                 "is being paused after a handoff"
                             } else {
@@ -3477,29 +3832,29 @@ impl Actor {
             }
             TickKind::ParkCheck => {
                 let m = self.env.settings.get().gate_park_minutes;
-                if self.agent.status == Status::WaitingInput
+                if self.job.status == Status::WaitingInput
                     && m > 0
-                    && now - self.agent.status_since >= minutes(m)
+                    && now - self.job.status_since >= minutes(m)
                 {
                     self.end_session().await;
-                    self.agent.fire(Trigger::Park, now);
+                    self.job.fire(Trigger::Park, now);
                     self.log(None, "parked", None).await;
                     self.commit(before).await;
                 }
             }
             TickKind::ScreenScan => {
-                if let Some(asked) = self.agent.pause_requested_at
-                    && self.agent.status.is_live()
+                if let Some(asked) = self.job.pause_requested_at
+                    && self.job.status.is_live()
                     && now - asked >= self.env.settings.get().pause_timeout.as_millis() as i64
                 {
                     self.finish_pause(true).await;
                 }
-                if self.agent.status.is_live() {
+                if self.job.status.is_live() {
                     let (driver, ctx, tx, generation) = (
                         self.env.driver.clone(),
                         self.ctx(),
                         self.tx.clone(),
-                        self.agent.generation,
+                        self.job.generation,
                     );
                     let lines = self
                         .env
@@ -3528,7 +3883,7 @@ impl Actor {
             WorkResult::Screen(screen) => {
                 // Only a running agent can be stuck on a failing command; a
                 // stopped one's screen is its own text about the work.
-                let scan = self.agent.status == Status::Running || self.auth_screen_block;
+                let scan = self.job.status == Status::Running || self.auth_screen_block;
                 let line = scan
                     .then(|| xherd_core::git_auth::failing_screen_line(&screen))
                     .flatten();
@@ -3552,17 +3907,17 @@ impl Actor {
                     return;
                 };
                 let shown = rules.matching(&screen).is_some();
-                let event = match (shown, self.agent.status == Status::Blocked) {
+                let event = match (shown, self.job.status == Status::Blocked) {
                     (true, false) => ReportEvent::Blocked,
-                    (false, true) if self.agent.screen_blocked => ReportEvent::Working,
+                    (false, true) if self.job.screen_blocked => ReportEvent::Working,
                     _ => return,
                 };
                 let r = Report {
                     id: xherd_core::new_id(),
-                    agent_id: self.agent.id.clone(),
+                    job_id: self.job.id.clone(),
                     event,
                     payload: json!({"message": "dialog on screen"}),
-                    seq: self.agent.last_daemon_seq + 1,
+                    seq: self.job.last_daemon_seq + 1,
                     at: self.now(),
                 };
                 self.on_report(r, Origin::Daemon).await;
@@ -3582,15 +3937,15 @@ impl Actor {
                     .map_err(|e| e.to_string())
                 });
                 if let Err(e) = written {
-                    tracing::warn!(agent = %self.agent.name, error = %e, "pr-templates.json not written");
+                    tracing::warn!(agent = %self.job.name, error = %e, "pr-templates.json not written");
                 }
             }
             WorkResult::PrTemplates(Err(e)) => {
-                tracing::warn!(agent = %self.agent.name, error = %e, "PR templates lookup failed");
+                tracing::warn!(agent = %self.job.name, error = %e, "PR templates lookup failed");
             }
             WorkResult::PrPoll(Ok((snap, comments))) => self.on_pr_poll(snap, comments).await,
             WorkResult::PrPoll(Err(e)) => {
-                tracing::warn!(agent = %self.agent.name, error = %e, "PR poll failed");
+                tracing::warn!(agent = %self.job.name, error = %e, "PR poll failed");
                 self.log(None, "pr-poll-failed", Some(json!({"error": e})))
                     .await;
                 self.git_access_failed("pr-poll", &e).await;
@@ -3599,14 +3954,14 @@ impl Actor {
             WorkResult::PrLookup(Ok(None)) => self.git_access_ok().await,
             WorkResult::PrLookup(Ok(Some(url))) => {
                 self.git_access_ok().await;
-                let before = self.agent.status;
-                self.agent.pr_url = Some(url.clone());
+                let before = self.job.status;
+                self.job.pr_url = Some(url.clone());
                 self.log(None, "pr-found", Some(json!({"url": url}))).await;
                 self.commit(before).await;
                 self.after_ship().await;
             }
             WorkResult::PrLookup(Err(e)) => {
-                tracing::warn!(agent = %self.agent.name, error = %e, "PR lookup failed");
+                tracing::warn!(agent = %self.job.name, error = %e, "PR lookup failed");
                 self.log(None, "pr-lookup-failed", Some(json!({"error": e})))
                     .await;
                 self.git_access_failed("pr-lookup", &e).await;
@@ -3614,10 +3969,10 @@ impl Actor {
             WorkResult::DeliveryTimeout { delivery } => match self.delivery {
                 Some((d, false))
                     if d == delivery
-                        && self.agent.status.is_live()
-                        && self.agent.status != Status::Blocked =>
+                        && self.job.status.is_live()
+                        && self.job.status != Status::Blocked =>
                 {
-                    tracing::info!(agent = %self.agent.name, "delivery not acknowledged; pressing Enter again");
+                    tracing::info!(agent = %self.job.name, "delivery not acknowledged; pressing Enter again");
                     let _ = self.env.driver.send(&self.ctx(), "", 1).await;
                     self.delivery = Some((d, true));
                     self.log(None, "delivery-retry", None).await;
@@ -3625,7 +3980,7 @@ impl Actor {
                         "delivery",
                         format!(
                             "{}: message not acknowledged; pressed Enter again",
-                            self.agent.name
+                            self.job.name
                         ),
                     );
                 }
@@ -3687,6 +4042,14 @@ fn append_ledger(wd: &Path, lines: &[Value]) -> std::io::Result<()> {
         .open(dir.join("approvals.jsonl"))?;
     f.write_all(&buf)?;
     f.sync_all()
+}
+
+/// A live change that would go past the repository profile's ceiling (R12a).
+fn above_profile(what: &str, want: &str, cap: &str, profile: &str) -> ActionError {
+    refuse(
+        "above_profile",
+        format!("{what} {want} is above what the profile {profile} allows ({cap})"),
+    )
 }
 
 #[cfg(test)]

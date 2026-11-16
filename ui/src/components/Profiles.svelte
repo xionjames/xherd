@@ -18,11 +18,11 @@
     id: string; name: string; match: string[];
     baseBranch?: string; stagingBranch?: string;
     autonomy?: string; permissionMode?: string; runtime?: string; models?: Record<string, string>; sensitivePaths?: string[]; maxDiffLines?: number;
-    agentTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
+    jobTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
   };
   type Form = {
     id: string; name: string; match: string; baseBranch: string; stagingBranch: string;
-    autonomy: string; permissionMode: string; runtime: string; models: Record<string, string>; sensitivePaths: string; maxDiffLines: string; agentTokenBudget: string;
+    autonomy: string; permissionMode: string; runtime: string; models: Record<string, string>; sensitivePaths: string; maxDiffLines: string; jobTokenBudget: string;
     testCommand: string; lintCommand: string; instructions: string;
   };
 
@@ -37,7 +37,7 @@
   // Runtimes that can choose a model get a model field each.
   const modelRuntimes = $derived(runtimes(app.state?.plugins).filter((r) => r.chooseModel));
 
-  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
+  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', jobTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
   const opt = (s: string) => (s.trim() ? s.trim() : undefined);
   const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
@@ -47,7 +47,7 @@
       id: p.id, name: p.name, match: p.match.join('\n'), baseBranch: p.baseBranch ?? '', stagingBranch: p.stagingBranch ?? '',
       autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '', models: { ...(p.models ?? {}) },
       sensitivePaths: p.sensitivePaths ? p.sensitivePaths.join('\n') : '', maxDiffLines: p.maxDiffLines?.toString() ?? '',
-      agentTokenBudget: p.agentTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
+      jobTokenBudget: p.jobTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
     };
   }
   // An empty "sensitive paths" box means the global list; the checkbox below
@@ -67,7 +67,7 @@
       // Entries of runtimes not shown (switched off) are kept; empty ones are dropped by the daemon.
       models: f.models,
       sensitivePaths: noSensitive ? [] : lines(f.sensitivePaths).length ? lines(f.sensitivePaths) : undefined,
-      maxDiffLines: num(f.maxDiffLines), agentTokenBudget: num(f.agentTokenBudget),
+      maxDiffLines: num(f.maxDiffLines), jobTokenBudget: num(f.jobTokenBudget),
       testCommand: opt(f.testCommand), lintCommand: opt(f.lintCommand), instructions: opt(f.instructions),
     };
   }
@@ -193,11 +193,12 @@
       </div>
       <div class="grp">
         <header><h3>Autonomy &amp; limits</h3><span class="hint">Empty fields use the global setting.</span></header>
-        <label class="f">Autonomy of new agents
-          <select bind:value={form.autonomy}><option value="">global setting</option><option value="ask">ask</option><option value="important">important</option></select></label>
-        <label class="f">Tool permissions of new agents
+        <label class="f">Autonomy, at most
+          <select bind:value={form.autonomy}><option value="">global setting</option><option value="ask">ask</option><option value="important">important</option></select>
+          <span class="hint">A ceiling: a job or agent that asks for more is lowered to this, also when changed later.</span></label>
+        <label class="f">Tool permissions, at most
           <select bind:value={form.permissionMode}><option value="">global setting</option>{#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}</select></label>
-        <label class="f">Runtime of new agents
+        <label class="f">Runtime of new jobs
           <select bind:value={form.runtime}><option value="">global setting</option>
             {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
             {#if form.runtime && !runtimes(app.state?.plugins).some((r) => r.name === form?.runtime)}<option value={form.runtime}>{form.runtime} (switched off)</option>{/if}
@@ -210,7 +211,7 @@
         <label class="f">Largest commit
           <span class="unit"><input type="number" min="1" bind:value={form.maxDiffLines} placeholder="global" /><span>changed lines</span></span></label>
         <label class="f">Token budget per agent
-          <span class="unit"><input type="number" min="0" bind:value={form.agentTokenBudget} placeholder="global" /><span>tokens</span></span>
+          <span class="unit"><input type="number" min="0" bind:value={form.jobTokenBudget} placeholder="global" /><span>tokens</span></span>
           <span class="hint">0 turns it off for this repository.</span></label>
         <label class="f">Sensitive paths
           <textarea class="mono" rows="3" bind:value={form.sensitivePaths} disabled={noSensitive} placeholder="global list"></textarea>

@@ -8,16 +8,16 @@
   import { app } from '../lib/store.svelte';
   import { route, go } from '../lib/router.svelte';
   import { needsYou } from '../lib/format';
-  import type { Agent } from '../lib/types';
+  import type { Job } from '../lib/types';
 
-  let { agents, children }: { agents: Agent[]; children: Snippet<[Agent[]]> } = $props();
+  let { agents, children }: { agents: Job[]; children: Snippet<[Job[]]> } = $props();
 
   const waiting = $derived(agents.filter(needsYou).sort((a, b) => a.statusSince - b.statusSince));
-  const count = (f: (a: Agent) => boolean) => agents.filter(f).length;
-  const slots = $derived(Number(app.state?.config.maxConcurrentAgents ?? 0));
+  const count = (f: (a: Job) => boolean) => agents.filter(f).length;
+  const slots = $derived(Number(app.state?.config.maxConcurrentJobs ?? 0));
   const busy = $derived(count((a) => ['running', 'waiting-input', 'blocked', 'idle'].includes(a.status)));
 
-  const FILTERS: [string, string, (a: Agent) => boolean][] = [
+  const FILTERS: [string, string, (a: Job) => boolean][] = [
     ['all', 'All', () => true],
     ['needs', 'Needs you', needsYou],
     ['running', 'Running', (a) => a.status === 'running'],
@@ -28,7 +28,7 @@
   const filter = $derived(route.query.get('f') ?? 'all');
   // Switching the filter keeps the layout.
   const setFilter = (id: string) =>
-    go('/', { f: id === 'all' ? undefined : id, layout: route.query.get('layout') ?? undefined });
+    go('/', { f: id === 'all' ? undefined : id, layout: route.query.get('layout') ?? undefined, group: route.query.get('group') ?? undefined });
   const shown = $derived(
     agents
       .filter(FILTERS.find((f) => f[0] === filter)?.[2] ?? (() => true))
