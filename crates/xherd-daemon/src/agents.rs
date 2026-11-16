@@ -372,6 +372,69 @@ impl Daemon {
         self.agent_memory(&def.id).await
     }
 
+    /// `GET /jobs/{id}/agent-memory` (R29): the job's pending agent-memory
+    /// proposal, the proposed text read from the worktree, and the agent's
+    /// memory now. Read-only, outside the actor.
+    pub async fn agent_memory_proposal(&self, who: &str) -> Result<Value, ActionError> {
+        let a = self.action(who, crate::actor::UserAction::Get).await?;
+        let Some(p) = a.agent_memory_proposal.clone() else {
+            return Ok(json!({"proposal": null}));
+        };
+        let wd = crate::workdir_of(&a)?.to_path_buf();
+        let proposed = xherd_flow::xap::doc_path(&p.file, &wd)
+            .ok()
+            .and_then(|d| crate::actor::inside(&wd, &d))
+            .and_then(|f| std::fs::read_to_string(f).ok());
+        let agent = a.agent.as_ref().map(|j| j.id.clone());
+        let current = match &agent {
+            Some(id) => self.agent_memory(id).await.ok(),
+            None => None,
+        };
+        Ok(json!({
+            "proposal": p,
+            "proposed": proposed,
+            "agent": a.agent.as_ref().map(|j| json!({"id": j.id, "name": j.name})),
+            "current": current.as_ref().map(|c| c["text"].clone()),
+            "version": current.as_ref().map(|c| c["version"].clone()),
+        }))
+    }
+
+    /// `POST /jobs/{id}/agent-memory-accept {text?}` (R29): the user's edit,
+    /// else the job's file, becomes the agent's memory (version + 1); then
+    /// the actor drops the proposal. The job's own snapshot is not touched:
+    /// only jobs created later get the new text.
+    pub async fn agent_memory_accept(
+        &self,
+        who: &str,
+        edited: Option<String>,
+    ) -> Result<Value, ActionError> {
+        let a = self.action(who, crate::actor::UserAction::Get).await?;
+        let Some(p) = a.agent_memory_proposal.clone() else {
+            return Err(err(
+                "no_proposal",
+                format!("{} has no agent-memory proposal", a.name),
+            ));
+        };
+        let Some(agent) = a.agent.as_ref() else {
+            return Err(err("no_agent", format!("{} has no saved agent", a.name)));
+        };
+        let text = match edited.filter(|t| !t.trim().is_empty()) {
+            Some(t) => t,
+            None => {
+                let wd = crate::workdir_of(&a)?.to_path_buf();
+                xherd_flow::xap::doc_path(&p.file, &wd)
+                    .ok()
+                    .and_then(|d| crate::actor::inside(&wd, &d))
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .ok_or_else(|| err("doc_missing", format!("{} is gone", p.file)))?
+            }
+        };
+        let done = self.set_agent_memory(&agent.id, text.trim_end()).await?;
+        self.action(who, crate::actor::UserAction::AgentMemoryClear)
+            .await?;
+        Ok(done)
+    }
+
     /// The jobs started from an agent, newest first.
     pub async fn agent_jobs(&self, key: &str) -> Result<Vec<Job>, ActionError> {
         let def = self.agent_def(key).await?;

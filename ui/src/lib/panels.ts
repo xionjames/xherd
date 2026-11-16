@@ -10,6 +10,7 @@ import PullRequest from '../panels/PullRequest.svelte';
 import Activity from '../panels/Activity.svelte';
 import TerminalPanel from '../panels/Terminal.svelte';
 import Memory from '../panels/Memory.svelte';
+import AgentMemory from '../panels/AgentMemory.svelte';
 import Ticket from '../panels/Ticket.svelte';
 
 export const PANELS: Record<string, Component<{ agent: Job }>> = {
@@ -21,6 +22,7 @@ export const PANELS: Record<string, Component<{ agent: Job }>> = {
   log: Activity,
   terminal: TerminalPanel,
   memory: Memory,
+  'agent-memory': AgentMemory,
   ticket: Ticket,
 };
 
@@ -45,10 +47,11 @@ export const AGENT_VIEW: TabDef[] = [
   { id: 'ticket', panel: 'ticket', label: 'Ticket', icon: 'doc', noFlow: true, worktree: false },
   { id: 'pr', panel: 'pr', label: 'Pull request', icon: 'pr', noFlow: true, worktree: false },
   { id: 'memory', panel: 'memory', label: 'Shared memory', icon: 'doc', noFlow: false, worktree: true },
+  { id: 'agent-memory', panel: 'agent-memory', label: 'Agent memory', icon: 'doc', noFlow: true, worktree: true },
   { id: 'activity', panel: 'log', label: 'Activity', icon: 'activity', noFlow: true, worktree: false },
 ];
 
 /** Tabs whose panel exists, filtered for flow `none`. */
 export function agentTabs(a: Job): TabDef[] {
-  return AGENT_VIEW.filter((t) => PANELS[t.panel] && (a.flow || t.noFlow));
+  return AGENT_VIEW.filter((t) => PANELS[t.panel] && (a.flow || t.noFlow) && (t.id !== 'agent-memory' || !!a.agent));
 }

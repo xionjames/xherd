@@ -39,5 +39,13 @@ run a sub-agent with a fresh context, give it this review to do.
    Nothing worth sharing: skip this step. Never commit `AGENTS.md` or
    `CLAUDE.md` yourself: the user accepts or dismisses the proposal and xherd
    commits it. Refused with `memory_declined`: skip this step.
+   Agent memory: when `.xherd/instructions.md` has an "Agent memory" section
+   (the job came from a saved agent) and the review found something lasting
+   about how this agent should work (a habit, a trap, a preference the user
+   showed), write the **whole** new memory (the section's text with your
+   changes, at most 4 000 characters) to `.xherd/agent-memory.proposed.md` and
+   run `xherd agent memory propose --reason "Always run the linter before proposing"`.
+   Refused with `no_agent`, or nothing worth keeping: skip it. The user accepts
+   or dismisses it; only jobs started later see the new memory.
 7. `xherd gate open review`
 8. Stop and wait for the user.

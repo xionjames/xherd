@@ -784,6 +784,7 @@ const XAP_ALLOW: &[&str] = &[
     "xherd handoff *",
     "xherd issue *",
     "xherd memory *",
+    "xherd agent memory *",
 ];
 
 /// What the runtime allows without asking in a new worktree: reading the

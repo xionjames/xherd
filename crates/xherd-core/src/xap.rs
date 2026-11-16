@@ -107,6 +107,14 @@ pub enum XapCmd {
         file: Option<String>,
         reason: String,
     },
+    /// Propose the saved agent's memory (R29): `file` holds the whole new
+    /// text. Refused `no_agent` for a job without a saved agent.
+    #[serde(rename = "agent.memory.propose")]
+    AgentMemoryPropose {
+        #[serde(default)]
+        file: Option<String>,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +143,7 @@ impl XapCmd {
             XapCmd::HandoffWritten { .. } => "handoff.written",
             XapCmd::IssueAdd { .. } => "issue.add",
             XapCmd::MemoryPropose { .. } => "memory.propose",
+            XapCmd::AgentMemoryPropose { .. } => "agent.memory.propose",
         }
     }
 
@@ -168,7 +177,8 @@ impl XapCmd {
             XapCmd::Ask { .. }
             | XapCmd::HandoffWritten { .. }
             | XapCmd::IssueAdd { .. }
-            | XapCmd::MemoryPropose { .. } => false,
+            | XapCmd::MemoryPropose { .. }
+            | XapCmd::AgentMemoryPropose { .. } => false,
         }
     }
 }

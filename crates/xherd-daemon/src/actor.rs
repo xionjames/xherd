@@ -101,6 +101,9 @@ pub enum UserAction {
         text: Option<String>,
     },
     MemoryDismiss,
+    /// Drop the pending agent-memory proposal (R29): after an accept, which
+    /// `Daemon::agent_memory_accept` wrote, or a dismiss. Memory is untouched.
+    AgentMemoryClear,
     /// Check the agent's pull request now (issue #131): the automatic poll
     /// without its guards, refused `no_pr` without a PR URL.
     CheckPr,
@@ -1778,6 +1781,14 @@ impl Actor {
                 let d = doc_path(f, &wd)?;
                 Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
             }
+            XapCmd::AgentMemoryPropose { file, .. } => {
+                let wd = self.workdir()?;
+                let f = file
+                    .as_deref()
+                    .unwrap_or(xherd_flow::xap::AGENT_MEMORY_PROPOSAL);
+                let d = doc_path(f, &wd)?;
+                Observed::Text(inside(&wd, &d).and_then(|p| std::fs::read_to_string(p).ok()))
+            }
             XapCmd::HandoffWritten { file } => {
                 let wd = self.workdir()?;
                 let d = doc_path(file.as_deref().unwrap_or(HANDOFF), &wd)?;
@@ -2120,6 +2131,12 @@ impl Actor {
                     let _ = self.env.store.put_memory_declined(&repo, "AGENTS.md").await;
                 }
                 "user.memory-dismiss"
+            }
+            UserAction::AgentMemoryClear => {
+                if self.job.agent_memory_proposal.take().is_none() {
+                    return Ok(());
+                }
+                "user.agent-memory-clear"
             }
             UserAction::CheckPr => {
                 self.check_pr()?;

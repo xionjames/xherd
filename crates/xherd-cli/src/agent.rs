@@ -10,6 +10,9 @@ use crate::Client;
 
 #[derive(Subcommand)]
 pub enum AgentCmd {
+    /// The job's agent memory (called from a job, XAP).
+    #[command(subcommand)]
+    Memory(crate::xap::AgentMemoryCmd),
     /// List saved agents.
     Ls,
     /// Show one agent's settings.
@@ -320,6 +323,10 @@ fn fail(what: &str, e: impl std::fmt::Display) -> i32 {
 }
 
 pub fn run(cmd: AgentCmd, json: bool) -> i32 {
+    // `memory` is a job's XAP call: it has no user token, only its own.
+    if let AgentCmd::Memory(m) = cmd {
+        return crate::xap::run(m.into(), json);
+    }
     let c = match Client::new() {
         Ok(c) => c,
         Err(e) => {
@@ -328,6 +335,7 @@ pub fn run(cmd: AgentCmd, json: bool) -> i32 {
         }
     };
     match cmd {
+        AgentCmd::Memory(m) => crate::xap::run(m.into(), json),
         AgentCmd::Ls => match c.call("GET", "/agents", None) {
             Ok(v) if json => print_json(&v),
             Ok(v) => {

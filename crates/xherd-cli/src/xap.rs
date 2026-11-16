@@ -151,6 +151,24 @@ pub enum MemoryCmd {
     },
 }
 
+#[derive(Subcommand)]
+pub enum AgentMemoryCmd {
+    /// Propose a new memory for the job's saved agent (full text in --file).
+    Propose {
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        reason: String,
+    },
+}
+
+impl From<AgentMemoryCmd> for XapCmd {
+    fn from(c: AgentMemoryCmd) -> XapCmd {
+        let AgentMemoryCmd::Propose { file, reason } = c;
+        XapCmd::AgentMemoryPropose { file, reason }
+    }
+}
+
 impl From<MemoryCmd> for XapCmd {
     fn from(c: MemoryCmd) -> XapCmd {
         let MemoryCmd::Propose { file, reason } = c;

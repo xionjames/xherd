@@ -235,6 +235,7 @@ pub fn apply(
             | XapCmd::HandoffWritten { .. }
             | XapCmd::IssueAdd { .. }
             | XapCmd::MemoryPropose { .. }
+            | XapCmd::AgentMemoryPropose { .. }
     ) {
         flow_of(a, pack)?;
     }
@@ -714,8 +715,46 @@ pub fn apply(
             });
             Ok(true)
         }
+
+        XapCmd::AgentMemoryPropose { file, reason } => {
+            if a.agent.is_none() {
+                return Err(refuse(
+                    "no_agent",
+                    "this job was not started from a saved agent: there is no agent memory",
+                ));
+            }
+            let Observed::Text(text) = obs else {
+                return Err(wrong("agent.memory.propose"));
+            };
+            let f = file.as_deref().unwrap_or(AGENT_MEMORY_PROPOSAL);
+            let Some(text) = text else {
+                return Err(refuse("doc_missing", format!("{f} does not exist")));
+            };
+            if text.trim().is_empty() {
+                return Err(refuse("doc_schema", format!("{f} is empty")));
+            }
+            let max = xherd_core::agent_def::MAX_MEMORY;
+            if text.chars().count() > max || text.contains('\0') {
+                return Err(refuse(
+                    "doc_schema",
+                    format!("{f} is over {max} characters: agent memory stays short"),
+                ));
+            }
+            if reason.trim().is_empty() {
+                return Err(refuse("usage", "a memory proposal needs a --reason"));
+            }
+            a.agent_memory_proposal = Some(xherd_core::job::MemoryProposal {
+                file: f.to_string(),
+                reason: reason.trim().to_string(),
+                at: now,
+            });
+            Ok(true)
+        }
     }
 }
+
+/// Default proposed agent memory, private like the handoff note (R29).
+pub const AGENT_MEMORY_PROPOSAL: &str = "./.xherd/agent-memory.proposed.md";
 
 /// Default proposed shared memory, private like the handoff note (§16.6).
 pub const MEMORY_PROPOSAL: &str = "./.xherd/AGENTS.proposed.md";

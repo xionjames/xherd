@@ -1,4 +1,4 @@
-# CLI reference
+ `issue add`, `memory propose`, `agent memory propose` |# CLI reference
 
 `xherd` is one binary: the daemon, the user commands, the calls jobs make, and a few helpers. Run `xherd <command> --help` for the exact flags of your version, and `xherd --version` for the version. The global `--json` flag gives machine-readable output for the XAP calls and `xherd diff`.
 

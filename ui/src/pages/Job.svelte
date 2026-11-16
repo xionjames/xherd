@@ -79,6 +79,7 @@
     }
     if (id === 'commits' && agent.commits?.length) return { n: agent.commits.length, tone: '' };
     if (id === 'memory' && agent.memoryProposal) return { n: '✋', tone: 'g' };
+    if (id === 'agent-memory' && agent.agentMemoryProposal) return { n: '✋', tone: 'g' };
     return undefined;
   }
 

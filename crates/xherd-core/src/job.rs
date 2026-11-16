@@ -139,6 +139,10 @@ pub struct Job {
     /// §16.6), until the user accepts or dismisses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_proposal: Option<MemoryProposal>,
+    /// A pending update of the saved agent's memory (R29), until the user
+    /// accepts or dismisses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_memory_proposal: Option<MemoryProposal>,
     /// A pause is waiting for the agent's handoff note (R-026); cleared when
     /// the session ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -267,6 +271,7 @@ impl Job {
             pr_url: None,
             handoff_at: None,
             memory_proposal: None,
+            agent_memory_proposal: None,
             pause_requested_at: None,
             last_message: None,
             screen_blocked: false,

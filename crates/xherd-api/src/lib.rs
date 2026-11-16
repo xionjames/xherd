@@ -42,6 +42,11 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/jobs/{id}/docs", get(docs))
         .route("/api/v1/jobs/{id}/findings", get(findings))
         .route("/api/v1/jobs/{id}/memory", get(memory))
+        .route("/api/v1/jobs/{id}/agent-memory", get(agent_memory_proposal))
+        .route(
+            "/api/v1/jobs/{id}/agent-memory-accept",
+            post(agent_memory_accept),
+        )
         .route("/api/v1/jobs/{id}/pr-review", get(pr_review))
         .route(
             "/api/v1/jobs/{id}/pr-decisions",
@@ -1210,6 +1215,26 @@ async fn memory(
     Ok(Json(d.memory(&id).await?))
 }
 
+/// `GET /jobs/:id/agent-memory`: the pending agent-memory proposal (R29).
+async fn agent_memory_proposal(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.agent_memory_proposal(&id).await?))
+}
+
+/// `POST /jobs/:id/agent-memory-accept {text?}`: save it as the agent's memory.
+async fn agent_memory_accept(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    body: Option<Json<ActionBody>>,
+) -> ApiResult<Json<Value>> {
+    let text = body.and_then(|b| b.0.text);
+    Ok(Json(d.agent_memory_accept(&id, text).await?))
+}
+
 /// `GET /jobs/:id/docs`: the agent's documents, open gate's first.
 async fn docs(_: User, State(d): State<Daemon>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({"docs": d.docs(&id).await?})))
@@ -1379,6 +1404,7 @@ async fn agent_action(
         },
         "memory-accept" => UserAction::MemoryAccept { text: b.text },
         "memory-dismiss" => UserAction::MemoryDismiss,
+        "agent-memory-dismiss" => UserAction::AgentMemoryClear,
         "pr-check" => UserAction::CheckPr,
         "resolve-conflicts" => UserAction::ResolveConflicts,
         "request-changes" => UserAction::RequestChanges {

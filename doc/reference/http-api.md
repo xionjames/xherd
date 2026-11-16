@@ -1,3 +1,5 @@
+| `GET /jobs/{id}/agent-memory` | The job's agent-memory proposal (`proposal`, `proposed` text, `agent`, the agent's `current` memory and `version`); `proposal` is `null` when there is none |
+| `POST /jobs/{id}/agent-memory-accept` | `{text?}`: the edit, else the job's file, becomes the agent's memory (version + 1) and the proposal is cleared; `no_proposal`, `no_agent`, `bad_memory`. `POST /jobs/{id}/agent-memory-dismiss` only clears it |
 # HTTP API
 
 The daemon serves the web UI, the CLI and the jobs over one HTTP API at `http://127.0.0.1:4740/api/v1` (the port is `config.port`). The web UI uses nothing else, so everything it does can be scripted. The API follows the daemon's version: there is no stability promise across releases yet, apart from the agent protocol ([XAP](xap.md), versioned on its own).

@@ -129,9 +129,12 @@ xherd pr opened --url URL
 xherd handoff written [--file PATH]
 xherd issue add --title TEXT --severity minor|major|blocker [--about PATH]... [--body TEXT]
 xherd memory propose --reason TEXT [--file PATH]
+xherd agent memory propose --reason TEXT [--file PATH]
 ```
 
 `pr opened` starts PR follow-up (refused with `bad_url` unless http(s)). `handoff written` confirms a pause/ship handoff (the pause waits for it); default file `.xherd/HANDOFF.md`, refused with `doc_missing` when absent. `issue add` appends to the issue ledger (`.xherd/ledger/issues.jsonl`). `memory propose` registers a proposed update of the repository's shared memory, `AGENTS.md`: `--file` (default `.xherd/AGENTS.proposed.md`) holds the whole proposed file, `--reason` one line on what it adds. One proposal per job; proposing again replaces it. It never blocks the flow: the user accepts (xherd commits `AGENTS.md`, plus a `CLAUDE.md` with `@AGENTS.md` when that import is missing, on the job's branch) or dismisses it. Refusals: `doc_missing`, `doc_schema` (empty, or over 64 KiB), `usage` (no reason), `memory_declined` (the repository has no `AGENTS.md` and the user dismissed a starter one before).
+
+`agent memory propose` registers a new memory for the saved agent the job was started from: `--file` (default `.xherd/agent-memory.proposed.md`) holds the whole text (at most 4 000 characters), `--reason` one line on why. One proposal per job; proposing again replaces it. Nothing is committed: the user accepts it on the job's Agent memory tab (it becomes the agent's memory, version + 1, and only jobs created later see it) or dismisses it. Refusals: `no_agent` (the job has no saved agent), `doc_missing`, `doc_schema` (empty, or over 4 000 characters), `usage` (no reason).
 
 ## 7. MCP transport
 

@@ -3703,3 +3703,77 @@ async fn a_merge_proposal_is_held_for_a_human() {
         "{why}"
     );
 }
+
+/// Agent memory (R29): only a job with a saved agent may propose; accepting
+/// writes the agent's memory (version + 1) and clears the proposal; the job's
+/// snapshot is untouched; dismissing changes nothing.
+#[tokio::test]
+async fn agent_memory_proposal_is_saved_on_accept() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    let propose = |j: &Job, id: &str| {
+        t.d.xap(call(
+            j,
+            id,
+            "agent.memory.propose",
+            json!({"reason": "Run the linter first"}),
+        ))
+    };
+    // This job has no saved agent.
+    std::fs::write(wt.join(".xherd/agent-memory.proposed.md"), "- lint first").unwrap();
+    assert_eq!(propose(&t.a, "n0").await.unwrap_err().code, "no_agent");
+
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "reviewer",
+        "description": "Reviews",
+        "runtime": "claude-code",
+        "workflow": {"pack": "xherd", "flow": "feature"},
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+    let mut b = Job::new("SC-2", 1);
+    b.workdir = t.a.workdir.clone();
+    b.pack = Some("xherd".into());
+    b.flow = Some("feature".into());
+    b.repo = Some(wt.to_string_lossy().into_owned());
+    b.launch = Some(vec!["rt".into()]);
+    b.agent = Some(def.snapshot());
+    let b = t.d.create_job(b).await.unwrap();
+
+    std::fs::remove_file(wt.join(".xherd/agent-memory.proposed.md")).unwrap();
+    assert_eq!(propose(&b, "n1").await.unwrap_err().code, "doc_missing");
+    std::fs::write(wt.join(".xherd/agent-memory.proposed.md"), "x".repeat(4001)).unwrap();
+    assert_eq!(propose(&b, "n2").await.unwrap_err().code, "doc_schema");
+    std::fs::write(wt.join(".xherd/agent-memory.proposed.md"), "- lint first").unwrap();
+    propose(&b, "n3").await.unwrap();
+
+    let view = t.d.agent_memory_proposal("SC-2").await.unwrap();
+    assert_eq!(view["proposed"], "- lint first");
+    assert_eq!(view["agent"]["name"], "reviewer");
+
+    // Dismiss: the memory stays as it was.
+    let a =
+        t.d.action("SC-2", UserAction::AgentMemoryClear)
+            .await
+            .unwrap();
+    assert!(a.agent_memory_proposal.is_none());
+    assert_eq!(t.d.agent_memory("reviewer").await.unwrap()["text"], "");
+
+    propose(&b, "n4").await.unwrap();
+    let saved =
+        t.d.agent_memory_accept("SC-2", Some("- lint first, then test\n".into()))
+            .await
+            .unwrap();
+    assert_eq!(saved["text"], "- lint first, then test");
+    assert_eq!(saved["version"], 1);
+    let a = t.d.action("SC-2", UserAction::Get).await.unwrap();
+    assert!(a.agent_memory_proposal.is_none());
+    assert_eq!(a.agent.unwrap().memory, None);
+    assert_eq!(
+        t.d.agent_memory_accept("SC-2", None)
+            .await
+            .unwrap_err()
+            .code,
+        "no_proposal"
+    );
+}
