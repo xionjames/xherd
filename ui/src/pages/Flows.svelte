@@ -49,6 +49,7 @@
   const choices = $derived(agents.filter(pickable));
   // A stage whose agent is archived or gone is still listed, so it can be changed.
   const names = (cur: string) => (cur && !choices.some((a) => a.name === cur) ? [...choices.map((a) => a.name), cur] : choices.map((a) => a.name));
+  const withDesc = (n: string) => { const d = agents.find((a) => a.name === n)?.description?.trim(); return d ? `${n} - ${d}` : n; };
 
   async function save() {
     if (!view) return;
@@ -108,7 +109,7 @@
                   <td>
                     <select aria-label="Agent for {label(s)}" bind:value={rows[i].agent}>
                       <option value="">{resolved[i] && !rows[i].agent ? `Same as before (${resolved[i]})` : 'No agent'}</option>
-                      {#each names(rows[i].agent) as n (n)}<option value={n}>{n}</option>{/each}
+                      {#each names(rows[i].agent) as n (n)}<option value={n}>{withDesc(n)}</option>{/each}
                     </select>
                     {#if s.broken && rows[i].agent === (s.agent ?? '') && s.assigned}<div class="hint err">✕ Cannot start jobs: {s.broken}</div>{/if}
                   </td>
