@@ -1107,11 +1107,7 @@ impl Actor {
         }
         let daily = self.env.store.usage("all", &today).await.unwrap_or(0);
         let s = self.env.settings.get();
-        let agent_budget = self
-            .profile()
-            .await
-            .and_then(|p| p.job_token_budget)
-            .unwrap_or(s.job_token_budget);
+        let agent_budget = self.guardrails(&s).await.job_token_budget;
         let checks = [
             ("agent", self.job.tokens_total(), agent_budget),
             ("daily", daily, s.daily_token_budget),
@@ -1525,14 +1521,8 @@ impl Actor {
         let st = self.env.settings.get();
         // The profile's values replace the global ones (R-115).
         let profile = self.profile().await;
-        let sensitive = profile
-            .as_ref()
-            .and_then(|p| p.sensitive_paths.as_ref())
-            .unwrap_or(&st.sensitive_paths);
-        let max_lines = profile
-            .as_ref()
-            .and_then(|p| p.max_diff_lines)
-            .unwrap_or(st.max_diff_lines);
+        let guard = self.guardrails(&st).await;
+        let (sensitive, max_lines) = (&guard.sensitive_paths, guard.max_diff_lines);
         hits.extend(tw::sensitive_summary(files, sensitive));
         if let Ok(wd) = self.workdir() {
             // A merge commit (#139, R16): a human checks how the conflicts
@@ -1578,6 +1568,20 @@ impl Actor {
                 None => why,
             });
         }
+    }
+
+    /// The limits this job runs under: the profile's (else the global
+    /// ones), tightened by its saved agent's (R13).
+    async fn guardrails(&self, st: &ActorSettings) -> xherd_core::resolve::Guardrails {
+        xherd_core::resolve::guardrails(
+            &xherd_core::resolve::Guardrails {
+                sensitive_paths: st.sensitive_paths.clone(),
+                max_diff_lines: st.max_diff_lines,
+                job_token_budget: st.job_token_budget,
+            },
+            self.profile().await.as_ref(),
+            self.job.agent.as_ref(),
+        )
     }
 
     /// The profile the agent was created on, read at each use so a change in
@@ -2118,6 +2122,18 @@ impl Actor {
                 if self.job.permission_mode == Some(*mode) {
                     return Ok(());
                 }
+                if let Some(p) = self.profile().await
+                    && let Some(cap) = p.permission_mode
+                    && *mode > cap
+                {
+                    return Err(above_profile(
+                        "tool permission mode",
+                        &mode.to_string(),
+                        &cap.to_string(),
+                        &p.name,
+                    ));
+                }
+                self.job.lowered.retain(|l| l.field != "permissionMode");
                 self.job.permission_mode = Some(*mode);
                 self.job.launch = Some(launch.clone());
                 "user.mode"
@@ -2541,7 +2557,14 @@ impl Actor {
             Gate::Commit(_) => flow.commit_stage(self.job.stage.as_deref())?,
             _ => return None,
         };
-        Some(if stage.role == Role::Pr {
+        // Human-only by the pack (role `pr`) or by the saved agent (R14).
+        let human = self
+            .job
+            .agent
+            .as_ref()
+            .and_then(|a| a.stage_overrides.get(&stage.id))
+            .is_some_and(|o| o.human);
+        Some(if stage.role == Role::Pr || human {
             Class::HumanOnly
         } else {
             stage.class
@@ -2680,6 +2703,18 @@ impl Actor {
         if self.job.autonomy == level {
             return Ok(());
         }
+        if let Some(p) = self.profile().await
+            && let Some(cap) = p.autonomy
+            && level > cap
+        {
+            return Err(above_profile(
+                "autonomy",
+                &level.to_string(),
+                &cap.to_string(),
+                &p.name,
+            ));
+        }
+        self.job.lowered.retain(|l| l.field != "autonomy");
         self.job.autonomy = level;
         self.job.auto_in_row = 0;
         self.job.generation += 1;
@@ -3668,6 +3703,14 @@ fn append_ledger(wd: &Path, lines: &[Value]) -> std::io::Result<()> {
         .open(dir.join("approvals.jsonl"))?;
     f.write_all(&buf)?;
     f.sync_all()
+}
+
+/// A live change that would go past the repository profile's ceiling (R12a).
+fn above_profile(what: &str, want: &str, cap: &str, profile: &str) -> ActionError {
+    refuse(
+        "above_profile",
+        format!("{what} {want} is above what the profile {profile} allows ({cap})"),
+    )
 }
 
 #[cfg(test)]

@@ -68,7 +68,43 @@ fn repo_dir_name(repo: &Path) -> String {
 
 impl Daemon {
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
-    pub async fn new_job(&self, req: NewJob) -> Result<Job, ActionError> {
+    pub async fn new_job(&self, mut req: NewJob) -> Result<Job, ActionError> {
+        // A saved agent (#141): its fields are defaults, the request wins.
+        let agent = match req
+            .agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
+            Some(key) => {
+                let def = self.agent_def(key).await?;
+                if def.archived_at.is_some() {
+                    return Err(refuse(
+                        "agent_archived",
+                        format!("agent {} is archived: unarchive it first", def.name),
+                    ));
+                }
+                if let Some(why) = self.agent_broken(&def) {
+                    return Err(refuse("agent_broken", why));
+                }
+                Some(def)
+            }
+            None => None,
+        };
+        if let Some(def) = &agent {
+            if req.repo.trim().is_empty() {
+                req.repo = def.repo.clone().unwrap_or_default();
+            }
+            if req.flow.as_deref().is_none_or(|f| f.trim().is_empty()) {
+                req.flow = Some(def.workflow.flow.clone());
+            }
+        }
+        if agent.is_some() && req.repo.trim().is_empty() {
+            return Err(refuse(
+                "repo_required",
+                "this agent has no default repository: choose one",
+            ));
+        }
         let c = new::check(&req)?;
         if req.autonomy.is_some_and(|a| !a.selectable()) {
             return Err(refuse(
@@ -76,28 +112,52 @@ impl Daemon {
                 "autonomy never is not available yet (v1.x, R-1209)",
             ));
         }
+        let pack_name = agent
+            .as_ref()
+            .map_or(xherd_flow::BUILTIN, |d| d.workflow.pack.as_str());
         let pack = (c.flow != FLOW_NONE)
-            .then(|| self.packs.get(xherd_flow::BUILTIN))
+            .then(|| self.packs.get(pack_name))
             .flatten();
         if c.flow != FLOW_NONE && pack.and_then(|p| p.flow(&c.flow)).is_none() {
             return Err(refuse(
                 "unknown_flow",
-                format!("pack {} has no flow {:?}", xherd_flow::BUILTIN, c.flow),
+                format!("pack {pack_name} has no flow {:?}", c.flow),
             ));
         }
 
         let git = Git::new("git");
         // A URL is cloned (or fetched) here, before the other checks: the
-        // clone is kept for the next agent even if a later check fails.
+        // clone is kept for the next job even if a later check fails.
         let repo = self.locate_repo(&req.repo).await?.path;
-        // Request, then profile, then Settings (R-002, R-109, R-135).
+        // Request, agent, profile, Settings; the profile's autonomy and mode
+        // are ceilings (R-002, R-109, R-135, #141 R12/R12a).
         let profile = self.profile_for_repo(&repo).await;
-        let rt_name = req
-            .runtime
-            .clone()
-            .or(profile.as_ref().and_then(|p| p.runtime.clone()))
-            .unwrap_or(self.live_config().default_runtime);
-        let rt_name = rt_name.as_str();
+        let cfg = self.live_config();
+        let eff = xherd_core::resolve::effective(
+            &xherd_core::resolve::Defaults {
+                runtime: cfg.default_runtime.clone(),
+                autonomy: cfg.autonomy,
+                mode: cfg.permission_mode,
+                models: cfg.runtime_models.clone(),
+            },
+            profile.as_ref(),
+            agent.as_ref(),
+            &xherd_core::resolve::Requested {
+                runtime: req.runtime.clone(),
+                model: clean_model(req.model.as_deref())?,
+                autonomy: req.autonomy,
+                mode: req.permission_mode,
+                base: req.base.clone(),
+                flow: Some(c.flow.clone()),
+            },
+        );
+        if !eff.autonomy.selectable() {
+            return Err(refuse(
+                "autonomy_unavailable",
+                "autonomy never is not available yet (v1.x, R-1209)",
+            ));
+        }
+        let rt_name = eff.runtime.as_str();
         let rt = self.runtime_terminal(rt_name)?;
         if let Some(p) = pack
             && !p.install.contains_key(rt_name)
@@ -107,22 +167,7 @@ impl Daemon {
                 format!("the {} pack has no commands for {rt_name}", p.name),
             ));
         }
-        let autonomy = req
-            .autonomy
-            .or(profile.as_ref().and_then(|p| p.autonomy))
-            .unwrap_or(self.live_config().autonomy);
-        let mode = req
-            .permission_mode
-            .or(profile.as_ref().and_then(|p| p.permission_mode))
-            .unwrap_or(self.live_config().permission_mode);
-        // Request, then the profile's model for this runtime, then Settings.
-        let model = match clean_model(req.model.as_deref())? {
-            Some(m) => Some(m),
-            None => profile
-                .as_ref()
-                .and_then(|p| p.models.get(rt_name).cloned())
-                .or_else(|| self.live_config().runtime_models.get(rt_name).cloned()),
-        };
+        let (autonomy, mode, model) = (eff.autonomy, eff.mode, eff.model.clone());
         let launch = mode_launch(&rt, mode, model.as_deref(), self.sandbox)?;
         let agents = self
             .store
@@ -159,14 +204,7 @@ impl Daemon {
                 format!("{} already exists", workdir.display()),
             ));
         }
-        let base = resolve_base(
-            &git,
-            &repo,
-            req.base
-                .as_deref()
-                .or(profile.as_ref().and_then(|p| p.base_branch.as_deref())),
-        )
-        .await?;
+        let base = resolve_base(&git, &repo, eff.base.as_deref()).await?;
 
         // Everything checked; create.
         if let Some(parent) = workdir.parent() {
@@ -188,6 +226,8 @@ impl Daemon {
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);
         a.runtime = Some(rt_name.into());
+        a.agent = agent.as_ref().map(|d| d.snapshot());
+        a.lowered = eff.lowered.clone();
         a.launch = Some(launch);
         a.next_prompt = Some(match pack {
             Some(p) => {
@@ -208,7 +248,7 @@ impl Daemon {
             None => c.prompt.clone(),
         });
         if pack.is_some() {
-            a.pack = Some(xherd_flow::BUILTIN.into());
+            a.pack = Some(pack_name.into());
             a.flow = Some(c.flow.clone());
         }
 

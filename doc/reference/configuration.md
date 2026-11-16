@@ -55,8 +55,8 @@ Settings → Repo profiles (stored in the database, not `config.json`; `GET/POST
 | Field | Effect |
 |---|---|
 | `baseBranch` | Where new jobs start when the request names no base |
-| `autonomy` | Default autonomy of new jobs (the New job form shows it once the repository is known) |
-| `permissionMode` | Default tool permissions of new jobs |
+| `autonomy` | The most autonomy a job in these repositories may have (a ceiling, not a default: a looser request or agent value is lowered, and the job says so; the job page cannot raise it either, `above_profile`) |
+| `permissionMode` | The most permissive tool permissions allowed here, the same way |
 | `runtime` | Runtime plugin of new jobs (`opencode`, `codex`…) |
 | `models` | Runtime plugin → model of new jobs; replaces that runtime's `runtimeModels` entry |
 | `sensitivePaths`, `maxDiffLines` | Replace the global values; an empty list switches the sensitive-path hold off |

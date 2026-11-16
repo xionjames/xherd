@@ -208,6 +208,13 @@ pub struct Job {
     /// runtime's own default. `launch` already carries it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The saved agent this job started from, as it was then (#141): editing
+    /// the agent never changes a job that exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::agent_def::JobAgent>,
+    /// Values a profile's ceiling lowered at creation or since (R12a).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lowered: Vec<crate::resolve::Lowered>,
     /// Gates approved automatically since a human last approved one (R-120).
     #[serde(default)]
     pub auto_in_row: u32,
@@ -273,6 +280,8 @@ impl Job {
             autonomy: Autonomy::Ask,
             permission_mode: None,
             model: None,
+            agent: None,
+            lowered: Vec::new(),
             auto_in_row: 0,
             ask_hold: None,
             worktree_removed_at: None,

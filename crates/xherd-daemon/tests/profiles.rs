@@ -86,6 +86,7 @@ fn req(t: &T, key: &str) -> NewJob {
         ticket_key: None,
         slug: None,
         repo: t.repo.path().to_string_lossy().into_owned(),
+        agent: None,
         base: None,
         flow: None,
         prompt: Some("add login".into()),
@@ -197,7 +198,9 @@ async fn a_matching_profile_sets_base_autonomy_and_instructions() {
     let a = t.d.new_job(req(&t, "P-1")).await.unwrap();
     assert_eq!(a.profile.as_deref(), Some(p.id.as_str()));
     assert_eq!(a.base.as_deref(), Some("develop"));
-    assert_eq!(a.autonomy, xherd_core::autonomy::Autonomy::Important);
+    // the profile's autonomy is a ceiling (#141 R12a), not a default: the
+    // setting (ask) stays
+    assert_eq!(a.autonomy, xherd_core::autonomy::Autonomy::Ask);
     let md = std::fs::read_to_string(
         std::path::Path::new(a.workdir.as_deref().unwrap()).join(".xherd/instructions.md"),
     )

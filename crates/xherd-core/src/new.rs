@@ -28,7 +28,13 @@ pub struct NewJob {
     pub slug: Option<String>,
     /// Absolute path of a local git repository, or a remote URL that xherd
     /// clones into the workspace (R-001, R-605).
+    /// Empty only when `agent` has a default repository (`repo_required`).
+    #[serde(default)]
     pub repo: String,
+    /// A saved agent (id or name) the job starts from (#141): its settings
+    /// are defaults for the fields below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     #[serde(default)]
     pub base: Option<String>,
     /// Flow of the built-in pack, or `none` (default `feature`).
@@ -268,6 +274,15 @@ pub fn instructions_md(a: &Job, repo_instructions: Option<&str>) -> String {
     let repo = repo_instructions.map_or(String::new(), |t| {
         format!("## Repo instructions\n\nFrom this repository's xherd profile:\n\n{t}\n\n")
     });
+    // The saved agent's text comes after the repository's (#141, R19).
+    let repo = match a.agent.as_ref().and_then(|g| g.instructions.as_deref()) {
+        Some(t) if !t.trim().is_empty() => format!(
+            "{repo}## Agent instructions\n\nFrom the saved agent {}:\n\n{}\n\n",
+            a.agent.as_ref().map_or("", |g| g.name.as_str()),
+            t.trim()
+        ),
+        _ => repo,
+    };
     format!(
         "# xherd job {name}
 
@@ -332,6 +347,7 @@ mod tests {
             ticket_key: None,
             slug: None,
             repo: "/r".into(),
+            agent: None,
             base: None,
             flow: None,
             prompt: None,

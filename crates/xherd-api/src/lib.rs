@@ -112,7 +112,10 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/agents/{id}/archive", post(agent_archive))
         .route("/api/v1/agents/{id}/unarchive", post(agent_unarchive))
         .route("/api/v1/agents/{id}/versions", get(agent_versions))
-        .route("/api/v1/agents/{id}/jobs", get(agent_jobs))
+        .route(
+            "/api/v1/agents/{id}/jobs",
+            get(agent_jobs).post(agent_new_job),
+        )
         .route("/api/v1/agents/{id}/{*rest}", any(gone_job))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
@@ -1571,6 +1574,20 @@ async fn agent_jobs(
         return Err(not_an_agent(&d, &id, "jobs").await);
     }
     Ok(Json(json!({"jobs": d.agent_jobs(&id).await?})))
+}
+
+/// A job from a saved agent (R21): the body is `NewJob`; the name may be left out.
+async fn agent_new_job(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(req): Json<xherd_core::new::NewJob>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    if !d.is_agent(&id).await {
+        return Err(not_an_agent(&d, &id, "jobs").await);
+    }
+    let job = d.new_agent_job(&id, req).await?;
+    Ok((StatusCode::CREATED, Json(json!({"job": job}))))
 }
 
 #[derive(Deserialize)]

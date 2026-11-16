@@ -401,6 +401,7 @@ fn main() -> ExitCode {
                 ticket_key: None,
                 slug: None,
                 repo: String::new(),
+                agent: None,
                 base,
                 flow,
                 prompt,

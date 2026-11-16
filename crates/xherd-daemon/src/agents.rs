@@ -49,10 +49,9 @@ pub struct Import {
     pub agents: Vec<AgentDef>,
 }
 
-/// The saved agent a job started from. `Job.agent` arrives with T10; until
-/// then no job has one, so every agent is idle with no jobs.
-fn job_agent(_job: &Job) -> Option<&str> {
-    None
+/// The saved agent a job started from.
+fn job_agent(job: &Job) -> Option<&str> {
+    job.agent.as_ref().map(|a| a.id.as_str())
 }
 
 /// Live jobs and the newest job's name, from the jobs of one agent (pure).
@@ -398,6 +397,42 @@ impl Daemon {
         }
         self.agents_changed();
         Ok(json!({"added": out.len()}))
+    }
+}
+
+impl Daemon {
+    /// A job from a saved agent (`POST /agents/{id}/jobs`, R21): without a
+    /// name it is `<agent>-<ticket key>`, else `<agent>-<n>`.
+    pub async fn new_agent_job(
+        &self,
+        key: &str,
+        mut req: xherd_core::new::NewJob,
+    ) -> Result<Job, ActionError> {
+        let def = self.agent_def(key).await?;
+        req.agent = Some(def.id.clone());
+        if req.name.trim().is_empty() && req.slug.is_none() && req.ticket_key.is_none() {
+            let ticket = match req.ticket.as_deref() {
+                Some(t) => xherd_core::new::parse_ticket(t)?,
+                None => None,
+            };
+            let taken: std::collections::HashSet<String> = self
+                .store
+                .list_jobs()
+                .await
+                .map_err(store)?
+                .into_iter()
+                .map(|j| j.name)
+                .collect();
+            req.name = agent_def::default_job_name(
+                &def.name,
+                match &ticket {
+                    Some(xherd_core::new::TicketInput::Key(k)) => Some(k.as_str()),
+                    _ => None,
+                },
+                &|n| taken.contains(n),
+            );
+        }
+        self.new_job(req).await
     }
 }
 

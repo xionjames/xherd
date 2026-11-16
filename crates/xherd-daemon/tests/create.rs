@@ -92,6 +92,7 @@ fn req(t: &T, key: &str) -> NewJob {
         ticket_key: None,
         slug: None,
         repo: t.repo.path().to_string_lossy().into_owned(),
+        agent: None,
         base: None,
         flow: None,
         prompt: Some("add login".into()),
@@ -564,6 +565,7 @@ async fn refuses_without_a_runtime_plugin() {
         ticket_key: None,
         slug: None,
         repo: repo.to_string_lossy().into_owned(),
+        agent: None,
         base: None,
         flow: None,
         prompt: None,
@@ -817,4 +819,187 @@ async fn remove_worktree_only_once_the_agent_is_finished() {
     // The Ticket tab keeps working: it reads the main checkout's origin.
     let status = t.d.ticket_status("SC-8").await.unwrap();
     assert_eq!(status["posted"], false);
+}
+
+// ---- jobs from saved agents (#141, T10) ----
+
+use xherd_core::agent_def::AgentDef;
+use xherd_core::autonomy::Autonomy;
+use xherd_core::permission::PermissionMode;
+
+fn saved(name: &str) -> AgentDef {
+    serde_json::from_value(serde_json::json!({
+        "name": name,
+        "runtime": "claude-code",
+        "workflow": {"pack": "xherd", "flow": "feature"},
+        "autonomy": "important",
+        "permissionMode": "auto",
+        "instructions": "Be terse.",
+        "sensitivePaths": ["secrets/**"],
+        "maxDiffLines": 300,
+        "stageOverrides": {"ship": {"human": true}},
+    }))
+    .unwrap()
+}
+
+fn from_agent(t: &T, agent: &str) -> NewJob {
+    let mut r = req(t, "A-1");
+    r.name = String::new();
+    r.ticket = None;
+    r.agent = Some(agent.into());
+    r
+}
+
+#[tokio::test]
+async fn a_job_from_an_agent_keeps_a_snapshot_and_its_instructions() {
+    let t = setup().await;
+    let def = t.d.create_agent(saved("rev")).await.unwrap().def;
+    let j =
+        t.d.new_agent_job("rev", from_agent(&t, "ignored"))
+            .await
+            .unwrap();
+    // the default name (R21) and the agent's settings
+    assert_eq!(j.name, "rev-1");
+    assert_eq!(
+        (j.autonomy, j.permission_mode),
+        (Autonomy::Important, Some(PermissionMode::Auto))
+    );
+    let snap = j.agent.clone().unwrap();
+    assert_eq!(
+        (snap.id.as_str(), snap.name.as_str(), snap.version),
+        (def.id.as_str(), "rev", 1)
+    );
+    assert!(j.lowered.is_empty());
+    let md = std::fs::read_to_string(
+        Path::new(j.workdir.as_deref().unwrap()).join(".xherd/instructions.md"),
+    )
+    .unwrap();
+    assert!(md.contains("## Agent instructions") && md.contains("Be terse."));
+    // the next default name, and one from a ticket
+    let mut r = from_agent(&t, "rev");
+    r.ticket = Some("pay-7".into());
+    assert_eq!(t.d.new_agent_job("rev", r).await.unwrap().name, "rev-pay-7");
+    let k =
+        t.d.new_agent_job("rev", from_agent(&t, "rev"))
+            .await
+            .unwrap();
+    assert_eq!(k.name, "rev-2");
+    // editing the agent leaves the job as it was
+    let mut v2 = saved("rev");
+    v2.instructions = Some("Be verbose.".into());
+    v2.autonomy = Some(Autonomy::Ask);
+    t.d.update_agent("rev", v2).await.unwrap();
+    let again = t.d.action(&j.name, UserAction::Get).await.unwrap();
+    assert_eq!(again.agent.unwrap().version, 1);
+    assert_eq!(again.autonomy, Autonomy::Important);
+    // the agent now sees its jobs
+    let v = t.d.agent("rev").await.unwrap();
+    assert_eq!(v.def.version, 2);
+    assert!(t.d.agent_jobs("rev").await.unwrap().len() >= 3);
+}
+
+#[tokio::test]
+async fn an_agent_job_is_refused_when_the_agent_cannot_start_it() {
+    let t = setup().await;
+    let code = |r: Result<Job, ActionError>| r.unwrap_err().code;
+    assert_eq!(
+        code(t.d.new_job(from_agent(&t, "nope")).await),
+        "unknown_agent"
+    );
+    t.d.create_agent(saved("rev")).await.unwrap();
+    t.d.archive_agent("rev", true).await.unwrap();
+    assert_eq!(
+        code(t.d.new_job(from_agent(&t, "rev")).await),
+        "agent_archived"
+    );
+    t.d.archive_agent("rev", false).await.unwrap();
+    let mut r = from_agent(&t, "rev");
+    r.repo = String::new();
+    assert_eq!(code(t.d.new_job(r.clone()).await), "repo_required");
+    // an agent's own repository is the default
+    let mut d = saved("home");
+    d.repo = Some(t.repo.path().to_string_lossy().into_owned());
+    t.d.create_agent(d).await.unwrap();
+    r.agent = Some("home".into());
+    r.name = "from-home".into();
+    assert_eq!(t.d.new_job(r).await.unwrap().agent.unwrap().name, "home");
+}
+
+#[tokio::test]
+async fn the_profile_is_a_ceiling_for_autonomy_and_mode() {
+    let t = setup().await;
+    let real = std::fs::canonicalize(t.repo.path())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let mut p = xherd_core::profile::Profile {
+        name: "Local".into(),
+        matches: vec![real],
+        ..Default::default()
+    };
+    p.autonomy = Some(Autonomy::Ask);
+    p.permission_mode = Some(PermissionMode::Edits);
+    t.d.create_profile(p).await.unwrap();
+    t.d.create_agent(saved("rev")).await.unwrap();
+    let j =
+        t.d.new_agent_job("rev", from_agent(&t, "rev"))
+            .await
+            .unwrap();
+    assert_eq!(
+        (j.autonomy, j.permission_mode),
+        (Autonomy::Ask, Some(PermissionMode::Edits))
+    );
+    assert_eq!(j.lowered.len(), 2);
+    assert_eq!(
+        (j.lowered[0].field.as_str(), j.lowered[0].to.as_str()),
+        ("autonomy", "ask")
+    );
+    // live changes cannot go above it either
+    let e =
+        t.d.set_permission_mode(&j.name, PermissionMode::Auto)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "above_profile");
+    let e =
+        t.d.action(
+            &j.name,
+            UserAction::SetAutonomy {
+                level: Autonomy::Important,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "above_profile");
+    // at or below it is fine, and clears that note
+    let j =
+        t.d.set_permission_mode(&j.name, PermissionMode::Ask)
+            .await
+            .unwrap();
+    assert_eq!(j.permission_mode, Some(PermissionMode::Ask));
+    assert_eq!(j.lowered.len(), 1);
+}
+
+#[tokio::test]
+async fn a_busy_agent_counts_its_live_jobs_and_cannot_be_deleted() {
+    let t = setup().await;
+    t.d.create_agent(saved("rev")).await.unwrap();
+    let j =
+        t.d.new_agent_job("rev", from_agent(&t, "rev"))
+            .await
+            .unwrap();
+    for _ in 0..200 {
+        if t.d.action(&j.name, UserAction::Get).await.unwrap().status == Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let v = t.d.agent("rev").await.unwrap();
+    assert_eq!(
+        (v.live_jobs, v.last_job.as_deref()),
+        (1, Some(j.name.as_str()))
+    );
+    assert_eq!(
+        t.d.delete_agent("rev").await.unwrap_err().code,
+        "agent_busy"
+    );
 }
