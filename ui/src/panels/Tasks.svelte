@@ -1,5 +1,6 @@
 <script lang="ts">
   import Panel from '../components/Panel.svelte';
+  import Clamp from '../components/Clamp.svelte';
   import type { Job } from '../lib/types';
   let { agent }: { agent: Job } = $props();
   const GLYPH = { todo: '○', doing: '●', done: '✓', blocked: '✕' };
@@ -18,10 +19,10 @@
               <tr>
                 <td><span class="mono muted">{t.id}</span> {t.title}
                   {#if t.depends.length}<div class="hint">after {t.depends.join(', ')}</div>{/if}</td>
-                <td><span class="pill {TONE[t.status]}">{GLYPH[t.status]} {t.status}</span>
+                <td><span class="pill nowrap {TONE[t.status]}">{GLYPH[t.status]} {t.status}</span>
                   {#if t.blockedReason}<div class="hint err">{t.blockedReason}</div>{/if}</td>
-                <td class="mono muted hide-sm">{t.files.join(', ')}</td>
-                <td class="muted hide-sm">{t.evidence ?? ''}</td>
+                <td class="muted hide-sm"><Clamp mono text={t.files.join(', ')} /></td>
+                <td class="muted hide-sm"><Clamp text={t.evidence} /></td>
               </tr>
             {/each}
           </tbody>
