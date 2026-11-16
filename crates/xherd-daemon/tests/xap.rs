@@ -3736,7 +3736,7 @@ async fn agent_memory_proposal_is_saved_on_accept() {
     b.flow = Some("feature".into());
     b.repo = Some(wt.to_string_lossy().into_owned());
     b.launch = Some(vec!["rt".into()]);
-    b.agent = Some(def.snapshot());
+    b.set_agent(def.snapshot());
     let b = t.d.create_job(b).await.unwrap();
 
     std::fs::remove_file(wt.join(".xherd/agent-memory.proposed.md")).unwrap();
@@ -3745,6 +3745,12 @@ async fn agent_memory_proposal_is_saved_on_accept() {
     assert_eq!(propose(&b, "n2").await.unwrap_err().code, "doc_schema");
     std::fs::write(wt.join(".xherd/agent-memory.proposed.md"), "- lint first").unwrap();
     propose(&b, "n3").await.unwrap();
+    // the proposal names the agent it is about (a job may have several)
+    let now = t.d.action("SC-2", UserAction::Get).await.unwrap();
+    assert_eq!(
+        now.agent_memory_proposal.unwrap().agent,
+        Some(def.id.clone())
+    );
 
     let view = t.d.agent_memory_proposal("SC-2").await.unwrap();
     assert_eq!(view["proposed"], "- lint first");
@@ -3767,7 +3773,7 @@ async fn agent_memory_proposal_is_saved_on_accept() {
     assert_eq!(saved["version"], 1);
     let a = t.d.action("SC-2", UserAction::Get).await.unwrap();
     assert!(a.agent_memory_proposal.is_none());
-    assert_eq!(a.agent.unwrap().memory, None);
+    assert_eq!(a.agent().unwrap().memory, None);
     assert_eq!(
         t.d.agent_memory_accept("SC-2", None)
             .await
@@ -3896,7 +3902,7 @@ async fn no_suggestion_when_it_is_off_or_the_job_is_cancelled_or_has_an_agent() 
     e.workdir = t.a.workdir.clone();
     e.launch = Some(vec!["rt".into()]);
     e.base = Some("main".into());
-    e.agent = Some(def.snapshot());
+    e.set_agent(def.snapshot());
     let e = t.d.create_job(e).await.unwrap();
     wait_status(&t, "SC-4", Status::Running).await;
     stop_job(&t, &e, 1).await;
@@ -3935,7 +3941,7 @@ async fn accepting_a_suggestion_creates_the_agent_and_attaches_the_job() {
     assert_eq!(r["agent"]["version"], 1);
     assert_eq!(r["agent"]["name"], "shop-notes");
     let job = t.d.action("SC-3", UserAction::Get).await.unwrap();
-    let snap = job.agent.expect("attached");
+    let snap = job.agent().cloned().expect("attached");
     assert_eq!(snap.name, "shop-notes");
     assert_eq!(snap.version, 1);
     assert_eq!(snap.instructions.as_deref(), Some("Run the linter first."));
@@ -4033,7 +4039,7 @@ async fn a_job_with_an_agent_cannot_propose_one() {
     b.pack = Some("xherd".into());
     b.flow = Some("feature".into());
     b.launch = Some(vec!["rt".into()]);
-    b.agent = Some(def.snapshot());
+    b.set_agent(def.snapshot());
     let b = t.d.create_job(b).await.unwrap();
     let r =
         t.d.xap(call(&b, "h1", "agent.propose", json!({"name": "other"})))

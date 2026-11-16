@@ -87,6 +87,7 @@ fn req(t: &T, key: &str) -> NewJob {
         slug: None,
         repo: t.repo.path().to_string_lossy().into_owned(),
         agent: None,
+        agents: Default::default(),
         base: None,
         flow: None,
         prompt: Some("add login".into()),

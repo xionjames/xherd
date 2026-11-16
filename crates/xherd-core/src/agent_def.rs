@@ -120,6 +120,16 @@ pub struct JobAgent {
     pub memory: Option<String>,
 }
 
+/// The agent a workflow stage runs with in one job, and whether the stage's
+/// gate always waits for the user (D26, R35).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageAgent {
+    pub agent: String,
+    #[serde(default)]
+    pub human: bool,
+}
+
 /// One skill of an agent at job creation: copied into the worktree for the
 /// job's runtime (`installed`), or skipped with the reason (R26, R27).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

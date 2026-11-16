@@ -1,5 +1,5 @@
 // Saved agents in the UI (#141, R23): pure helpers, tested in agents.test.ts.
-import type { AgentDef, AgentView, Job } from './types';
+import type { AgentDef, AgentView, Job, JobAgent } from './types';
 import type { PermissionMode } from './modes';
 
 /** The New job form's fields an agent can fill (the names of its state). */
@@ -126,12 +126,22 @@ export function versionDiff(from: AgentDef, to: AgentDef): FieldDiff[] {
   return out;
 }
 
+/** The saved agent a job's session runs with now (D26), if any. */
+export const jobAgent = (job: Pick<Job, 'agents' | 'currentAgent'>): JobAgent | undefined =>
+  job.currentAgent ? job.agents?.[job.currentAgent] : undefined;
+
+/** The job has agents at all (started from, or attached to, a saved agent). */
+export const hasAgents = (job: Pick<Job, 'agents'>): boolean => Object.keys(job.agents ?? {}).length > 0;
+
+/** The job started with, or was attached to, agent `id`. */
+export const usesAgent = (job: Pick<Job, 'agents'>, id: string): boolean => !!job.agents?.[id];
+
 export const NO_AGENT_LANE = 'No agent';
 
 /** The group of a job when jobs are grouped by agent (Herd `?group=agent`,
  *  Board `?lanes=agent-def`): the snapshot's name, else `No agent`. */
-export function agentLane(job: Pick<Job, 'agent'>): string {
-  return job.agent?.name ?? NO_AGENT_LANE;
+export function agentLane(job: Pick<Job, 'agents' | 'currentAgent'>): string {
+  return jobAgent(job)?.name ?? NO_AGENT_LANE;
 }
 
 /** Lane names in name order, `No agent` last. */
@@ -142,19 +152,24 @@ export function agentLaneOrder(names: string[]): string[] {
 
 /** A queued job waits for its agent's `maxLiveJobs`, not for a free slot (R16):
  *  its agent has as many live jobs as it may. Nothing is stored. */
-export function waitsForAgent(job: Pick<Job, 'status' | 'agent'>, agents: readonly Pick<AgentView, 'id' | 'liveJobs' | 'maxLiveJobs'>[]): boolean {
-  if (job.status !== 'queued' || !job.agent) return false;
-  const a = agents.find((x) => x.id === job.agent!.id);
+export function waitsForAgent(job: Pick<Job, 'status' | 'agents' | 'currentAgent'>, agents: readonly Pick<AgentView, 'id' | 'liveJobs' | 'maxLiveJobs'>[]): boolean {
+  const cur = jobAgent(job);
+  if (job.status !== 'queued' || !cur) return false;
+  const a = agents.find((x) => x.id === cur.id);
   return !!a && a.liveJobs >= a.maxLiveJobs;
 }
 
 /** The saved agent a job started from, when it still exists. */
-export const agentOf = (job: Pick<Job, 'agent'>, agents: readonly AgentView[] | undefined): AgentView | undefined =>
-  job.agent ? agents?.find((a) => a.id === job.agent!.id) : undefined;
+export const agentOf = (job: Pick<Job, 'agents' | 'currentAgent'>, agents: readonly AgentView[] | undefined): AgentView | undefined => {
+  const cur = jobAgent(job);
+  return cur ? agents?.find((a) => a.id === cur.id) : undefined;
+};
 
 /** The agent has a newer version than the job started with (R23). */
-export const changedSince = (job: Pick<Job, 'agent'>, agent: Pick<AgentView, 'version'> | undefined): boolean =>
-  !!job.agent && !!agent && agent.version > job.agent.version;
+export const changedSince = (job: Pick<Job, 'agents' | 'currentAgent'>, agent: Pick<AgentView, 'version'> | undefined): boolean => {
+  const cur = jobAgent(job);
+  return !!cur && !!agent && agent.version > cur.version;
+};
 
 export const STATUS_LABEL: Record<AgentView['status'], string> = {
   archived: 'archived',
@@ -228,8 +243,8 @@ export function slugify(s: string): string {
 }
 
 /** The suggestion is on offer: the job has no agent, the daemon made one and it was not dismissed (R30, R32). */
-export const suggestionOpen = (job: Pick<Job, 'agent' | 'suggestion'>): boolean =>
-  !job.agent && !!job.suggestion && !job.suggestion.dismissed;
+export const suggestionOpen = (job: Pick<Job, 'agents' | 'suggestion'>): boolean =>
+  !hasAgents(job) && !!job.suggestion && !job.suggestion.dismissed;
 
 /** Mark done is for a job with no workflow, between turns (R30). */
 export const canMarkDone = (job: Pick<Job, 'flow' | 'status'>): boolean =>

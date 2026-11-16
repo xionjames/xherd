@@ -119,8 +119,16 @@ pub struct FlowView {
     pub stages: Vec<StageView>,
 }
 
-fn job_agent(job: &Job) -> Option<&str> {
-    job.agent.as_ref().map(|a| a.id.as_str())
+/// The agent a memory proposal is about: the one named in it, else the job's
+/// current one (proposals made before stage agents).
+fn proposal_agent<'a>(
+    job: &'a Job,
+    p: &xherd_core::job::MemoryProposal,
+) -> Option<&'a xherd_core::agent_def::JobAgent> {
+    match p.agent.as_deref() {
+        Some(id) => job.agents.get(id),
+        None => job.agent(),
+    }
 }
 
 /// Live jobs and the newest job's name, from the jobs of one agent (pure).
@@ -165,7 +173,7 @@ impl Daemon {
             .await
             .map_err(store)?
             .into_iter()
-            .filter(|j| job_agent(j) == Some(id))
+            .filter(|j| j.uses_agent(id))
             .collect();
         jobs.sort_by_key(|j| std::cmp::Reverse(j.created_at));
         Ok(jobs)
@@ -195,10 +203,7 @@ impl Daemon {
         let jobs = self.store.list_jobs().await.map_err(store)?;
         let mut out = Vec::new();
         for d in defs {
-            let mine: Vec<&Job> = jobs
-                .iter()
-                .filter(|j| job_agent(j) == Some(d.id.as_str()))
-                .collect();
+            let mine: Vec<&Job> = jobs.iter().filter(|j| j.uses_agent(&d.id)).collect();
             out.push(self.view(d, &mine).await);
         }
         Ok(out)
@@ -236,8 +241,17 @@ impl Daemon {
         } else {
             Vec::new()
         };
-        self.check_runtime(&def.runtime, &off)
-            .map_err(|m| err("unknown_runtime", m))?;
+        // A runtime that cannot run now is fine when the fallback can (R36).
+        if let Err(m) = self.check_runtime(&def.runtime, &off) {
+            let fallback_runs = running
+                && def
+                    .fallback_runtime
+                    .as_deref()
+                    .is_some_and(|f| self.check_runtime(f, &off).is_ok());
+            if !fallback_runs {
+                return Err(err("unknown_runtime", m));
+            }
+        }
         // The fallback only has to exist; it may be off, that is what it is for.
         if let Some(f) = &def.fallback_runtime {
             self.check_runtime(f, &[])
@@ -427,15 +441,17 @@ impl Daemon {
             .ok()
             .and_then(|d| crate::actor::inside(&wd, &d))
             .and_then(|f| std::fs::read_to_string(f).ok());
-        let agent = a.agent.as_ref().map(|j| j.id.clone());
+        // The agent the proposal is for: the one that wrote it (D26), else
+        // the job's current one.
+        let agent = proposal_agent(&a, &p);
         let current = match &agent {
-            Some(id) => self.agent_memory(id).await.ok(),
+            Some(g) => self.agent_memory(&g.id).await.ok(),
             None => None,
         };
         Ok(json!({
             "proposal": p,
             "proposed": proposed,
-            "agent": a.agent.as_ref().map(|j| json!({"id": j.id, "name": j.name})),
+            "agent": agent.as_ref().map(|j| json!({"id": j.id, "name": j.name})),
             "current": current.as_ref().map(|c| c["text"].clone()),
             "version": current.as_ref().map(|c| c["version"].clone()),
         }))
@@ -457,7 +473,7 @@ impl Daemon {
                 format!("{} has no agent-memory proposal", a.name),
             ));
         };
-        let Some(agent) = a.agent.as_ref() else {
+        let Some(agent) = proposal_agent(&a, &p) else {
             return Err(err("no_agent", format!("{} has no saved agent", a.name)));
         };
         let text = match edited.filter(|t| !t.trim().is_empty()) {
@@ -483,7 +499,7 @@ impl Daemon {
     /// a fourth would nag after the third was dismissed.
     pub(crate) async fn repeated_setup(&self, new: &Job) -> bool {
         const DAYS_30: i64 = 30 * 24 * 3600 * 1000;
-        if new.agent.is_some() || !self.live_config().suggest_agents {
+        if !new.agents.is_empty() || !self.live_config().suggest_agents {
             return false;
         }
         let Ok(jobs) = self.store.list_jobs().await else {
@@ -492,7 +508,7 @@ impl Daemon {
         let same = jobs
             .iter()
             .filter(|j| {
-                j.agent.is_none()
+                j.agents.is_empty()
                     && new.created_at - j.created_at <= DAYS_30
                     && j.repo == new.repo
                     && j.runtime == new.runtime
@@ -535,7 +551,7 @@ impl Daemon {
         accept: bool,
     ) -> Result<Value, ActionError> {
         let a = self.action(who, crate::actor::UserAction::Get).await?;
-        if a.agent.is_some() {
+        if !a.agents.is_empty() {
             return Err(err(
                 "has_agent",
                 format!("{} already belongs to an agent", a.name),

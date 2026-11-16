@@ -22,7 +22,7 @@
   import { MODE_HINT, modes } from '../lib/modes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
-  import { agentOf, canMarkDone, changedSince, waitsForAgent } from '../lib/agents';
+  import { agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
 
   let { agent }: { agent: Job } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -53,6 +53,7 @@
   const flow = $derived(flowOf(agent, app.state?.flows ?? []));
   // The saved agent this job started from (R23): a link while it exists, plain
   // text after it was deleted; "changed since" opens the diff of its versions.
+  const curAgent = $derived(jobAgent(agent));
   const def = $derived(agentOf(agent, app.state?.agents));
   const newer = $derived(changedSince(agent, def));
   const queuedForAgent = $derived(waitsForAgent(agent, app.state?.agents ?? []));
@@ -123,8 +124,8 @@
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
 <TicketPrompt {agent} />
 <SuggestAgent {agent} bind:open={saveOpen} />
-{#if agent.agent?.skills?.some((s) => !s.installed)}
-  <Callout tone="info">{#each agent.agent.skills.filter((s) => !s.installed) as s (s.name)}<div>
+{#if curAgent?.skills?.some((s) => !s.installed)}
+  <Callout tone="info">{#each curAgent.skills.filter((s) => !s.installed) as s (s.name)}<div>
     Skill <b>{s.name}</b> was not installed: {s.skipped ?? 'skipped'}.</div>{/each}</Callout>
 {/if}
 {#if agent.lowered?.length}
@@ -142,9 +143,9 @@
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
         <div class="hfacts">
-          {#if agent.agent}
-            <span>agent {#if def}<a href={href(`/agents/${def.name}`)}>{agent.agent.name}</a>{:else}{agent.agent.name}{/if} <span class="muted">v{agent.agent.version}</span>
-              {#if newer && def}<a class="hint" href={href(`/agents/${def.name}`, { s: 'versions', since: String(agent.agent.version) })} title="This job keeps the settings it started with">· agent changed since this job started (now v{def.version})</a>{/if}
+          {#if curAgent}
+            <span>agent {#if def}<a href={href(`/agents/${def.name}`)}>{curAgent.name}</a>{:else}{curAgent.name}{/if} <span class="muted">v{curAgent.version}</span>
+              {#if newer && def}<a class="hint" href={href(`/agents/${def.name}`, { s: 'versions', since: String(curAgent.version) })} title="This job keeps the settings it started with">· agent changed since this job started (now v{def.version})</a>{/if}
               {#if queuedForAgent}<span class="hint"> · waits for its agent: {def?.liveJobs} of {def?.maxLiveJobs} live jobs</span>{/if}</span>
           {/if}
           {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
@@ -207,7 +208,7 @@
             {#if canMarkDone(agent)}
               <button role="menuitem" class="btn ghost" title="This job has no pull request to merge: end it here" onclick={() => act('mark-done', 'Could not mark it done')}>Mark done</button>
             {/if}
-            {#if !agent.agent}
+            {#if !hasAgents(agent)}
               <button role="menuitem" class="btn ghost" onclick={() => { menu = false; saveOpen = true; }}>Save as agent…</button>
             {/if}
             <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel job…</button>

@@ -149,8 +149,15 @@ pub struct Guardrails {
 /// The profile's values, else the global ones (a profile's empty
 /// `sensitivePaths` still switches the global list off), then the stricter of
 /// that and the agent's: paths are joined, the smaller diff limit wins, and
-/// the smallest non-zero budget (0 = off loses to any limit).
-pub fn guardrails(global: &Guardrails, p: Option<&Profile>, a: Option<&JobAgent>) -> Guardrails {
+/// the smallest non-zero budget (0 = off loses to any limit). Paths and the
+/// diff limit are the current stage's agent's (`a`); the token budget is the
+/// job's, so every agent of the job (`all`) counts.
+pub fn guardrails(
+    global: &Guardrails,
+    p: Option<&Profile>,
+    a: Option<&JobAgent>,
+    all: &BTreeMap<String, JobAgent>,
+) -> Guardrails {
     let mut g = Guardrails {
         sensitive_paths: p
             .and_then(|p| p.sensitive_paths.clone())
@@ -171,14 +178,34 @@ pub fn guardrails(global: &Guardrails, p: Option<&Profile>, a: Option<&JobAgent>
         if let Some(n) = a.max_diff_lines {
             g.max_diff_lines = g.max_diff_lines.min(n);
         }
-        if let Some(b) = a.job_token_budget.filter(|b| *b > 0) {
-            g.job_token_budget = match g.job_token_budget {
-                0 => b,
-                have => have.min(b),
-            };
-        }
+    }
+    for b in all
+        .values()
+        .filter_map(|a| a.job_token_budget)
+        .filter(|b| *b > 0)
+    {
+        g.job_token_budget = match g.job_token_budget {
+            0 => b,
+            have => have.min(b),
+        };
     }
     g
+}
+
+/// The runtime an agent runs on in a new job (R36): its own, else its
+/// fallback when that one cannot run now. `None` = neither can. The bool says
+/// the fallback was used. Chosen once, at creation: nothing switches later.
+pub fn usable_runtime(
+    runtime: &str,
+    fallback: Option<&str>,
+    is_usable: impl Fn(&str) -> bool,
+) -> Option<(String, bool)> {
+    if is_usable(runtime) {
+        return Some((runtime.to_string(), false));
+    }
+    fallback
+        .filter(|f| !f.is_empty() && is_usable(f))
+        .map(|f| (f.to_string(), true))
 }
 
 /// One stage of a workflow given to a saved agent (D26, R35). `human` makes
@@ -461,9 +488,36 @@ mod tests {
         a.snapshot()
     }
 
+    /// `guardrails` for a job with just this one agent.
+    fn one(g: &Guardrails, p: Option<&Profile>, a: Option<&JobAgent>) -> Guardrails {
+        let all = a.map(|a| (a.id.clone(), a.clone())).into_iter().collect();
+        guardrails(g, p, a, &all)
+    }
+
+    #[test]
+    fn the_job_budget_is_the_lowest_of_all_its_agents_the_rest_the_current_ones() {
+        let (mut a, mut b) = (agent(), agent());
+        a.id = "a".into();
+        a.max_diff_lines = Some(300);
+        a.job_token_budget = Some(5000);
+        b.id = "b".into();
+        b.sensitive_paths = vec!["x/**".into()];
+        b.max_diff_lines = Some(900);
+        b.job_token_budget = Some(2000);
+        let (a, b) = (a.snapshot(), b.snapshot());
+        let all = BTreeMap::from([("a".to_string(), a.clone()), ("b".to_string(), b.clone())]);
+        let g = guardrails(&global(), None, Some(&a), &all);
+        assert_eq!(g.max_diff_lines, 300);
+        assert!(g.sensitive_paths.iter().all(|p| p != "x/**"));
+        assert_eq!(g.job_token_budget, 2000);
+        let g = guardrails(&global(), None, Some(&b), &all);
+        assert_eq!(g.max_diff_lines, 900);
+        assert!(g.sensitive_paths.contains(&"x/**".to_string()));
+    }
+
     #[test]
     fn guardrails_without_profile_or_agent_are_the_global_ones() {
-        assert_eq!(guardrails(&global(), None, None), global());
+        assert_eq!(one(&global(), None, None), global());
     }
 
     #[test]
@@ -472,7 +526,7 @@ mod tests {
         p.sensitive_paths = Some(vec![]);
         p.max_diff_lines = Some(50);
         p.job_token_budget = Some(10);
-        let g = guardrails(&global(), Some(&p), None);
+        let g = one(&global(), Some(&p), None);
         assert_eq!(
             g,
             Guardrails {
@@ -486,7 +540,7 @@ mod tests {
     #[test]
     fn the_stricter_value_wins_between_profile_and_agent() {
         // agent adds paths (no duplicates), lowers the limit, sets a budget
-        let g = guardrails(&global(), None, Some(&snap()));
+        let g = one(&global(), None, Some(&snap()));
         assert_eq!(g.sensitive_paths, vec!["*.pem", "secrets/**"]);
         assert_eq!(g.max_diff_lines, 300);
         assert_eq!(g.job_token_budget, 5000);
@@ -495,18 +549,34 @@ mod tests {
         p.max_diff_lines = Some(100);
         p.job_token_budget = Some(2000);
         p.sensitive_paths = Some(vec!["a".into()]);
-        let g = guardrails(&global(), Some(&p), Some(&snap()));
+        let g = one(&global(), Some(&p), Some(&snap()));
         assert_eq!(g.max_diff_lines, 100);
         assert_eq!(g.job_token_budget, 2000);
         assert_eq!(g.sensitive_paths, vec!["a", "secrets/**", "*.pem"]);
         // an agent with no limits changes nothing; budget 0 is no limit
         let mut a = agent();
         a.job_token_budget = Some(0);
-        let g = guardrails(&global(), Some(&p), Some(&a.snapshot()));
+        let g = one(&global(), Some(&p), Some(&a.snapshot()));
         assert_eq!(g.job_token_budget, 2000);
         assert_eq!(g.max_diff_lines, 100);
-        let g = guardrails(&global(), None, Some(&a.snapshot()));
+        let g = one(&global(), None, Some(&a.snapshot()));
         assert_eq!(g.job_token_budget, 0);
+    }
+
+    #[test]
+    fn a_runtime_that_cannot_run_gives_way_to_the_fallback_once() {
+        let on = |r: &str| r == "opencode";
+        assert_eq!(
+            usable_runtime("opencode", Some("codex"), on),
+            Some(("opencode".into(), false))
+        );
+        assert_eq!(
+            usable_runtime("claude-code", Some("opencode"), on),
+            Some(("opencode".into(), true))
+        );
+        assert_eq!(usable_runtime("claude-code", Some("codex"), on), None);
+        assert_eq!(usable_runtime("claude-code", None, on), None);
+        assert_eq!(usable_runtime("claude-code", Some(""), on), None);
     }
 
     fn assign(stage: &str, agent: &str) -> Assignment {

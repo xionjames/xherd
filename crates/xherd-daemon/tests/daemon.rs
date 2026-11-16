@@ -848,7 +848,7 @@ async fn a_version_1_database_opens_and_its_job_resumes() {
 
 fn of_agent(name: &str, created: i64, def: &xherd_core::agent_def::AgentDef) -> Job {
     let mut j = agent(name, created);
-    j.agent = Some(def.snapshot());
+    j.set_agent(def.snapshot());
     j
 }
 

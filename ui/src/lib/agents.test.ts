@@ -105,14 +105,14 @@ describe('versionDiff', () => {
 
 describe('agentLane', () => {
   it('is the snapshot name, else No agent, which sorts last', () => {
-    expect(agentLane({ agent: { id: 'x', name: 'reviewer', version: 1 } })).toBe('reviewer');
+    expect(agentLane({ agents: { x: { id: 'x', name: 'reviewer', version: 1 } }, currentAgent: 'x' })).toBe('reviewer');
     expect(agentLane({})).toBe(NO_AGENT_LANE);
     expect(agentLaneOrder([NO_AGENT_LANE, 'zed', 'alpha', 'zed'])).toEqual(['alpha', 'zed', NO_AGENT_LANE]);
   });
 });
 
 describe('waitsForAgent', () => {
-  const j = (status: string, id = 'ag1') => ({ status: status as never, agent: { id, name: 'a', version: 1 } });
+  const j = (status: string, id = 'ag1') => ({ status: status as never, agents: { [id]: { id, name: 'a', version: 1 } }, currentAgent: id });
   it('a queued job whose agent is at its limit waits for it', () => {
     expect(waitsForAgent(j('queued'), [view({ liveJobs: 1, maxLiveJobs: 1 })])).toBe(true);
     expect(waitsForAgent(j('queued'), [view({ liveJobs: 1, maxLiveJobs: 2 })])).toBe(false);
@@ -126,7 +126,7 @@ describe('waitsForAgent', () => {
 
 describe('changedSince', () => {
   it('is true only when the agent is newer than the job\'s snapshot', () => {
-    const job = { agent: { id: 'ag1', name: 'a', version: 2 } };
+    const job = { agents: { ag1: { id: 'ag1', name: 'a', version: 2 } }, currentAgent: 'ag1' };
     expect(changedSince(job, { version: 3 })).toBe(true);
     expect(changedSince(job, { version: 2 })).toBe(false);
     expect(changedSince({}, { version: 9 })).toBe(false);
@@ -171,7 +171,7 @@ describe('suggestions (R30…R32)', () => {
     expect(suggestionOpen(job({ suggestion: s }))).toBe(true);
     expect(suggestionOpen(job({ suggestion: { ...s, dismissed: true } }))).toBe(false);
     expect(suggestionOpen(job())).toBe(false);
-    expect(suggestionOpen(job({ suggestion: s, agent: { id: 'a', name: 'a', version: 1 } as Job['agent'] }))).toBe(false);
+    expect(suggestionOpen(job({ suggestion: s, agents: { a: { id: 'a', name: 'a', version: 1 } } }))).toBe(false);
   });
 
   it('Mark done is for a job with no workflow between turns', () => {

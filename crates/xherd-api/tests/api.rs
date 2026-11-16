@@ -1725,7 +1725,11 @@ async fn mark_done_and_save_as_agent_routes() {
     .await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["agent"]["name"], "shop");
-    assert_eq!(v["job"]["agent"]["name"], "shop");
+    let id = v["job"]["currentAgent"].as_str().unwrap().to_string();
+    assert_eq!(v["job"]["agents"][id.as_str()]["name"], "shop");
+    assert_eq!(v["job"]["defaultAgent"], id.as_str());
+    assert_eq!(v["job"]["pinned"], true);
+    assert!(v["job"].get("agent").is_none());
     let (s, v) = call(
         app.clone(),
         send("POST", "/api/v1/jobs/SC-1/save-as-agent", Some(form)),

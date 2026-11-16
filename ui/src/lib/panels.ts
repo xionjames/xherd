@@ -2,6 +2,7 @@
 // page renders the built-in view below; declarative pack views come later.
 import type { Component } from 'svelte';
 import type { Job } from './types';
+import { hasAgents } from './agents';
 import Documents from '../panels/Documents.svelte';
 import Tasks from '../panels/Tasks.svelte';
 import Commits from '../panels/Commits.svelte';
@@ -53,5 +54,5 @@ export const AGENT_VIEW: TabDef[] = [
 
 /** Tabs whose panel exists, filtered for flow `none`. */
 export function agentTabs(a: Job): TabDef[] {
-  return AGENT_VIEW.filter((t) => PANELS[t.panel] && (a.flow || t.noFlow) && (t.id !== 'agent-memory' || !!a.agent));
+  return AGENT_VIEW.filter((t) => PANELS[t.panel] && (a.flow || t.noFlow) && (t.id !== 'agent-memory' || hasAgents(a)));
 }

@@ -72,7 +72,7 @@ impl Daemon {
     /// The same time under the saved agent the job came from (R24), as a row
     /// keyed `agent:<id>`; the per-ticket listing leaves those out.
     async fn book_agent(&self, day: &str, job: &xherd_core::Job, kind: &str, ms: u64) {
-        if let Some(a) = &job.agent
+        if let Some(a) = job.agent()
             && let Err(e) = self
                 .store
                 .add_worklog(day, &format!("{AGENT_KEY}{}", a.id), kind, ms)

@@ -27,7 +27,7 @@ describe('board lanes', () => {
 
 describe('board lanes by saved agent', () => {
   it('?lanes=agent-def groups by the job\'s agent snapshot, No agent last', () => {
-    const withAgent = a({ agent: { id: 'g1', name: 'reviewer', version: 2 } });
+    const withAgent = a({ agents: { g1: { id: 'g1', name: 'reviewer', version: 2 } }, currentAgent: 'g1' });
     expect(boardLane(withAgent, 'agent-def')).toBe('reviewer');
     expect(boardLane(a({}), 'agent-def')).toBe('No agent');
     expect(laneOrder(['TODOs', 'No agent', 'zed', 'reviewer'])).toEqual(['reviewer', 'zed', 'No agent', 'TODOs']);

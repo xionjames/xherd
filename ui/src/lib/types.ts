@@ -95,6 +95,8 @@ export interface Ticket { key?: string; url?: string }
 
 
 /** What a job keeps of the saved agent it started from (R12). */
+export interface StageAgent { agent: string; human: boolean }
+
 export interface JobAgent {
   id: string;
   name: string;
@@ -217,7 +219,15 @@ export interface Job {
   /** The open gate is one autonomy will approve at the next stop (R4): it does not wait for you. */
   autoApprovePending?: boolean;
   /** The saved agent it started from (R12): a snapshot, so later edits do not change it. */
-  agent?: JobAgent;
+  agents?: Record<string, JobAgent>;
+  /** The agent each stage of the workflow runs with, and whether its gate always waits for you (D26). */
+  stageAgents?: Record<string, StageAgent>;
+  /** The agent for stages with no assignment. */
+  defaultAgent?: string;
+  /** The agent the running session uses: a key of `agents`. */
+  currentAgent?: string;
+  /** An agent attached to a running job: stage assignments never switch it. */
+  pinned?: boolean;
   /** Values the repo profile lowered (R12a). */
   lowered?: Lowered[];
 }

@@ -11,6 +11,7 @@
   import { upsertJob } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
   import { lineDiff } from '../lib/diff';
+  import { jobAgent } from '../lib/agents';
   import { agoText } from '../lib/format';
 
   let { agent }: { agent: Job } = $props();
@@ -60,7 +61,7 @@
     {#if !view}
       <p class="muted">Loading…</p>
     {:else if !view.proposal}
-      <p class="empty">No proposal. At review, the job may propose a new memory for {agent.agent?.name ?? 'its agent'}.</p>
+      <p class="empty">No proposal. At review, the job may propose a new memory for {jobAgent(agent)?.name ?? 'its agent'}.</p>
     {:else}
       <p><b style="font-weight:500">{view.proposal.reason}</b> <span class="hint">proposed {agoText(view.proposal.at)}</span></p>
       {#if view.proposed == null}

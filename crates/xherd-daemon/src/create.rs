@@ -2,12 +2,14 @@
 //! then create the worktree and `.xherd/`, then register the agent. A failure
 //! after the worktree exists removes it again, so nothing is left behind.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use xherd_core::agent_def::SkillCopy;
+use xherd_core::agent_def::{AgentDef, SkillCopy, StageAgent};
 use xherd_core::new::{self, FLOW_NONE, NewJob};
 use xherd_core::paths::write_atomic;
 use xherd_core::permission::PermissionMode;
+use xherd_core::resolve::{Assignment, Effective};
 use xherd_core::xap::Refusal;
 use xherd_core::{Job, Status};
 use xherd_git::Git;
@@ -68,28 +70,32 @@ fn repo_dir_name(repo: &Path) -> String {
 }
 
 impl Daemon {
+    /// A saved agent a job may start from: it exists, is not archived and
+    /// its runtime (or its fallback) can run now (R15, R36).
+    async fn usable_agent(&self, key: &str) -> Result<AgentDef, ActionError> {
+        let def = self.agent_def(key).await?;
+        if def.archived_at.is_some() {
+            return Err(refuse(
+                "agent_archived",
+                format!("agent {} is archived: unarchive it first", def.name),
+            ));
+        }
+        if let Some(why) = self.agent_broken(&def) {
+            return Err(refuse("agent_broken", why));
+        }
+        Ok(def)
+    }
+
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
     pub async fn new_job(&self, mut req: NewJob) -> Result<Job, ActionError> {
-        // A saved agent (#141): its fields are defaults, the request wins.
-        let agent = match req
+        // The agent for stages with no assignment (`--agent A`, #141).
+        let default_def = match req
             .agent
             .as_deref()
             .map(str::trim)
             .filter(|k| !k.is_empty())
         {
-            Some(key) => {
-                let def = self.agent_def(key).await?;
-                if def.archived_at.is_some() {
-                    return Err(refuse(
-                        "agent_archived",
-                        format!("agent {} is archived: unarchive it first", def.name),
-                    ));
-                }
-                if let Some(why) = self.agent_broken(&def) {
-                    return Err(refuse("agent_broken", why));
-                }
-                Some(def)
-            }
+            Some(key) => Some(self.usable_agent(key).await?),
             None => None,
         };
         // No repository yet: the one a ticket URL names (#148). An explicit
@@ -122,28 +128,167 @@ impl Daemon {
         // A URL is cloned (or fetched) here, before the other checks: the
         // clone is kept for the next job even if a later check fails.
         let repo = self.locate_repo(&req.repo).await?.path;
+        // Who runs each stage (D26, R37): the request's override, the
+        // workflow's assignment, the default agent, the stage before.
+        let stage_ids: Vec<&str> = pack
+            .and_then(|p| p.flow(&c.flow))
+            .map(|f| f.stages.iter().map(|s| s.id.as_str()).collect())
+            .unwrap_or_default();
+        let assignments: Vec<Assignment> = if pack.is_some() {
+            self.store
+                .flow_assignments(pack_name, &c.flow)
+                .await
+                .map_err(|e| refuse("store", e.to_string()))?
+                .into_iter()
+                .filter(|a| stage_ids.contains(&a.stage.as_str()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut overrides = BTreeMap::new();
+        for (stage, key) in &req.agents {
+            if !stage_ids.contains(&stage.as_str()) {
+                return Err(refuse(
+                    "unknown_stage",
+                    format!("workflow {} has no stage {stage:?}", c.flow),
+                ));
+            }
+            overrides.insert(stage.clone(), self.usable_agent(key).await?.id);
+        }
+        let default_id = default_def.as_ref().map(|d| d.id.clone());
+        let per_stage = xherd_core::resolve::stage_agents(
+            &stage_ids,
+            &assignments,
+            &overrides,
+            default_id.as_deref(),
+        );
+        let mut stage_agents = BTreeMap::new();
+        for (stage, id) in stage_ids.iter().zip(&per_stage) {
+            if let Some(id) = id {
+                let human = assignments
+                    .iter()
+                    .find(|a| a.stage == *stage)
+                    .is_some_and(|a| a.human);
+                stage_agents.insert(
+                    stage.to_string(),
+                    StageAgent {
+                        agent: id.clone(),
+                        human,
+                    },
+                );
+            }
+        }
+        // The session starts on the first stage's agent; a plain job, or a
+        // flow none job, on the default one.
+        let current_id = if pack.is_some() {
+            per_stage.first().cloned().flatten()
+        } else {
+            default_id.clone()
+        };
+        let mut defs: BTreeMap<String, AgentDef> = BTreeMap::new();
+        for id in per_stage.iter().flatten().chain(default_id.iter()) {
+            if !defs.contains_key(id) {
+                defs.insert(id.clone(), self.usable_agent(id).await?);
+            }
+        }
+
         // Request, agent, profile, Settings; the profile's autonomy and mode
         // are ceilings (R-002, R-109, R-135, #141 R12/R12a).
         let profile = self.profile_for_repo(&repo).await;
         let cfg = self.live_config();
-        let eff = xherd_core::resolve::effective(
-            &xherd_core::resolve::Defaults {
-                runtime: cfg.default_runtime.clone(),
-                autonomy: cfg.autonomy,
-                mode: cfg.permission_mode,
-                models: cfg.runtime_models.clone(),
-            },
+        let model_req = clean_model(req.model.as_deref())?;
+        let defaults = xherd_core::resolve::Defaults {
+            runtime: cfg.default_runtime.clone(),
+            autonomy: cfg.autonomy,
+            mode: cfg.permission_mode,
+            models: cfg.runtime_models.clone(),
+        };
+        let requested = |runtime: Option<String>| xherd_core::resolve::Requested {
+            runtime,
+            model: model_req.clone(),
+            autonomy: req.autonomy,
+            mode: req.permission_mode,
+            base: req.base.clone(),
+            flow: Some(c.flow.clone()),
+        };
+        let plain = xherd_core::resolve::effective(
+            &defaults,
             profile.as_ref(),
-            agent.as_ref(),
-            &xherd_core::resolve::Requested {
-                runtime: req.runtime.clone(),
-                model: clean_model(req.model.as_deref())?,
-                autonomy: req.autonomy,
-                mode: req.permission_mode,
-                base: req.base.clone(),
-                flow: Some(c.flow.clone()),
-            },
+            None,
+            &requested(req.runtime.clone()),
         );
+        // Every agent of the job, resolved once and kept (R37, R40): the
+        // runtime (its own, else its fallback), autonomy, mode, model and
+        // the launch line.
+        let mut baked: BTreeMap<String, (xherd_core::agent_def::JobAgent, Effective)> =
+            BTreeMap::new();
+        for (id, def) in &defs {
+            let (runtime, fell_back) = match req.runtime.as_deref().map(str::trim) {
+                Some(r) if !r.is_empty() => (r.to_string(), false),
+                _ => xherd_core::resolve::usable_runtime(
+                    &def.runtime,
+                    def.fallback_runtime.as_deref(),
+                    |r| self.runtime_terminal(r).is_ok(),
+                )
+                .ok_or_else(|| {
+                    refuse(
+                        "agent_broken",
+                        format!(
+                            "agent {}: its runtime and its fallback cannot run",
+                            def.name
+                        ),
+                    )
+                })?,
+            };
+            let eff = xherd_core::resolve::effective(
+                &defaults,
+                profile.as_ref(),
+                Some(def),
+                &requested(Some(runtime)),
+            );
+            if !eff.autonomy.selectable() {
+                return Err(refuse(
+                    "autonomy_unavailable",
+                    "autonomy never is not available yet (v1.x, R-1209)",
+                ));
+            }
+            let term = self.runtime_terminal(&eff.runtime)?;
+            let mut snap = def.snapshot();
+            snap.runtime = eff.runtime.clone();
+            snap.fell_back = fell_back;
+            snap.autonomy = Some(eff.autonomy);
+            snap.permission_mode = Some(eff.mode);
+            snap.model = eff.model.clone();
+            snap.launch = mode_launch(&term, eff.mode, eff.model.as_deref(), self.sandbox)?;
+            // The memory as it is now; later edits do not reach this job (R28).
+            snap.memory = self
+                .store
+                .agent_memory(id)
+                .await
+                .map_err(|e| refuse("store", e.to_string()))?
+                .map(|(t, _)| t)
+                .filter(|t| !t.trim().is_empty());
+            baked.insert(id.clone(), (snap, eff));
+        }
+        // One runtime per job until R-025: a stage without an agent counts
+        // when the session starts on it.
+        let mut runtimes: Vec<&str> = baked.values().map(|(_, e)| e.runtime.as_str()).collect();
+        if current_id.is_none() && !baked.is_empty() {
+            runtimes.push(plain.runtime.as_str());
+        }
+        runtimes.sort_unstable();
+        runtimes.dedup();
+        if runtimes.len() > 1 {
+            return Err(refuse(
+                "mixed_runtime",
+                format!(
+                    "the agents of this job run on different runtimes ({}): a job keeps one",
+                    runtimes.join(", ")
+                ),
+            ));
+        }
+        let cur = current_id.as_ref().and_then(|id| baked.get(id));
+        let eff = cur.map_or(&plain, |(_, e)| e);
         if !eff.autonomy.selectable() {
             return Err(refuse(
                 "autonomy_unavailable",
@@ -161,7 +306,10 @@ impl Daemon {
             ));
         }
         let (autonomy, mode, model) = (eff.autonomy, eff.mode, eff.model.clone());
-        let launch = mode_launch(&rt, mode, model.as_deref(), self.sandbox)?;
+        let launch = match cur {
+            Some((snap, _)) => snap.launch.clone(),
+            None => mode_launch(&rt, mode, model.as_deref(), self.sandbox)?,
+        };
         let agents = self
             .store
             .list_jobs()
@@ -219,17 +367,13 @@ impl Daemon {
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);
         a.runtime = Some(rt_name.into());
-        a.agent = agent.as_ref().map(|d| d.snapshot());
-        if let Some(snap) = a.agent.as_mut() {
-            // The memory as it is now; later edits do not reach this job (R28).
-            snap.memory = self
-                .store
-                .agent_memory(&snap.id)
-                .await
-                .map_err(|e| refuse("store", e.to_string()))?
-                .map(|(t, _)| t)
-                .filter(|t| !t.trim().is_empty());
-        }
+        a.agents = baked
+            .iter()
+            .map(|(id, (snap, _))| (id.clone(), snap.clone()))
+            .collect();
+        a.stage_agents = stage_agents;
+        a.default_agent = default_id;
+        a.current_agent = current_id.clone();
         a.lowered = eff.lowered.clone();
         a.launch = Some(launch);
         a.next_prompt = Some(match pack {
@@ -264,13 +408,15 @@ impl Daemon {
             });
         }
 
-        let wanted: Vec<(String, Option<String>)> = agent
+        // The session starts on the first stage's agent: its skills go in now.
+        let wanted: Vec<(String, Option<String>)> = current_id
             .as_ref()
+            .and_then(|id| defs.get(id))
             .map(|d| d.skills.iter().map(|s| (s.clone(), None)).collect())
             .unwrap_or_default();
         let res = async {
             self.prepare_worktree(&a).await?;
-            if let Some(snap) = a.agent.as_mut() {
+            if let Some(snap) = a.agent_mut() {
                 snap.skills = self.install_skills(&workdir, rt_name, &rt, &wanted).await?;
             }
             self.create_job(a).await
@@ -283,6 +429,16 @@ impl Daemon {
         }
         let a = res?;
         debug_assert_eq!(a.status, Status::Queued);
+        for g in a.agents.values().filter(|g| g.fell_back) {
+            let e = xherd_store::Event {
+                id: xherd_core::new_id(),
+                job_id: a.id.clone(),
+                kind: "agent-fallback".into(),
+                payload: Some(serde_json::json!({"agent": g.id, "runtime": g.runtime})),
+                at: self.clock.now(),
+            };
+            let _ = self.store.insert_event(e).await;
+        }
         if suggested {
             self.suggestion_notify(&a);
         }
@@ -443,8 +599,8 @@ impl Daemon {
     /// library copy with the same hash. Failures are only logged.
     async fn reinstall_skills(&self, a: &Job, workdir: &Path) {
         let wanted: Vec<(String, Option<String>)> = a
-            .agent
-            .iter()
+            .agent()
+            .into_iter()
             .flat_map(|g| &g.skills)
             .filter(|s| s.installed)
             .map(|s| (s.name.clone(), Some(s.sha256.clone())))

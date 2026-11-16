@@ -2,6 +2,7 @@
 //! files written into the job's `.xherd/`. Repository and git checks run in
 //! the daemon.
 
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -36,6 +37,10 @@ pub struct NewJob {
     /// are defaults for the fields below.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Stage → saved agent (id or name) for stages of the workflow that the
+    /// request gives its own agent, over the stage assignments (D26, R37).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, String>,
     #[serde(default)]
     pub base: Option<String>,
     /// Flow of the built-in pack, or `none` (default `feature`).
@@ -282,18 +287,18 @@ pub fn instructions_md(a: &Job, repo_instructions: Option<&str>) -> String {
         format!("## Repo instructions\n\nFrom this repository's xherd profile:\n\n{t}\n\n")
     });
     // The saved agent's text comes after the repository's (#141, R19).
-    let repo = match a.agent.as_ref().and_then(|g| g.instructions.as_deref()) {
+    let repo = match a.agent().and_then(|g| g.instructions.as_deref()) {
         Some(t) if !t.trim().is_empty() => format!(
             "{repo}## Agent instructions\n\nFrom the saved agent {}:\n\n{}\n\n",
-            a.agent.as_ref().map_or("", |g| g.name.as_str()),
+            a.agent().map_or("", |g| g.name.as_str()),
             t.trim()
         ),
         _ => repo,
     };
-    let repo = match a.agent.as_ref().and_then(|g| g.memory.as_deref()) {
+    let repo = match a.agent().and_then(|g| g.memory.as_deref()) {
         Some(t) if !t.trim().is_empty() => format!(
             "{repo}## Agent memory\n\nWhat the saved agent {} remembers from earlier jobs:\n\n{}\n\n",
-            a.agent.as_ref().map_or("", |g| g.name.as_str()),
+            a.agent().map_or("", |g| g.name.as_str()),
             t.trim()
         ),
         _ => repo,
@@ -363,6 +368,7 @@ mod tests {
             slug: None,
             repo: "/r".into(),
             agent: None,
+            agents: Default::default(),
             base: None,
             flow: None,
             prompt: None,

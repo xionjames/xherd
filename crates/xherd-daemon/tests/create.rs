@@ -93,6 +93,7 @@ fn req(t: &T, key: &str) -> NewJob {
         slug: None,
         repo: t.repo.path().to_string_lossy().into_owned(),
         agent: None,
+        agents: Default::default(),
         base: None,
         flow: None,
         prompt: Some("add login".into()),
@@ -566,6 +567,7 @@ async fn refuses_without_a_runtime_plugin() {
         slug: None,
         repo: repo.to_string_lossy().into_owned(),
         agent: None,
+        agents: Default::default(),
         base: None,
         flow: None,
         prompt: None,
@@ -922,7 +924,7 @@ async fn a_job_from_an_agent_keeps_a_snapshot_and_its_instructions() {
         (j.autonomy, j.permission_mode),
         (Autonomy::Important, Some(PermissionMode::Auto))
     );
-    let snap = j.agent.clone().unwrap();
+    let snap = j.agent().cloned().unwrap();
     assert_eq!(
         (snap.id.as_str(), snap.name.as_str(), snap.version),
         (def.id.as_str(), "rev", 1)
@@ -948,7 +950,7 @@ async fn a_job_from_an_agent_keeps_a_snapshot_and_its_instructions() {
     v2.autonomy = Some(Autonomy::Ask);
     t.d.update_agent("rev", v2).await.unwrap();
     let again = t.d.action(&j.name, UserAction::Get).await.unwrap();
-    assert_eq!(again.agent.unwrap().version, 1);
+    assert_eq!(again.agent().unwrap().version, 1);
     assert_eq!(again.autonomy, Autonomy::Important);
     // the agent now sees its jobs
     let v = t.d.agent("rev").await.unwrap();
@@ -978,7 +980,7 @@ async fn an_agent_job_is_refused_when_the_agent_cannot_start_it() {
     // an agent has no repository of its own: the request names one
     r.repo = t.repo.path().to_string_lossy().into_owned();
     r.name = "from-rev".into();
-    assert_eq!(t.d.new_job(r).await.unwrap().agent.unwrap().name, "rev");
+    assert_eq!(t.d.new_job(r).await.unwrap().agent().unwrap().name, "rev");
 }
 
 #[tokio::test]
@@ -1133,7 +1135,7 @@ async fn an_agents_skills_are_copied_and_kept_out_of_git() {
     );
 
     // recorded on the job, hash included
-    let skills = j.agent.as_ref().unwrap().skills.clone();
+    let skills = j.agent().unwrap().skills.clone();
     assert_eq!(skills.len(), 2);
     assert!(skills.iter().all(|s| s.installed && s.skipped.is_none()));
     assert_eq!(
@@ -1142,7 +1144,7 @@ async fn an_agents_skills_are_copied_and_kept_out_of_git() {
     );
     // and stored: the next read of the job has it
     let again = t.d.action(&j.name, UserAction::Get).await.unwrap();
-    assert_eq!(again.agent.unwrap().skills, skills);
+    assert_eq!(again.agent().unwrap().skills, skills);
 
     // git sees nothing, in the worktree or in the main checkout
     for dir in [wt, t.repo.path()] {
@@ -1190,7 +1192,7 @@ async fn a_skill_the_repository_already_has_is_left_alone() {
     );
     assert!(!wt.join(".claude/skills/lint-fix/.gitignore").exists());
     assert!(wt.join(".claude/skills/other/SKILL.md").is_file());
-    let skills = j.agent.clone().unwrap().skills;
+    let skills = j.agent().cloned().unwrap().skills;
     assert_eq!(
         (skills[0].installed, skills[0].skipped.as_deref()),
         (false, Some("the repository has its own"))
@@ -1218,7 +1220,7 @@ async fn a_runtime_without_a_skill_folder_skips_them_and_still_creates_the_job()
             .join(".opencode/skills/lint-fix/SKILL.md")
             .is_file()
     );
-    assert!(j.agent.unwrap().skills[0].installed);
+    assert!(j.agent().unwrap().skills[0].installed);
 
     let t = setup_with(|o| {
         let rt = o
@@ -1241,7 +1243,7 @@ async fn a_runtime_without_a_skill_folder_skips_them_and_still_creates_the_job()
     let j = t.d.new_agent_job("oc", from_agent(&t, "oc")).await.unwrap();
     let wt = worktree(&j);
     assert!(!wt.join(".opencode/skills").exists());
-    let s = j.agent.unwrap().skills;
+    let s = j.agent().unwrap().skills.clone();
     assert_eq!(s.len(), 1);
     assert_eq!(
         (
@@ -1263,7 +1265,7 @@ async fn agent_memory_is_copied_into_the_job_when_it_is_created() {
         t.d.new_agent_job("mem", from_agent(&t, "mem"))
             .await
             .unwrap();
-    assert!(first.agent.as_ref().unwrap().memory.is_none());
+    assert!(first.agent().unwrap().memory.is_none());
     let md = |j: &xherd_core::Job| {
         std::fs::read_to_string(
             Path::new(j.workdir.as_deref().unwrap()).join(".xherd/instructions.md"),
@@ -1287,7 +1289,7 @@ async fn agent_memory_is_copied_into_the_job_when_it_is_created() {
     assert_eq!(v["version"], 2);
     let again = t.d.action(&second.name, UserAction::Get).await.unwrap();
     assert_eq!(
-        again.agent.unwrap().memory.as_deref(),
+        again.agent().unwrap().memory.as_deref(),
         Some("Tests live in qa/.")
     );
     // too long, and unknown agents
@@ -1338,4 +1340,147 @@ async fn a_different_setup_does_not_count_for_the_third_job_rule() {
         let j = t.d.new_job(r).await.unwrap();
         assert!(j.suggestion.is_none(), "{n}");
     }
+}
+
+// ---- several agents in one job (#141, D26, T23) ----
+
+fn assign(stage: &str, agent: &str, human: bool) -> xherd_core::resolve::Assignment {
+    xherd_core::resolve::Assignment {
+        stage: stage.into(),
+        agent_id: agent.into(),
+        human,
+    }
+}
+
+#[tokio::test]
+async fn a_job_bakes_every_agent_of_its_workflow_and_starts_on_the_first_stages() {
+    let t = setup().await;
+    let dev = t.d.create_agent(saved("dev")).await.unwrap().def;
+    let arch = t.d.create_agent(saved("architect")).await.unwrap().def;
+    let rev = t.d.create_agent(saved("reviewer")).await.unwrap().def;
+    t.d.set_assignments(
+        "xherd",
+        "feature",
+        vec![
+            assign("design", "architect", false),
+            assign("review", "reviewer", true),
+        ],
+    )
+    .await
+    .unwrap();
+    // `--agent dev` fills the unassigned stages (before the previous one);
+    // the request gives `ship` its own agent.
+    let mut r = from_agent(&t, "dev");
+    r.name = "multi".into();
+    r.agents.insert("ship".into(), "architect".into());
+    let j = t.d.new_job(r).await.unwrap();
+    let at = |s: &str| j.stage_agents[s].agent.as_str();
+    assert_eq!(at("spec"), dev.id);
+    assert_eq!(at("design"), arch.id);
+    assert_eq!(at("tasks"), dev.id);
+    assert_eq!(at("implement"), dev.id);
+    assert_eq!(at("review"), rev.id);
+    assert_eq!(at("ship"), arch.id);
+    assert!(j.stage_agents["review"].human && !j.stage_agents["design"].human);
+    assert_eq!(j.default_agent.as_deref(), Some(dev.id.as_str()));
+    assert_eq!(j.current_agent.as_deref(), Some(dev.id.as_str()));
+    assert_eq!(j.agents.len(), 3);
+    // each agent carries what it resolved to
+    let g = &j.agents[&rev.id];
+    assert_eq!(g.runtime, "claude-code");
+    assert_eq!(g.autonomy, Some(Autonomy::Important));
+    assert_eq!(g.permission_mode, Some(PermissionMode::Auto));
+    assert!(!g.launch.is_empty() && !g.fell_back);
+    // the job starts as its first stage's agent
+    assert_eq!(j.autonomy, Autonomy::Important);
+    assert_eq!(j.launch.as_deref(), Some(&j.agent().unwrap().launch[..]));
+    // every agent sees the job
+    for a in ["dev", "architect", "reviewer"] {
+        assert_eq!(t.d.agent_jobs(a).await.unwrap().len(), 1, "{a}");
+    }
+}
+
+#[tokio::test]
+async fn without_a_default_an_unassigned_stage_follows_the_one_before() {
+    let t = setup().await;
+    let arch = t.d.create_agent(saved("architect")).await.unwrap().def;
+    t.d.set_assignments(
+        "xherd",
+        "feature",
+        vec![assign("design", "architect", false)],
+    )
+    .await
+    .unwrap();
+    let mut r = req(&t, "A-2");
+    r.name = "later".into();
+    r.ticket = None;
+    let j = t.d.new_job(r).await.unwrap();
+    // `spec` has no agent: the session starts plain, the agent comes at design
+    assert!(!j.stage_agents.contains_key("spec"));
+    assert_eq!(j.stage_agents["design"].agent, arch.id);
+    assert_eq!(j.stage_agents["tasks"].agent, arch.id);
+    assert_eq!(j.stage_agents["review"].agent, arch.id);
+    assert_eq!(j.current_agent, None);
+    assert_eq!(j.default_agent, None);
+    assert!(j.agent().is_none() && j.agents.len() == 1);
+    assert_eq!(j.autonomy, Autonomy::Ask);
+}
+
+#[tokio::test]
+async fn an_agent_on_its_fallback_runtime_is_recorded_once() {
+    let t = setup().await;
+    let mut d = saved("flaky");
+    d.runtime = "opencode".into();
+    d.fallback_runtime = Some("claude-code".into());
+    t.d.create_agent(d).await.unwrap();
+    // the preferred runtime works: no fallback
+    let mut r = from_agent(&t, "flaky");
+    r.name = "first".into();
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.runtime.as_deref(), Some("opencode"));
+    assert!(!a.agent().unwrap().fell_back);
+    // switched off: the fallback runs it
+    let off = t.d.save_config(
+        serde_json::from_value(serde_json::json!({"disabledPlugins": ["opencode"]})).unwrap(),
+    );
+    assert!(off.is_ok(), "{:?}", off.err().map(|e| e.message));
+    let mut r = from_agent(&t, "flaky");
+    r.name = "second".into();
+    let b = t.d.new_job(r).await.unwrap();
+    assert_eq!(b.runtime.as_deref(), Some("claude-code"));
+    let g = b.agent().unwrap();
+    assert!(g.fell_back && g.runtime == "claude-code");
+    let ev = t.d.store.events(&b.id, 20).await.unwrap();
+    assert_eq!(ev.iter().filter(|e| e.kind == "agent-fallback").count(), 1);
+    assert!(
+        t.d.store
+            .events(&a.id, 20)
+            .await
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != "agent-fallback")
+    );
+}
+
+#[tokio::test]
+async fn agents_on_different_runtimes_and_unknown_stages_are_refused() {
+    let t = setup().await;
+    t.d.create_agent(saved("dev")).await.unwrap();
+    let mut oc = saved("oc");
+    oc.runtime = "opencode".into();
+    t.d.create_agent(oc).await.unwrap();
+    let mut r = from_agent(&t, "dev");
+    r.name = "mixed".into();
+    r.agents.insert("review".into(), "oc".into());
+    assert_eq!(t.d.new_job(r).await.unwrap_err().code, "mixed_runtime");
+    let mut r = from_agent(&t, "dev");
+    r.name = "nostage".into();
+    r.agents.insert("deploy".into(), "dev".into());
+    assert_eq!(t.d.new_job(r).await.unwrap_err().code, "unknown_stage");
+    let mut r = from_agent(&t, "dev");
+    r.name = "ghost".into();
+    r.agents.insert("review".into(), "nobody".into());
+    assert_eq!(t.d.new_job(r).await.unwrap_err().code, "unknown_agent");
+    // nothing was left behind by the refused ones
+    assert!(t.d.store.list_jobs().await.unwrap().is_empty());
 }

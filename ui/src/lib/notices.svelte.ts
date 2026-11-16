@@ -4,6 +4,7 @@
 import { go } from './router.svelte';
 import { jobByName } from './store.svelte';
 import type { Job } from './types';
+import { hasAgents } from './agents';
 
 export interface Notice { key: string; jobId: string; kind: string; text: string; at: number; read: boolean }
 
@@ -92,7 +93,7 @@ const over: Record<string, (a: Job) => boolean> = {
   gate: (a) => !a.gate || a.status === 'running',
   blocked: (a) => a.status !== 'blocked',
   idle: (a) => a.status !== 'idle',
-  suggestion: (a) => !a.suggestion || a.suggestion.dismissed || !!a.agent,
+  suggestion: (a) => !a.suggestion || a.suggestion.dismissed || hasAgents(a),
 };
 
 /** Marks read the agent's notices that its new state has settled. */

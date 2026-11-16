@@ -153,7 +153,7 @@ impl Supervisor {
     fn register(&mut self, a: Job) {
         let entry = Entry {
             tx: actor::spawn(a.clone(), self.env.clone()),
-            agent: a.agent.as_ref().map(|g| g.id.clone()),
+            agent: a.agent().map(|g| g.id.clone()),
             name: a.name.clone(),
             ticket_key: a.ticket_key().map(str::to_string),
             status: a.status,

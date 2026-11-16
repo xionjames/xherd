@@ -16,7 +16,7 @@
 
   // Status, live jobs and the last job come from the jobs: fetch again when
   // a job of an agent changes state (agent edits arrive as a change message).
-  const signature = $derived((app.state?.jobs ?? []).map((j) => `${j.id}:${j.status}:${j.agent?.id ?? ''}`).join('|'));
+  const signature = $derived((app.state?.jobs ?? []).map((j) => `${j.id}:${j.status}:${j.currentAgent ?? ''}:${Object.keys(j.agents ?? {}).join(',')}`).join('|'));
   $effect(() => {
     signature;
     reloadAgents();

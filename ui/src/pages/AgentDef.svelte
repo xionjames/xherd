@@ -19,7 +19,7 @@
   import { runtimes, runtimeLabel } from '../lib/runtimes';
   import { canChooseModel, validModel } from '../lib/models';
   import { agoText } from '../lib/format';
-  import { STATUS_LABEL, fromForm, profileMarks, toForm, versionDiff, type AgentForm, type ProfileLimits } from '../lib/agents';
+  import { STATUS_LABEL, fromForm, profileMarks, toForm, usesAgent, versionDiff, type AgentForm, type ProfileLimits } from '../lib/agents';
   import type { AgentDef } from '../lib/types';
 
   let { name }: { name: string } = $props();
@@ -141,7 +141,7 @@
   }
 
   // ---- jobs and versions ----------------------------------------------------
-  const jobs = $derived(agent ? (app.state?.jobs ?? []).filter((j) => j.agent?.id === agent.id).sort((a, b) => b.createdAt - a.createdAt) : []);
+  const jobs = $derived(agent ? (app.state?.jobs ?? []).filter((j) => usesAgent(j, agent.id)).sort((a, b) => b.createdAt - a.createdAt) : []);
 
   let versions = $state<AgentDef[] | null>(null);
   $effect(() => {
@@ -287,7 +287,7 @@
                 <tr class="hov" onclick={() => go(`/jobs/${j.name}`)}>
                   <td><a class="mono" href={href(`/jobs/${j.name}`)}>{j.name}</a></td>
                   <td><StatusPill agent={j} /></td>
-                  <td class="hide-sm num">v{j.agent?.version}{#if agent && j.agent && j.agent.version < agent.version}<span class="muted"> (now v{agent.version})</span>{/if}</td>
+                  <td class="hide-sm num">v{agent ? j.agents?.[agent.id]?.version : ''}{#if agent && j.agents?.[agent.id] && j.agents[agent.id].version < agent.version}<span class="muted"> (now v{agent.version})</span>{/if}</td>
                   <td class="r muted num">{agoText(j.createdAt)}</td>
                 </tr>
               {/each}

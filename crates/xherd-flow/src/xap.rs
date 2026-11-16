@@ -713,12 +713,13 @@ pub fn apply(
                 file: f.to_string(),
                 reason: reason.trim().to_string(),
                 at: now,
+                agent: None,
             });
             Ok(true)
         }
 
         XapCmd::AgentMemoryPropose { file, reason } => {
-            if a.agent.is_none() {
+            if a.agents.is_empty() {
                 return Err(refuse(
                     "no_agent",
                     "this job was not started from a saved agent: there is no agent memory",
@@ -748,6 +749,7 @@ pub fn apply(
                 file: f.to_string(),
                 reason: reason.trim().to_string(),
                 at: now,
+                agent: a.current_agent.clone(),
             });
             Ok(true)
         }
@@ -757,7 +759,7 @@ pub fn apply(
             description,
             instructions_file,
         } => {
-            if a.agent.is_some() {
+            if !a.agents.is_empty() {
                 return Err(refuse(
                     "has_agent",
                     "this job already started from a saved agent: there is nothing to propose",

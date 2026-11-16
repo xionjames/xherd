@@ -10,7 +10,7 @@
   import { href, route, go } from '../lib/router.svelte';
   import Seg from './Seg.svelte';
   import { app } from '../lib/store.svelte';
-  import { agentLane, agentLaneOrder, waitsForAgent } from '../lib/agents';
+  import { agentLane, agentLaneOrder, jobAgent, waitsForAgent } from '../lib/agents';
   import { ago, repoName, shortBase } from '../lib/format';
   import { stageNow } from '../lib/flow';
   import type { Job, FlowInfo } from '../lib/types';
@@ -65,7 +65,7 @@
                       <AgentDot agent={a} />
                       <div class="wrap-any">
                         <a class="mono nyname" href={href(`/jobs/${a.name}`)}>{a.name}</a> <TicketPill ticket={a.ticket} />
-                        <div class="hint">{repoName(a)} · {a.flow ?? 'no workflow'}{#if a.agent && !byAgent} · agent {a.agent.name}{/if}</div>
+                        <div class="hint">{repoName(a)} · {a.flow ?? 'no workflow'}{#if jobAgent(a) && !byAgent} · agent {jobAgent(a)?.name}{/if}</div>
                       </div>
                     </div>
                   </td>

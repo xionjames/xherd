@@ -741,7 +741,7 @@ impl Actor {
     /// Offer to save this job's setup as an agent (R30): once, for a job with
     /// no agent, while `suggestAgents` is on. One notice, never a modal.
     fn offer_agent(&mut self, reason: &str) {
-        if self.job.agent.is_some()
+        if !self.job.agents.is_empty()
             || self.job.suggestion.is_some()
             || !self.env.settings.get().suggest_agents
         {
@@ -762,7 +762,7 @@ impl Actor {
     /// Only jobs without an agent: those are the ones that may become one.
     async fn keep_note(&self, text: &str) {
         let text = text.trim();
-        if self.job.agent.is_some() || text.is_empty() {
+        if !self.job.agents.is_empty() || text.is_empty() {
             return;
         }
         if let Err(e) = self
@@ -779,7 +779,7 @@ impl Actor {
     /// the ship prompt's agent draft. Only the user's own texts; ticket and
     /// PR text never go in.
     async fn write_user_notes(&self) {
-        if self.job.agent.is_some() {
+        if !self.job.agents.is_empty() {
             return;
         }
         let Ok(wd) = self.workdir() else {
@@ -1203,7 +1203,7 @@ impl Actor {
         }
         // Recorded per saved agent (R24), shown but not enforced.
         if delta > 0
-            && let Some(a) = &self.job.agent
+            && let Some(a) = self.job.agent()
             && let Err(e) = self
                 .env
                 .store
@@ -1688,7 +1688,8 @@ impl Actor {
                 job_token_budget: st.job_token_budget,
             },
             self.profile().await.as_ref(),
-            self.job.agent.as_ref(),
+            self.job.agent(),
+            &self.job.agents,
         )
     }
 
@@ -2270,14 +2271,15 @@ impl Actor {
                 "user.mark-done"
             }
             UserAction::AttachAgent { snapshot } => {
-                if self.job.agent.is_some() {
+                if !self.job.agents.is_empty() {
                     return Err(refuse(
                         "has_agent",
                         format!("{} already belongs to an agent", self.job.name),
                     ));
                 }
                 payload = Some(json!({"agent": snapshot.id, "version": snapshot.version}));
-                self.job.agent = Some((**snapshot).clone());
+                self.job.set_agent((**snapshot).clone());
+                self.job.pinned = true;
                 self.job.suggestion = None;
                 self.job.agent_draft = None;
                 "user.attach-agent"

@@ -93,6 +93,9 @@ enum Cmd {
         /// Start from a saved agent (`xherd agent ls`): its settings are the defaults for the flags above.
         #[arg(long)]
         agent: Option<String>,
+        /// Give one stage of the workflow its own agent: `design=architect` (repeatable; over the workflow's assignments).
+        #[arg(long = "stage-agent", value_name = "STAGE=AGENT", value_parser = parse_stage_agent)]
+        stage_agent: Vec<(String, String)>,
         prompt: Option<String>,
     },
     /// Saved agents: a named, versioned setup that jobs start from.
@@ -410,6 +413,7 @@ fn main() -> ExitCode {
             runtime,
             model,
             agent,
+            stage_agent,
             prompt,
         } => new_job(
             repo,
@@ -420,6 +424,7 @@ fn main() -> ExitCode {
                 slug: None,
                 repo: String::new(),
                 agent,
+                agents: stage_agent.into_iter().collect(),
                 base,
                 flow,
                 prompt,
@@ -817,13 +822,32 @@ fn ls() -> i32 {
 
 /// `xherd ls` as text: each column as wide as its longest value, the
 /// runtime's session id cut to 8 characters (its full form is a UUID).
+/// `--stage-agent design=architect`.
+fn parse_stage_agent(s: &str) -> Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((stage, agent)) if !stage.trim().is_empty() && !agent.trim().is_empty() => {
+            Ok((stage.trim().to_string(), agent.trim().to_string()))
+        }
+        _ => Err("expected STAGE=AGENT, like design=architect".into()),
+    }
+}
+
+/// The saved agent a job runs with now, by name (`-` when none).
+fn current_agent_name(job: &Value) -> String {
+    job["currentAgent"]
+        .as_str()
+        .and_then(|id| job["agents"][id]["name"].as_str())
+        .unwrap_or("-")
+        .to_string()
+}
+
 fn ls_table(agents: &[Value]) -> String {
     let mut rows = vec![["JOB", "AGENT", "STATUS", "SESSION", "GATE / PR"].map(String::from)];
     for a in agents {
         let session = a["session"].as_str().unwrap_or("-");
         rows.push([
             a["name"].as_str().unwrap_or("?").to_string(),
-            a["agent"]["name"].as_str().unwrap_or("-").to_string(),
+            current_agent_name(a),
             a["status"].as_str().unwrap_or("?").to_string(),
             session.chars().take(8).collect(),
             gate_or_pr(a),
@@ -1063,7 +1087,7 @@ mod tests {
     fn ls_columns_fit_long_names_and_sessions() {
         let agents = [
             serde_json::json!({"name": "SHOP-151-order-export-csv", "status": "waiting-input",
-                "agent": {"id": "a1", "name": "reviewer"},
+                "agents": {"a1": {"id": "a1", "name": "reviewer"}}, "currentAgent": "a1",
                 "session": "5c0e9f1a-2b7d-4e8a-9f3c-1d2e3f4a5b6c",
                 "gate": {"kind": "commit", "id": "C02", "files": ["a.ts"]}}),
             serde_json::json!({"name": "SHOP-9-x", "status": "paused"}),
