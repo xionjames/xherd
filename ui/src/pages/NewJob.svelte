@@ -1,10 +1,10 @@
 <script lang="ts">
   // New agent (POST /jobs): a name, the workflow, an optional ticket, the
   // repository and instructions; the rest under "More options" (#114, #115).
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { get, post } from '../lib/api';
   import { upsertJob, app } from '../lib/store.svelte';
-  import { go, href } from '../lib/router.svelte';
+  import { go, href, route } from '../lib/router.svelte';
   import { showError } from '../lib/errors.svelte';
   import type { Job } from '../lib/types';
   import PageHead from '../components/PageHead.svelte';
@@ -14,12 +14,45 @@
   import { runtimes, runtimeLabel } from '../lib/runtimes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
+  import { FORM_DEFAULTS, fillFromAgent, pickable, unmark, type FormField } from '../lib/agents';
 
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
   let f = $state({ name: '', ticket: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
   let busy = $state(false);
+
+  // Agent (R23): the first choice. It fills the fields it sets and marks them
+  // "from agent"; each can still be changed for this job only. The last
+  // choice is remembered in this browser.
+  const AGENT_KEY = 'xherd.newJob.agent';
+  const agents = $derived((app.state?.agents ?? []).filter(pickable));
+  let agentName = $state('');
+  let marks = $state<FormField[]>([]);
+  const agent = $derived(agents.find((a) => a.name === agentName));
+  const from = (k: FormField) => marks.includes(k);
+  const edited = (k: FormField) => { marks = unmark(marks, k); };
+  function pickAgent(name: string) {
+    agentName = name;
+    try { localStorage.setItem(AGENT_KEY, name); } catch { /* private mode */ }
+    const r = fillFromAgent(agents.find((a) => a.name === name), { flow: f.flow, repo: f.repo, base: f.base, runtime: f.runtime, model: f.model, autonomy: f.autonomy, mode: f.mode }, marks);
+    f.flow = r.form.flow; f.repo = r.form.repo; f.base = r.form.base; f.runtime = r.form.runtime;
+    f.model = r.form.model; f.autonomy = r.form.autonomy; f.mode = r.form.mode;
+    marks = r.marks;
+    autonomyTouched = false;
+    if (f.repo.trim()) resolve();
+  }
+  let agentRestored = false;
+  $effect(() => {
+    // Wait for the list: /state may still be loading on a direct visit.
+    if (agentRestored || !app.state) return;
+    agentRestored = true;
+    let want = route.query.get('agent') ?? '';
+    if (!want) { try { want = localStorage.getItem(AGENT_KEY) ?? ''; } catch { /* private mode */ } }
+    if (want && agents.some((a) => a.name === want)) untrack(() => pickAgent(want));
+  });
   let autonomyTouched = $state(false); // a profile's autonomy fills the selector until the user picks one
   const nameOk = $derived(/^[a-z0-9][a-z0-9-]{0,40}$/.test(f.name));
+  // With an agent the name may be left out: <agent>-<ticket key>, else <agent>-<n> (R21).
+  const nameFine = $derived(nameOk || (!!agent && f.name === ''));
 
   // Ticket: a key or an issue URL; the daemon says which tracker reads it
   // and the key a URL stands for (POST /tickets/resolve).
@@ -57,7 +90,7 @@
     more = (e.currentTarget as HTMLDetailsElement).open;
     try { localStorage.setItem(MORE, more ? '1' : '0'); } catch { /* private mode */ }
   }
-  const moreTouched = $derived(autonomyTouched || !!f.runtime || !!f.mode || !!f.model.trim());
+  const moreTouched = $derived(autonomyTouched || !!f.runtime || !!f.mode || !!f.model.trim() || from('autonomy'));
 
   // Repository: a local path or a remote URL, which the daemon clones into
   // the workspace once and fetches later (POST /repos/resolve).
@@ -89,7 +122,7 @@
       const d = await post<Resolved>('/repos/resolve', { repo: want });
       if (repo.input === want) {
         repo.data = d;
-        if (d.profile?.autonomy && !autonomyTouched) f.autonomy = d.profile.autonomy;
+        if (d.profile?.autonomy && !autonomyTouched && !from('autonomy')) f.autonomy = d.profile.autonomy;
         // A key's tracker can depend on the repository's host.
         if (ticketIn && !isHttp(ticketIn)) resolveTicket();
       }
@@ -119,23 +152,24 @@
     return [f.autonomy, rt ? runtimeLabel(rt) : runtime, ...(canModel && model ? [model] : []), mode].join(' · ');
   });
 
-  const ready = $derived(nameOk && !ticketBad && modelOk && input !== '' && !repoBad && (f.flow !== 'none' || f.prompt.trim() !== ''));
+  const ready = $derived(nameFine && !ticketBad && modelOk && input !== '' && !repoBad && (f.flow !== 'none' || f.prompt.trim() !== ''));
 
   async function create(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
     const r = await resolve();
     if (!r) { busy = false; return; }
-    const body: Record<string, string> = { name: f.name, repo: r.path, flow: f.flow };
+    const body: Record<string, string> = { repo: r.path, flow: f.flow };
+    if (f.name) body.name = f.name;
     if (ticketIn) body.ticket = ticketIn;
     if (f.base.trim()) body.base = f.base.trim();
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
-    body.autonomy = f.autonomy;
+    if (!agent || autonomyTouched || from('autonomy')) body.autonomy = f.autonomy;
     if (f.mode) body.permissionMode = f.mode;
     if (f.runtime) body.runtime = f.runtime;
     if (canModel && f.model.trim()) body.model = f.model.trim();
     try {
-      const r = await post<{ job: Job }>('/jobs', body);
+      const r = await post<{ job: Job }>(agent ? `/agents/${agent.id}/jobs` : '/jobs', body);
       upsertJob(r.job);
       go(`/jobs/${r.job.name}`);
     } catch (err) {
@@ -149,15 +183,25 @@
 <PageHead width="narrow" title="New job" sub="One job, one worktree, one branch." />
 <form class="stack narrow" onsubmit={create}>
   <Panel>
+    <label class="f">Agent
+      <select value={agentName} onchange={(e) => pickAgent(e.currentTarget.value)}>
+        <option value="">No agent</option>
+        {#each agents as a (a.id)}<option value={a.name}>{a.name}{a.description ? ` · ${a.description}` : ''}</option>{/each}
+      </select>
+      {#if agent}<span class="hint">Fields marked <span class="frm">from agent</span> come from <a href={href(`/agents/${agent.name}`)}>{agent.name}</a> v{agent.version}; change any of them for this job only.
+        {#if agent.liveJobs >= agent.maxLiveJobs}It has {agent.liveJobs} live job{agent.liveJobs === 1 ? '' : 's'} (limit {agent.maxLiveJobs}): this one waits in the queue.{/if}</span>
+      {:else if agents.length}<span class="hint">Start from a saved setup, or none.</span>
+      {:else}<span class="hint">No saved agents yet. <a href={href('/agents/new')}>Create one</a>.</span>{/if}</label>
     <div class="g2">
       <label class="f">Name
-        <input class="mono" bind:value={f.name} placeholder="refund-retry" required autocomplete="off"
+        <input class="mono" bind:value={f.name} placeholder={agent ? `${agent.name}-1` : 'refund-retry'} required={!agent} autocomplete="off"
           oninput={() => (f.name = f.name.toLowerCase())} />
         {#if f.name && !nameOk}<span class="hint err">Lowercase letters, digits and -, up to 41.</span>
         {:else if f.name}<span class="hint">Branch <span class="mono">{branch}</span></span>
+        {:else if agent}<span class="hint">Empty: <span class="mono">{agent.name}</span>-ticket key, else a number.</span>
         {:else}<span class="hint">Job, session and worktree folder.</span>{/if}</label>
-      <div class="f">Workflow
-        <Seg label="Workflow" value={f.flow} onchange={(v) => (f.flow = v)}
+      <div class="f">Workflow {#if from('flow')}<span class="frm">from agent</span>{/if}
+        <Seg label="Workflow" value={f.flow} onchange={(v) => { f.flow = v; edited('flow'); }}
           options={[...flows, 'none'].map((fl) => ({ value: fl, label: fl === 'none' ? 'No workflow' : fl }))} /></div>
     </div>
     <label class="f">Ticket (optional)
@@ -170,8 +214,8 @@
         {:else}<span class="hint"><span class="mono">{tk.data.key}</span> · no issue tracker reads this key: it names the branch only.</span>{/if}
       {:else}<span class="hint">An issue URL or a key. Its key starts the branch name.</span>{/if}</label>
     <div class="g2">
-      <label class="f">Repository: URL or local path
-        <input class="mono" bind:value={f.repo} list="known-repos" required onchange={resolve}
+      <label class="f">Repository: URL or local path {#if from('repo')}<span class="frm">from agent</span>{/if}
+        <input class="mono" bind:value={f.repo} list="known-repos" required onchange={resolve} oninput={() => edited('repo')}
           placeholder="https://github.com/acme/payments-api or /Users/you/xherd/payments-api" />
         <datalist id="known-repos">{#each known as k (k.path)}<option value={k.path}></option>{/each}</datalist>
         {#if repo.busy && repo.input === input}
@@ -184,8 +228,8 @@
         {:else}
           <span class="hint">A URL is cloned into the workspace once and fetched before each new agent.</span>
         {/if}</label>
-      <label class="f">Base branch (optional)
-        <input class="mono" bind:value={f.base} list="repo-branches"
+      <label class="f">Base branch (optional) {#if from('base')}<span class="frm">from agent</span>{/if}
+        <input class="mono" bind:value={f.base} list="repo-branches" oninput={() => edited('base')}
           placeholder={repo.data?.base ?? "origin's default branch"} />
         <datalist id="repo-branches">{#each repo.data?.branches ?? [] as b (b)}<option value={b}></option>{/each}</datalist></label>
     </div>
@@ -198,26 +242,26 @@
     <details class="more" open={more || moreTouched} ontoggle={toggleMore}>
       <summary><span class="mono hint">{summary}{prof ? ` (profile ${prof.name})` : ''}</span><span class="lbl">More options</span></summary>
       <div class="opts">
-      <div class="f">Autonomy
-        <Seg label="Autonomy" value={f.autonomy} onchange={(v) => { autonomyTouched = true; f.autonomy = v; }}
+      <div class="f">Autonomy {#if from('autonomy')}<span class="frm">from agent</span>{/if}
+        <Seg label="Autonomy" value={f.autonomy} onchange={(v) => { autonomyTouched = true; f.autonomy = v; edited('autonomy'); }}
           options={[{ value: 'ask', label: 'ask' }, { value: 'important', label: 'important' }]} />
         <span class="hint">{f.autonomy === 'ask'
           ? 'Every gate waits for you.'
           : 'Design, tasks, review and commit gates are approved by xherd when nothing needs you; spec and ship always wait.'}</span></div>
-      <label class="f">Runtime
-        <select bind:value={f.runtime}>
+      <label class="f">Runtime {#if from('runtime')}<span class="frm">from agent</span>{/if}
+        <select bind:value={f.runtime} onchange={() => edited('runtime')}>
           <option value="">{repo.data?.profile?.runtime ? `${repo.data.profile.runtime} (profile)` : 'Default (Settings)'}</option>
           {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
         </select>
         <span class="hint">The coding agent that runs in the terminal. Set the default in Settings → Gates &amp; autonomy.</span></label>
       {#if canModel}
-        <label class="f">Model (optional)
-          <ModelInput {runtime} bind:value={f.model} placeholder={profileModel ? `${profileModel} (profile)` : 'Default (Settings, else the runtime’s)'} />
+        <label class="f">Model (optional) {#if from('model')}<span class="frm">from agent</span>{/if}
+          <ModelInput {runtime} bind:value={f.model} onchange={() => edited('model')} placeholder={profileModel ? `${profileModel} (profile)` : 'Default (Settings, else the runtime’s)'} />
           {#if !modelOk}<span class="hint err">Letters, digits and . _ : / @ - [ ] only.</span>
           {:else}<span class="hint">Pick one, or Other… for any model {runtime} knows. Set a default per runtime in Settings → Plugins → Options. Each agent can change it later.</span>{/if}</label>
       {/if}
-      <label class="f">Tool permissions
-        <select bind:value={f.mode}>
+      <label class="f">Tool permissions {#if from('mode')}<span class="frm">from agent</span>{/if}
+        <select bind:value={f.mode} onchange={() => edited('mode')}>
           <option value="">{repo.data?.profile?.permissionMode ? `${repo.data.profile.permissionMode} (profile)` : 'Default (Settings)'}</option>
           {#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}
         </select>
@@ -226,12 +270,13 @@
     </details>
     {#snippet foot()}
       <button type="button" class="btn ghost" onclick={() => history.back()}>Cancel</button>
-      <button class="btn primary" disabled={!ready || busy}>{busy && repo.busy ? 'Getting the repository…' : 'Create agent'}</button>
+      <button class="btn primary" disabled={!ready || busy}>{busy && repo.busy ? 'Getting the repository…' : 'Create job'}</button>
     {/snippet}
   </Panel>
 </form>
 
 <style>
+  .frm { font-size: 11px; font-weight: 600; margin-left: 6px; padding: 0 6px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); }
   .more > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; cursor: pointer; list-style: none; }
   .more > summary::-webkit-details-marker { display: none; }
   .more > summary .lbl::after { content: ' ▸'; }

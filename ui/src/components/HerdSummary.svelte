@@ -28,7 +28,7 @@
   const filter = $derived(route.query.get('f') ?? 'all');
   // Switching the filter keeps the layout.
   const setFilter = (id: string) =>
-    go('/', { f: id === 'all' ? undefined : id, layout: route.query.get('layout') ?? undefined });
+    go('/', { f: id === 'all' ? undefined : id, layout: route.query.get('layout') ?? undefined, group: route.query.get('group') ?? undefined });
   const shown = $derived(
     agents
       .filter(FILTERS.find((f) => f[0] === filter)?.[2] ?? (() => true))

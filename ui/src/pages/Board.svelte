@@ -5,7 +5,7 @@
   // place of the implement stage. Fix tasks from a review or the PR carry a
   // tag; a pending task names the tasks it waits on. Where an agent waits for
   // you the card is outlined. Read-only. Filters and swimlanes live in the URL:
-  // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=none|agent|repo|flow`.
+  // `?agent=NAME&repo=NAME&needs=1&finished=1&upcoming=0|1&lanes=none|agent|agent-def|repo|flow`.
   // A flow with several implement-role stages (bugfix: Reproduce, Fix) shows
   // its task list once, in place of the first.
   import PageHead from '../components/PageHead.svelte';
@@ -15,6 +15,7 @@
   import { get } from '../lib/api';
   import { flowOf, steps, stageLabel } from '../lib/flow';
   import { agentHue, agoText, needsYou, repoName, waitsAtGate } from '../lib/format';
+  import { NO_AGENT_LANE } from '../lib/agents';
   import { LANES, TODO_LANE, boardLane, laneOrder, todoLane } from '../lib/board';
   import type { Job, StageInfo, Task } from '../lib/types';
 
@@ -156,7 +157,7 @@
       <label class="f chk"><input type="checkbox" checked={finished} onchange={(e) => go({ finished: e.currentTarget.checked ? '1' : undefined })} /> Finished</label>
     </span>
     <select aria-label="Swimlanes" value={lanes} onchange={(e) => go({ lanes: e.currentTarget.value === 'none' ? undefined : e.currentTarget.value })}>
-      <option value="none">No swimlanes</option><option value="agent">Lanes by agent</option><option value="repo">Lanes by repository</option><option value="flow">Lanes by workflow</option>
+      <option value="none">No swimlanes</option><option value="agent">Lanes by job</option><option value="agent-def">Lanes by agent</option><option value="repo">Lanes by repository</option><option value="flow">Lanes by workflow</option>
     </select>
     <select aria-label="Agent" value={only} onchange={(e) => go({ agent: e.currentTarget.value || undefined })}>
       <option value="">All jobs</option>
@@ -188,7 +189,7 @@
   {:else}
     {#each laneNames as lane (lane)}
       <section class="lane" aria-label={lane || 'Board'}>
-        {#if lane}<h2 class="lh">{#if lanes === 'agent' && lane !== TODO_LANE}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
+        {#if lane}<h2 class="lh">{#if (lanes === 'agent' || lanes === 'agent-def') && lane !== TODO_LANE && lane !== NO_AGENT_LANE}<span class="hue" style:background={agentHue(lane)}></span>{/if}{lane}</h2>{/if}
         <div class="cols" data-show={phoneCol}>
           {#each COLS as [col, name] (col)}
             {@const list = cards.filter((c) => c.lane === lane && c.col === col)}

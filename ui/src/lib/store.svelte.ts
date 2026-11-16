@@ -2,7 +2,7 @@
 // reloaded on every (re)connect (design §13.1).
 import { get } from './api';
 import { setLinkRules } from './links';
-import type { Job, AppState } from './types';
+import type { Job, AppState, AgentView } from './types';
 import { addNotice, settle } from './notices.svelte';
 
 export const app = $state<{
@@ -35,7 +35,7 @@ export function jobByName(idOrName: string): Job | undefined {
   return app.state?.jobs.find((a) => a.id === idOrName || a.name === idOrName);
 }
 
-type WsMsg = { type: 'job'; job: Job } | { type: 'notify'; jobId: string; kind: string; text: string };
+type WsMsg = { type: 'job'; job: Job } | { type: 'agents' } | { type: 'notify'; jobId: string; kind: string; text: string };
 
 let retry = 500;
 let opened = false;
@@ -59,6 +59,7 @@ function connect() {
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data) as WsMsg;
     if (m.type === 'job') upsertJob(m.job);
+    else if (m.type === 'agents') reloadAgents();
     else if (m.type === 'notify') addNotice(m.jobId, m.kind, m.text);
   };
   ws.onclose = () => {
@@ -67,3 +68,16 @@ function connect() {
     retry = Math.min(retry * 2, 10_000);
   };
 }
+
+/** The saved agents changed (`{"type": "agents"}`): fetch the list again. */
+export async function reloadAgents() {
+  try {
+    const r = await get<{ agents: AgentView[] }>('/agents');
+    if (app.state) app.state.agents = r.agents;
+  } catch {
+    // the next full reload brings them
+  }
+}
+
+export const agentByName = (idOrName: string): AgentView | undefined =>
+  app.state?.agents?.find((a) => a.id === idOrName || a.name === idOrName);

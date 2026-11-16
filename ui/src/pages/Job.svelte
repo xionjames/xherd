@@ -21,6 +21,7 @@
   import { MODE_HINT, modes } from '../lib/modes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
+  import { agentOf, changedSince, waitsForAgent } from '../lib/agents';
 
   let { agent }: { agent: Job } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -48,6 +49,11 @@
   }
 
   const flow = $derived(flowOf(agent, app.state?.flows ?? []));
+  // The saved agent this job started from (R23): a link while it exists, plain
+  // text after it was deleted; "changed since" opens the diff of its versions.
+  const def = $derived(agentOf(agent, app.state?.agents));
+  const newer = $derived(changedSince(agent, def));
+  const queuedForAgent = $derived(waitsForAgent(agent, app.state?.agents ?? []));
   const tabs = $derived(agentTabs(agent));
   const fallback = $derived.by(() => {
     const g = agent.gate;
@@ -113,6 +119,10 @@
 
 {#if needsYou(agent)}<YourCallBand {agent} {flow} tabId={tab?.id} />{/if}
 <TicketPrompt {agent} />
+{#if agent.lowered?.length}
+  <Callout tone="info">{#each agent.lowered as l (l.field)}<div>
+    {l.field === 'autonomy' ? 'Autonomy' : 'Tool permissions'} was lowered from <b>{l.from}</b> to <b>{l.to}</b> by the repository profile <b>{l.profile}</b> ("at most").</div>{/each}</Callout>
+{/if}
 
 <header class="hero">
   <div class="htop">
@@ -124,6 +134,11 @@
       <h1 class="hname"><AgentDot {agent} />{agent.name}</h1>
       <div class="hmeta">
         <div class="hfacts">
+          {#if agent.agent}
+            <span>agent {#if def}<a href={href(`/agents/${def.name}`)}>{agent.agent.name}</a>{:else}{agent.agent.name}{/if} <span class="muted">v{agent.agent.version}</span>
+              {#if newer && def}<a class="hint" href={href(`/agents/${def.name}`, { s: 'versions', since: String(agent.agent.version) })} title="This job keeps the settings it started with">· agent changed since this job started (now v{def.version})</a>{/if}
+              {#if queuedForAgent}<span class="hint"> · waits for its agent: {def?.liveJobs} of {def?.maxLiveJobs} live jobs</span>{/if}</span>
+          {/if}
           {#if agent.base}<span class="mono">{agent.branch} ← {shortBase(agent)}</span>{/if}
           <span>{agent.runtime ?? 'claude-code'}</span>
           {#if !canModel && agent.model}<span class="mono">{agent.model}</span>{/if}

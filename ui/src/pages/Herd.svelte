@@ -18,7 +18,7 @@
   const view = $derived(pickView(route.query.get('layout'), app.state?.plugins));
   // The first view is the default and leaves `layout` out; the filter stays.
   const setLayout = (id: string) =>
-    go('/', { f: route.query.get('f') ?? undefined, layout: id === views[0].id ? undefined : id });
+    go('/', { f: route.query.get('f') ?? undefined, layout: id === views[0].id ? undefined : id, group: route.query.get('group') ?? undefined });
   const open = (a: Job) => go(`/jobs/${a.name}`);
 
   // The kill switch (R-032): no handoff notes, nothing new starts.

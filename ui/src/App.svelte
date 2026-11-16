@@ -11,8 +11,10 @@
   import Board from './pages/Board.svelte';
   import Time from './pages/Time.svelte';
   import Todos from './pages/Todos.svelte';
+  import Agents from './pages/Agents.svelte';
+  import AgentDef from './pages/AgentDef.svelte';
   import Callout from './components/Callout.svelte';
-  import { app, start } from './lib/store.svelte';
+  import { app, start, agentByName } from './lib/store.svelte';
   import { route, go } from './lib/router.svelte';
   import { setup, loadChecks, loadConfig, failingRequired } from './lib/setup.svelte';
 
@@ -22,9 +24,13 @@
 
   const jobId = $derived(route.path.match(/^\/jobs\/([^/]+)/)?.[1]);
   const job = $derived(jobId ? app.state?.jobs.find((a) => a.name === jobId || a.id === jobId) : undefined);
-  // Old links: `#/agent/<name>` and `#/agents/<name>` open the job (issue #141).
+  // `#/agents/<name>` is a saved agent (issue #141); `new` is the empty form.
+  const agentName = $derived(route.path.match(/^\/agents\/([^/]+)$/)?.[1]);
+  // Old links: `#/agent/<name>` opens the job, and so does `#/agents/<name>`
+  // when no saved agent has that name.
   $effect(() => {
-    const old = route.path.match(/^\/agents?\/([^/]+)$/)?.[1];
+    const old = route.path.match(/^\/agent\/([^/]+)$/)?.[1]
+      ?? (agentName && agentName !== 'new' && app.state && !agentByName(agentName) && app.state.jobs.some((j) => j.name === agentName) ? agentName : undefined);
     if (old) location.replace(`#/jobs/${old}${route.query.size ? `?${route.query}` : ''}`);
   });
   // Until required checks pass, only Setup and Settings are open.
@@ -56,6 +62,10 @@
       <Board />
     {:else if route.path === '/attention' || route.path === '/review'}
       <Attention />
+    {:else if route.path === '/agents'}
+      <Agents />
+    {:else if agentName}
+      {#key agentName}<AgentDef name={agentName} />{/key}
     {:else if route.path === '/new'}
       <NewJob />
     {:else if route.path === '/'}

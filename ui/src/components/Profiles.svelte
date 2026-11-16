@@ -193,11 +193,12 @@
       </div>
       <div class="grp">
         <header><h3>Autonomy &amp; limits</h3><span class="hint">Empty fields use the global setting.</span></header>
-        <label class="f">Autonomy of new agents
-          <select bind:value={form.autonomy}><option value="">global setting</option><option value="ask">ask</option><option value="important">important</option></select></label>
-        <label class="f">Tool permissions of new agents
+        <label class="f">Autonomy, at most
+          <select bind:value={form.autonomy}><option value="">global setting</option><option value="ask">ask</option><option value="important">important</option></select>
+          <span class="hint">A ceiling: a job or agent that asks for more is lowered to this, also when changed later.</span></label>
+        <label class="f">Tool permissions, at most
           <select bind:value={form.permissionMode}><option value="">global setting</option>{#each modes(!!app.state?.sandbox) as m (m)}<option value={m}>{m}</option>{/each}</select></label>
-        <label class="f">Runtime of new agents
+        <label class="f">Runtime of new jobs
           <select bind:value={form.runtime}><option value="">global setting</option>
             {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
             {#if form.runtime && !runtimes(app.state?.plugins).some((r) => r.name === form?.runtime)}<option value={form.runtime}>{form.runtime} (switched off)</option>{/if}

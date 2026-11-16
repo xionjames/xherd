@@ -93,6 +93,59 @@ export type Gate =
 /** An agent's ticket (#114): a key (`PAY-412`, `#12`), an issue URL, or both. */
 export interface Ticket { key?: string; url?: string }
 
+
+/** What a job keeps of the saved agent it started from (R12). */
+export interface JobAgent {
+  id: string;
+  name: string;
+  version: number;
+  instructions?: string;
+  sensitivePaths?: string[];
+  maxDiffLines?: number;
+  jobTokenBudget?: number;
+  stageOverrides?: Record<string, { human: boolean }>;
+}
+
+/** A value a repo profile's ceiling lowered at creation or since (R12a). */
+export interface Lowered { field: 'autonomy' | 'permissionMode' | string; from: string; to: string; profile: string }
+
+/** A saved agent (R10): a named, versioned setup that jobs start from. */
+export interface AgentDef {
+  id: string;
+  name: string;
+  description: string;
+  version: number;
+  runtime: string;
+  models?: Record<string, string>;
+  workflow: { pack: string; flow: string };
+  autonomy?: 'ask' | 'important' | 'never';
+  permissionMode?: import('./modes').PermissionMode;
+  instructions?: string;
+  repo?: string;
+  baseBranch?: string;
+  jobTokenBudget?: number;
+  sensitivePaths?: string[];
+  maxDiffLines?: number;
+  stageOverrides?: Record<string, { human: boolean }>;
+  skills?: string[];
+  maxLiveJobs: number;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number;
+}
+
+export type AgentStatus = 'archived' | 'needs-you' | 'working' | 'idle';
+
+/** `GET /agents` row: the settings plus what is derived from its jobs (R17, R19). */
+export interface AgentView extends AgentDef {
+  status: AgentStatus;
+  /** Why jobs cannot start from it now (R15). */
+  broken?: string;
+  liveJobs: number;
+  lastJob: string | null;
+  tokensToday: number;
+}
+
 export interface Job {
   id: string;
   /** Lowercase slug: what the UI shows, the tmux session and worktree folder. */
@@ -147,6 +200,10 @@ export interface Job {
   worktreeRemovedAt?: number;
   /** The open gate is one autonomy will approve at the next stop (R4): it does not wait for you. */
   autoApprovePending?: boolean;
+  /** The saved agent it started from (R12): a snapshot, so later edits do not change it. */
+  agent?: JobAgent;
+  /** Values the repo profile lowered (R12a). */
+  lowered?: Lowered[];
 }
 
 /** `label`: the pack's own name for the stage ("Fix"), when it sets one. */
@@ -191,6 +248,7 @@ export interface AppState {
   platform: string;
   config: Record<string, unknown>;
   jobs: Job[];
+  agents: AgentView[];
   plugins: PluginInfo[];
   /** Link rules of the enabled tracker plugins. */
   trackerLinks: { plugin: string; pattern: string; url: string }[];

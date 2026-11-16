@@ -11,15 +11,16 @@ You give xherd a ticket. It creates an **job**: a git worktree and a branch for 
 | Screen | What it is for |
 |---|---|
 | **Herd** (home) | Every job: status, stage, progress, tasks. Jobs waiting for you are on top. *By stage* puts them in columns by their current stage, using their workflow's stages (one lane per workflow when the jobs shown use more than one); *Tiles* (a view plugin) and other [Herd view plugins](../extend/plugins.md#herd-view-plugins) add more layouts. *Pause all* is the kill switch |
+| **Agents** | Saved setups that jobs start from ([below](#saved-agents)): status, live jobs, last job, tokens today, *New agent* and *Start job* |
 | **Job page** | One job: the your-call band on top, then tabs (below) |
-| **Board** | Every stage and task of every job as cards in Pending / In progress / Done, plus your TODOs. Swimlanes by job, repository or workflow, filters for one job, one repository, or only what needs you |
+| **Board** | Every stage and task of every job as cards in Pending / In progress / Done, plus your TODOs. Swimlanes by job, saved agent, repository or workflow, filters for one job, one repository, or only what needs you |
 | **Needs attention** (✋ and a count in the bar) | Jobs waiting for you and TODOs that are due or whose check failed: only these raise the ✋ and the count. Below them, folded, *Approved by xherd*: the approvals xherd made for you that you have not marked seen, each linking to what was approved |
 | **TODOs** | Reminders and condition checks (below) |
 | **Time** | Job time and your time per day and ticket, cycle time, review rounds and rework |
 | **Settings** | General, Gates & autonomy, Notifications, Open in, Git access, Repo profiles, Backups, Plugins, About |
 | **Setup checks** | What must be in place before jobs can run, each failing check with its fix |
 
-⌘K (Ctrl+K) jumps to a job by name. The bell in the bar keeps the latest notifications.
+The Herd list can be grouped by agent (*Group by*, `?group=agent`). ⌘K (Ctrl+K) jumps to a job by name or ticket, or to a saved agent by name. The bell in the bar keeps the latest notifications.
 
 ## Welcome, plugins and git access
 
@@ -166,6 +167,16 @@ With a tracker plugin on (Jira through `acli`, GitHub issues, GitLab issues), ti
 ## Shared memory
 
 During review, a job may propose an update of the repository's `AGENTS.md` (what later jobs should know about the code). The *Shared memory* tab shows the diff and lets you edit it. Accepting commits `AGENTS.md` (and a `CLAUDE.md` that imports it, if missing) on the job's branch; dismissing drops it. A proposal never blocks the flow.
+
+## Saved agents
+
+An **agent** is a named, versioned setup that jobs start from: runtime and model, workflow, autonomy, tool permissions, instructions, a default repository and base branch, guardrails (a token budget per job, a diff limit, sensitive paths, stages that always wait for a person) and how many of its jobs may be live at once. Agents → *New agent* (or `xherd agent new`) creates one; its name cannot change later.
+
+- **Start a job from it**: *Start job*, or the **Agent** picker at the top of *New job* (the last choice is remembered). The picker fills the fields the agent sets and marks them *from agent*; change any of them for this job only. The name may then be left empty: the job is `<agent>-<ticket key>`, else `<agent>-<n>`.
+- **Settings** on the agent page edit the form; every save makes a **new version**. The *Versions* tab keeps them all, each with what changed. A job keeps the settings of the version it started with: its page says *agent changed since this job started* and opens the diff.
+- A [repo profile](#repo-profiles) still applies: its autonomy and tool permissions are ceilings (the form says so under the field), its sensitive paths are added to the agent's, and the smaller diff limit and token budget win.
+- **Archive** hides an agent from pickers and keeps its history; its jobs keep working. **Delete** needs no live job; its jobs keep their settings and show its name as plain text. An agent whose runtime or workflow is gone or switched off is marked and cannot start jobs until fixed.
+- With **live jobs at once** reached, more jobs of that agent wait in the queue (*waits for its agent*) while others start.
 
 ## Repo profiles
 
