@@ -83,7 +83,7 @@ Every stage starts a **fresh session** of the runtime. What carries over is `.xh
 When a job stops at a gate, the **your-call band** on its page says what it waits for, with **Approve** and **Request changes** on the tab that holds what you approve.
 
 - **Documents** (the *Spec* tab) render Markdown, with Mermaid diagrams drawn. Click any block, or a list item, to comment on it. Questions the coding agent lists under `## Open questions` get an answer box each. After a change request, the blocks that changed since you read them are marked.
-- **Changes** shows diffs. For a commit waiting for you, the side column starts with *Tasks in this commit*: each task's id, title and the evidence the coding agent gave (for a bug fix, the failing then passing test run). Below it, the side column lists the files of the diff shown, with their +/− counts and a box that filters the list by path; clicking a file jumps to it (on a phone the list is folded behind *Files (N)* above the diff). Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*. A new or changed file over 8 MiB that is not committed yet (a heap dump, a build artefact) is listed with its size but not read.
+- **Changes** shows diffs. For a commit waiting for you, the side column starts with *Tasks in this commit*: each task's id, title and the evidence the coding agent gave (for a bug fix, the failing then passing test run); long evidence is cut to two lines, with *Show all* to open it. Below it, the side column lists the files of the diff shown, with their +/− counts and a box that filters the list by path; clicking a file jumps to it (on a phone the list is folded behind *Files (N)* above the diff). Click a line number to comment on that line. Mark files *Viewed* as you go; a file whose diff changes is un-marked. `.md`, `.html` and image files of the commit being approved have a *Preview*. A new or changed file over 8 MiB that is not committed yet (a heap dump, a build artefact) is listed with its size but not read.
 - **Send N comments** sends every comment, from documents and diffs, as one change request.
 - **Approve** covers exactly what you read: the UI sends the hash of what it showed, and if a file changed since, the approval is refused. Editing an approved document re-opens its gate.
 - At a commit gate you can edit the commit message before approving. If git refuses the commit (a hook fails), the job is asked to fix it.
@@ -97,7 +97,7 @@ If the coding agent asks a question (`xherd ask`), the band shows it with an ans
 | Tab | Shows |
 |---|---|
 | Terminal | The live session. Type into it. Selecting text needs Shift+drag (Option+drag on a Mac) because the runtime takes the mouse. With no session, *Ask* (below) |
-| Tasks | Tasks with status, evidence and dependencies; tasks from a review or PR round are tagged |
+| Tasks | Tasks with status, evidence and dependencies; tasks from a review or PR round are tagged. Long file lists and evidence are cut to two lines, with *Show all* to open them in place |
 | Commits | Proposed and made commits, with message and files |
 | Ticket | The ticket and its comments, read from the tracker, and posting a summary (below) |
 | Pull request | State, checks (with links to the runs), conflicts, reviewers, and the PR comment round |

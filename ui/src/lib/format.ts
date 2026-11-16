@@ -88,3 +88,8 @@ export function span(ms: number): string {
   const h = Math.floor(m / 60);
   return h < 24 ? `${h}h ${String(m % 60).padStart(2, '0')}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
 }
+
+/** Whether a cell's text may be cut to two lines, so it gets a Show all button (heuristic). */
+export function needsExpand(text?: string): boolean {
+  return !!text && (text.length > 120 || text.includes('\n'));
+}

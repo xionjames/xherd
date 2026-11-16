@@ -280,6 +280,9 @@ label.f.chk.top { align-items: flex-start; }
 .gtitle.open h2, .gtitle.open p { -webkit-line-clamp: unset; display: block; }
 .gtoggle { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--ink-2); font-size: 12px; cursor: pointer; text-decoration: underline; }
 .gtoggle:hover { color: var(--ink); }
+.clamp { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.clamp.open { -webkit-line-clamp: unset; display: block; white-space: pre-wrap; }
+.pill.nowrap { white-space: nowrap; }
 .gwhy { font-size: 12.5px; color: var(--ink); font-weight: 500; }
 .gwhy::before { content: "▸ "; color: var(--gate); }
 .gact { flex: 0 1 640px; display: flex; gap: 8px; align-items: center; justify-content: flex-end; min-width: 0; }

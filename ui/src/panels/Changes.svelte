@@ -10,6 +10,7 @@
   import DiffLines, { lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
   import FilePath from '../components/FilePath.svelte';
+  import Clamp from '../components/Clamp.svelte';
   import Seg from '../components/Seg.svelte';
   import FileNav from '../components/FileNav.svelte';
   import { tick } from 'svelte';
@@ -207,7 +208,7 @@
             {#each commitTasks as t (t.id)}
               <li>
                 <span class="mono">{t.id}</span> {t.title ?? ''}
-                {#if t.evidence}<div class="muted ev">{t.evidence}</div>{/if}
+                {#if t.evidence}<div class="muted ev"><Clamp text={t.evidence} /></div>{/if}
               </li>
             {/each}
           </ul>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { needsYou, waitsAtGate } from './format';
+import { needsExpand, needsYou, waitsAtGate } from './format';
 import type { Job } from './types';
 
 const a = (over: Partial<Job>): Job => ({ id: 'x', name: 'x', branch: 'x', status: 'running', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
@@ -20,5 +20,16 @@ describe('waitsAtGate and needsYou (R4)', () => {
     expect(needsYou(a({}))).toBe(false);
     expect(needsYou(a({ status: 'blocked', gate: docs, autoApprovePending: true }))).toBe(true);
     expect(needsYou(a({ status: 'waiting-input' }))).toBe(true);
+  });
+});
+
+describe('needsExpand', () => {
+  it('short text fits', () => expect(needsExpand('cargo test: 3 passed')).toBe(false));
+  it('long text is cut', () => expect(needsExpand('x'.repeat(121))).toBe(true));
+  it('120 characters still fit', () => expect(needsExpand('x'.repeat(120))).toBe(false));
+  it('a newline is cut', () => expect(needsExpand('a\nb')).toBe(true));
+  it('empty and undefined fit', () => {
+    expect(needsExpand('')).toBe(false);
+    expect(needsExpand(undefined)).toBe(false);
   });
 });
