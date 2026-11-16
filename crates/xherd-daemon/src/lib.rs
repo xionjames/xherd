@@ -15,6 +15,7 @@ use xherd_plugin::Registry;
 use xherd_store::Store;
 
 pub mod actor;
+pub mod agents;
 pub mod backup;
 pub mod checks;
 mod create;
@@ -173,6 +174,8 @@ pub struct Daemon {
     pub secrets_write: Arc<std::sync::Mutex<()>>,
     /// The same for `config.json` (Settings and Git access both save it).
     pub config_write: Arc<std::sync::Mutex<()>>,
+    /// Held while saved agents are changed (create, edit, archive, delete, import).
+    pub agents_write: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// `GET /runtimes/{name}/models`.
@@ -310,6 +313,7 @@ impl Daemon {
             worklog_flushed: Arc::default(),
             secrets_write: Arc::default(),
             config_write: Arc::default(),
+            agents_write: Arc::default(),
         };
         d.import_ledgers().await;
         d.repair_restored().await;

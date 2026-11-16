@@ -57,6 +57,8 @@ pub enum Change {
         kind: String,
         text: String,
     },
+    /// A saved agent was created, changed, archived or deleted; the UI refetches `/agents`.
+    Agents,
 }
 
 pub type Hub = broadcast::Sender<Change>;

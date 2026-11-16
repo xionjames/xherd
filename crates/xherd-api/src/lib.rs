@@ -102,9 +102,17 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/jobs/{id}/ticket-summary", get(ticket_summary))
         .route("/api/v1/jobs/{id}/ticket-comment", post(ticket_comment))
         // The old job routes (R3): one release of `410 moved`.
-        .route("/api/v1/agents", any(gone_list))
+        // Saved agents (R19). Static paths come first; `{id}` resolves an agent
+        // before the old job path (R3).
+        .route("/api/v1/agents", get(agents_list).post(agent_create))
         .route("/api/v1/agents/pause-all", any(gone_pause_all))
-        .route("/api/v1/agents/{id}", any(gone_job))
+        .route("/api/v1/agents/export", get(agents_export))
+        .route("/api/v1/agents/import", post(agents_import))
+        .route("/api/v1/agents/{id}", any(agent_one))
+        .route("/api/v1/agents/{id}/archive", post(agent_archive))
+        .route("/api/v1/agents/{id}/unarchive", post(agent_unarchive))
+        .route("/api/v1/agents/{id}/versions", get(agent_versions))
+        .route("/api/v1/agents/{id}/jobs", get(agent_jobs))
         .route("/api/v1/agents/{id}/{*rest}", any(gone_job))
         .route("/api/v1/git/known-hosts", post(git_known_host))
         .route("/api/v1/git/login", post(git_login))
@@ -182,7 +190,10 @@ impl From<ActionError> for ApiError {
             "bad_ticket" | "bad_name" | "name_required" | "unknown_flow" | "prompt_required"
             | "repo_url" | "not_a_repo" | "base_unresolved" | "runtime_unusable"
             | "runtime_hooks" | "unknown_pack" | "unknown_runtime" | "bad_model"
-            | "model_unavailable" => StatusCode::UNPROCESSABLE_ENTITY,
+            | "model_unavailable" | "bad_agent" | "unknown_stage" => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
+            "unknown_agent" => StatusCode::NOT_FOUND,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
@@ -413,6 +424,7 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "platform": std::env::consts::OS,
         "config": config,
         "jobs": agents,
+        "agents": d.agents().await?,
         "plugins": plugins,
         "trackerLinks": d.tracker_links(),
         "brokenPlugins": d.plugins.broken(),
@@ -1274,10 +1286,6 @@ fn moved(location: String) -> ApiError {
     e
 }
 
-async fn gone_list(_: User) -> ApiError {
-    moved("/api/v1/jobs".into())
-}
-
 async fn gone_pause_all(_: User) -> ApiError {
     moved("/api/v1/jobs/pause-all".into())
 }
@@ -1290,6 +1298,13 @@ async fn gone_job(
     Path(p): Path<std::collections::HashMap<String, String>>,
 ) -> ApiError {
     let id = p.get("id").cloned().unwrap_or_default();
+    if d.is_agent(&id).await {
+        return ApiError::new(
+            StatusCode::NOT_FOUND,
+            "no_such_route",
+            format!("agent {id:?} has no such route"),
+        );
+    }
     if d.action(&id, UserAction::Get).await.is_err() {
         return ApiError::new(
             StatusCode::NOT_FOUND,
@@ -1443,4 +1458,148 @@ async fn xap(auth: AgentAuth, State(d): State<Daemon>, body: axum::body::Bytes) 
             fail(status, r.code, r.message)
         }
     }
+}
+
+// ---- saved agents (R19) -------------------------------------------------------
+
+async fn agents_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({"agents": d.agents().await?})))
+}
+
+async fn agent_create(
+    _: User,
+    State(d): State<Daemon>,
+    Json(def): Json<xherd_core::agent_def::AgentDef>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(json!(d.create_agent(def).await?)))
+}
+
+/// `GET`, `PUT` and `DELETE /agents/{id}`; any other path or method of a job
+/// name is the old route (`410`).
+async fn agent_one(
+    user: User,
+    State(d): State<Daemon>,
+    method: axum::http::Method,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    if !d.is_agent(&id).await {
+        let p = std::collections::HashMap::from([("id".to_string(), id)]);
+        return gone_job(user, State(d), Path(p)).await.into_response();
+    }
+    let r: ApiResult<Json<Value>> = match method {
+        axum::http::Method::GET => d
+            .agent(&id)
+            .await
+            .map(|a| Json(json!(a)))
+            .map_err(Into::into),
+        axum::http::Method::PUT => match serde_json::from_slice(&body) {
+            Ok(def) => d
+                .update_agent(&id, def)
+                .await
+                .map(|a| Json(json!(a)))
+                .map_err(Into::into),
+            Err(e) => Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                e.to_string(),
+            )),
+        },
+        axum::http::Method::DELETE => d
+            .delete_agent(&id)
+            .await
+            .map(|()| Json(json!({"ok": true})))
+            .map_err(Into::into),
+        _ => Err(ApiError::new(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "method_not_allowed",
+            format!("{method} {id}"),
+        )),
+    };
+    r.into_response()
+}
+
+/// A static agent path (`archive`, `versions`…) of something that is not a
+/// saved agent is an old job path.
+async fn not_an_agent(d: &Daemon, id: &str, rest: &str) -> ApiError {
+    let p = std::collections::HashMap::from([
+        ("id".to_string(), id.to_string()),
+        ("rest".to_string(), rest.to_string()),
+    ]);
+    gone_job(User, State(d.clone()), Path(p)).await
+}
+
+async fn agent_archive(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !d.is_agent(&id).await {
+        return Err(not_an_agent(&d, &id, "archive").await);
+    }
+    Ok(Json(json!(d.archive_agent(&id, true).await?)))
+}
+
+async fn agent_unarchive(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !d.is_agent(&id).await {
+        return Err(not_an_agent(&d, &id, "unarchive").await);
+    }
+    Ok(Json(json!(d.archive_agent(&id, false).await?)))
+}
+
+async fn agent_versions(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !d.is_agent(&id).await {
+        return Err(not_an_agent(&d, &id, "versions").await);
+    }
+    Ok(Json(json!({"versions": d.agent_versions(&id).await?})))
+}
+
+async fn agent_jobs(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    if !d.is_agent(&id).await {
+        return Err(not_an_agent(&d, &id, "jobs").await);
+    }
+    Ok(Json(json!({"jobs": d.agent_jobs(&id).await?})))
+}
+
+#[derive(Deserialize)]
+struct AgentExportQuery {
+    name: Option<String>,
+}
+
+async fn agents_export(
+    _: User,
+    State(d): State<Daemon>,
+    Query(q): Query<AgentExportQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(d.export_agents(q.name.as_deref()).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentImportQuery {
+    dry_run: Option<String>,
+}
+
+async fn agents_import(
+    _: User,
+    State(d): State<Daemon>,
+    Query(q): Query<AgentImportQuery>,
+    Json(i): Json<xherd_daemon::agents::Import>,
+) -> ApiResult<Json<Value>> {
+    let dry = q
+        .dry_run
+        .is_some_and(|v| matches!(v.as_str(), "1" | "true"));
+    Ok(Json(d.import_agents(i, dry).await?))
 }

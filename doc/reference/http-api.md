@@ -30,7 +30,7 @@ All paths are under `/api/v1`. `{id}` is a job id or name.
 | Method and path | Does |
 |---|---|
 | `GET /healthz` | Liveness, no auth |
-| `GET /state` | Everything the UI starts from: jobs, flows (each pack flow's stages), plugins (with `enabled`, and `view: {entry}` for a view plugin), tracker links, `buildVersion` |
+| `GET /state` | Everything the UI starts from: jobs, saved agents (`agents`), flows (each pack flow's stages), plugins (with `enabled`, and `view: {entry}` for a view plugin), tracker links, `buildVersion` |
 | `GET /ws` (WebSocket) | The change feed: one JSON message per change, tagged `type` (kebab-case). The UI reloads `/state` when it reconnects. A client that falls behind is disconnected |
 | `GET /checks`, `POST /checks/{id}/fix` | Setup checks, and running a check's fix |
 | `POST /install` | Install the pack's commands for the runtimes (`xherd install`) |
@@ -67,6 +67,23 @@ All paths are under `/api/v1`. `{id}` is a job id or name.
 | `POST /repos/resolve` | A path or URL → branches, default base, matching profile (or `suggestedMatch`) |
 | `GET /profiles`, `POST /profiles`, `PUT /profiles/{id}`, `DELETE /profiles/{id}` | Repo profiles |
 | `GET /profiles/export`, `POST /profiles/import` | All profiles as JSON; import is all or nothing and replaces profiles with the same name |
+
+### Saved agents
+
+A saved agent is a named, versioned setup that jobs start from (runtime, models, workflow, autonomy, tool permissions, instructions, guardrails, `maxLiveJobs`). `{id}` is an agent's id or name; a name that no agent has but a job does answers the old job route's `410` (below). A saved agent wins over a job of the same name.
+
+| Method and path | Does |
+|---|---|
+| `GET /agents` | `{agents}`: each agent's settings plus the derived `status` (`archived`, `needs-you`, `working`, `idle`), `broken` (why jobs cannot start from it now: its pack, flow or runtime is gone or switched off; absent when fine), `liveJobs`, `lastJob` (the newest job's name) and `tokensToday` (0 until the agent budget scope lands). `/state` carries the same list as `agents` |
+| `POST /agents` | Create (body: `name`, `runtime`, `workflow: {pack, flow}`, and optional `description`, `models` (runtime → model), `autonomy`, `permissionMode`, `instructions`, `repo`, `baseBranch`, `jobTokenBudget`, `sensitivePaths`, `maxDiffLines`, `stageOverrides` (stage → `{human: true}`, which can only tighten a gate), `skills`, `maxLiveJobs` (default 1)). `id`, `version` and the dates are assigned. Refusals: `bad_name`, `bad_agent`, `name_taken`, `unknown_pack`, `unknown_flow`, `unknown_runtime`, `runtime_unusable` (the pack has no commands for it), `mode_unavailable` (`all` outside the container), `unknown_stage`, `autonomy_unavailable` |
+| `GET /agents/{id}`, `PUT /agents/{id}`, `DELETE /agents/{id}` | One agent; replace its settings (the version goes up by one; the name cannot change: `name_fixed`); delete it with its versions and memory (refused with `agent_busy` while a job started from it is live; jobs keep their snapshot) |
+| `POST /agents/{id}/archive`, `POST /agents/{id}/unarchive` | Hide it from pickers, or bring it back. Not a new version |
+| `GET /agents/{id}/versions` | `{versions}`, newest first; every version is kept |
+| `GET /agents/{id}/jobs` | `{jobs}` started from it, newest first |
+| `GET /agents/export?name=` | `{agents}` without ids, versions or dates (all, or the one named) |
+| `POST /agents/import?dryRun=1` | Body `{agents}`. All or nothing; a name that exists is refused with `name_taken` (never replaced). With `dryRun=1` nothing is written: `{agents: [{agent, risky, nameTaken}], nameTaken}`, where `risky` lists the fields to look at before importing (`permissionMode` auto or all, `autonomy` above ask, `instructions`, `skills`). The real call answers `{added}` |
+
+Every write publishes `{"type": "agents"}` on `/ws`; the UI refetches `/agents`.
 
 ### Reviews, TODOs, time, backups
 
@@ -118,4 +135,4 @@ All paths are under `/api/v1`. `{id}` is a job id or name.
 - Session tokens are of kind `job` (`XHERD_JOB_TOKEN`); tokens of kind `agent` issued before are still accepted.
 - Config keys `maxConcurrentAgents` and `agentTokenBudget` (config and repo profiles) are now `maxConcurrentJobs` and `jobTokenBudget`; the old keys are read once and never written.
 - The Herd view plugin protocol v1 is unchanged: its field is still `agents`, and holds the jobs.
-- The `/agents` paths are being reused for saved agents (a later change in the same release series); until then they only answer `410` or `404`.
+- The `/agents` paths now serve saved agents (see above): `GET` and `POST /agents` are the agent list and create, and `/agents/{x}` resolves a saved agent first. `GET /agents` used to answer `410` pointing at `/jobs`; it no longer does. Only a `{x}` that is not an agent but is a job still answers `410`, and a path an agent does not have answers `404 no_such_route`.

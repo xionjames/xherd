@@ -1294,8 +1294,6 @@ async fn old_agent_routes_are_gone() {
     let app =
         xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
     for (method, uri, location) in [
-        ("GET", "/api/v1/agents", "/api/v1/jobs"),
-        ("POST", "/api/v1/agents", "/api/v1/jobs"),
         ("POST", "/api/v1/agents/pause-all", "/api/v1/jobs/pause-all"),
         ("GET", "/api/v1/agents/SC-1", "/api/v1/jobs/SC-1"),
         (
@@ -1327,6 +1325,220 @@ async fn old_agent_routes_are_gone() {
         get("/api/v1/agents/NOPE/diff").body(Body::empty()).unwrap(),
     )
     .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_job"))
+    );
+}
+
+fn send(method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
+    let b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("host", "127.0.0.1:4740");
+    match body {
+        Some(v) => b
+            .header("content-type", "application/json")
+            .body(Body::from(v.to_string()))
+            .unwrap(),
+        None => b.body(Body::empty()).unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn saved_agent_routes() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let new = json!({"name": "reviewer", "runtime": "claude-code",
+                     "workflow": {"pack": "xherd", "flow": "feature"}});
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents", Some(new.clone())),
+    )
+    .await;
+    assert_eq!(
+        (s, v["version"].clone(), v["status"].clone()),
+        (StatusCode::OK, json!(1), json!("idle"))
+    );
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["liveJobs"], 0);
+    // refusals have their codes and statuses
+    for (body, status, code) in [
+        (new.clone(), StatusCode::CONFLICT, "name_taken"),
+        (
+            json!({"name": "x", "runtime": "claude-code", "workflow": {"pack": "xherd", "flow": "hotfix"}}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unknown_flow",
+        ),
+        (
+            json!({"name": "Bad Name", "runtime": "claude-code", "workflow": {"pack": "xherd", "flow": "feature"}}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bad_name",
+        ),
+    ] {
+        let (s, v) = call(app.clone(), send("POST", "/api/v1/agents", Some(body))).await;
+        assert_eq!((s, v["code"].clone()), (status, json!(code)));
+    }
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["agents"].as_array().unwrap().len()),
+        (StatusCode::OK, 1)
+    );
+    let (_, st) = call(
+        app.clone(),
+        get("/api/v1/state").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(st["agents"][0]["name"], "reviewer");
+    assert_eq!(st["jobs"].as_array().unwrap().len(), 1, "jobs stay jobs");
+
+    // by name and by id; edit; versions; archive
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!((s, v["id"].clone()), (StatusCode::OK, json!(id)));
+    let mut edit = new.clone();
+    edit["description"] = json!("more");
+    let (s, v) = call(
+        app.clone(),
+        send("PUT", &format!("/api/v1/agents/{id}"), Some(edit.clone())),
+    )
+    .await;
+    assert_eq!((s, v["version"].clone()), (StatusCode::OK, json!(2)));
+    edit["name"] = json!("renamed");
+    let (s, v) = call(
+        app.clone(),
+        send("PUT", "/api/v1/agents/reviewer", Some(edit)),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("name_fixed"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send("PUT", "/api/v1/agents/reviewer", Some(json!({"nope": 1}))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!("bad_request"))
+    );
+    let (_, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/versions")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v["versions"].as_array().unwrap().len(), 2);
+    let (_, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/jobs")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(v["jobs"], json!([]));
+    let (_, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/reviewer/archive", None),
+    )
+    .await;
+    assert_eq!(v["status"], "archived");
+    let (_, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/reviewer/unarchive", None),
+    )
+    .await;
+    assert_eq!(v["status"], "idle");
+
+    // export and import
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents/export?name=reviewer")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["agents"].as_array().unwrap().len()),
+        (StatusCode::OK, 1)
+    );
+    let mut copy = v.clone();
+    copy["agents"][0]["name"] = json!("copy");
+    let (_, dry) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/import?dryRun=1", Some(copy.clone())),
+    )
+    .await;
+    assert_eq!(dry["agents"][0]["agent"]["name"], "copy");
+    assert_eq!(
+        d.agents().await.unwrap().len(),
+        1,
+        "a dry run writes nothing"
+    );
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/import", Some(copy)),
+    )
+    .await;
+    assert_eq!((s, v["added"].clone()), (StatusCode::OK, json!(1)));
+
+    // a job with the same name as no agent still gets the 410, an agent route
+    // that does not exist the 404, and a job name on an agent path the 410
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/agents/reviewer/ticket")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("no_such_route"))
+    );
+    for (method, uri, location) in [
+        ("GET", "/api/v1/agents/SC-1", "/api/v1/jobs/SC-1"),
+        (
+            "POST",
+            "/api/v1/agents/SC-1/archive",
+            "/api/v1/jobs/SC-1/archive",
+        ),
+        (
+            "GET",
+            "/api/v1/agents/SC-1/versions",
+            "/api/v1/jobs/SC-1/versions",
+        ),
+    ] {
+        let (s, v) = call(app.clone(), send(method, uri, None)).await;
+        assert_eq!(
+            (s, v["code"].clone(), v["location"].clone()),
+            (StatusCode::GONE, json!("moved"), json!(location)),
+            "{method} {uri}"
+        );
+    }
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/agents/NOPE/archive", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_job"))
+    );
+
+    // delete
+    let (s, _) = call(app.clone(), send("DELETE", "/api/v1/agents/copy", None)).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, v) = call(app, send("DELETE", "/api/v1/agents/copy", None)).await;
     assert_eq!(
         (s, v["code"].clone()),
         (StatusCode::NOT_FOUND, json!("unknown_job"))
