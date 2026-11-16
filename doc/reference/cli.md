@@ -60,26 +60,40 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `--mode` | Tool permissions: `ask`, `edits`, `auto` or `all` (container only); default: the repo profile's, else the `permissionMode` setting |
 | `--runtime` | Runtime plugin: `claude-code`, `opencode` or `codex`; default: the repo profile's, else the `defaultRuntime` setting |
 | `--model` | Model for the runtime (`opus`, `sonnet`, `opencode/…`); default: the repo profile's `models` entry for the runtime, else the `runtimeModels` setting, else the runtime's own |
-| `--agent` | Start from a saved agent (id or name, see below): its settings are the defaults for the flags above, and a flag you give wins. An agent with a default repository needs no `--repo`; without one the current directory is sent |
+| `--agent` | Start from a saved agent (id or name, see below), for every stage no [assignment](#workflows-and-agents) covers: its settings are the defaults for the flags above, and a flag you give wins. The agent has no repository: `--repo`, the ticket or the repo profile give it |
+| `--stage-agent STAGE=AGENT` | Repeat to give one stage of this job to another agent than the workflow does (`--stage-agent design=architect`). Refusals `unknown_stage`, `unknown_agent`, `agent_archived`, `mixed_runtime` |
 
 ## Saved agents
 
-A saved agent is a named, versioned setup (runtime, model, workflow, autonomy, tool permissions, instructions, limits) that jobs start from. Every `xherd agent` command takes the agent's name or id; `--json` prints the API's answer.
+A saved agent is a named, versioned setup (runtime, model, autonomy, tool permissions, instructions, limits; no repository, base branch or workflow) that jobs start from. Every `xherd agent` command takes the agent's name or id; `--json` prints the API's answer.
 
 | Command | Does |
 |---|---|
 | `xherd agent ls` | Agents with their version, status, runtime, workflow, live jobs and last job |
 | `xherd agent show <agent>` | Every setting of one agent |
-| `xherd agent new <name> [flags]` | Save an agent. Defaults: runtime `claude-code`, pack `xherd`, flow `feature` |
+| `xherd agent new <name> [flags]` | Save an agent. Default runtime `claude-code` |
 | `xherd agent edit <agent> [flags]` | Change the settings given; the agent's version goes up by one. The name cannot change |
 | `xherd agent archive\|unarchive <agent>` | Hide an agent from pickers, or bring it back (same version) |
 | `xherd agent rm <agent>` | Delete an agent with no live jobs (its jobs keep their snapshot) |
 | `xherd agent jobs <agent>` | The jobs started from it |
-| `xherd agent start <agent> [PROMPT] [--ticket T] [--repo R] [--base B] [--name N]` | Start a job. Without `--name` it is `<agent>-<ticket key lower-cased>`, else `<agent>-<n>` |
+| `xherd agent start <agent> [PROMPT] [--ticket T] [--repo R] [--base B] [--name N]` | Start a job with the agent on every stage. Without `--name` it is `<agent>-<ticket key lower-cased>`, else `<agent>-<n>` |
 | `xherd agent export [<agent>] [--out FILE]` | The agents as JSON (no ids, no secrets) |
-| `xherd agent import FILE [--yes]` | Prints every setting of each agent in the file first, with `!` and a "look at" line for the ones that widen what a job may do or add text it reads (`permissionMode` `auto`/`all`, `autonomy` other than `ask`, `instructions`, `skills`, `stageOverrides`), then asks (`--yes` skips the question). All or nothing; a name that exists is refused, never replaced |
+| `xherd agent import FILE [--yes]` | Prints every setting of each agent in the file first, with `!` and a "look at" line for the ones that widen what a job may do or add text it reads (`permissionMode` `auto`/`all`, `autonomy` other than `ask`, `instructions`, `skills`), then asks (`--yes` skips the question). Fields an agent no longer has (`repo`, `baseBranch`, `workflow`, `stageOverrides`) are listed as ignored. All or nothing; a name that exists is refused, never replaced |
 
-`new` and `edit` flags: `--description`, `--runtime`, `--pack`, `--flow`, `--model` (for the agent's runtime), `--autonomy`, `--mode`, `--instructions` or `--instructions-file`, `--repo`, `--base`, `--job-token-budget`, `--sensitive-path` (repeat), `--max-diff-lines`, `--human-stage` (repeat: a stage whose gate always waits for a person), `--skill` (repeat), `--max-live-jobs`. On `edit` a repeated flag replaces its whole list, and an empty value (`--model ""`, `--sensitive-path ""`) clears the setting.
+`new` and `edit` flags: `--description`, `--runtime`, `--fallback-runtime` (used once, at creation, when the runtime is unusable), `--model` (for the agent's runtime), `--autonomy`, `--mode`, `--instructions` or `--instructions-file`, `--job-token-budget`, `--sensitive-path` (repeat), `--max-diff-lines`, `--skill` (repeat), `--max-live-jobs`. On `edit` a repeated flag replaces its whole list, and an empty value (`--model ""`, `--sensitive-path ""`) clears the setting.
+
+## Workflows and agents
+
+A workflow's stages can be given to saved agents (an architect for the spec and design, a coder for the implementation, a reviewer for the review). `<flow>` is `feature`, or `pack/flow` for a flow of another pack.
+
+| Command | Does |
+|---|---|
+| `xherd flow ls` | Every flow with how many of its stages have an agent |
+| `xherd flow show <flow>` | Each stage with the agent it resolves to: `(same)` when it follows the stage before, `human`, and why an agent cannot run |
+| `xherd flow assign <flow> <stage> <agent> [--human\|--no-human]` | Give a stage to an agent, replacing its assignment. `--human` makes the stage's gate always wait for you, whatever the autonomy |
+| `xherd flow unassign <flow> <stage>` | Take the stage back: it uses the agent given at creation, else the stage before |
+
+Refusals: `unknown_pack`, `unknown_flow`, `unknown_stage`, `unknown_agent`, `agent_archived`, `mixed_runtime` (all agents of a flow share one runtime). Assignments apply to jobs created afterwards.
 
 ## Called by the runtime and by jobs
 

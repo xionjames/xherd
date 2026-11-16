@@ -78,6 +78,8 @@ by theme; update it together with them.
 - [ ] More flow packs: PR review, research/design; multi-repo tickets
 - [x] `xherd memory propose` and the Shared memory tab (AGENTS.md, #65)
 - [x] Saved agents (#141): versioned setups jobs start from, with a skills library, agent memory and its proposals, suggestions after a finished or repeated job, and backups; "agent" now means the saved setup, a run is a job (design §18, D25)
+- [x] Agents on workflow stages (#141, D26): agents are personas; a workflow's stages are assigned to agents (Flows page, `xherd flow`), the job snapshots them and switches at each stage start; fallback runtime; Herd By agent
+- [ ] Agents on stages, still open: check in a browser and with real runtimes; mixing runtimes in one job (needs R-025); a switch between approve and `stage enter` after a pause
 - [ ] Saved agents, still open: check the pages in a browser and a job from an agent with real runtimes; a Skills tab on the agent page; update the supervisor's live count when a running job is attached to an agent; scheduled agent runs
 
 ## Git, accounts and credentials

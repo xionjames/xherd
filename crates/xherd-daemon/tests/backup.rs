@@ -103,6 +103,18 @@ async fn backup_and_restore_on_another_machine() {
     def.updated_at = 20;
     store.put_agent_def(&def).await.unwrap();
     store
+        .set_flow_assignments(
+            "xherd",
+            "feature",
+            &[xherd_core::resolve::Assignment {
+                stage: "review".into(),
+                agent_id: "ad1".into(),
+                human: true,
+            }],
+        )
+        .await
+        .unwrap();
+    store
         .put_agent_memory("ad1", "Use cargo nextest.", 30)
         .await
         .unwrap();
@@ -172,6 +184,16 @@ async fn backup_and_restore_on_another_machine() {
     assert_eq!(
         s2.agent_memory("ad1").await.unwrap().map(|m| m.0),
         Some("Use cargo nextest.".into())
+    );
+    let asg = s2.flow_assignments("xherd", "feature").await.unwrap();
+    assert_eq!(asg.len(), 1);
+    assert_eq!(
+        (
+            asg[0].stage.as_str(),
+            asg[0].agent_id.as_str(),
+            asg[0].human
+        ),
+        ("review", "ad1", true)
     );
     assert!(p2.skills().join("lint/SKILL.md").is_file());
     let cfg: serde_json::Value =

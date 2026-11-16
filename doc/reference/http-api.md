@@ -75,22 +75,35 @@ All paths are under `/api/v1`. `{id}` is a job id or name.
 
 ### Saved agents
 
-A saved agent is a named, versioned setup that jobs start from (runtime, models, workflow, autonomy, tool permissions, instructions, guardrails, `maxLiveJobs`). `{id}` is an agent's id or name; a name that no agent has but a job does answers the old job route's `410` (below). A saved agent wins over a job of the same name.
+A saved agent is a named, versioned setup that jobs start from (runtime, models, autonomy, tool permissions, instructions, guardrails, `maxLiveJobs`; no repository, base branch or workflow, which belong to the job and to stage assignments below). `{id}` is an agent's id or name; a name that no agent has but a job does answers the old job route's `410` (below). A saved agent wins over a job of the same name.
 
 | Method and path | Does |
 |---|---|
 | `GET /agents` | `{agents}`: each agent's settings plus the derived `status` (`archived`, `needs-you`, `working`, `idle`), `broken` (why jobs cannot start from it now: its pack, flow or runtime is gone or switched off; absent when fine), `liveJobs`, `lastJob` (the newest job's name) and `tokensToday` (the day's tokens of its jobs, UTC; recorded under the budget scope `agent:<id>`, shown but not enforced). `/state` carries the same list as `agents` |
-| `POST /agents` | Create (body: `name`, `runtime`, `workflow: {pack, flow}`, and optional `description`, `models` (runtime → model), `autonomy`, `permissionMode`, `instructions`, `repo`, `baseBranch`, `jobTokenBudget`, `sensitivePaths`, `maxDiffLines`, `stageOverrides` (stage → `{human: true}`, which can only tighten a gate), `skills`, `maxLiveJobs` (default 1)). `id`, `version` and the dates are assigned. Refusals: `bad_name`, `bad_agent`, `name_taken`, `unknown_pack`, `unknown_flow`, `unknown_runtime`, `runtime_unusable` (the pack has no commands for it), `mode_unavailable` (`all` outside the container), `unknown_stage`, `autonomy_unavailable` |
-| `GET /agents/{id}`, `PUT /agents/{id}`, `DELETE /agents/{id}` | One agent; replace its settings (the version goes up by one; the name cannot change: `name_fixed`); delete it with its versions and memory (refused with `agent_busy` while a job started from it is live; jobs keep their snapshot) |
-| `POST /agents/{id}/archive`, `POST /agents/{id}/unarchive` | Hide it from pickers, or bring it back. Not a new version |
+| `POST /agents` | Create (body: `name`, `runtime`, and optional `description`, `models` (runtime → model), `fallbackRuntime`, `autonomy`, `permissionMode`, `instructions`, `jobTokenBudget`, `sensitivePaths`, `maxDiffLines`, `skills`, `maxLiveJobs` (default 1)). `id`, `version` and the dates are assigned. Refusals: `bad_name`, `bad_agent`, `name_taken`, `unknown_runtime`, `runtime_unusable` (the default pack has no commands for it), `bad_fallback`, `mode_unavailable` (`all` outside the container), `autonomy_unavailable`; `PUT` also `mixed_runtime` (the change would mix runtimes in a flow that assigns the agent) |
+| `GET /agents/{id}`, `PUT /agents/{id}`, `DELETE /agents/{id}` | One agent; replace its settings (the version goes up by one; the name cannot change: `name_fixed`); delete it with its versions and memory (refused with `agent_busy` while a job started from it is live, `agent_assigned` while a workflow stage names it; jobs keep their snapshot) |
+| `POST /agents/{id}/archive`, `POST /agents/{id}/unarchive` | Hide it from pickers, or bring it back. Not a new version. Archiving is refused with `agent_assigned` while a stage names it |
 | `GET /agents/{id}/versions` | `{versions}`, newest first; every version is kept |
 | `GET /agents/{id}/memory`, `PUT /agents/{id}/memory` | `{text, version}` (empty, version 0, before the first save); `PUT {text}` replaces it, at most 4 000 characters (`bad_memory` 422). Each job copies the memory when it is created (`job.agent.memory`); later edits do not reach started jobs |
 | `GET /agents/{id}/jobs` | `{jobs}` started from it, newest first |
-| `POST /agents/{id}/jobs` | Start a job from the agent; the body is the one of `POST /jobs` (`agent` is taken from the path) with a name that may be left out: it is then `<agent>-<ticket key>`, else `<agent>-<n>`. A job carries `agent` (a snapshot: id, name, version, instructions, guardrails, stage overrides; editing the agent later leaves it as it is) and, when a repo profile's ceiling lowered a value, `lowered: [{field, from, to, profile}]`. Refusals: `unknown_agent`, `agent_archived`, `agent_broken` (its pack, flow or runtime is gone or off), `repo_required` (no repository in the request or the agent) |
+| `POST /agents/{id}/jobs` | Start a job from the agent; the body is the one of `POST /jobs` (`agent` is taken from the path) with a name that may be left out: it is then `<agent>-<ticket key>`, else `<agent>-<n>`. A job carries `agents` (a snapshot per agent id: name, version, runtime, `fellBack`, autonomy, mode, model, launch, instructions, memory, guardrails, skills), `stageAgents` (stage → `{agent, human}`), `defaultAgent`, `currentAgent` (the agent of the current stage) and `pinned` (an agent attached to a running job, never switched); editing an agent later leaves them as they are and, when a repo profile's ceiling lowered a value, `lowered: [{field, from, to, profile}]`. Refusals: `unknown_agent`, `agent_archived`, `agent_broken` (neither its runtime nor its fallback is usable), `repo_required` (no repository in the request, the ticket or the repo profile) |
 | `GET /agents/export?name=` | `{agents}` without ids, versions or dates (all, or the one named) |
-| `POST /agents/import?dryRun=1` | Body `{agents}`. All or nothing; a name that exists is refused with `name_taken` (never replaced). With `dryRun=1` nothing is written: `{agents: [{agent, risky, nameTaken}], nameTaken}`, where `risky` lists the fields to look at before importing (`permissionMode` auto or all, `autonomy` above ask, `instructions`, `skills`). The real call answers `{added}` |
+| `POST /agents/import?dryRun=1` | Body `{agents}`. All or nothing; a name that exists is refused with `name_taken` (never replaced). With `dryRun=1` nothing is written: `{agents: [{agent, risky, nameTaken}], nameTaken}`, where `risky` lists the fields to look at before importing (`permissionMode` auto or all, `autonomy` above ask, `instructions`, `skills`) and `ignored` the dropped fields the file still has (`repo`, `baseBranch`, `workflow`, `stageOverrides`). The real call answers `{added}` |
 
 Every write publishes `{"type": "agents"}` on `/ws`; the UI refetches `/agents`.
+
+### Workflows and stage assignments
+
+Which saved agent runs which stage of a workflow (a pack's flow). A job created afterwards keeps a snapshot of the agents its stages resolve to: the request's overrides (`agents`: stage → agent in `POST /jobs`), the assignment, the job's default agent (`agent`), else the stage before.
+
+| Method and path | Does |
+|---|---|
+| `GET /flows` | `{flows}`: every flow of every pack with its `stages` (`id`, `label`, `role`, `class`, `command`, `assigned`, `human`, `agentId`, `agent`, and `broken`: why the agent cannot run, such as archived or its runtime off) |
+| `GET /flows/{pack}/{flow}` | One flow, the same shape |
+| `GET /flows/{pack}/{flow}/assignments` | `{assignments: [{stage, agentId, human}]}` |
+| `PUT /flows/{pack}/{flow}/assignments` | Replace the flow's assignments with `{assignments}` (agents by id or name; `human` defaults to false). Answers the flow as `GET` does. Refusals: `unknown_pack`, `unknown_flow`, `unknown_stage`, `unknown_agent`, `agent_archived`, `bad_assignment`, `mixed_runtime` (the agents of one flow must share a runtime) |
+
+A write publishes `{"type": "agents"}`.
 
 ### Skills library
 

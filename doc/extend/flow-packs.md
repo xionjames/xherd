@@ -39,6 +39,7 @@ Each stage has an `id`, a `role` (`explore`, `spec`, `design`, `tasks`, `impleme
 - **`class`**: `routine`, `critical`, `code` or `human-only`. Autonomy decides from it: `ask` approves nothing; `important` approves `routine` and `code` gates when no tripwire holds them; `critical` and `human-only` always wait. A stage with role `pr` is human-only whatever the manifest says.
 - **`next`**: the command typed after approval, from a fixed vocabulary of conditions. `{prefix}`, `{key}`, `{prompt}`, `{commit}` and similar placeholders are filled in; `${…}` is left for the shell.
 - **`loopUntil` / `then`**: repeat a stage until a condition (for example all tasks done), then move on.
+- **`command`** (optional): the command that starts the stage (`"{prefix}design"`), the same text as the previous stage's `next`. xherd matches an approved gate's next command against it to know which stage a fresh session starts, and so which saved agent works there (`Flow::stage_for_command`). A stage without one, and a `next` that matches none (`{prefix}commit {commit}`, `{prefix}pr-apply`), stay in the same stage and agent. Which agent runs a stage is not in the pack: the user assigns it (Flows page, `xherd flow assign`).
 - **`label`** (optional, 1–40 characters): the name the UI shows for the stage instead of one made from its `id`. The built-in `bugfix` flow keeps the id `implement` for its fix stage, which the shared prompts enter, and labels it `Fix`.
 
 Rules that follow from the stages:
