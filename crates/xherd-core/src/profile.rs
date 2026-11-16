@@ -55,9 +55,13 @@ pub struct Profile {
     /// Replace the global `maxDiffLines`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_diff_lines: Option<usize>,
-    /// Replace the global `agentTokenBudget` (0 = off).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_token_budget: Option<u64>,
+    /// Replace the global `jobTokenBudget` (0 = off).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "agentTokenBudget"
+    )]
+    pub job_token_budget: Option<u64>,
     /// One shell command run in the worktree at each commit proposal; a
     /// failure holds the commit for a human (R-115).
     #[serde(default, skip_serializing_if = "Option::is_none")]

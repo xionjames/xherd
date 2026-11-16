@@ -66,6 +66,9 @@ pub fn hub() -> Hub {
 }
 
 pub const TOKEN_USER: &str = "user";
+/// Tokens of a job's session. Kind `agent` is what sessions started before
+/// #141 hold; it is still accepted but never minted.
+pub const TOKEN_JOB: &str = "job";
 pub const TOKEN_AGENT: &str = "agent";
 pub const SCOPE_HOOKS: &str = "hooks";
 pub const SCOPE_XAP: &str = "xap";

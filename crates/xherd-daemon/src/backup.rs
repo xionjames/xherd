@@ -8,7 +8,7 @@
 //!
 //! Not included, because they can be recreated or re-entered: `secrets.json`,
 //! runtime logins, toolchains and caches, repository clones, and the worktree
-//! files xherd writes itself (`.xherd/agent.json`, `instructions.md`, the
+//! files xherd writes itself (`.xherd/job.json`, `instructions.md`, the
 //! pre-push guard, the toolchain plan). The daemon finishes a restored
 //! worktree at its next start (`Daemon::repair_restored`).
 //!
@@ -37,6 +37,7 @@ pub const UPDATE_KEEP: usize = 3;
 const MAX_UNTRACKED: u64 = 20 * 1024 * 1024;
 /// Parts of `.xherd/` that xherd writes again by itself.
 const XHERD_SKIP: &[&str] = &[
+    "job.json",
     "agent.json",
     "instructions.md",
     "hooks",

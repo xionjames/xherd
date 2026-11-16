@@ -24,7 +24,8 @@ use xherd_term::ScreenRules;
 
 use crate::driver::{Driver, JobCtx};
 use crate::support::{
-    Change, Clock, Hub, SCOPE_CREDENTIAL, SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, mint_token,
+    Change, Clock, Hub, SCOPE_CREDENTIAL, SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_JOB,
+    mint_token,
 };
 
 #[derive(Debug)]
@@ -230,7 +231,7 @@ pub struct ActorSettings {
     pub max_review_loops: u32,
     /// Consecutive automatic approvals allowed (R-120); 0 = no limit.
     pub max_auto_approvals_in_row: u32,
-    pub agent_token_budget: u64,
+    pub job_token_budget: u64,
     pub daily_token_budget: u64,
     pub max_diff_lines: usize,
     pub sensitive_paths: Vec<String>,
@@ -260,7 +261,7 @@ impl ActorSettings {
             max_session_minutes: c.max_session_minutes,
             max_review_loops: c.max_review_loops,
             max_auto_approvals_in_row: c.max_auto_approvals_in_row,
-            agent_token_budget: c.agent_token_budget,
+            job_token_budget: c.job_token_budget,
             daily_token_budget: c.daily_token_budget,
             max_diff_lines: c.max_diff_lines,
             sensitive_paths: c.sensitive_paths.clone(),
@@ -404,7 +405,7 @@ impl Default for ActorSettings {
             max_session_minutes: 0,
             max_review_loops: 3,
             max_auto_approvals_in_row: 10,
-            agent_token_budget: 0,
+            job_token_budget: 0,
             daily_token_budget: 0,
             max_diff_lines: xherd_core::tripwire::MAX_DIFF_LINES,
             sensitive_paths: Vec::new(),
@@ -761,13 +762,15 @@ impl Actor {
     }
 
     async fn revoke_tokens(&self) {
-        if let Err(e) = self
-            .env
-            .store
-            .revoke_tokens(TOKEN_AGENT, &self.job.id, self.now())
-            .await
-        {
-            tracing::error!(agent = %self.job.name, error = %e, "revoking agent tokens failed");
+        for kind in [TOKEN_JOB, TOKEN_AGENT] {
+            if let Err(e) = self
+                .env
+                .store
+                .revoke_tokens(kind, &self.job.id, self.now())
+                .await
+            {
+                tracing::error!(job = %self.job.name, error = %e, "revoking job tokens failed");
+            }
         }
     }
 
@@ -1107,8 +1110,8 @@ impl Actor {
         let agent_budget = self
             .profile()
             .await
-            .and_then(|p| p.agent_token_budget)
-            .unwrap_or(s.agent_token_budget);
+            .and_then(|p| p.job_token_budget)
+            .unwrap_or(s.job_token_budget);
         let checks = [
             ("agent", self.job.tokens_total(), agent_budget),
             ("daily", daily, s.daily_token_budget),
@@ -2351,7 +2354,7 @@ impl Actor {
         self.revoke_tokens().await;
         let token = mint_token(
             &self.env.store,
-            TOKEN_AGENT,
+            TOKEN_JOB,
             Some(&self.job.id),
             &[SCOPE_HOOKS, SCOPE_XAP, SCOPE_CREDENTIAL],
             self.now(),
@@ -2364,8 +2367,8 @@ impl Actor {
             ("XHERD_ENV".into(), "1".into()),
             ("XHERD_BIN".into(), s.xherd_bin.clone()),
             ("XHERD_URL".into(), s.xherd_url.clone()),
-            ("XHERD_AGENT_ID".into(), self.job.id.clone()),
-            ("XHERD_AGENT_TOKEN".into(), token),
+            ("XHERD_JOB_ID".into(), self.job.id.clone()),
+            ("XHERD_JOB_TOKEN".into(), token),
             ("XHERD_PORT_BASE".into(), port_base.to_string()),
         ];
         // The prompts call plain `xherd …`: a command with a variable in it

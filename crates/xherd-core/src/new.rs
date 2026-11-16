@@ -243,8 +243,8 @@ pub fn clone_path(workspace: &std::path::Path, url: &str) -> Result<std::path::P
     Ok(out)
 }
 
-/// `.xherd/agent.json` (R-005c).
-pub fn agent_json(a: &Job) -> serde_json::Value {
+/// `.xherd/job.json` (R-005c); worktrees from before #141 have `agent.json`.
+pub fn job_json(a: &Job) -> serde_json::Value {
     serde_json::json!({
         "id": a.id, "name": a.name, "branch": a.branch, "ticket": a.ticket,
         "pack": a.pack, "flow": a.flow,
@@ -467,7 +467,7 @@ mod tests {
         a.branch = "SC-1-login".into();
         a.pack = Some("xherd".into());
         a.flow = Some("feature".into());
-        let j = agent_json(&a);
+        let j = job_json(&a);
         assert_eq!(
             (
                 j["ticket"]["key"].as_str(),

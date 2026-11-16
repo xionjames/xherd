@@ -18,11 +18,11 @@
     id: string; name: string; match: string[];
     baseBranch?: string; stagingBranch?: string;
     autonomy?: string; permissionMode?: string; runtime?: string; models?: Record<string, string>; sensitivePaths?: string[]; maxDiffLines?: number;
-    agentTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
+    jobTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
   };
   type Form = {
     id: string; name: string; match: string; baseBranch: string; stagingBranch: string;
-    autonomy: string; permissionMode: string; runtime: string; models: Record<string, string>; sensitivePaths: string; maxDiffLines: string; agentTokenBudget: string;
+    autonomy: string; permissionMode: string; runtime: string; models: Record<string, string>; sensitivePaths: string; maxDiffLines: string; jobTokenBudget: string;
     testCommand: string; lintCommand: string; instructions: string;
   };
 
@@ -37,7 +37,7 @@
   // Runtimes that can choose a model get a model field each.
   const modelRuntimes = $derived(runtimes(app.state?.plugins).filter((r) => r.chooseModel));
 
-  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', agentTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
+  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', jobTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
   const opt = (s: string) => (s.trim() ? s.trim() : undefined);
   const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
@@ -47,7 +47,7 @@
       id: p.id, name: p.name, match: p.match.join('\n'), baseBranch: p.baseBranch ?? '', stagingBranch: p.stagingBranch ?? '',
       autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '', models: { ...(p.models ?? {}) },
       sensitivePaths: p.sensitivePaths ? p.sensitivePaths.join('\n') : '', maxDiffLines: p.maxDiffLines?.toString() ?? '',
-      agentTokenBudget: p.agentTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
+      jobTokenBudget: p.jobTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
     };
   }
   // An empty "sensitive paths" box means the global list; the checkbox below
@@ -67,7 +67,7 @@
       // Entries of runtimes not shown (switched off) are kept; empty ones are dropped by the daemon.
       models: f.models,
       sensitivePaths: noSensitive ? [] : lines(f.sensitivePaths).length ? lines(f.sensitivePaths) : undefined,
-      maxDiffLines: num(f.maxDiffLines), agentTokenBudget: num(f.agentTokenBudget),
+      maxDiffLines: num(f.maxDiffLines), jobTokenBudget: num(f.jobTokenBudget),
       testCommand: opt(f.testCommand), lintCommand: opt(f.lintCommand), instructions: opt(f.instructions),
     };
   }
@@ -210,7 +210,7 @@
         <label class="f">Largest commit
           <span class="unit"><input type="number" min="1" bind:value={form.maxDiffLines} placeholder="global" /><span>changed lines</span></span></label>
         <label class="f">Token budget per agent
-          <span class="unit"><input type="number" min="0" bind:value={form.agentTokenBudget} placeholder="global" /><span>tokens</span></span>
+          <span class="unit"><input type="number" min="0" bind:value={form.jobTokenBudget} placeholder="global" /><span>tokens</span></span>
           <span class="hint">0 turns it off for this repository.</span></label>
         <label class="f">Sensitive paths
           <textarea class="mono" rows="3" bind:value={form.sensitivePaths} disabled={noSensitive} placeholder="global list"></textarea>

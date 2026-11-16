@@ -154,14 +154,14 @@ pub fn findings(
             "no limit: set maxSessionMinutes to pause long sessions",
         )
     });
-    out.push(if c.agent_token_budget > 0 || c.daily_token_budget > 0 {
+    out.push(if c.job_token_budget > 0 || c.daily_token_budget > 0 {
         f(
             "budgets",
             true,
             "Token budgets",
             format!(
                 "per agent {}, per day {}",
-                budget_text(c.agent_token_budget),
+                budget_text(c.job_token_budget),
                 budget_text(c.daily_token_budget)
             ),
         )
@@ -170,7 +170,7 @@ pub fn findings(
             "budgets",
             false,
             "Token budgets",
-            "none: set agentTokenBudget / dailyTokenBudget to pause runaway agents",
+            "none: set jobTokenBudget / dailyTokenBudget to pause runaway agents",
         )
     });
     out.push(if c.sensitive_paths.is_empty() {

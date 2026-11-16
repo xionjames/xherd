@@ -14,7 +14,8 @@ use crate::{ActionError, Daemon};
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigPatch {
-    pub max_concurrent_agents: Option<usize>,
+    #[serde(alias = "maxConcurrentAgents")]
+    pub max_concurrent_jobs: Option<usize>,
     pub gate_park_minutes: Option<u64>,
     pub idle_alert_minutes: Option<u64>,
     pub pause_timeout_sec: Option<u64>,
@@ -47,7 +48,8 @@ pub struct ConfigPatch {
     pub runtime_models: Option<std::collections::BTreeMap<String, String>>,
     pub open_in: Option<xherd_core::config::OpenIn>,
     pub max_auto_approvals_in_row: Option<u32>,
-    pub agent_token_budget: Option<u64>,
+    #[serde(alias = "agentTokenBudget")]
+    pub job_token_budget: Option<u64>,
     pub daily_token_budget: Option<u64>,
     pub max_diff_lines: Option<usize>,
     /// Replaces the list of sensitive path globs.
@@ -171,11 +173,11 @@ fn check_open_in(
 
 /// Apply a patch with range checks. Pure, so it is tested directly.
 pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
-    if let Some(n) = p.max_concurrent_agents {
+    if let Some(n) = p.max_concurrent_jobs {
         if !(1..=64).contains(&n) {
-            return Err(bad("maxConcurrentAgents must be 1 to 64"));
+            return Err(bad("maxConcurrentJobs must be 1 to 64"));
         }
-        c.max_concurrent_agents = n;
+        c.max_concurrent_jobs = n;
     }
     if let Some(n) = p.pause_timeout_sec {
         if !(5..=3600).contains(&n) {
@@ -241,8 +243,8 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
     if let Some(n) = p.max_auto_approvals_in_row {
         c.max_auto_approvals_in_row = n;
     }
-    if let Some(n) = p.agent_token_budget {
-        c.agent_token_budget = n;
+    if let Some(n) = p.job_token_budget {
+        c.job_token_budget = n;
     }
     if let Some(n) = p.daily_token_budget {
         c.daily_token_budget = n;
@@ -502,12 +504,12 @@ mod tests {
     fn patch_ranges_and_fields() {
         let mut c = Config::default();
         let p: ConfigPatch = serde_json::from_value(json!({
-            "maxConcurrentAgents": 6, "freshSessions": false, "workspace": "/w",
+            "maxConcurrentJobs": 6, "freshSessions": false, "workspace": "/w",
             "pluginSettings": {"github": {"gh": "/bin/gh"}}, "welcomed": true
         }))
         .unwrap();
         apply(&mut c, p).unwrap();
-        assert_eq!(c.max_concurrent_agents, 6);
+        assert_eq!(c.max_concurrent_jobs, 6);
         assert!(!c.fresh_sessions && c.welcomed);
         assert_eq!(c.workspace.as_deref(), Some("/w"));
         assert_eq!(c.plugin_settings["github"]["gh"], "/bin/gh");
@@ -517,7 +519,7 @@ mod tests {
         assert_eq!(c.workspace, None);
 
         for bad in [
-            json!({"maxConcurrentAgents": 0}),
+            json!({"maxConcurrentJobs": 0}),
             json!({"workspace": "rel/dir"}),
             json!({"pluginSettings": {"x": 1}}),
         ] {

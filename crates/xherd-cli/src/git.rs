@@ -40,10 +40,7 @@ pub fn credential(op: &str) -> i32 {
         .ok()
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| cfg.url());
-    let token = std::env::var("XHERD_AGENT_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty())
-        .or(cfg.user_token);
+    let token = crate::report::job_env("TOKEN").or(cfg.user_token);
     let agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(5)))

@@ -20,7 +20,7 @@ struct T {
 async fn daemon_with(dir: tempfile::TempDir, max: usize, tweak: impl FnOnce(&mut Options)) -> T {
     let paths = Paths::at(dir.path());
     let cfg = xherd_core::config::Config {
-        max_concurrent_agents: max,
+        max_concurrent_jobs: max,
         ..Default::default()
     };
     paths.ensure().unwrap();
@@ -739,7 +739,7 @@ async fn token_budget_warns_then_pauses_at_a_stop() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::at(dir.path());
     let cfg = xherd_core::config::Config {
-        agent_token_budget: 1000,
+        job_token_budget: 1000,
         ..Default::default()
     };
     paths.ensure().unwrap();

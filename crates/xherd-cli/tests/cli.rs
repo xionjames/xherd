@@ -215,9 +215,9 @@ fn end_to_end_replay_and_live_hooks() {
     // While the daemon is down, a stop is queued.
     let url = format!("http://127.0.0.1:{port}");
     let env = [
-        ("XHERD_AGENT_ID", id.as_str()),
+        ("XHERD_JOB_ID", id.as_str()),
         ("XHERD_URL", url.as_str()),
-        ("XHERD_AGENT_TOKEN", token),
+        ("XHERD_JOB_TOKEN", token),
     ];
     xherd(
         home.path(),
@@ -276,9 +276,9 @@ fn end_to_end_replay_and_live_hooks() {
 
     // A wrong token is rejected, not queued.
     let bad = [
-        ("XHERD_AGENT_ID", id.as_str()),
+        ("XHERD_JOB_ID", id.as_str()),
         ("XHERD_URL", url.as_str()),
-        ("XHERD_AGENT_TOKEN", "nope"),
+        ("XHERD_JOB_TOKEN", "nope"),
     ];
     xherd(home.path(), wt.path(), &["hook", "stop"], &bad, "{}");
     assert!(!home.path().join("hook-queue.jsonl").exists());
@@ -334,9 +334,9 @@ fn xap_exit_codes_without_daemon() {
     assert_eq!(o.status.code(), Some(4));
 
     let env = [
-        ("XHERD_AGENT_ID", "A1"),
+        ("XHERD_JOB_ID", "A1"),
         ("XHERD_URL", down.as_str()),
-        ("XHERD_AGENT_TOKEN", "t"),
+        ("XHERD_JOB_TOKEN", "t"),
     ];
     // Needs an answer: unreachable.
     let o = xherd(home.path(), wt.path(), &["gate", "open", "spec"], &env, "");
@@ -440,4 +440,33 @@ fn terminal_handler_install_and_uninstall() {
     let o = xherd(&home, &home, &["terminal-handler", "install"], &env, "");
     assert_eq!(o.status.code(), Some(2));
     assert!(!handler.exists());
+}
+
+/// #141: a job's session has `XHERD_JOB_*` and `.xherd/job.json`; the old
+/// names (the test above) still work for sessions started before.
+#[test]
+fn hook_reads_the_job_names() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = tempfile::tempdir().unwrap();
+    let down = format!("http://127.0.0.1:{}", free_port());
+    std::fs::create_dir(wt.path().join(".xherd")).unwrap();
+    std::fs::write(
+        wt.path().join(".xherd/job.json"),
+        r#"{"id":"J1","name":"sc-1"}"#,
+    )
+    .unwrap();
+    let env = [("XHERD_URL", down.as_str()), ("XHERD_JOB_TOKEN", "xh_x")];
+    let o = xherd(home.path(), wt.path(), &["hook", "stop"], &env, "{}");
+    assert!(o.status.success() && o.stdout.is_empty(), "{o:?}");
+    let q = queue_lines(home.path());
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0]["jobId"], "J1");
+    // The environment's id wins over the file's.
+    let env = [
+        ("XHERD_URL", down.as_str()),
+        ("XHERD_JOB_TOKEN", "xh_x"),
+        ("XHERD_JOB_ID", "J2"),
+    ];
+    xherd(home.path(), wt.path(), &["hook", "stop"], &env, "{}");
+    assert_eq!(queue_lines(home.path())[1]["jobId"], "J2");
 }

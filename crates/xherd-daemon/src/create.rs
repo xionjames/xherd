@@ -294,7 +294,7 @@ impl Daemon {
             .map_err(|e| refuse("runtime_unusable", e))
     }
 
-    /// A worktree a backup restore recreated has no `.xherd/agent.json` (it is
+    /// A worktree a backup restore recreated has no `.xherd/job.json` (it is
     /// not in the backup): finish it like a new agent's, once, at daemon start.
     pub(crate) async fn repair_restored(&self) {
         let Ok(agents) = self.store.list_jobs().await else {
@@ -305,7 +305,11 @@ impl Daemon {
                 continue;
             };
             let live = !matches!(a.status, Status::Done | Status::Cancelled);
-            if live && w.join(".xherd").is_dir() && !w.join(".xherd/agent.json").exists() {
+            if live
+                && w.join(".xherd").is_dir()
+                && !w.join(".xherd/job.json").exists()
+                && !w.join(".xherd/agent.json").exists()
+            {
                 match self.prepare_worktree(&a).await {
                     Ok(()) => tracing::info!(agent = %a.name, "restored worktree prepared"),
                     Err(e) => {
@@ -546,7 +550,7 @@ pub(crate) async fn resolve_base(
 /// setgid, group-writable: the folders the daemon and the agent share.
 const SHARED_DIR_MODE: u32 = 0o2775;
 
-/// `.xherd/` with `agent.json`, `instructions.md` and `spec/`, excluded from
+/// `.xherd/` with `job.json`, `instructions.md` and `spec/`, excluded from
 /// git (R-005b exclude part, R-005c).
 async fn prepare_xherd_dir(
     git: &Git,
@@ -564,8 +568,8 @@ async fn prepare_xherd_dir(
             .await
             .map_err(|e| io(d, e))?;
     }
-    let json = serde_json::to_vec_pretty(&new::agent_json(a)).expect("json");
-    let f = dir.join("agent.json");
+    let json = serde_json::to_vec_pretty(&new::job_json(a)).expect("json");
+    let f = dir.join("job.json");
     write_atomic(&f, &json, None).map_err(|e| io(&f, e))?;
     let f = dir.join("instructions.md");
     write_atomic(

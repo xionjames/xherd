@@ -10,7 +10,7 @@ use xherd_core::domain::Role;
 use xherd_core::paths::Paths;
 use xherd_core::xap::{Severity, XapCall, XapCmd};
 
-use crate::report::{DEFAULT_URL, find_agent};
+use crate::report::{DEFAULT_URL, find_job};
 
 fn role(s: &str) -> Result<Role, String> {
     serde_json::from_value(Value::String(s.to_string())).map_err(|_| {
@@ -268,11 +268,8 @@ enum Posted {
 }
 
 fn post(call: &XapCall) -> Posted {
-    let Some(token) = std::env::var("XHERD_AGENT_TOKEN")
-        .ok()
-        .filter(|s| !s.is_empty())
-    else {
-        return Posted::Unreachable("no XHERD_AGENT_TOKEN in this environment".into());
+    let Some(token) = crate::report::job_env("TOKEN") else {
+        return Posted::Unreachable("no XHERD_JOB_TOKEN in this environment".into());
     };
     let url = std::env::var("XHERD_URL")
         .ok()
@@ -310,7 +307,7 @@ fn post(call: &XapCall) -> Posted {
 
 pub fn run(cmd: XapCmd, json: bool) -> i32 {
     let name = cmd.name();
-    let Some(target) = find_agent() else {
+    let Some(target) = find_job() else {
         eprintln!("xherd {name}: not running under xherd");
         return 4;
     };

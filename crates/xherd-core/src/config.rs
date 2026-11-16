@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::paths::write_atomic;
 
-pub const CONFIG_SCHEMA_VERSION: u32 = 3;
+pub const CONFIG_SCHEMA_VERSION: u32 = 4;
 
 /// The runtime of agents created before they named one, and the default
 /// `defaultRuntime`.
@@ -44,7 +44,7 @@ pub struct Config {
     /// Token of the local user (CLI, local browser). Generated on first start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_token: Option<String>,
-    pub max_concurrent_agents: usize,
+    pub max_concurrent_jobs: usize,
     /// 0 = never park.
     pub gate_park_minutes: u64,
     /// 0 = no idle alerts.
@@ -108,7 +108,7 @@ pub struct Config {
     /// Token budget of one agent and of all agents per UTC day (R-1205). At
     /// 80 % a notification; at 100 % the agent is paused at its next stop.
     /// 0 = no budget.
-    pub agent_token_budget: u64,
+    pub job_token_budget: u64,
     pub daily_token_budget: u64,
     /// Code gates hold a commit proposal with more changed lines than this
     /// (R-115 `maxDiffLines`). Global until repo profiles exist.
@@ -151,7 +151,7 @@ impl Default for Config {
             port: 4740,
             bind: "127.0.0.1".into(),
             user_token: None,
-            max_concurrent_agents: 4,
+            max_concurrent_jobs: 4,
             gate_park_minutes: 30,
             idle_alert_minutes: 15,
             pause_timeout_sec: 120,
@@ -180,7 +180,7 @@ impl Default for Config {
             runtime_models: Default::default(),
             open_in: OpenIn::default(),
             max_auto_approvals_in_row: 10,
-            agent_token_budget: 0,
+            job_token_budget: 0,
             daily_token_budget: 0,
             max_diff_lines: 1000,
             sensitive_paths: Vec::new(),
@@ -294,7 +294,26 @@ fn both_protocols() -> Vec<String> {
 
 /// Migrations from version N to N+1, applied to the raw JSON. Index 0 = 0 → 1.
 type Migration = fn(&mut Map<String, Value>);
-const MIGRATIONS: &[Migration] = &[|_v0| {}, git_hosts_to_providers, open_in_commands_to_links];
+const MIGRATIONS: &[Migration] = &[
+    |_v0| {},
+    git_hosts_to_providers,
+    open_in_commands_to_links,
+    agent_keys_to_job_keys,
+];
+
+/// 3 → 4 (#141): `maxConcurrentAgents` and `agentTokenBudget` become
+/// `maxConcurrentJobs` and `jobTokenBudget`; a new key already present wins,
+/// the old one is never written again.
+fn agent_keys_to_job_keys(m: &mut Map<String, Value>) {
+    for (old, new) in [
+        ("maxConcurrentAgents", "maxConcurrentJobs"),
+        ("agentTokenBudget", "jobTokenBudget"),
+    ] {
+        if let Some(v) = m.remove(old) {
+            m.entry(new).or_insert(v);
+        }
+    }
+}
 
 /// 1 → 2 (R-693): a host's `gh` / `glab` credential becomes the provider
 /// credential bound to `github` / `gitlab`; `xherd` and `none` stay.
@@ -378,7 +397,7 @@ impl Config {
         self.runtime_models = s.runtime_models;
         self.open_in = s.open_in;
         self.max_auto_approvals_in_row = s.max_auto_approvals_in_row;
-        self.agent_token_budget = s.agent_token_budget;
+        self.job_token_budget = s.job_token_budget;
         self.daily_token_budget = s.daily_token_budget;
         self.max_diff_lines = s.max_diff_lines;
         self.sensitive_paths = s.sensitive_paths;
@@ -608,8 +627,27 @@ mod tests {
         assert!(v["openIn"].get("commands").is_none());
         assert_eq!(
             (v["schemaVersion"].as_u64(), v["futureThing"].as_u64()),
-            (Some(3), Some(1))
+            (Some(4), Some(1))
         );
+    }
+
+    /// #141: the old keys move to the job names; a new key wins.
+    #[test]
+    fn agent_keys_become_job_keys() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("config.json");
+        std::fs::write(
+            &f,
+            r#"{"schemaVersion": 3, "maxConcurrentAgents": 7, "agentTokenBudget": 5,
+                "maxConcurrentJobs": 2}"#,
+        )
+        .unwrap();
+        let (c, migrated) = Config::load(&f).unwrap();
+        assert!(migrated);
+        assert_eq!((c.max_concurrent_jobs, c.job_token_budget), (2, 5));
+        c.save(&f).unwrap();
+        let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
+        assert!(v.get("maxConcurrentAgents").is_none() && v.get("agentTokenBudget").is_none());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use xherd_core::report::Report;
 use xherd_core::xap::XapCall;
-use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_USER};
+use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_JOB, TOKEN_USER};
 use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
 mod term;
@@ -350,10 +350,12 @@ impl FromRequestParts<Daemon> for AgentAuth {
             .await
             .map_err(ApiError::internal)?;
         match row {
-            Some(r) if r.kind == TOKEN_AGENT && !r.revoked => Ok(AgentAuth {
-                job_id: r.subject.unwrap_or_default(),
-                scopes: r.scopes,
-            }),
+            Some(r) if (r.kind == TOKEN_JOB || r.kind == TOKEN_AGENT) && !r.revoked => {
+                Ok(AgentAuth {
+                    job_id: r.subject.unwrap_or_default(),
+                    scopes: r.scopes,
+                })
+            }
             _ => Err(deny()),
         }
     }

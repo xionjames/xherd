@@ -14,7 +14,7 @@
 
   const waiting = $derived(agents.filter(needsYou).sort((a, b) => a.statusSince - b.statusSince));
   const count = (f: (a: Job) => boolean) => agents.filter(f).length;
-  const slots = $derived(Number(app.state?.config.maxConcurrentAgents ?? 0));
+  const slots = $derived(Number(app.state?.config.maxConcurrentJobs ?? 0));
   const busy = $derived(count((a) => ['running', 'waiting-input', 'blocked', 'idle'].includes(a.status)));
 
   const FILTERS: [string, string, (a: Job) => boolean][] = [

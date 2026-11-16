@@ -147,7 +147,7 @@ async fn creates_worktree_and_private_folder() {
     );
 
     let j: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(wt.join(".xherd/agent.json")).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(wt.join(".xherd/job.json")).unwrap()).unwrap();
     assert_eq!(
         (j["id"].as_str(), j["ticket"]["key"].as_str()),
         (Some(a.id.as_str()), Some("SC-1"))
