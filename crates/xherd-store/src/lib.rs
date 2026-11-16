@@ -546,6 +546,127 @@ impl Store {
             .await
     }
 
+    // ---- saved agents ------------------------------------------------------------
+
+    /// Write the agent and its `agent_versions` row for `def.version` in one
+    /// transaction (R11). A name used by another agent is an error.
+    pub async fn put_agent_def(&self, def: &xherd_core::agent_def::AgentDef) -> Result<()> {
+        let data = serde_json::to_string(def)?;
+        let (id, name, version) = (def.id.clone(), def.name.clone(), def.version);
+        let (archived, at) = (def.archived_at, def.updated_at);
+        self.write(move |c| {
+            let tx = c.transaction()?;
+            tx.execute(
+                "INSERT INTO agents (id, name, archived_at, data) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET name = excluded.name,
+                   archived_at = excluded.archived_at, data = excluded.data",
+                params![id, name, archived, data],
+            )?;
+            tx.execute(
+                "INSERT INTO agent_versions (agent_id, version, at, data) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(agent_id, version) DO UPDATE SET at = excluded.at, data = excluded.data",
+                params![id, version, at, data],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn get_agent_def(&self, id: &str) -> Result<Option<xherd_core::agent_def::AgentDef>> {
+        let id = id.to_string();
+        self.read(move |c| {
+            let data: Option<String> = c
+                .query_row("SELECT data FROM agents WHERE id = ?1", [id], |r| r.get(0))
+                .optional()?;
+            Ok(data.map(|d| serde_json::from_str(&d)).transpose()?)
+        })
+        .await
+    }
+
+    /// In creation order (rowid); rows that no longer parse are skipped.
+    pub async fn list_agent_defs(&self) -> Result<Vec<xherd_core::agent_def::AgentDef>> {
+        self.read(|c| {
+            let mut st = c.prepare("SELECT data FROM agents ORDER BY rowid")?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                if let Ok(a) = serde_json::from_str(&row?) {
+                    out.push(a);
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Every stored version of an agent, newest first.
+    pub async fn agent_versions(&self, id: &str) -> Result<Vec<xherd_core::agent_def::AgentDef>> {
+        let id = id.to_string();
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT data FROM agent_versions WHERE agent_id = ?1 ORDER BY version DESC",
+            )?;
+            let rows = st.query_map([id], |r| r.get::<_, String>(0))?;
+            let mut out = Vec::new();
+            for row in rows {
+                if let Ok(a) = serde_json::from_str(&row?) {
+                    out.push(a);
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Remove the agent, its versions and its memory; whether the agent existed.
+    pub async fn delete_agent_def(&self, id: &str) -> Result<bool> {
+        let id = id.to_string();
+        self.write(move |c| {
+            let tx = c.transaction()?;
+            tx.execute("DELETE FROM agent_versions WHERE agent_id = ?1", [&id])?;
+            tx.execute("DELETE FROM agent_memory WHERE agent_id = ?1", [&id])?;
+            let n = tx.execute("DELETE FROM agents WHERE id = ?1", [&id])?;
+            tx.commit()?;
+            Ok(n == 1)
+        })
+        .await
+    }
+
+    /// The agent's memory text and its version.
+    pub async fn agent_memory(&self, id: &str) -> Result<Option<(String, u32)>> {
+        let id = id.to_string();
+        self.read(move |c| {
+            Ok(c.query_row(
+                "SELECT text, version FROM agent_memory WHERE agent_id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?)
+        })
+        .await
+    }
+
+    /// Replace the memory; its version grows by one (1 for the first write).
+    /// Returns the new version.
+    pub async fn put_agent_memory(&self, id: &str, text: &str, now: Millis) -> Result<u32> {
+        let (id, text) = (id.to_string(), text.to_string());
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO agent_memory (agent_id, text, updated_at, version) VALUES (?1, ?2, ?3, 1)
+                 ON CONFLICT(agent_id) DO UPDATE SET text = excluded.text,
+                   updated_at = excluded.updated_at, version = version + 1",
+                params![id, text, now],
+            )?;
+            Ok(c.query_row(
+                "SELECT version FROM agent_memory WHERE agent_id = ?1",
+                [id],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+    }
+
     // ---- work log ------------------------------------------------------------
 
     /// Add `ms` to the work log of `ticket` on `day` (`YYYY-MM-DD`, UTC);
@@ -982,6 +1103,90 @@ mod tests {
         assert_eq!(n, 1);
         s.delete_job(&job.id).await.unwrap();
         assert!(s.events(&job.id, 10).await.unwrap().is_empty());
+    }
+
+    fn agent(id: &str, name: &str, version: u32) -> xherd_core::agent_def::AgentDef {
+        use xherd_core::agent_def::{AgentDef, Workflow};
+        AgentDef {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            version,
+            runtime: "claude-code".into(),
+            models: Default::default(),
+            workflow: Workflow {
+                pack: "xherd".into(),
+                flow: "feature".into(),
+            },
+            autonomy: None,
+            permission_mode: None,
+            instructions: None,
+            repo: None,
+            base_branch: None,
+            job_token_budget: None,
+            sensitive_paths: vec![],
+            max_diff_lines: None,
+            stage_overrides: Default::default(),
+            skills: vec![],
+            max_live_jobs: 1,
+            created_at: 1,
+            updated_at: 10 + Millis::from(version),
+            archived_at: None,
+        }
+    }
+
+    /// Migration 3: the row and its version are written together; delete
+    /// removes the agent, its versions and its memory, and nothing else.
+    #[tokio::test]
+    async fn agents_versions_and_memory() {
+        let (_d, s) = open();
+        let mut a = agent("a1", "reviewer", 1);
+        s.put_agent_def(&a).await.unwrap();
+        a.version = 2;
+        a.updated_at = 20;
+        a.archived_at = Some(30);
+        s.put_agent_def(&a).await.unwrap();
+        s.put_agent_def(&agent("a2", "other", 1)).await.unwrap();
+
+        assert_eq!(s.get_agent_def("a1").await.unwrap(), Some(a.clone()));
+        assert_eq!(s.get_agent_def("nope").await.unwrap(), None);
+        let names: Vec<_> = s
+            .list_agent_defs()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(names, ["reviewer", "other"]);
+        let vs: Vec<u32> = s
+            .agent_versions("a1")
+            .await
+            .unwrap()
+            .iter()
+            .map(|d| d.version)
+            .collect();
+        assert_eq!(vs, [2, 1]);
+
+        // A second agent cannot take a name in use, and nothing of it is kept.
+        assert!(s.put_agent_def(&agent("a3", "reviewer", 1)).await.is_err());
+        assert!(s.agent_versions("a3").await.unwrap().is_empty());
+
+        assert_eq!(s.agent_memory("a1").await.unwrap(), None);
+        assert_eq!(s.put_agent_memory("a1", "one", 5).await.unwrap(), 1);
+        assert_eq!(s.put_agent_memory("a1", "two", 6).await.unwrap(), 2);
+        assert_eq!(s.agent_memory("a1").await.unwrap(), Some(("two".into(), 2)));
+        s.put_agent_memory("a2", "keep", 6).await.unwrap();
+
+        assert!(s.delete_agent_def("a1").await.unwrap());
+        assert!(!s.delete_agent_def("a1").await.unwrap());
+        assert_eq!(s.get_agent_def("a1").await.unwrap(), None);
+        assert!(s.agent_versions("a1").await.unwrap().is_empty());
+        assert_eq!(s.agent_memory("a1").await.unwrap(), None);
+        assert_eq!(
+            s.agent_memory("a2").await.unwrap(),
+            Some(("keep".into(), 1))
+        );
+        assert_eq!(s.agent_versions("a2").await.unwrap().len(), 1);
     }
 
     #[tokio::test]

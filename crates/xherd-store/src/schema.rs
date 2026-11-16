@@ -35,4 +35,12 @@ ALTER TABLE diff_viewed RENAME COLUMN agent_id TO job_id;
 DROP INDEX events_agent;
 CREATE INDEX events_job ON events(job_id, at);
 "#,
+    // 3: saved agents (issue #141): the name `agents` is free after migration 2.
+    // Every version, the current one included, is in `agent_versions`.
+    r#"
+CREATE TABLE agents (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, archived_at INTEGER, data TEXT NOT NULL);
+CREATE TABLE agent_versions (agent_id TEXT NOT NULL, version INTEGER NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL,
+                             PRIMARY KEY (agent_id, version));
+CREATE TABLE agent_memory (agent_id TEXT PRIMARY KEY, text TEXT NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL);
+"#,
 ];
