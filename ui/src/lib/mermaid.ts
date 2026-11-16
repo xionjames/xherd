@@ -10,11 +10,17 @@ type Mermaid = typeof import('mermaid').default;
 let loading: Promise<Mermaid> | null = null;
 let seq = 0;
 
-/** Colours and font from the app's tokens, so diagrams follow the theme. */
-function themeVariables(): Record<string, string> {
-  const css = getComputedStyle(document.documentElement);
-  const v = (name: string) => css.getPropertyValue(name).trim();
+/**
+ * Colours and font from the app's tokens (`v` reads one), so diagrams follow
+ * the theme. `darkMode` tells Mermaid which theme this is; its derived colours
+ * depend on it. The ER attribute rows are set from tokens (Mermaid would
+ * derive near-white rows under the light text of the dark theme).
+ */
+export function themeVariables(v: (token: string) => string, dark: boolean): Record<string, unknown> {
   return {
+    darkMode: dark,
+    rowOdd: v('--pen'),
+    rowEven: v('--pen-2'),
     fontFamily: v('--sans'),
     fontSize: '14px',
     background: v('--pen'),
@@ -41,7 +47,10 @@ function themeVariables(): Record<string, string> {
 async function load(): Promise<Mermaid> {
   loading ??= import('mermaid').then((m) => m.default);
   const mermaid = await loading;
-  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, theme: 'base', themeVariables: themeVariables() });
+  const { isDark } = await import('./theme.svelte');
+  const css = getComputedStyle(document.documentElement);
+  const token = (name: string) => css.getPropertyValue(name).trim();
+  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, theme: 'base', themeVariables: themeVariables(token, isDark()) });
   return mermaid;
 }
 
