@@ -71,7 +71,7 @@ pub fn create(to: Option<PathBuf>) -> i32 {
         .await
         {
             Ok(c) => {
-                println!("{} ({} agent(s))", c.path.display(), c.agents);
+                println!("{} ({} job(s))", c.path.display(), c.jobs);
                 show(&c.warnings);
                 0
             }
@@ -97,9 +97,9 @@ pub fn verify(archive: &Path) -> i32 {
     )) {
         Ok(m) => {
             println!(
-                "ok: {} file(s), {} agent(s), made by xherd {}, workspace {}",
+                "ok: {} file(s), {} job(s), made by xherd {}, workspace {}",
                 m.files.len(),
-                m.agents.len(),
+                m.jobs.len(),
                 m.xherd_version,
                 m.workspace
             );
@@ -150,12 +150,12 @@ pub fn restore(archive: &Path, workspace: Option<String>, maps: Vec<String>, for
     )) {
         Ok(r) => {
             println!(
-                "restored {} agent(s), paused: {}",
-                r.agents.len(),
-                r.agents.join(", ")
+                "restored {} job(s), paused: {}",
+                r.jobs.len(),
+                r.jobs.join(", ")
             );
             show(&r.warnings);
-            println!("start the daemon, then resume the agents you want running");
+            println!("start the daemon, then resume the jobs you want running");
             0
         }
         Err(e) => {

@@ -57,12 +57,14 @@ pub struct Manifest {
     pub workspace: String,
     /// sha256 of every file of the archive but this one, by relative path.
     pub files: BTreeMap<String, String>,
-    pub agents: Vec<AgentEntry>,
+    /// Archives made before the rename call this `agents`.
+    #[serde(alias = "agents")]
+    pub jobs: Vec<JobEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentEntry {
+pub struct JobEntry {
     pub id: String,
     pub name: String,
     pub branch: Option<String>,
@@ -75,22 +77,32 @@ pub struct AgentEntry {
     pub patch: bool,
 }
 
+/// A job's folder in an unpacked archive: `jobs/<name>`, else `agents/<name>` (archives made before the rename).
+fn job_dir(work: &Path, name: &str) -> PathBuf {
+    let new = work.join("jobs").join(name);
+    if new.is_dir() {
+        return new;
+    }
+    let old = work.join("agents").join(name);
+    if old.is_dir() { old } else { new }
+}
+
 #[derive(Debug)]
 pub struct Created {
     pub path: PathBuf,
-    pub agents: usize,
+    pub jobs: usize,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Default)]
 pub struct Restored {
-    pub agents: Vec<String>,
+    pub jobs: Vec<String>,
     pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct RestoreOptions {
-    /// `OLD=NEW` prefixes applied to the agents' stored paths.
+    /// `OLD=NEW` prefixes applied to the jobs' stored paths.
     pub maps: Vec<(String, String)>,
     /// New workspace root: also saved in `config.json`, and maps the old one.
     pub workspace: Option<String>,
@@ -205,7 +217,7 @@ pub async fn create(
     let res = match out {
         Ok((manifest, warnings)) => pack(&stage, dest, label, now / 1000).map(|path| Created {
             path,
-            agents: manifest.agents.len(),
+            jobs: manifest.jobs.len(),
             warnings,
         }),
         Err(e) => Err(e),
@@ -274,7 +286,7 @@ async fn fill_stage(
         created_at: now,
         workspace: workspace.to_string_lossy().into_owned(),
         files,
-        agents: entries,
+        jobs: entries,
     };
     let bytes = serde_json::to_vec_pretty(&manifest).expect("json");
     io(
@@ -289,7 +301,7 @@ async fn backup_agent(
     a: &Job,
     stage: &Path,
     warnings: &mut Vec<String>,
-) -> Result<Option<AgentEntry>> {
+) -> Result<Option<JobEntry>> {
     // A removed worktree (R14) has nothing to save but its record.
     let Some(wt) = a
         .workdir
@@ -305,14 +317,14 @@ async fn backup_agent(
             wt.display()
         ));
     }
-    let adir = stage.join("agents").join(&a.name);
-    io("agent folder", std::fs::create_dir_all(&adir))?;
+    let adir = stage.join("jobs").join(&a.name);
+    io("job folder", std::fs::create_dir_all(&adir))?;
     io(
         ".xherd",
         copy_tree(&wt.join(".xherd"), &adir.join("xherd"), XHERD_SKIP, false),
     )?;
 
-    let mut entry = AgentEntry {
+    let mut entry = JobEntry {
         id: a.id.clone(),
         name: a.name.clone(),
         branch: None,
@@ -486,8 +498,8 @@ async fn open(archive: &Path, work: &Path, git: &Git) -> Result<Manifest> {
         }
     }
     xherd_store::check_integrity(&work.join("db/xherd.db")).map_err(|e| e.to_string())?;
-    for e in m.agents.iter().filter(|e| e.bundle) {
-        let b = work.join("agents").join(&e.name).join("branch.bundle");
+    for e in m.jobs.iter().filter(|e| e.bundle) {
+        let b = job_dir(work, &e.name).join("branch.bundle");
         git.run(work, &["bundle", "list-heads", &b.to_string_lossy()])
             .await
             .map_err(|err| format!("{}: bundle: {err}", e.name))?;
@@ -577,7 +589,7 @@ async fn restore_from(
     }
 
     let store = Store::open(&paths.db(), &paths.backups()).map_err(|e| e.to_string())?;
-    for e in &m.agents {
+    for e in &m.jobs {
         let Some(mut a) = store.get_job(&e.id).await.map_err(|e| e.to_string())? else {
             out.warnings
                 .push(format!("{}: not in the database", e.name));
@@ -591,25 +603,17 @@ async fn restore_from(
         }
         a.pause_requested_at = None;
         store.put_job(&a).await.map_err(|e| e.to_string())?;
-        if let Err(w) = restore_agent(
-            git,
-            e,
-            &a,
-            &work.join("agents").join(&e.name),
-            &mut out.warnings,
-        )
-        .await
-        {
+        if let Err(w) = restore_job(git, e, &a, &job_dir(work, &e.name), &mut out.warnings).await {
             out.warnings.push(format!("{}: {w}", e.name));
         }
-        out.agents.push(e.name.clone());
+        out.jobs.push(e.name.clone());
     }
     Ok(out)
 }
 
-async fn restore_agent(
+async fn restore_job(
     git: &Git,
-    e: &AgentEntry,
+    e: &JobEntry,
     a: &Job,
     adir: &Path,
     warnings: &mut Vec<String>,

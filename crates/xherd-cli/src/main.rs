@@ -59,7 +59,7 @@ enum Cmd {
     Docker(DockerCmd),
     /// Is the daemon up?
     Status,
-    /// Create an agent: worktree, branch and `.xherd/`.
+    /// Create a job: worktree, branch and `.xherd/`.
     New {
         /// Job name: lowercase letters, digits and `-` (also the tmux session and worktree folder).
         name: String,
@@ -88,9 +88,9 @@ enum Cmd {
         model: Option<String>,
         prompt: Option<String>,
     },
-    /// List agents.
+    /// List jobs.
     Ls,
-    /// Install a pack's commands for agent runtimes (default: xherd, every runtime switched on).
+    /// Install a pack's commands for job runtimes (default: xherd, every runtime switched on).
     Install {
         #[arg(long)]
         runtime: Option<String>,
@@ -99,51 +99,51 @@ enum Cmd {
     },
     /// Change what xherd may approve by itself: ask or important.
     Autonomy {
-        agent: String,
+        job: String,
         level: xherd_core::autonomy::Autonomy,
     },
-    /// Change an agent's tool permissions (ask, edits, auto, all); used from its next session start.
+    /// Change a job's tool permissions (ask, edits, auto, all); used from its next session start.
     Mode {
-        agent: String,
+        job: String,
         mode: xherd_core::permission::PermissionMode,
     },
-    /// Change an agent's model ("" = the runtime's default); used from its next session start.
-    Model { agent: String, model: String },
-    /// Pause an agent (it writes a handoff note first), or with --all every live agent at once, with no note (kill switch).
+    /// Change a job's model ("" = the runtime's default); used from its next session start.
+    Model { job: String, model: String },
+    /// Pause a job (it writes a handoff note first), or with --all every live job at once, with no note (kill switch).
     Pause {
-        agent: Option<String>,
-        #[arg(long, conflicts_with = "agent")]
+        job: Option<String>,
+        #[arg(long, conflicts_with = "job")]
         all: bool,
     },
-    /// Resume a paused, cancelled or failed agent.
-    Resume { agent: String },
-    /// Cancel an agent (ends its session, keeps the worktree unless --remove-worktree).
+    /// resume a paused, cancelled or failed job.
+    Resume { job: String },
+    /// Cancel a job (ends its session, keeps the worktree unless --remove-worktree).
     Cancel {
-        agent: String,
-        /// Also remove the worktree folder (the branch and the agent's record stay).
+        job: String,
+        /// Also remove the worktree folder (the branch and the job's record stay).
         #[arg(long)]
         remove_worktree: bool,
     },
-    /// Remove a done or cancelled agent's worktree folder (the branch and the record stay).
-    RemoveWorktree { agent: String },
-    /// Type a message into an agent's session.
-    Send { agent: String, text: String },
-    /// Ask a paused, parked, watching or failed agent something: starts a session with the text and holds it there (no auto-approval, no move to watching) until `xherd finish` or new flow work.
-    Talk { agent: String, text: String },
+    /// Remove a done or cancelled job's worktree folder (the branch and the record stay).
+    RemoveWorktree { job: String },
+    /// Type a message into a job's session.
+    Send { job: String, text: String },
+    /// Ask a paused, parked, watching or failed job something: starts a session with the text and holds it there (no auto-approval, no move to watching) until `xherd finish` or new flow work.
+    Talk { job: String, text: String },
     /// End a `talk`: back to watching its PR when it was watching, else paused.
-    Finish { agent: String },
-    /// Have the agent merge its PR's base branch into its branch and resolve the conflicts (a new session; the merge commit waits for your approval).
-    ResolveConflicts { agent: String },
-    /// Approve the agent's open gate (documents or commit) as they are now.
+    Finish { job: String },
+    /// Have the job merge its PR's base branch into its branch and resolve the conflicts (a new session; the merge commit waits for your approval).
+    ResolveConflicts { job: String },
+    /// Approve the job's open gate (documents or commit) as they are now.
     Approve {
-        agent: String,
+        job: String,
         #[arg(long)]
         reason: Option<String>,
     },
-    /// Ask the agent to revise its open gate.
-    Changes { agent: String, comment: String },
+    /// Ask the job to revise its open gate.
+    Changes { job: String, comment: String },
     /// Show the open commit proposal's diff, the branch at a ship gate, else every uncommitted change.
-    Diff { agent: String },
+    Diff { job: String },
     /// git credential helper: answers `get` with the token of Settings → Git access.
     Credential { op: String },
     /// Git access.
@@ -152,22 +152,22 @@ enum Cmd {
     /// Security overview.
     #[command(subcommand)]
     Security(SecurityCmd),
-    /// Back up and restore xherd's data and the agents' unfinished work.
+    /// Back up and restore xherd's data and the jobs' unfinished work.
     #[command(subcommand)]
     Backup(BackupCmd),
     /// Checks behind xherd's git hooks.
     #[command(subcommand)]
     Guard(GuardCmd),
-    /// Open an agent's worktree in an app on this computer (apps: ~/.config/xherd/open.json, else editors on PATH).
+    /// Open a job's worktree in an app on this computer (apps: ~/.config/xherd/open.json, else editors on PATH).
     Open {
-        agent: String,
+        job: String,
         #[arg(long)]
         app: Option<String>,
     },
-    /// Attach this terminal to an agent's session (in the container when xherd runs in Docker).
-    Attach { agent: String },
-    /// A shell in an agent's worktree (in the container when xherd runs in Docker).
-    Shell { agent: String },
+    /// Attach this terminal to a job's session (in the container when xherd runs in Docker).
+    Attach { job: String },
+    /// A shell in a job's worktree (in the container when xherd runs in Docker).
+    Shell { job: String },
     /// Register the xherd-term:// link that opens a terminal in a worktree.
     #[command(subcommand)]
     TerminalHandler(TerminalHandlerCmd),
@@ -224,7 +224,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum BackupCmd {
-    /// Write one archive: database, config, plugins, archive, and each live agent's .xherd, branch bundle and uncommitted work. No secrets or logins.
+    /// Write one archive: database, config, plugins, archive, and each live job's .xherd, branch bundle and uncommitted work. No secrets or logins.
     Create {
         /// Folder for the archive (default: the data root's backups/, in the container <workspace>/xherd-backups).
         #[arg(long)]
@@ -232,13 +232,13 @@ enum BackupCmd {
     },
     /// Check an archive (hashes, database, bundles) without restoring it.
     Verify { archive: std::path::PathBuf },
-    /// Restore an archive into the data root (daemon stopped). Agents come back paused.
+    /// Restore an archive into the data root (daemon stopped). Jobs come back paused.
     Restore {
         archive: std::path::PathBuf,
         /// Workspace on this machine, when it differs from the one in the backup.
         #[arg(long)]
         workspace: Option<String>,
-        /// Also rewrite a path prefix of the agents' repositories: OLD=NEW (repeatable).
+        /// Also rewrite a path prefix of the jobs' repositories: OLD=NEW (repeatable).
         #[arg(long = "map")]
         maps: Vec<String>,
         /// Replace an existing database (it is kept in backups/).
@@ -285,7 +285,7 @@ enum DockerCmd {
     },
     /// Check engine, mounts, ownership, SSH agent and port binding, each with a fix.
     Doctor,
-    /// Pause live agents, pull and restart the container, resume them.
+    /// Pause live jobs, pull and restart the container, resume them.
     Update {
         /// Update even when the daemon does not answer.
         #[arg(long)]
@@ -326,6 +326,14 @@ enum ToolchainCmd {
     },
 }
 
+/// `xherd job new …` is `xherd new …`: the word `job` before a command is dropped.
+fn argv_without_job_word(mut args: Vec<String>) -> Vec<String> {
+    if args.get(1).map(String::as_str) == Some("job") && args.len() > 2 {
+        args.remove(1);
+    }
+    args
+}
+
 fn main() -> ExitCode {
     // Hot path first: no argument parser errors, no panics, nothing on stdout (R-012).
     let args: Vec<String> = std::env::args().collect();
@@ -336,7 +344,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let cli = match Cli::try_parse() {
+    let cli = match Cli::try_parse_from(argv_without_job_word(args)) {
         Ok(c) => c,
         Err(e) => {
             let code = if e.use_stderr() { 64 } else { 0 };
@@ -402,58 +410,48 @@ fn main() -> ExitCode {
                 model,
             },
         ),
-        Cmd::Model { agent, model } => {
-            action(&agent, "model", Some(serde_json::json!({"model": model})))
+        Cmd::Model { job, model } => {
+            action(&job, "model", Some(serde_json::json!({"model": model})))
         }
-        Cmd::Mode { agent, mode } => {
-            action(&agent, "mode", Some(serde_json::json!({"mode": mode})))
+        Cmd::Mode { job, mode } => action(&job, "mode", Some(serde_json::json!({"mode": mode}))),
+        Cmd::Autonomy { job, level } => {
+            action(&job, "autonomy", Some(serde_json::json!({"level": level})))
         }
-        Cmd::Autonomy { agent, level } => action(
-            &agent,
-            "autonomy",
-            Some(serde_json::json!({"level": level})),
-        ),
-        Cmd::Pause {
-            agent: Some(agent), ..
-        } => action(&agent, "pause", None),
+        Cmd::Pause { job: Some(job), .. } => action(&job, "pause", None),
         Cmd::Pause { all: true, .. } => with_client(pause_all),
         Cmd::Pause { .. } => {
-            eprintln!("xherd pause: give an agent name, or --all");
+            eprintln!("xherd pause: give an job name, or --all");
             2
         }
-        Cmd::Resume { agent } => action(&agent, "resume", None),
+        Cmd::Resume { job } => action(&job, "resume", None),
         Cmd::Cancel {
-            agent,
+            job,
             remove_worktree,
         } => action(
-            &agent,
+            &job,
             "cancel",
             remove_worktree.then(|| serde_json::json!({"removeWorktree": true})),
         ),
-        Cmd::RemoveWorktree { agent } => action(&agent, "remove-worktree", None),
-        Cmd::Send { agent, text } => {
-            action(&agent, "send", Some(serde_json::json!({"text": text})))
+        Cmd::RemoveWorktree { job } => action(&job, "remove-worktree", None),
+        Cmd::Send { job, text } => action(&job, "send", Some(serde_json::json!({"text": text}))),
+        Cmd::Talk { job, text } => action(&job, "ask", Some(serde_json::json!({"text": text}))),
+        Cmd::Finish { job } => action(&job, "finish", None),
+        Cmd::ResolveConflicts { job } => action(&job, "resolve-conflicts", None),
+        Cmd::Approve { job, reason } => {
+            action(&job, "approve", Some(serde_json::json!({"reason": reason})))
         }
-        Cmd::Talk { agent, text } => action(&agent, "ask", Some(serde_json::json!({"text": text}))),
-        Cmd::Finish { agent } => action(&agent, "finish", None),
-        Cmd::ResolveConflicts { agent } => action(&agent, "resolve-conflicts", None),
-        Cmd::Approve { agent, reason } => action(
-            &agent,
-            "approve",
-            Some(serde_json::json!({"reason": reason})),
-        ),
-        Cmd::Changes { agent, comment } => action(
-            &agent,
+        Cmd::Changes { job, comment } => action(
+            &job,
             "request-changes",
             Some(serde_json::json!({"comment": comment})),
         ),
-        Cmd::Diff { agent } => diff(&agent, json),
+        Cmd::Diff { job } => diff(&job, json),
         Cmd::Toolchain(ToolchainCmd::Exec { argv }) => toolchain::exec(argv),
         Cmd::Credential { op } => git::credential(&op),
         Cmd::Guard(GuardCmd::PrePush { branch, .. }) => guard::pre_push(&branch),
-        Cmd::Open { agent, app } => with_client(|c| open_in::open(c, &agent, app)),
-        Cmd::Attach { agent } => with_client(|c| open_in::attach(c, &agent, false)),
-        Cmd::Shell { agent } => with_client(|c| open_in::attach(c, &agent, true)),
+        Cmd::Open { job, app } => with_client(|c| open_in::open(c, &job, app)),
+        Cmd::Attach { job } => with_client(|c| open_in::attach(c, &job, false)),
+        Cmd::Shell { job } => with_client(|c| open_in::attach(c, &job, true)),
         Cmd::TerminalHandler(TerminalHandlerCmd::Install) => open_in::terminal_handler(false),
         Cmd::TerminalHandler(TerminalHandlerCmd::Uninstall) => open_in::terminal_handler(true),
         Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
@@ -782,7 +780,7 @@ fn ls() -> i32 {
     };
     let agents = v["jobs"].as_array().cloned().unwrap_or_default();
     if agents.is_empty() {
-        println!("no agents");
+        println!("no jobs");
         return 0;
     }
     print!("{}", ls_table(&agents));
@@ -792,7 +790,7 @@ fn ls() -> i32 {
 /// `xherd ls` as text: each column as wide as its longest value, the
 /// runtime's session id cut to 8 characters (its full form is a UUID).
 fn ls_table(agents: &[Value]) -> String {
-    let mut rows = vec![["NAME", "STATUS", "SESSION", "GATE / PR"].map(String::from)];
+    let mut rows = vec![["JOB", "STATUS", "SESSION", "GATE / PR"].map(String::from)];
     for a in agents {
         let session = a["session"].as_str().unwrap_or("-");
         rows.push([
@@ -983,6 +981,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn job_word_is_an_alias() {
+        let argv = |v: &[&str]| argv_without_job_word(v.iter().map(|s| s.to_string()).collect());
+        let cli = Cli::try_parse_from(argv(&["xherd", "job", "new", "shop"])).unwrap();
+        assert!(matches!(cli.cmd, Cmd::New { ref name, .. } if name == "shop"));
+        let cli = Cli::try_parse_from(argv(&["xherd", "new", "shop"])).unwrap();
+        assert!(matches!(cli.cmd, Cmd::New { .. }));
+        assert!(Cli::try_parse_from(argv(&["xherd", "job"])).is_err());
+    }
+
+    #[test]
     fn ls_columns_fit_long_names_and_sessions() {
         let agents = [
             serde_json::json!({"name": "SHOP-151-order-export-csv", "status": "waiting-input",
@@ -992,7 +1000,7 @@ mod tests {
         ];
         assert_eq!(
             ls_table(&agents),
-            "NAME                       STATUS         SESSION   GATE / PR\n\
+            "JOB                        STATUS         SESSION   GATE / PR\n\
              SHOP-151-order-export-csv  waiting-input  5c0e9f1a  commit C02: a.ts\n\
              SHOP-9-x                   paused         -         -\n"
         );
@@ -1051,17 +1059,17 @@ mod tests {
     fn talk_and_finish_parse() {
         let cli = Cli::try_parse_from(["xherd", "talk", "shop", "Why the retry?"]).unwrap();
         assert!(
-            matches!(cli.cmd, Cmd::Talk { ref agent, ref text } if agent == "shop" && text == "Why the retry?")
+            matches!(cli.cmd, Cmd::Talk { ref job, ref text } if job == "shop" && text == "Why the retry?")
         );
         let cli = Cli::try_parse_from(["xherd", "finish", "shop"]).unwrap();
-        assert!(matches!(cli.cmd, Cmd::Finish { ref agent } if agent == "shop"));
+        assert!(matches!(cli.cmd, Cmd::Finish { ref job } if job == "shop"));
         assert!(Cli::try_parse_from(["xherd", "talk", "shop"]).is_err());
     }
 
     #[test]
     fn resolve_conflicts_parses() {
         let cli = Cli::try_parse_from(["xherd", "resolve-conflicts", "shop"]).unwrap();
-        assert!(matches!(cli.cmd, Cmd::ResolveConflicts { ref agent } if agent == "shop"));
+        assert!(matches!(cli.cmd, Cmd::ResolveConflicts { ref job } if job == "shop"));
         assert!(Cli::try_parse_from(["xherd", "resolve-conflicts"]).is_err());
     }
 
@@ -1069,7 +1077,7 @@ mod tests {
     fn cancel_and_remove_worktree_parse() {
         let cli = Cli::try_parse_from(["xherd", "cancel", "shop"]).unwrap();
         assert!(
-            matches!(cli.cmd, Cmd::Cancel { ref agent, remove_worktree: false } if agent == "shop")
+            matches!(cli.cmd, Cmd::Cancel { ref job, remove_worktree: false } if job == "shop")
         );
         let cli = Cli::try_parse_from(["xherd", "cancel", "shop", "--remove-worktree"]).unwrap();
         assert!(matches!(
@@ -1080,7 +1088,7 @@ mod tests {
             }
         ));
         let cli = Cli::try_parse_from(["xherd", "remove-worktree", "shop"]).unwrap();
-        assert!(matches!(cli.cmd, Cmd::RemoveWorktree { ref agent } if agent == "shop"));
+        assert!(matches!(cli.cmd, Cmd::RemoveWorktree { ref job } if job == "shop"));
         assert!(Cli::try_parse_from(["xherd", "remove-worktree"]).is_err());
     }
 

@@ -771,7 +771,7 @@ async fn new_backup(
         .await
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "backup_failed", e))?;
     Ok(Json(
-        json!({"path": c.path, "agents": c.agents, "warnings": c.warnings}),
+        json!({"path": c.path, "jobs": c.jobs, "warnings": c.warnings}),
     ))
 }
 

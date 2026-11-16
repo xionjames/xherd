@@ -80,7 +80,7 @@ async fn backup_and_restore_on_another_machine() {
     let made = backup::create(&p1, &ws1, &store, &g, &dest, "manual", 1_000_000)
         .await
         .unwrap();
-    assert_eq!(made.agents, 1, "{:?}", made.warnings);
+    assert_eq!(made.jobs, 1, "{:?}", made.warnings);
     assert!(made.path.is_file());
     // Nothing is left beside the archive.
     assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 1);
@@ -88,8 +88,10 @@ async fn backup_and_restore_on_another_machine() {
     let m = backup::verify(&made.path, &p1.scratch(), &g, 1)
         .await
         .unwrap();
-    assert!(m.agents[0].bundle && m.agents[0].patch);
+    assert!(m.jobs[0].bundle && m.jobs[0].patch);
     assert!(!m.files.keys().any(|k| k.contains("secrets")));
+    assert!(m.files.keys().any(|k| k.starts_with("jobs/ag1/")));
+    assert!(!m.files.keys().any(|k| k.starts_with("agents/")));
 
     // The second machine: no repository, another workspace.
     let ws2 = t.join("ws2");
@@ -101,7 +103,7 @@ async fn backup_and_restore_on_another_machine() {
     let r = backup::restore(&p2, &g, &made.path, &opts, 2)
         .await
         .unwrap();
-    assert_eq!(r.agents, ["ag1"]);
+    assert_eq!(r.jobs, ["ag1"]);
     assert!(r.warnings.is_empty(), "{:?}", r.warnings);
 
     let wt2 = ws2.join("worktrees/r/ag1");
@@ -140,6 +142,54 @@ async fn backup_and_restore_on_another_machine() {
     // A second restore over a database needs --force.
     let again = backup::restore(&p2, &g, &made.path, &opts, 3).await;
     assert!(again.unwrap_err().contains("--force"));
+
+    // An archive made before the rename (`agents/<name>`, manifest key `agents`).
+    let old = legacy_archive(&made.path, &t.join("legacy"));
+    let ws3 = t.join("ws3");
+    let p3 = Paths::at(t.join("data3"));
+    let opts3 = RestoreOptions {
+        workspace: Some(ws3.to_string_lossy().into_owned()),
+        ..RestoreOptions::default()
+    };
+    let m3 = backup::verify(&old, &p3.scratch(), &g, 4).await.unwrap();
+    assert_eq!(m3.jobs.len(), 1);
+    let r3 = backup::restore(&p3, &g, &old, &opts3, 5).await.unwrap();
+    assert_eq!(r3.jobs, ["ag1"]);
+    assert!(r3.warnings.is_empty(), "{:?}", r3.warnings);
+    let wt3 = ws3.join("worktrees/r/ag1");
+    assert_eq!(git(&g, &wt3, &["log", "-1", "--format=%s"]).await, "work");
+    assert_eq!(
+        std::fs::read_to_string(wt3.join(".xherd/spec/spec.md")).unwrap(),
+        "# spec\n"
+    );
+}
+
+/// Repack `archive` the way xherd made them before jobs: `agents/<name>` folders and
+/// `agents` in the manifest.
+fn legacy_archive(archive: &Path, work: &Path) -> std::path::PathBuf {
+    let dir = work.join("tree");
+    std::fs::create_dir_all(&dir).unwrap();
+    let dec = zstd::Decoder::new(std::fs::File::open(archive).unwrap()).unwrap();
+    tar::Archive::new(dec).unpack(&dir).unwrap();
+    std::fs::rename(dir.join("jobs"), dir.join("agents")).unwrap();
+    let mp = dir.join("manifest.json");
+    let mut m: serde_json::Value = serde_json::from_slice(&std::fs::read(&mp).unwrap()).unwrap();
+    let o = m.as_object_mut().unwrap();
+    let jobs = o.remove("jobs").unwrap();
+    o.insert("agents".into(), jobs);
+    let files = o["files"].as_object().unwrap().clone();
+    let renamed: serde_json::Map<String, serde_json::Value> = files
+        .into_iter()
+        .map(|(k, v)| (k.replacen("jobs/", "agents/", 1), v))
+        .collect();
+    o.insert("files".into(), renamed.into());
+    std::fs::write(&mp, serde_json::to_vec(&m).unwrap()).unwrap();
+    let out = work.join("old.tar.zst");
+    let enc = zstd::Encoder::new(std::fs::File::create(&out).unwrap(), 3).unwrap();
+    let mut b = tar::Builder::new(enc);
+    b.append_dir_all(".", &dir).unwrap();
+    b.into_inner().unwrap().finish().unwrap();
+    out
 }
 
 #[tokio::test]
