@@ -17,11 +17,13 @@ pub mod host;
 pub mod issues;
 pub mod manifest;
 pub mod runtime;
+pub mod source;
 pub mod toolchain;
 pub mod tracker;
 pub mod view;
 
 pub use manifest::{Check, Kind, MANIFEST_FILE, Manifest, Setting};
+pub use source::PluginSource;
 
 /// Built-in plugins compiled into the binary (R-504), from `plugins/`.
 pub fn builtins() -> Vec<Manifest> {

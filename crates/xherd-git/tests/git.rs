@@ -511,3 +511,78 @@ async fn commit_paths_refuses_an_unresolved_or_wider_merge() {
     assert_eq!(g.rev_parse(d.path(), "HEAD").await.unwrap(), head);
     assert!(g.merge_in_progress(d.path()).await);
 }
+
+#[tokio::test]
+async fn fetch_shallow_takes_a_branch_a_sha_or_head_without_history() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let g = init_repo(&repo).await;
+    let first = g.rev_parse(&repo, "HEAD").await.unwrap();
+    g.run(&repo, &["checkout", "--quiet", "-b", "dev"])
+        .await
+        .unwrap();
+    std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+    g.run(&repo, &["commit", "--quiet", "-am", "second"])
+        .await
+        .unwrap();
+    let second = g.rev_parse(&repo, "HEAD").await.unwrap();
+    g.run(&repo, &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    let url = repo.to_string_lossy().to_string();
+
+    let head = d.path().join("head");
+    assert_eq!(g.fetch_shallow(&url, None, &head).await.unwrap(), first);
+    assert_eq!(
+        std::fs::read_to_string(head.join("a.txt")).unwrap(),
+        "one\n"
+    );
+
+    let by_branch = d.path().join("branch");
+    let sha = g
+        .fetch_shallow(&url, Some("dev"), &by_branch)
+        .await
+        .unwrap();
+    assert_eq!(sha, second);
+    assert_eq!(
+        std::fs::read_to_string(by_branch.join("a.txt")).unwrap(),
+        "two\n"
+    );
+    assert_eq!(
+        g.run(&by_branch, &["rev-list", "--count", "HEAD"])
+            .await
+            .unwrap(),
+        "1",
+        "no history"
+    );
+
+    let by_sha = d.path().join("sha");
+    assert_eq!(
+        g.fetch_shallow(&url, Some(&second), &by_sha).await.unwrap(),
+        second
+    );
+
+    let bad = d.path().join("bad");
+    assert!(g.fetch_shallow(&url, Some("nope"), &bad).await.is_err());
+    assert!(
+        g.fetch_shallow(&url, Some("--upload-pack=x"), &d.path().join("opt"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn diff_files_shows_a_change_and_is_empty_when_equal() {
+    let d = tempfile::tempdir().unwrap();
+    let g = Git::default();
+    let (a, b, c) = (d.path().join("a"), d.path().join("b"), d.path().join("c"));
+    std::fs::write(&a, "x\ny\n").unwrap();
+    std::fs::write(&b, "x\nz\n").unwrap();
+    std::fs::write(&c, "x\ny\n").unwrap();
+    let diff = g.diff_files(&a, &b).await.unwrap();
+    assert!(diff.contains("-y") && diff.contains("+z"), "{diff}");
+    assert_eq!(g.diff_files(&a, &c).await.unwrap(), "");
+    let gone = g.diff_files(&a, &d.path().join("missing")).await.unwrap();
+    assert!(gone.contains("-x"), "a missing file is empty: {gone}");
+}

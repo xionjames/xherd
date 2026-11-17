@@ -9,7 +9,12 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | Command | Does |
 |---|---|
 | `xherd daemon` | Run the daemon in the foreground. Logs are JSON on stderr; `XHERD_LOG=debug` for more |
+| `xherd daemon restart` | Ask the running daemon to restart (`POST /admin/restart`) and wait up to 60 s until it is down and answers `/healthz` again. The daemon closes its connections (10 s grace) and replaces itself with the same binary and arguments, so new plugins load while agent sessions in tmux keep running |
 | `xherd status` | Is the daemon up? |
+| `xherd plugin ls` | Plugins with their kind and version; an installed one shows `url@short-sha`, one copied by hand shows `installed by hand, not pinned`. Adds a note when a restart is needed |
+| `xherd plugin install URL [--ref REF] [--path DIR] [--yes]` | Fetch a git repository (any remote URL; `http://` is refused), preview what it holds (name, version, where it comes from, what it will run, a warning, whether it replaces another plugin, a digest), ask, then install exactly the previewed digest. A repository with several plugins prints the choices and exits 2 asking for `--path`. Private repositories use [Git access](../user/guide.md#welcome-plugins-and-git-access). Needs a restart to load |
+| `xherd plugin update NAME [--ref REF] [--yes]` | Same for an installed plugin: also prints the manifest diff, then installs the previewed digest. A plugin without a recorded source cannot be updated |
+| `xherd plugin remove NAME [--forget] [--yes]` | Delete an external plugin's folder; `--forget` also drops its settings and secrets. Refused while a live job uses it |
 | `xherd install [--runtime R] [--pack P]` | Install the pack's commands (`/xherd:*`) for runtimes. Default: the xherd pack, every runtime plugin that is switched on. Runs in the daemon, so commands land where jobs run |
 | `xherd docker init [--workspace DIR] [--image I] [--port N] [--extra-path DIR]… [--force]` | Write `~/.config/xherd/compose.yaml` and `.env` for the detected engine. `--extra-path` mounts another folder with repositories at the same path; `--force` rewrites an existing file |
 | `xherd docker doctor` | Check engine, mounts, ownership, SSH job and port binding; each finding has a fix |
@@ -114,6 +119,7 @@ Exit codes of XAP calls: `0` accepted, `2` refused (stderr has a one-line reason
 | Variable | Used by | Meaning |
 |---|---|---|
 | `XHERD_HOME` | everything | Data root. Else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd` |
+| `XHERD_PLUGIN_INSTALL=off` | daemon | Turn plugin install and update off (CLI, API and UI); removing stays possible |
 | `XHERD_WORKSPACE` | daemon | Workspace folder when `config.workspace` is not set (default `~/xherd`) |
 | `XHERD_URL` | CLI, jobs | Daemon URL; set in job sessions, read by the CLI when present |
 | `XHERD_LOG` | daemon | Log filter, e.g. `debug` |

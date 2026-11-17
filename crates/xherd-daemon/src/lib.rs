@@ -25,6 +25,7 @@ pub mod install;
 pub mod notifier;
 pub mod open_in;
 mod plugin_dirs;
+pub mod plugin_install;
 pub mod pr_round;
 pub mod profiles;
 pub mod repos;
@@ -77,6 +78,11 @@ pub struct Options {
     pub verify_timeout: std::time::Duration,
     /// Time between PR polls; `None` = `prPollMinutes` of the config (tests).
     pub pr_poll: Option<std::time::Duration>,
+    /// Plugins may be previewed, installed and updated (R10); the CLI sets
+    /// it to false for `XHERD_PLUGIN_INSTALL=off`.
+    pub plugin_install: bool,
+    /// Tests only: let a `file://` URL be a plugin source (no network).
+    pub allow_local_plugin_sources: bool,
 }
 
 impl Options {
@@ -93,6 +99,8 @@ impl Options {
             local_peers: Vec::new(),
             verify_timeout: actor::VERIFY_TIMEOUT,
             pr_poll: None,
+            plugin_install: true,
+            allow_local_plugin_sources: false,
         }
     }
 }
@@ -177,6 +185,19 @@ pub struct Daemon {
     pub config_write: Arc<std::sync::Mutex<()>>,
     /// Held while saved agents are changed (create, edit, archive, delete, import).
     pub agents_write: Arc<tokio::sync::Mutex<()>>,
+    /// Held while plugins are installed, updated or removed.
+    pub plugins_write: Arc<tokio::sync::Mutex<()>>,
+    /// See `Options::plugin_install`.
+    pub plugin_install: bool,
+    /// See `Options::allow_local_plugin_sources`.
+    pub allow_local_plugin_sources: bool,
+    /// External plugins loaded at start (name, recorded sha or empty), to
+    /// tell whether installs, updates or removals wait for a restart (R7).
+    pub loaded_plugins: Arc<BTreeMap<String, String>>,
+    /// The same map as it is now; changed with the plugin records.
+    pub plugin_state: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
+    /// Woken by `request_restart` (R7a); the daemon process re-executes.
+    pub restart: Arc<tokio::sync::Notify>,
 }
 
 /// `GET /runtimes/{name}/models`.
@@ -238,11 +259,26 @@ impl Daemon {
                 .await?;
         }
 
+        plugin_install::clean_staging(&paths.plugins());
         let (external, not_copied) = plugin_dirs::external_dir(&paths);
         let plugins = Registry::load(opts.builtin_plugins, &external).with_broken(not_copied);
         for b in plugins.broken() {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
         }
+        let recorded: BTreeMap<String, Option<String>> = store
+            .plugin_records()
+            .await?
+            .into_iter()
+            .map(|r| (r.name, r.sha))
+            .collect();
+        let loaded_plugins: BTreeMap<String, String> = plugins
+            .all()
+            .filter(|p| p.root.is_some())
+            .map(|p| {
+                let sha = recorded.get(p.name()).cloned().flatten();
+                (p.name().to_string(), sha.unwrap_or_default())
+            })
+            .collect();
 
         let packs = Arc::new(BTreeMap::from([(
             xherd_flow::BUILTIN.to_string(),
@@ -322,6 +358,12 @@ impl Daemon {
             secrets_write: Arc::default(),
             config_write: Arc::default(),
             agents_write: Arc::default(),
+            plugins_write: Arc::default(),
+            plugin_install: opts.plugin_install,
+            allow_local_plugin_sources: opts.allow_local_plugin_sources,
+            plugin_state: Arc::new(std::sync::Mutex::new(loaded_plugins.clone())),
+            loaded_plugins: Arc::new(loaded_plugins),
+            restart: Arc::default(),
         };
         d.import_ledgers().await;
         d.repair_restored().await;

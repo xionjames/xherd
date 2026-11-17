@@ -152,6 +152,15 @@ pub fn router(d: Daemon) -> Router {
             get(view::plugin_file),
         )
         .route("/api/v1/view-kit/{file}", get(view::kit_file))
+        .route("/api/v1/plugins", get(plugins_list))
+        .route("/api/v1/plugins/preview", post(plugin_preview))
+        .route("/api/v1/plugins/install", post(plugin_install))
+        .route(
+            "/api/v1/plugins/{name}",
+            axum::routing::delete(plugin_remove),
+        )
+        .route("/api/v1/plugins/{name}/update", post(plugin_update))
+        .route("/api/v1/admin/restart", post(admin_restart))
         .route("/api/v1/plugins/{name}/login", post(plugin_login))
         .route(
             "/api/v1/plugins/{name}/secrets",
@@ -226,6 +235,15 @@ impl From<ActionError> for ApiError {
             | "mixed_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_agent" | "no_such_skill" => StatusCode::NOT_FOUND,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
+            "plugin_install_off" => StatusCode::FORBIDDEN,
+            "unknown_plugin" => StatusCode::NOT_FOUND,
+            "bad_plugin_source"
+            | "bad_plugin_folder"
+            | "bad_manifest"
+            | "build_not_supported"
+            | "kind_not_supported"
+            | "no_manifest" => StatusCode::UNPROCESSABLE_ENTITY,
+            "fetch_failed" => StatusCode::BAD_GATEWAY,
             "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
@@ -413,6 +431,7 @@ async fn healthz() -> Json<Value> {
 
 async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
     let agents = d.store.list_jobs().await.map_err(ApiError::internal)?;
+    let records = d.store.plugin_records().await.map_err(ApiError::internal)?;
     let mut config = serde_json::to_value(&*d.config).map_err(ApiError::internal)?;
     if let Some(c) = config.as_object_mut() {
         c.remove("userToken");
@@ -440,6 +459,10 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
                    "builtin": p.builtin(), "settings": settings,
                    "enabled": d.plugin_enabled(p.name()), "login": p.manifest.login.is_some(),
                    "chooseModel": models});
+            // Where an installed plugin came from (R6).
+            if let Some(r) = records.iter().find(|r| r.name == p.name()) {
+                info["source"] = record_source(r);
+            }
             // A Herd view plugin: the file the Herd page frames (R9).
             if p.manifest.kind == xherd_plugin::Kind::View
                 && let Ok(entry) = xherd_plugin::manifest::view_entry(&p.manifest)
@@ -1060,6 +1083,129 @@ async fn put_plugin_secrets(
     Json(r): Json<SecretsReq>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.set_plugin_secrets(&name, r.values)?))
+}
+
+/// The recorded source of an installed plugin.
+fn record_source(r: &xherd_store::PluginRecord) -> Value {
+    json!({"url": r.source, "ref": r.data["ref"], "path": r.data["path"], "sha": r.sha,
+           "digest": r.data["digest"], "installedAt": r.data["installedAt"],
+           "updatedAt": r.data["updatedAt"]})
+}
+
+/// The plugins with their sources, and whether a restart is needed (R7).
+async fn plugins_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    let records = d.store.plugin_records().await.map_err(ApiError::internal)?;
+    let plugins: Vec<Value> = d
+        .plugins
+        .all()
+        .map(|p| {
+            let mut info = json!({"name": p.name(), "kind": p.manifest.kind,
+                "version": p.manifest.version, "builtin": p.builtin()});
+            if let Some(r) = records.iter().find(|r| r.name == p.name()) {
+                info["source"] = record_source(r);
+            }
+            info
+        })
+        .collect();
+    Ok(Json(json!({
+        "plugins": plugins,
+        "restartNeeded": d.plugin_changes(),
+        "installEnabled": d.plugin_install,
+    })))
+}
+
+#[derive(Deserialize)]
+struct PluginSourceReq {
+    url: String,
+    #[serde(rename = "ref")]
+    git_ref: Option<String>,
+    path: Option<String>,
+    /// The digest the user saw in the preview (install only).
+    digest: Option<String>,
+}
+
+/// Fetch a source and show what installing it would do; nothing is written (R1).
+async fn plugin_preview(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<PluginSourceReq>,
+) -> ApiResult<Json<Value>> {
+    let p = d
+        .plugin_preview(&r.url, r.git_ref.as_deref(), r.path.as_deref())
+        .await?;
+    Ok(Json(serde_json::to_value(p).map_err(ApiError::internal)?))
+}
+
+/// Install what the user previewed: refused when the source changed since (R4).
+async fn plugin_install(
+    _: User,
+    State(d): State<Daemon>,
+    Json(r): Json<PluginSourceReq>,
+) -> ApiResult<Json<Value>> {
+    let digest = r
+        .digest
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "usage",
+                "digest is required: install what a preview showed",
+            )
+        })?;
+    let i = d
+        .plugin_install(&r.url, r.git_ref.as_deref(), r.path.as_deref(), digest)
+        .await?;
+    Ok(Json(serde_json::to_value(i).map_err(ApiError::internal)?))
+}
+
+#[derive(Deserialize)]
+struct PluginUpdateReq {
+    #[serde(rename = "ref")]
+    git_ref: Option<String>,
+    /// Without it: the preview (manifest diff); with it: apply that preview.
+    digest: Option<String>,
+}
+
+async fn plugin_update(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+    Json(r): Json<PluginUpdateReq>,
+) -> ApiResult<Json<Value>> {
+    let v = match r.digest.as_deref().filter(|s| !s.is_empty()) {
+        None => {
+            let p = d.plugin_update_preview(&name, r.git_ref.as_deref()).await?;
+            serde_json::to_value(p)
+        }
+        Some(digest) => {
+            let u = d.plugin_update(&name, r.git_ref.as_deref(), digest).await?;
+            serde_json::to_value(u)
+        }
+    };
+    Ok(Json(v.map_err(ApiError::internal)?))
+}
+
+#[derive(Deserialize, Default)]
+struct PluginRemoveQuery {
+    #[serde(default)]
+    forget: bool,
+}
+
+async fn plugin_remove(
+    _: User,
+    State(d): State<Daemon>,
+    Path(name): Path<String>,
+    Query(q): Query<PluginRemoveQuery>,
+) -> ApiResult<Json<Value>> {
+    let r = d.plugin_remove(&name, q.forget).await?;
+    Ok(Json(serde_json::to_value(r).map_err(ApiError::internal)?))
+}
+
+/// Ask the daemon to restart itself (R7a); the process re-executes.
+async fn admin_restart(_: User, State(d): State<Daemon>) -> (StatusCode, Json<Value>) {
+    d.request_restart();
+    (StatusCode::ACCEPTED, Json(json!({"restarting": true})))
 }
 
 /// Start a plugin's login (`/ws/setup/plugin-login` shows it).

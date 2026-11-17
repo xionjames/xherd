@@ -361,7 +361,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
 | Settings | `GET/PUT /config`, `GET/POST/PUT/DELETE /profiles…`, `GET /profiles/export`, `POST /profiles/import` |
 | Repositories | `GET /repos` (earlier jobs' repositories and xherd's clones), `POST /repos/resolve` (a path, or a URL cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use; answers the path, branches and default base) |
-| Plugins and packs | `GET /plugins`, `POST /plugins/preview`, `POST /plugins/install`, `POST /plugins/:name/{update,enable,disable,reload}`, `PUT /plugins/:name/settings`, `DELETE /plugins/:name`, same under `/flows` |
+| Plugins and packs | `GET /plugins`, `POST /plugins/preview`, `POST /plugins/install`, `POST /plugins/:name/{update,enable,disable,reload}` (update: no digest previews, a digest applies), `PUT /plugins/:name/settings`, `DELETE /plugins/:name`, `POST /admin/restart`, same under `/flows` |
 | Git and toolchains | `GET/PUT /git/hosts`, `POST /git/doctor`, `POST /git/known-hosts`, `POST /git/login` (browser login session, `/ws/setup/git-login`), `POST /git/credential` (`xherd credential`), `GET /toolchains`, `POST /toolchains/install` |
 | Devices and access | `POST /pair`, `GET/DELETE /devices…`, `GET/PUT /lan`, `POST /token/rotate`, `GET /ca.pem` |
 | Admin | `POST /admin/drain`, `POST /admin/resume-drained`, `GET/POST /backups`, `GET /security/check`, `GET /worklog` |
@@ -756,7 +756,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Agents on workflow stages (#141 second part; D26, T21–T26): agent record without repo/base/workflow (migration 4), `flow_assignments` (migration 5) with `resolve::stage_agent`, job snapshot of several agents, switch at session start, `fallbackRuntime`, Flows page, New job and stepper per stage, the stage's agent on Board cards, backups of assignments. Not checked in a browser or with real runtimes
   - [x] Saved agents (#141, branch `141-rethink-agents`; D25): job rename, `agents`/`agent_versions`/`agent_memory` tables, resolver (request > agent > profile > settings), CRUD/export/import, jobs from agents, `maxLiveJobs`, CLI, UI (Agents, agent page, picker, grouping), time and budgets by agent, skills library and per-runtime skill install, agent memory and proposals, mark done and suggestions, backups of agents and skills. Not checked in a browser or with real runtimes
   - [ ] Toolchain plugins and Welcome installer
-  - [ ] Plugin install from the UI
+  - [x] Plugin install from a git URL (CLI and Settings → Plugins): shallow fetch into a scratch folder, preview and digest, install only the previewed digest, update with manifest diff, remove with `--forget`; source `url@sha` in the `plugins` table (no migration), audit events `plugin-install|update|remove`; restart by re-exec (`POST /admin/restart`, `xherd daemon restart`); `XHERD_PLUGIN_INSTALL=off`. No live reload, catalogue, archives or `plugin new|test|link`
   - [x] Herd views as plugins (#108): kind `view`, sandboxed frame, protocol v1, view kit
   - [x] TODOs: reminders, once or repeating (`/todos`, 30 s tick, kind `todo`)
   - [x] TODO condition checks (spec §16.2): a headless read-only run of the runtime (`data.terminal.check`) answering `XHERD_RESULT {met, summary}`; met or unclear needs you, not met is rescheduled, failure is an error

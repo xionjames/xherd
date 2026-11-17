@@ -17,6 +17,7 @@ mod git;
 mod guard;
 mod init;
 mod open_in;
+mod plugin;
 mod report;
 mod toolchain;
 mod xap;
@@ -37,8 +38,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Run the daemon in the foreground.
-    Daemon,
+    /// Run the daemon in the foreground (`restart`: restart a running one).
+    Daemon {
+        #[command(subcommand)]
+        action: Option<DaemonCmd>,
+    },
     /// Container entrypoint (root): prepare the user, home, SSH and git, then run the daemon.
     Init,
     /// Run commands for the daemon as this user (container, R-1203): listens on a unix socket.
@@ -104,6 +108,9 @@ enum Cmd {
     /// Which saved agent runs which stage of a workflow.
     #[command(subcommand)]
     Flow(flow::FlowCmd),
+    /// External plugins: install from a git repository, update, remove, list.
+    #[command(subcommand)]
+    Plugin(plugin::PluginCmd),
     /// List jobs.
     Ls,
     /// Install a pack's commands for job runtimes (default: xherd, every runtime switched on).
@@ -284,6 +291,12 @@ enum GitCmd {
 }
 
 #[derive(Subcommand)]
+enum DaemonCmd {
+    /// Restart the running daemon in place (same process, new code and plugins); jobs keep running.
+    Restart,
+}
+
+#[derive(Subcommand)]
 enum DockerCmd {
     /// Write ~/.config/xherd/compose.yaml and .env for the detected engine.
     Init {
@@ -372,7 +385,10 @@ fn main() -> ExitCode {
     };
     let json = cli.json;
     let code = match cli.cmd {
-        Cmd::Daemon => run_daemon(),
+        Cmd::Daemon { action: None } => run_daemon(),
+        Cmd::Daemon {
+            action: Some(DaemonCmd::Restart),
+        } => with_client(daemon_restart),
         Cmd::Init => init::init(),
         Cmd::Runner {
             socket,
@@ -401,6 +417,7 @@ fn main() -> ExitCode {
         Cmd::Ls => ls(),
         Cmd::Agent(c) => agent::run(c, json),
         Cmd::Flow(c) => flow::run(c, json),
+        Cmd::Plugin(c) => plugin::run(c, json),
         Cmd::Install { runtime, pack } => install(runtime, pack),
         Cmd::New {
             name,
@@ -581,7 +598,16 @@ fn run_daemon() -> i32 {
         }
     };
     match rt.block_on(daemon_main()) {
-        Ok(()) => 0,
+        Ok(false) => 0,
+        // A restart was requested (R7a): the runtime is gone and the listener
+        // closed; start again as the same process so new plugins load.
+        Ok(true) => {
+            drop(rt);
+            let e = exec_self();
+            tracing::error!(error = %e, "restart failed");
+            eprintln!("xherd daemon: cannot restart: {e}");
+            1
+        }
         Err(e) => {
             tracing::error!(error = %e, "daemon stopped");
             eprintln!("xherd daemon: {e}");
@@ -590,7 +616,68 @@ fn run_daemon() -> i32 {
     }
 }
 
-async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
+/// How long open connections (terminals, websockets) may delay a stop or restart.
+const STOP_GRACE: Duration = Duration::from_secs(10);
+
+/// The binary to run again: Linux appends " (deleted)" to `current_exe` when
+/// the file was replaced by an update.
+fn restart_exe(exe: std::path::PathBuf) -> std::path::PathBuf {
+    match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+        Some(s) => s.into(),
+        None => exe,
+    }
+}
+
+/// Replace this process with a new `xherd` with the same arguments; returns
+/// only when that failed.
+fn exec_self() -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    match std::env::current_exe() {
+        Ok(exe) => std::process::Command::new(restart_exe(exe))
+            .args(std::env::args_os().skip(1))
+            .exec(),
+        Err(e) => e,
+    }
+}
+
+/// `xherd daemon restart`: ask, then wait until the daemon is down and up again.
+fn daemon_restart(c: &Client) -> i32 {
+    if let Err(e) = c.call("POST", "/admin/restart", None) {
+        eprintln!("xherd daemon restart: {e}");
+        return 1;
+    }
+    let up = || c.call("GET", "/healthz", None).is_ok();
+    let poll = Duration::from_millis(50);
+    let start = std::time::Instant::now();
+    let mut seen_down = false;
+    while start.elapsed() < Duration::from_secs(60) {
+        if up() {
+            if seen_down {
+                println!("xherd restarted");
+                return 0;
+            }
+            // Still the old process: it stops within the grace period.
+            if start.elapsed() > STOP_GRACE + Duration::from_secs(5) {
+                break;
+            }
+        } else {
+            seen_down = true;
+        }
+        std::thread::sleep(poll);
+    }
+    eprintln!(
+        "xherd daemon restart: {}",
+        if seen_down {
+            "the daemon did not come back within 60 s (see its log)"
+        } else {
+            "the daemon did not stop"
+        }
+    );
+    1
+}
+
+/// Runs the daemon; `true` when it stopped for a restart request.
+async fn daemon_main() -> Result<bool, Box<dyn std::error::Error>> {
     let paths = Paths::from_env();
     let (cfg, _) = Config::load(&paths.config())?;
     // In the container the daemon binds every interface (`XHERD_BIND`), and
@@ -621,11 +708,36 @@ async fn daemon_main() -> Result<(), Box<dyn std::error::Error>> {
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
         .collect();
+    opts.plugin_install = std::env::var("XHERD_PLUGIN_INSTALL").map_or(true, |v| v != "off");
     let d = xherd_daemon::Daemon::start(paths.clone(), opts).await?;
     tracing::info!(url = %format!("http://{addr}"), data = %paths.root.display(), version = xherd_core::BUILD_VERSION, "xherd daemon listening");
-    xherd_api::serve(d, listener, shutdown_signal()).await?;
-    tracing::info!("xherd daemon stopped; agent sessions keep running");
-    Ok(())
+    let restarting = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (stopping_tx, stopping_rx) = tokio::sync::oneshot::channel::<()>();
+    let shutdown = {
+        let (d, restarting) = (d.clone(), restarting.clone());
+        async move {
+            tokio::select! {
+                _ = shutdown_signal() => {},
+                _ = d.restart_requested() => {
+                    restarting.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _ = stopping_tx.send(());
+        }
+    };
+    let serve = xherd_api::serve(d, listener, shutdown);
+    tokio::pin!(serve);
+    // Graceful stop, but open terminals must not hold it forever.
+    tokio::select! {
+        r = &mut serve => r?,
+        _ = async {
+            let _ = stopping_rx.await;
+            tokio::time::sleep(STOP_GRACE).await;
+        } => tracing::warn!("open connections did not close in time"),
+    }
+    let restart = restarting.load(std::sync::atomic::Ordering::SeqCst);
+    tracing::info!(restart, "xherd daemon stopped; agent sessions keep running");
+    Ok(restart)
 }
 
 async fn shutdown_signal() {
@@ -1059,6 +1171,29 @@ fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_restart_is_a_subcommand() {
+        let cli = Cli::try_parse_from(["xherd", "daemon"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Daemon { action: None }));
+        let cli = Cli::try_parse_from(["xherd", "daemon", "restart"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Daemon {
+                action: Some(DaemonCmd::Restart)
+            }
+        ));
+    }
+
+    #[test]
+    fn restart_exe_drops_the_deleted_suffix() {
+        let p = |s: &str| std::path::PathBuf::from(s);
+        assert_eq!(
+            restart_exe(p("/usr/bin/xherd (deleted)")),
+            p("/usr/bin/xherd")
+        );
+        assert_eq!(restart_exe(p("/usr/bin/xherd")), p("/usr/bin/xherd"));
+    }
 
     #[test]
     fn job_word_is_an_alias() {

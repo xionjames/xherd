@@ -62,6 +62,18 @@ pub struct Approval {
     pub reason: Option<String>,
 }
 
+/// One row of the `plugins` table: a plugin installed from `source` (a git
+/// URL) at commit `sha`. `data` holds `{ref, path, digest, version, installedAt}`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginRecord {
+    pub name: String,
+    pub kind: String,
+    pub source: String,
+    pub sha: Option<String>,
+    pub enabled: bool,
+    pub data: Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenRow {
     pub id: String,
@@ -926,6 +938,67 @@ impl Store {
         .await
     }
 
+    // ---- plugin records ------------------------------------------------------
+
+    /// Plugins installed from a git URL, by name.
+    pub async fn plugin_records(&self) -> Result<Vec<PluginRecord>> {
+        self.read(|c| {
+            let mut st = c.prepare(
+                "SELECT name, kind, source, sha, enabled, data FROM plugins ORDER BY name",
+            )?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, bool>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (name, kind, source, sha, enabled, data) = row?;
+                // A row whose data no longer parses is skipped, like profiles.
+                if let Ok(data) = serde_json::from_str(&data) {
+                    out.push(PluginRecord {
+                        name,
+                        kind,
+                        source,
+                        sha,
+                        enabled,
+                        data,
+                    });
+                }
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// Insert or replace the record of `r.name`.
+    pub async fn upsert_plugin_record(&self, r: &PluginRecord) -> Result<()> {
+        let r = r.clone();
+        let data = serde_json::to_string(&r.data)?;
+        self.write(move |c| {
+            c.execute(
+                "INSERT INTO plugins (name, kind, source, sha, enabled, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, source = excluded.source,
+                   sha = excluded.sha, enabled = excluded.enabled, data = excluded.data",
+                params![r.name, r.kind, r.source, r.sha, r.enabled, data],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Whether a row was removed.
+    pub async fn delete_plugin_record(&self, name: &str) -> Result<bool> {
+        let name = name.to_string();
+        self.write(move |c| Ok(c.execute("DELETE FROM plugins WHERE name = ?1", [name])? == 1))
+            .await
+    }
+
     // ---- events ------------------------------------------------------------
 
     /// Insert unless an event with this id exists. Returns whether it was new.
@@ -1147,6 +1220,39 @@ mod tests {
     #[test]
     fn migrations_are_valid() {
         migrations().validate().unwrap();
+    }
+
+    #[tokio::test]
+    async fn plugin_records_are_upserted_listed_and_deleted() {
+        let (_d, s) = open();
+        assert!(s.plugin_records().await.unwrap().is_empty());
+        let mut r = PluginRecord {
+            name: "zed".into(),
+            kind: "runtime".into(),
+            source: "https://github.com/o/zed".into(),
+            sha: Some("abc".into()),
+            enabled: true,
+            data: serde_json::json!({"ref": "v1", "digest": "d1"}),
+        };
+        s.upsert_plugin_record(&r).await.unwrap();
+        let other = PluginRecord {
+            name: "alpha".into(),
+            sha: None,
+            ..r.clone()
+        };
+        s.upsert_plugin_record(&other).await.unwrap();
+        r.sha = Some("def".into());
+        r.data = serde_json::json!({"ref": "v2", "digest": "d2"});
+        s.upsert_plugin_record(&r).await.unwrap();
+
+        let all = s.plugin_records().await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0], other);
+        assert_eq!(all[1], r);
+
+        assert!(s.delete_plugin_record("zed").await.unwrap());
+        assert!(!s.delete_plugin_record("zed").await.unwrap());
+        assert_eq!(s.plugin_records().await.unwrap(), vec![other]);
     }
 
     #[tokio::test]
