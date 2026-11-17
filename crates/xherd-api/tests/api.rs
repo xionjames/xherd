@@ -20,9 +20,17 @@ async fn setup() -> (tempfile::TempDir, Daemon, Job) {
 /// `setup`, with `prep` run on the data root before the daemon starts (to
 /// add external plugins).
 async fn setup_with(prep: impl FnOnce(&Paths)) -> (tempfile::TempDir, Daemon, Job) {
+    setup_opts(|_| {}, prep).await
+}
+
+async fn setup_opts(
+    tweak: impl FnOnce(&mut Options),
+    prep: impl FnOnce(&Paths),
+) -> (tempfile::TempDir, Daemon, Job) {
     let dir = tempfile::tempdir().unwrap();
     let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
     o.scheduler = None;
+    tweak(&mut o);
     // Never the real Claude Code config: a fixture that trusts the workspace.
     let trust = dir.path().join("claude.json");
     let ws = dir.path().join("ws");
@@ -1848,5 +1856,190 @@ async fn flow_assignment_routes() {
     assert_eq!(
         (s, v["code"].clone()),
         (StatusCode::CONFLICT, json!("agent_assigned"))
+    );
+}
+
+/// A local git repo holding one host plugin, as a `file://` source.
+fn plugin_repo() -> (tempfile::TempDir, String) {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::write(
+        repo.path().join("xherd-plugin.json"),
+        json!({"name": "gitea", "kind": "host", "version": "1.0.0"}).to_string(),
+    )
+    .unwrap();
+    for args in [
+        vec!["init", "--quiet", "-b", "main"],
+        vec!["add", "--all"],
+        vec!["commit", "--quiet", "-m", "x"],
+    ] {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(&args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+    let url = format!("file://{}", repo.path().display());
+    (repo, url)
+}
+
+#[tokio::test]
+async fn plugin_routes() {
+    let (_dir, d, _a) = setup_opts(|o| o.allow_local_plugin_sources = true, |_| {}).await;
+    let (_repo, url) = plugin_repo();
+    let local =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let remote = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([192, 168, 1, 5], 5555))));
+
+    // The user only: no rights from another host without a token, nor with a
+    // job's token (R10).
+    let job_t = mint_token(&d.store, TOKEN_AGENT, Some("x"), &[SCOPE_XAP], 1)
+        .await
+        .unwrap();
+    for (method, uri, body) in [
+        ("GET", "/api/v1/plugins", None),
+        ("POST", "/api/v1/plugins/preview", Some(json!({"url": url}))),
+        (
+            "POST",
+            "/api/v1/plugins/install",
+            Some(json!({"url": url, "digest": "x"})),
+        ),
+        ("POST", "/api/v1/plugins/gitea/update", Some(json!({}))),
+        ("DELETE", "/api/v1/plugins/gitea", None),
+        ("POST", "/api/v1/admin/restart", None),
+    ] {
+        let (s, _) = call(remote.clone(), send(method, uri, body.clone())).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {uri}");
+        let mut req = send(method, uri, body);
+        req.headers_mut()
+            .insert("authorization", format!("Bearer {job_t}").parse().unwrap());
+        let (s, _) = call(local.clone(), req).await;
+        assert_eq!(
+            s,
+            StatusCode::UNAUTHORIZED,
+            "{method} {uri} with a job token"
+        );
+    }
+
+    // Preview, then install what was previewed.
+    let (s, v) = call(
+        local.clone(),
+        send("POST", "/api/v1/plugins/preview", Some(json!({"url": url}))),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["name"], "gitea");
+    let digest = v["digest"].as_str().unwrap().to_string();
+    let (s, v) = call(
+        local.clone(),
+        send("POST", "/api/v1/plugins/install", Some(json!({"url": url}))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!("usage"))
+    );
+    let (s, v) = call(
+        local.clone(),
+        send(
+            "POST",
+            "/api/v1/plugins/install",
+            Some(json!({"url": url, "digest": "stale"})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("changed_since_preview"))
+    );
+    let (s, v) = call(
+        local.clone(),
+        send(
+            "POST",
+            "/api/v1/plugins/install",
+            Some(json!({"url": url, "digest": digest})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["name"], "gitea");
+
+    // Listed with its source; a restart is needed to load it.
+    let (s, v) = call(
+        local.clone(),
+        get("/api/v1/plugins").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["restartNeeded"], true);
+    let recorded = v["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "gitea");
+    // Not loaded until the restart, so only its record exists.
+    assert!(recorded.is_none());
+
+    // Update with no change shows an empty diff; built-ins cannot be removed.
+    let (s, v) = call(
+        local.clone(),
+        send("POST", "/api/v1/plugins/gitea/update", Some(json!({}))),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["manifestDiff"], "");
+    let (s, v) = call(
+        local.clone(),
+        send("DELETE", "/api/v1/plugins/claude-code", None),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("builtin_plugin"))
+    );
+    let (s, v) = call(local.clone(), send("DELETE", "/api/v1/plugins/nope", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("unknown_plugin"))
+    );
+    let (s, v) = call(
+        local.clone(),
+        send("DELETE", "/api/v1/plugins/gitea?forget=true", None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["forgot"], true);
+
+    // Restart: 202, and the daemon's waiter wakes.
+    let (s, _) = call(local.clone(), send("POST", "/api/v1/admin/restart", None)).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    tokio::time::timeout(Duration::from_secs(5), d.restart_requested())
+        .await
+        .expect("restart requested");
+}
+
+#[tokio::test]
+async fn plugin_install_off_is_forbidden() {
+    let (_dir, d, _a) = setup_opts(
+        |o| {
+            o.allow_local_plugin_sources = true;
+            o.plugin_install = false;
+        },
+        |_| {},
+    )
+    .await;
+    let (_repo, url) = plugin_repo();
+    let local = xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let (s, v) = call(
+        local,
+        send("POST", "/api/v1/plugins/preview", Some(json!({"url": url}))),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("plugin_install_off"))
     );
 }
