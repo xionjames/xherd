@@ -9,7 +9,6 @@
   import GitIdentity from '../components/GitIdentity.svelte';
   import GitHosts from '../components/GitHosts.svelte';
   import Backups from '../components/Backups.svelte';
-  import Skills from '../components/Skills.svelte';
   import Profiles from '../components/Profiles.svelte';
   import OpenIn from '../components/OpenIn.svelte';
   import PluginList from '../components/PluginList.svelte';
@@ -22,7 +21,7 @@
   import { MODE_HINT, modes, type PermissionMode } from '../lib/modes';
   import { runtimes, runtimeLabel } from '../lib/runtimes';
 
-  const TABS = ['general', 'gates', 'notifications', 'openin', 'git', 'profiles', 'skills', 'backups', 'plugins', 'about'];
+  const TABS = ['general', 'gates', 'notifications', 'openin', 'git', 'profiles', 'backups', 'plugins', 'about'];
   const tab = $derived(TABS.find((t) => t === route.query.get('tab')) ?? 'general');
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
@@ -68,7 +67,7 @@
       saving = false;
     }
   }
-  const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', openin: 'Open in', git: 'Git access', profiles: 'Repo profiles', skills: 'Skills', backups: 'Backups', plugins: 'Plugins', about: 'About' };
+  const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', openin: 'Open in', git: 'Git access', profiles: 'Repo profiles', backups: 'Backups', plugins: 'Plugins', about: 'About' };
   const tabItems = $derived(TABS.map((t) => ({
     id: t, label: TAB_LABEL[t], href: href('/settings', t === 'general' ? {} : { tab: t }),
     badge: t === 'plugins' && broken.length ? { n: `${broken.length} error${broken.length > 1 ? 's' : ''}`, tone: 'h' as const } : undefined,
@@ -90,8 +89,6 @@
     <OpenIn />
   {:else if tab === 'profiles'}
     <Profiles />
-  {:else if tab === 'skills'}
-    <Skills />
   {:else if tab === 'backups'}
     <Backups />
   {:else if tab === 'about'}
