@@ -37,7 +37,7 @@
   }
   $effect(() => { load(); });
 
-  function start() {
+  export function start() {
     adding = true; name = ''; text = template(''); files = null; skipped = 0; replace = false; problem = '';
   }
   async function pickFolder(e: Event) {
@@ -108,11 +108,10 @@
         {/each}
       </ul>
     {/if}
-    {#snippet foot()}<button class="btn primary" onclick={start}>Add a skill</button>{/snippet}
   </Panel>
 
   {#if adding}
-    <Panel title="Add a skill">
+    <Panel title="New skill">
       <div class="grp">
         <label class="f">From a folder
           <input type="file" webkitdirectory onchange={pickFolder} />
@@ -131,7 +130,7 @@
       </div>
       {#snippet foot()}
         <button class="btn ghost" onclick={() => (adding = false)}>Cancel</button>
-        <button class="btn primary" disabled={busy || !nameOk || (!!files && !!problem)} onclick={add}>{busy ? 'Adding…' : 'Add skill'}</button>
+        <button class="btn primary" disabled={busy || !nameOk || (!!files && !!problem)} onclick={add}>{busy ? 'Creating…' : 'Create skill'}</button>
       {/snippet}
     </Panel>
   {/if}
