@@ -172,6 +172,10 @@ pub struct Plan {
 /// Worktree-relative file where the plan is written.
 pub const PLAN_FILE: &str = ".xherd/toolchain.json";
 
+/// Worktree-relative POSIX `sh` file with the resolved `PATH` and variables,
+/// written by `xherd toolchain exec` (R-652). Shells and `verify:` source it.
+pub const ENV_FILE: &str = ".xherd/toolchain.env";
+
 pub fn subst(argv: &[String], v: &str) -> Vec<String> {
     argv.iter().map(|a| a.replace("{v}", v)).collect()
 }

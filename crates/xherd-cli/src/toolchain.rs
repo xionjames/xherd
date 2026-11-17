@@ -129,6 +129,44 @@ fn new_path(entries: &[PathBuf]) -> std::ffi::OsString {
     std::env::join_paths(entries.iter().cloned().chain(std::env::split_paths(&old))).unwrap_or(old)
 }
 
+/// `s` as one single-quoted `sh` word.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// The `toolchain.env` text for a resolved plan: a POSIX `sh` script that
+/// prepends the resolved directories to `PATH`, exports the variables and, when
+/// `prev_bash_env` is set, sources the `BASH_ENV` that `exec` replaced.
+#[allow(dead_code)] // used by `exec` from T02
+fn env_file(r: &Resolved, prev_bash_env: Option<&str>) -> String {
+    let mut s = String::from(
+        "# Written by `xherd toolchain exec`; source it with `. ./.xherd/toolchain.env`.\n",
+    );
+    if !r.path.is_empty() {
+        let dirs: Vec<String> = r
+            .path
+            .iter()
+            .map(|p| sh_quote(&p.to_string_lossy()))
+            .collect();
+        s.push_str(&format!("PATH={}:\"$PATH\"\nexport PATH\n", dirs.join(":")));
+    }
+    for (k, v) in &r.env {
+        let mut chars = k.chars();
+        let valid = chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if valid {
+            s.push_str(&format!("export {k}={}\n", sh_quote(v)));
+        }
+    }
+    if let Some(prev) = prev_bash_env.filter(|p| !p.is_empty()) {
+        let q = sh_quote(prev);
+        s.push_str(&format!("if [ -f {q} ]; then . {q}; fi\n"));
+    }
+    s
+}
+
 pub fn exec(argv: Vec<String>) -> i32 {
     let Some(program) = argv.first() else {
         eprintln!("xherd toolchain exec: nothing to run");
@@ -243,6 +281,83 @@ mod tests {
         .await;
         assert!(r.path.is_empty());
         assert_eq!(r.env, [("GOTOOLCHAIN".to_string(), "auto".to_string())]);
+    }
+
+    /// Source `text` with `sh` (`PATH=/usr/bin:/bin`) and print what `script` shows.
+    async fn sourced(text: &str, script: &str) -> String {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("toolchain.env");
+        std::fs::write(&f, text).unwrap();
+        let o = run(Cmd::new(vec![
+            "sh".into(),
+            "-c".into(),
+            format!(". {}\n{script}", f.display()),
+        ])
+        .env("PATH", "/usr/bin:/bin"))
+        .await
+        .unwrap();
+        assert!(o.success(), "{}", o.stderr);
+        o.stdout_str()
+    }
+
+    fn resolved(path: &[&str], env: &[(&str, &str)]) -> Resolved {
+        Resolved {
+            path: path.iter().map(PathBuf::from).collect(),
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            complete: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn env_file_prepends_dirs_and_exports_variables() {
+        let text = env_file(
+            &resolved(&["/a/bin", "/b dir/bin"], &[("T_HOME", "/a")]),
+            None,
+        );
+        let out = sourced(&text, "echo \"$PATH\"; echo \"$T_HOME\"").await;
+        assert_eq!(out, "/a/bin:/b dir/bin:/usr/bin:/bin\n/a\n");
+    }
+
+    #[tokio::test]
+    async fn env_file_quotes_values_and_skips_invalid_names() {
+        let text = env_file(
+            &resolved(
+                &["/it's/bin"],
+                &[("Q", "a'b $x"), ("1BAD", "x"), ("A-B", "y")],
+            ),
+            None,
+        );
+        assert!(!text.contains("1BAD") && !text.contains("A-B"));
+        let out = sourced(&text, "echo \"$Q\"; echo \"$PATH\"").await;
+        assert_eq!(out, "a'b $x\n/it's/bin:/usr/bin:/bin\n");
+    }
+
+    #[tokio::test]
+    async fn env_file_chains_the_previous_bash_env() {
+        let d = tempfile::tempdir().unwrap();
+        let prev = d.path().join("prev.sh");
+        std::fs::write(&prev, "PREV=yes\n").unwrap();
+        let prev = prev.to_string_lossy().to_string();
+        let r = resolved(&[], &[]);
+        let out = sourced(&env_file(&r, Some(&prev)), "echo \"$PREV\"").await;
+        assert_eq!(out, "yes\n");
+        // A missing previous file is not an error.
+        let missing = format!("{prev}.none");
+        let out = sourced(&env_file(&r, Some(&missing)), "echo ok").await;
+        assert_eq!(out, "ok\n");
+    }
+
+    #[tokio::test]
+    async fn env_file_of_a_partly_failed_plan_keeps_what_resolved() {
+        let mut r = resolved(&["/a/bin"], &[]);
+        r.complete = false;
+        let out = sourced(&env_file(&r, None), "echo \"$PATH\"").await;
+        assert_eq!(out, "/a/bin:/usr/bin:/bin\n");
+        let out = sourced(&env_file(&Resolved::default(), None), "echo \"$PATH\"").await;
+        assert_eq!(out, "/usr/bin:/bin\n");
     }
 
     #[test]
