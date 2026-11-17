@@ -234,6 +234,89 @@ impl Git {
             .map(drop)
     }
 
+    /// Fetch one commit of `url` (`git_ref`, or its `HEAD`) with no history
+    /// into `dest` (created, and made a repository) and check it out
+    /// detached; returns the commit's sha. A ref that is not a branch, tag or
+    /// full sha the server accepts fails with git's message.
+    pub async fn fetch_shallow(
+        &self,
+        url: &str,
+        git_ref: Option<&str>,
+        dest: &Path,
+    ) -> Result<String> {
+        let git_ref = git_ref.unwrap_or("HEAD");
+        if git_ref.starts_with('-') || url.starts_with('-') {
+            return Err(GitError::Refused(
+                "a URL or ref cannot start with '-'".into(),
+            ));
+        }
+        std::fs::create_dir_all(dest).map_err(|e| GitError::Refused(e.to_string()))?;
+        self.run(dest, &["init", "--quiet"]).await?;
+        self.run_env(
+            dest,
+            NO_PROMPT,
+            &[
+                "-c",
+                "protocol.ext.allow=never",
+                "fetch",
+                "--quiet",
+                "--depth",
+                "1",
+                "--no-tags",
+                "--",
+                url,
+                git_ref,
+            ],
+        )
+        .await?;
+        self.run(dest, &["checkout", "--quiet", "--detach", "FETCH_HEAD"])
+            .await?;
+        self.run(dest, &["rev-parse", "HEAD"]).await
+    }
+
+    /// Unified diff of two files outside any repository (`git diff
+    /// --no-index`); empty when they are equal. A missing file counts as
+    /// empty, so a new or removed file shows in full.
+    pub async fn diff_files(&self, a: &Path, b: &Path) -> Result<String> {
+        let dir = a.parent().unwrap_or(Path::new("/"));
+        let side = |p: &Path| {
+            if p.exists() {
+                p.to_string_lossy().into_owned()
+            } else {
+                "/dev/null".to_string()
+            }
+        };
+        let (pa, pb) = (side(a), side(b));
+        let cmd = Cmd::new([
+            self.bin.as_str(),
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--",
+            &pa,
+            &pb,
+        ])
+        .cwd(dir)
+        .env("LC_ALL", "C")
+        .timeout(self.timeout)
+        .as_agent();
+        let out = run(cmd).await?;
+        if out.timed_out {
+            return Err(GitError::Timeout {
+                args: "diff --no-index".into(),
+            });
+        }
+        // Exit 1 means "they differ".
+        match out.code {
+            Some(0 | 1) => Ok(out.stdout_str().trim_end_matches('\n').to_string()),
+            _ => Err(GitError::Failed {
+                args: "diff --no-index".into(),
+                stderr: out.stderr.trim().to_string(),
+            }),
+        }
+    }
+
     /// Local branches and `origin`'s, by short name (`main`, `origin/main`),
     /// without `origin/HEAD`.
     pub async fn branches(&self, dir: &Path) -> Result<Vec<String>> {
