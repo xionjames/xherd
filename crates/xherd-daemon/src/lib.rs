@@ -185,6 +185,8 @@ pub struct Daemon {
     pub config_write: Arc<std::sync::Mutex<()>>,
     /// Held while saved agents are changed (create, edit, archive, delete, import).
     pub agents_write: Arc<tokio::sync::Mutex<()>>,
+    /// Held while plugins are installed, updated or removed.
+    pub plugins_write: Arc<tokio::sync::Mutex<()>>,
     /// See `Options::plugin_install`.
     pub plugin_install: bool,
     /// See `Options::allow_local_plugin_sources`.
@@ -250,6 +252,7 @@ impl Daemon {
                 .await?;
         }
 
+        plugin_install::clean_staging(&paths.plugins());
         let (external, not_copied) = plugin_dirs::external_dir(&paths);
         let plugins = Registry::load(opts.builtin_plugins, &external).with_broken(not_copied);
         for b in plugins.broken() {
@@ -334,6 +337,7 @@ impl Daemon {
             secrets_write: Arc::default(),
             config_write: Arc::default(),
             agents_write: Arc::default(),
+            plugins_write: Arc::default(),
             plugin_install: opts.plugin_install,
             allow_local_plugin_sources: opts.allow_local_plugin_sources,
         };

@@ -403,3 +403,194 @@ async fn preview_checks_the_source_and_the_switch() {
     assert_eq!(e.code, "plugin_install_off");
     assert!(Path::new(t.home.path()).exists());
 }
+
+fn install_repo() -> (Repo, String) {
+    let m = all_argv_manifest();
+    let extra = bins();
+    let repo = Repo::new(&files("xherd-plugin.json", &m, &extra));
+    // The scripts are executable in the repository.
+    repo.git(&[
+        "update-index",
+        "--chmod=+x",
+        "bin/pr",
+        "bin/hook",
+        "bin/fix",
+    ]);
+    repo.git(&["commit", "--quiet", "-m", "exec"]);
+    (repo, m)
+}
+
+async fn digest_of(t: &T, repo: &Repo) -> String {
+    json_of(&t.d.plugin_preview(&repo.url(), None, None).await.unwrap())["digest"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn install_puts_the_previewed_plugin_on_disk_and_records_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = daemon().await;
+    let (repo, _) = install_repo();
+    let digest = digest_of(&t, &repo).await;
+    let i = json_of(
+        &t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        (i["name"].as_str(), i["sha"].as_str()),
+        (Some("gitea"), Some(repo.sha().as_str()))
+    );
+    let dir = t.home.path().join("plugins/gitea");
+    assert!(dir.join("xherd-plugin.json").is_file());
+    assert!(!dir.join(".git").exists());
+    assert_ne!(
+        dir.join("bin/pr").metadata().unwrap().permissions().mode() & 0o111,
+        0
+    );
+    assert_eq!(
+        dir.join("xherd-plugin.json")
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0
+    );
+    // No staging folder and no scratch fetch is left.
+    let left: Vec<_> = std::fs::read_dir(t.home.path().join("plugins"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["gitea"]);
+    assert_eq!(scratch_left(&t), 0);
+
+    let recs = t.d.store.plugin_records().await.unwrap();
+    assert_eq!(recs.len(), 1);
+    let r = &recs[0];
+    assert_eq!(
+        (r.name.as_str(), r.kind.as_str(), r.source.as_str()),
+        ("gitea", "host", repo.url().as_str())
+    );
+    assert_eq!(r.sha.as_deref(), Some(repo.sha().as_str()));
+    assert!(r.enabled);
+    assert_eq!(r.data["digest"], digest);
+    assert_eq!(r.data["version"], "1.2.3");
+    assert!(r.data["installedAt"].as_i64().unwrap() > 0);
+    assert!(r.data["ref"].is_null() && r.data["path"].is_null());
+
+    let events = t.d.store.events("", 10).await.unwrap();
+    let installs: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "plugin-install")
+        .collect();
+    assert_eq!(installs.len(), 1);
+    assert_eq!(installs[0].payload.as_ref().unwrap()["name"], "gitea");
+}
+
+#[tokio::test]
+async fn install_refuses_a_source_that_changed_since_the_preview() {
+    let t = daemon().await;
+    let (repo, _) = install_repo();
+    let digest = digest_of(&t, &repo).await;
+    repo.commit(&[("README.md", "changed")]);
+    let e =
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "changed_since_preview");
+    assert!(!t.home.path().join("plugins/gitea").exists());
+    assert!(t.d.store.plugin_records().await.unwrap().is_empty());
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn install_does_not_replace_an_installed_plugin() {
+    let t = daemon().await;
+    let (repo, _) = install_repo();
+    let digest = digest_of(&t, &repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+    let e =
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "plugin_exists");
+    assert_eq!(t.d.store.plugin_records().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn install_takes_a_plugin_from_a_sub_folder_and_a_ref() {
+    let t = daemon().await;
+    let one = manifest("one", "tracker", json!({}));
+    let two = manifest("two", "toolchain", json!({}));
+    let repo = Repo::new(&[
+        ("plugins/one/xherd-plugin.json", &one),
+        ("plugins/two/xherd-plugin.json", &two),
+    ]);
+    let preview = json_of(
+        &t.d.plugin_preview(&repo.url(), Some("main"), Some("plugins/two"))
+            .await
+            .unwrap(),
+    );
+    let digest = preview["digest"].as_str().unwrap();
+    // Without a path the repository offers a choice: nothing is installed.
+    let e =
+        t.d.plugin_install(&repo.url(), Some("main"), None, digest)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "no_manifest");
+    t.d.plugin_install(&repo.url(), Some("main"), Some("plugins/two"), digest)
+        .await
+        .unwrap();
+    assert!(
+        t.home
+            .path()
+            .join("plugins/two/xherd-plugin.json")
+            .is_file()
+    );
+    assert!(!t.home.path().join("plugins/one").exists());
+    let r = &t.d.store.plugin_records().await.unwrap()[0];
+    assert_eq!(
+        (r.data["ref"].as_str(), r.data["path"].as_str()),
+        (Some("main"), Some("plugins/two"))
+    );
+    assert_eq!(r.kind, "toolchain");
+}
+
+#[tokio::test]
+async fn install_is_off_with_the_switch_and_cleans_staging_at_start() {
+    let t = daemon_with(|o| o.plugin_install = false).await;
+    let e =
+        t.d.plugin_install("https://github.com/o/r", None, None, "x")
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "plugin_install_off");
+
+    // Leftovers of an interrupted install are removed at start.
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path());
+    paths.ensure().unwrap();
+    for n in [".a.staging-1", ".b.old-2"] {
+        std::fs::create_dir_all(paths.plugins().join(n)).unwrap();
+    }
+    std::fs::create_dir_all(paths.plugins().join("keep")).unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let cfg = xherd_core::config::Config {
+        workspace: Some(ws.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    cfg.save(&paths.config()).unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let _d = Daemon::start(paths.clone(), o).await.unwrap();
+    let mut left: Vec<_> = std::fs::read_dir(paths.plugins())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, ["keep"]);
+}

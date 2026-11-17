@@ -175,6 +175,64 @@ pub struct Choice {
     pub error: Option<String>,
 }
 
+/// What `plugin_install` put in `<data>/plugins`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Installed {
+    pub name: String,
+    pub kind: Kind,
+    pub version: String,
+    pub url: String,
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    pub path: Option<String>,
+    pub sha: String,
+    pub digest: String,
+}
+
+/// Remove what an interrupted install or update left in `plugins`
+/// (`.<name>.staging-*`, `.<name>.old-*`): the registry would list them as
+/// broken plugins.
+pub(crate) fn clean_staging(plugins: &Path) {
+    let Ok(rd) = std::fs::read_dir(plugins) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && (name.contains(".staging-") || name.contains(".old-")) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
+/// Copy a scanned plugin folder (no symlinks, see [`scan`]) without `.git`:
+/// folders 0755, files 0755 with an execute bit and 0644 without.
+fn copy_plugin(src: &Path, dst: &Path, depth: usize) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        let (from, to) = (e.path(), dst.join(e.file_name()));
+        let t = e.file_type()?;
+        if depth == 0 && e.file_name() == ".git" {
+            continue;
+        }
+        if t.is_dir() {
+            std::fs::create_dir(&to)?;
+            copy_plugin(&from, &to, depth + 1)?;
+        } else if t.is_file() {
+            std::fs::copy(&from, &to)?;
+            let exec = from.metadata()?.permissions().mode() & 0o111 != 0;
+            std::fs::set_permissions(
+                &to,
+                std::fs::Permissions::from_mode(if exec { 0o755 } else { 0o644 }),
+            )?;
+        } else {
+            return Err(std::io::Error::other("not a plain file or folder"));
+        }
+    }
+    Ok(())
+}
+
 /// Where the manifest is in a fetched repository.
 enum Found {
     One(PathBuf, Option<String>),
@@ -273,6 +331,117 @@ impl Daemon {
             }
         })
         .await
+    }
+
+    /// R4, R5, R6, R11: install what `plugin_preview` showed. The source is
+    /// fetched again and must digest to `expect_digest` (`changed_since_preview`
+    /// otherwise, nothing written); an installed plugin of that name is not
+    /// replaced (`plugin_exists`). The folder is copied under a staging name and
+    /// renamed, so `<data>/plugins/<name>` is whole or absent. Needs a restart
+    /// to load (no live reload).
+    pub async fn plugin_install(
+        &self,
+        url: &str,
+        git_ref: Option<&str>,
+        path: Option<&str>,
+        expect_digest: &str,
+    ) -> Result<Installed, ActionError> {
+        let src = self.plugin_source(url, git_ref, path)?;
+        let _write = self.plugins_write.lock().await;
+        let plugins = self.paths.plugins();
+        let (view, found_path, sha) = self
+            .with_fetched(&src, |root, sha| {
+                let (dir, found_path) = match locate(root, src.path.as_deref())? {
+                    Found::One(dir, p) => (dir, p),
+                    Found::Many(_) => {
+                        return Err(refuse_action(
+                            "no_manifest",
+                            "several plugins in the repository: choose one with a path",
+                        ));
+                    }
+                };
+                let view = self.inspect(&dir)?;
+                if view.digest != expect_digest {
+                    return Err(refuse_action(
+                        "changed_since_preview",
+                        "the source changed since the preview: preview it again",
+                    ));
+                }
+                if view.replaces == Some("external") {
+                    return Err(refuse_action(
+                        "plugin_exists",
+                        format!("a plugin named {} is already installed", view.name),
+                    ));
+                }
+                let io = |e: std::io::Error| refuse_action("io", format!("{}: {e}", view.name));
+                std::fs::create_dir_all(&plugins).map_err(io)?;
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos());
+                let staging = plugins.join(format!(".{}.staging-{nanos}", view.name));
+                let placed = std::fs::create_dir(&staging)
+                    .and_then(|()| copy_plugin(&dir, &staging, 0))
+                    .and_then(|()| std::fs::rename(&staging, plugins.join(&view.name)));
+                if let Err(e) = placed {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    return Err(io(e));
+                }
+                Ok((view, found_path, sha))
+            })
+            .await?;
+        let now = self.clock.now();
+        let kind = serde_json::to_value(view.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let record = xherd_store::PluginRecord {
+            name: view.name.clone(),
+            kind,
+            source: src.url.clone(),
+            sha: Some(sha.clone()),
+            enabled: true,
+            data: serde_json::json!({
+                "ref": src.git_ref,
+                "path": found_path,
+                "digest": view.digest,
+                "version": view.version,
+                "installedAt": now,
+            }),
+        };
+        let recorded = async {
+            self.store.upsert_plugin_record(&record).await?;
+            self.store
+                .insert_event(xherd_store::Event {
+                    id: xherd_core::new_id(),
+                    job_id: String::new(),
+                    kind: "plugin-install".into(),
+                    payload: Some(serde_json::json!({
+                        "name": view.name, "source": src.url, "sha": sha,
+                        "digest": view.digest, "version": view.version,
+                    })),
+                    at: now,
+                })
+                .await
+        }
+        .await;
+        if let Err(e) = recorded {
+            // No record, no plugin: do not leave an install nobody can see.
+            let _ = std::fs::remove_dir_all(plugins.join(&view.name));
+            return Err(refuse_action(
+                "io",
+                format!("cannot record the install: {e}"),
+            ));
+        }
+        Ok(Installed {
+            name: view.name,
+            kind: view.kind,
+            version: view.version,
+            url: src.url,
+            git_ref: src.git_ref,
+            path: found_path,
+            sha,
+            digest: view.digest,
+        })
     }
 
     /// Check the plugin folder `dir` and describe it (R3, R5, R5a).
