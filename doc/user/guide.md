@@ -10,18 +10,17 @@ You give xherd a ticket. It creates an **job**: a git worktree and a branch for 
 
 | Screen | What it is for |
 |---|---|
-| **Herd** (home) | Every job: status, stage, progress, tasks. Jobs waiting for you are on top. *By stage* puts them in columns by their current stage, using their workflow's stages (one lane per workflow when the jobs shown use more than one); *Tiles* (a view plugin) and other [Herd view plugins](../extend/plugins.md#herd-view-plugins) add more layouts. *Pause all* is the kill switch |
-| **Agents** | Saved setups that jobs start from ([below](#saved-agents)): status, live jobs, last job, tokens today, *New agent* and *Start job* |
-| **Flows** | Which saved agent runs each stage of a workflow ([below](#agents-on-workflow-stages)) |
+| **Jobs** (home) | Four counters that filter (Needs you, Running, Waiting with its breakdown, Done; the same in every layout; click the active one to clear it), then one list grouped *Needs you · Running · Waiting* (done jobs hidden until you ask). Each job has a **stage track**: one pill per stage of its own workflow, with the stage's name (green done, blue current, coral waits for you, grey not reached, struck through skipped) and the initials of the agent that runs it below. *Team now* on the side shows who is busy with what. *Group* switches the list to Agent or Flow; *Layout* adds *By stage* (the same counters, then columns by current stage, one lane per workflow) and [Herd view plugins](../extend/plugins.md#herd-view-plugins). *Pause all* is the kill switch |
+| **Team** | Three tabs. *Agents*: a card per saved setup that jobs start from ([below](#saved-agents)) with status, live jobs, last job, tokens today, *New agent* and *Start job*. *Flows*: which saved agent runs each stage of a workflow ([below](#agents-on-workflow-stages)). *Skills*: the library agents draw from |
 | **Job page** | One job: the your-call band on top, then tabs (below) |
 | **Board** | Every stage and task of every job as cards in Pending / In progress / Done, plus your TODOs. Swimlanes by job, saved agent, repository or workflow, filters for one job, one repository, or only what needs you |
-| **Needs attention** (✋ and a count in the bar) | Jobs waiting for you and TODOs that are due or whose check failed: only these raise the ✋ and the count. Below them, folded, *Approved by xherd*: the approvals xherd made for you that you have not marked seen, each linking to what was approved |
+| **Inbox** (✋ and a count in the bar) | Two panes. Left: *Needs you* in coral (jobs waiting at a gate, a question or a block, and TODOs that are due or whose check failed: only these raise the ✋ and the count), then *Updates*: the approvals xherd made for you that you have not marked seen. Right: the picked item, with its stage track and a button to the tab that holds the decision (`#/inbox`; the old `#/attention` and `#/review` redirect here) |
 | **TODOs** | Reminders and condition checks (below) |
 | **Time** | Job time and your time per day and ticket, cycle time, review rounds and rework |
 | **Settings** | General, Gates & autonomy, Notifications, Open in, Git access, Repo profiles, Backups, Plugins, About |
 | **Setup checks** | What must be in place before jobs can run, each failing check with its fix |
 
-The Herd list can be grouped by agent (*Group by*, `?group=agent`). ⌘K (Ctrl+K) jumps to a job by name or ticket, or to a saved agent by name. The bell in the bar keeps the latest notifications.
+The Jobs list can be grouped by status, agent or flow (*Group*, `?group=agent|flow`) and filtered by the counters (`?f=needs|running|waiting|done`, the same in the By stage layout). ⌘K (Ctrl+K) jumps to a job by name or ticket, or to a saved agent by name. The bell in the bar keeps the latest notifications.
 
 ## Welcome, plugins and git access
 
@@ -144,7 +143,7 @@ stateDiagram-v2
 
 By default every gate waits for you (`ask`). With `important`, xherd approves *routine* and *code* gates itself (design, tasks, review, commits) and leaves *critical* ones (spec, ship) and *human-only* ones (pr-review) to you. Set it per job at creation (`--autonomy`), later on the job page (`xherd autonomy`), per repository in a profile, or as the default in Settings → Gates & autonomy.
 
-Held gates are never auto-approved, nor is a gate xherd inferred because the job stopped without declaring one. After `maxAutoApprovalsInRow` automatic approvals in a row (default 10), the next gate waits for you. A gate xherd will approve when the job stops does not show as waiting for you meanwhile; if it is held or refused at the stop, it does. Automatic approvals are listed under **Needs attention** (*Approved by xherd*) until you mark them seen; they never raise the ✋.
+Held gates are never auto-approved, nor is a gate xherd inferred because the job stopped without declaring one. After `maxAutoApprovalsInRow` automatic approvals in a row (default 10), the next gate waits for you. A gate xherd will approve when the job stops does not show as waiting for you meanwhile; if it is held or refused at the stop, it does. Automatic approvals are listed under **Inbox → Updates** (*Approved by xherd*) until you mark them seen; they never raise the ✋.
 
 **Tool permissions** are separate: they say what the runtime may do without asking. `ask` asks before each tool that needs permission, `edits` (default) accepts file edits, `auto` lets the runtime's own checks decide, `all` asks nothing (only in the container). A change applies from the job's next session.
 
@@ -176,7 +175,7 @@ One job can have an architect for the spec and design, a coder for the implement
 - A job keeps a snapshot of every agent its stages use, so later edits never change it. At each stage start the job takes that stage's agent: instructions, memory, skills, tool permissions, model and autonomy (a repo profile's ceilings still apply), always in a fresh session. The stepper names the agent of each stage and the header names the current one, with its runtime, model, autonomy and tools as facts; **Override for this job** (header) changes them for this job only and pins it to the current agent, so it stops switching at each stage.
 - All agents of one job must use the same runtime (`mixed_runtime` otherwise) until a job can change runtime between steps. An agent may name a **fallback runtime**, used once at creation when its runtime is unusable; the job page says it fell back.
 - Choosing a model, tool permissions or autonomy on the job page pins the current agent: later stages keep it.
-- Limits and budgets follow the agent of the current stage. The Herd shows jobs (List, By stage); what each agent is doing is on the **Agents** page, and Board cards name the agent of their stage.
+- Limits and budgets follow the agent of the current stage. Jobs shows jobs (List, By stage); what each agent is doing is in *Team now* and on the **Team** page, and Board cards name the agent of their stage.
 
 ## Saved agents
 
@@ -187,7 +186,7 @@ An **agent** is a named, versioned persona that jobs start from: runtime and mod
 - A [repo profile](#repo-profiles) still applies: its autonomy and tool permissions are ceilings (the form says so under the field), its sensitive paths are added to the agent's, and the smaller diff limit and token budget win.
 - **Archive** hides an agent from pickers and keeps its history; its jobs keep working. **Delete** needs no live job; its jobs keep their settings and show its name as plain text. An agent whose runtime and fallback runtime are both gone or switched off is marked and cannot start jobs until fixed. An agent a workflow stage names cannot be archived or deleted until that assignment changes.
 - With **live jobs at once** reached, more jobs of that agent wait in the queue (*waits for its agent*) while others start.
-- **Skills** (Settings → Skills) are a library of reusable instructions and files: add a folder with a `SKILL.md` or write one, view or delete it (not while an agent lists it). An agent lists skills from this library; each job it starts gets a copy in its worktree, where the job's runtime looks for project skills (Claude Code `.claude/skills`, opencode `.opencode/skills`, Codex `.agents/skills`), hidden from git. A skill the repository already has under that name is left alone, and a runtime with no skill folder skips them: the job page names each skill that was not installed and why. Skills are never pasted into the prompt.
+- **Skills** (Team → Skills) are a library of reusable instructions and files: add a folder with a `SKILL.md` or write one, view or delete it (not while an agent lists it). An agent lists skills from this library; each job it starts gets a copy in its worktree, where the job's runtime looks for project skills (Claude Code `.claude/skills`, opencode `.opencode/skills`, Codex `.agents/skills`), hidden from git. A skill the repository already has under that name is left alone, and a runtime with no skill folder skips them: the job page names each skill that was not installed and why. Skills are never pasted into the prompt.
 - **Memory** (the agent page's Memory tab, up to 4 000 characters) is what every job from the agent should know. A job gets the text as it is when it starts, as an *Agent memory* section of its instructions after the agent's own; changing it later does not reach jobs already started.
 - **Agent memory proposals**: at the review a job of an agent may propose a new memory; you accept it (editable) or dismiss it on the job's *Agent memory* tab. Nothing is written without you.
 - **Save a setup as an agent**: a job with no agent offers it (a band on its page and one *suggestion* notification, never a pop-up) when it is done, when you **Mark done** a job with no workflow (*⋯ → Mark done*, `xherd done`: such a job has no PR to merge, so nothing else ends it), or when you start the same setup (repository, runtime, model, workflow, autonomy, tool permissions) a third time within 30 days. Not after a cancel or a failure. *Save as agent…* opens a form filled with what the job ran with, a name and description from the repository and workflow, and instructions the job drafted at the ship step from what you had to tell it (ticket and PR text are never used for this). Save creates the agent (version 1) and attaches the job, which keeps its own settings. *Not now* is remembered for that job; *Don't suggest* turns off Settings → Gates & autonomy → *Suggest saving a job's setup as an agent*. *Save as agent…* is always in the job's ⋯ menu, for any job without an agent.
@@ -204,7 +203,7 @@ Settings → Repo profiles holds per-repository settings, matched by the `origin
 
 ## TODOs
 
-TODOs are reminders that are not jobs. A TODO is due at a time, once or every N minutes; when it comes due it is notified and shows in Needs attention and on the Board. A TODO with a **condition** ("the PR for PAY-412 is merged") is checked at each interval by a short, read-only run of the default runtime: met, or unclear, makes it due; not met waits for the next check. *Check now* runs it at once.
+TODOs are reminders that are not jobs. A TODO is due at a time, once or every N minutes; when it comes due it is notified and shows in the Inbox and on the Board. A TODO with a **condition** ("the PR for PAY-412 is merged") is checked at each interval by a short, read-only run of the default runtime: met, or unclear, makes it due; not met waits for the next check. *Check now* runs it at once.
 
 ## Notifications
 
@@ -214,7 +213,7 @@ Every notification (a gate, a blocked job, an idle one, a failure, a budget or l
 - to your phone through [ntfy](https://ntfy.sh): Settings → Notifications, server and topic. Messages carry job names and reasons in plain text, never document or comment contents;
 - to the desktop (`osascript` on macOS, `notify-send` on Linux) with `desktopNotifications`, native installs only: in Docker the daemon cannot reach your desktop, so Settings does not offer it there; use the browser or ntfy.
 
-Settings → Notifications → *Which ones* mutes kinds everywhere. Automatic approvals send no notification: they are listed under **Needs attention** (*Approved by xherd*).
+Settings → Notifications → *Which ones* mutes kinds everywhere. Automatic approvals send no notification: they are listed under **Inbox → Updates** (*Approved by xherd*).
 
 ## Opening the code
 
