@@ -3135,6 +3135,24 @@ async fn cancel_while_a_pause_waits_for_the_note() {
     assert_eq!(a.pause_requested_at, None);
 }
 
+/// AGENTS.md and CLAUDE.md are shared memory: a commit proposal naming them
+/// is refused (#153).
+#[tokio::test]
+async fn memory_file_is_refused_in_a_commit_proposal() {
+    let t = setup().await;
+    for (i, f) in ["AGENTS.md", "./CLAUDE.md"].into_iter().enumerate() {
+        let e = xap(
+            &t,
+            &format!("mf{i}"),
+            "commit.propose",
+            json!({"id": "C01", "subject": "a", "files": ["a.txt", f]}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(e.code, "memory_file");
+    }
+}
+
 /// Shared memory (spec §16.6): a proposal waits for the user; accepting
 /// commits AGENTS.md and a CLAUDE.md importing it on the agent's branch.
 #[tokio::test]
