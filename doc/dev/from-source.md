@@ -71,7 +71,7 @@ cd ui && pnpm dev            # Vite dev server, proxies /api to XHERD_URL (defau
 
 Jobs' sessions get the daemon's `PATH` (tmux takes it from the client that creates the session), and the prompts call plain `xherd …`: to run real jobs from a debug build, put `target/debug` on `PATH` before starting the daemon (`PATH=$PWD/target/debug:$PATH`), or their calls fail with "command not found".
 
-`scripts/demo.sh` runs a throwaway daemon on port 4741 with fake jobs, for screenshots ([Development](development.md#demo-data-for-screenshots)).
+`node scripts/demo/server.mjs` serves the built UI with a mock API (no daemon needed), for screenshots; `scripts/demo.sh` is older and needs updating ([Development](development.md#demo-data-for-screenshots)).
 
 ## Release builds like CI
 

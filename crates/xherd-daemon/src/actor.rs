@@ -2305,6 +2305,12 @@ impl Actor {
                 payload = Some(json!({"agent": snapshot.id, "version": snapshot.version}));
                 self.job.set_agent((**snapshot).clone());
                 self.job.pinned = true;
+                // The supervisor counts a running job against its agent's
+                // `maxLiveJobs` from now on, not only from its next spawn.
+                let _ = self.env.sup.send(SupEvent::AgentChanged {
+                    id: self.job.id.clone(),
+                    agent: self.job.current_agent.clone(),
+                });
                 self.job.suggestion = None;
                 self.job.agent_draft = None;
                 "user.attach-agent"

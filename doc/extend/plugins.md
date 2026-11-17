@@ -14,6 +14,8 @@ A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in 
 | `bitbucket` | host | Git access only (a token kept by xherd); no pull request support yet |
 | `jira`, `github-issues`, `gitlab-issues` | tracker | Ticket keys as links, the Ticket tab (reading the ticket and its comments), posting a summary you accepted |
 | `sdkman`, `nvm`, `uv`, `go`, `rustup` | toolchain | Which version files they read and how to find or install a tool |
+
+`rustup` also has an optional check for a C compiler (`cc`), which Rust needs to link. In the container, where nothing can install system packages, its Fix downloads a pinned Zig into `~/.local/zig` and adds a `cc` shim that runs `zig cc`; natively it shows how to install the platform's compiler.
 | `herd-tiles` | view | A layout of the Herd page: saved agents, then one tile per job grouped by repository. The example of a [Herd view plugin](#herd-view-plugins) |
 
 Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `view`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host, tracker, toolchain and view plugins; the others are accepted by the manifest but nothing consumes them yet.

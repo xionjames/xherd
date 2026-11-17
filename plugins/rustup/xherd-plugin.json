@@ -65,6 +65,25 @@
       "instructions": {
         "any": "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # see https://rustup.rs"
       }
+    },
+    {
+      "name": "cc",
+      "check": [
+        "sh",
+        "-c",
+        "if command -v cc >/dev/null 2>&1; then exit 0; fi; echo \"no C compiler (cc): Rust cannot link\" >&2; exit 1"
+      ],
+      "optional": true,
+      "install": [
+        "sh",
+        "-c",
+        "set -eu; v=0.14.1; case \"$(uname -m)\" in x86_64) a=x86_64; s=24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c;; aarch64|arm64) a=aarch64; s=f7a654acc967864f7a050ddacfaa778c7504a0eca8d2b678839c21eea47c992b;; *) echo \"no zig build for $(uname -m)\" >&2; exit 1;; esac; t=$(mktemp -d); trap 'rm -rf \"$t\"' EXIT; curl -fsSL -o \"$t/zig.tar.xz\" \"https://ziglang.org/download/$v/zig-$a-linux-$v.tar.xz\"; echo \"$s  $t/zig.tar.xz\" | sha256sum -c -; tar -xJf \"$t/zig.tar.xz\" -C \"$t\"; rm -rf \"$HOME/.local/zig\"; mkdir -p \"$HOME/.local/bin\"; mv \"$t/zig-$a-linux-$v\" \"$HOME/.local/zig\"; printf '#!/bin/sh\\nfor a; do shift; case \"$a\" in -Wl,--fix-cortex-a53-843419|--target=*) ;; *) set -- \"$@\" \"$a\";; esac; done\\nexec \"%s/.local/zig/zig\" cc \"$@\"\\n' \"$HOME\" > \"$HOME/.local/bin/cc\"; chmod 0755 \"$HOME/.local/bin/cc\""
+      ],
+      "instructions": {
+        "macos": "xcode-select --install",
+        "linux": "Install gcc and libc headers with your package manager (Debian/Ubuntu: apt install build-essential)",
+        "any": "Install a C compiler that provides `cc`"
+      }
     }
   ]
 }

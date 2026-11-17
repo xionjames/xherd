@@ -6,6 +6,7 @@
   import PageHead from '../components/PageHead.svelte';
   import TeamTabs from '../components/TeamTabs.svelte';
   import Panel from '../components/Panel.svelte';
+  import Seg from '../components/Seg.svelte';
   import SaveBar from '../components/SaveBar.svelte';
   import Callout from '../components/Callout.svelte';
   import { app } from '../lib/store.svelte';
@@ -14,12 +15,17 @@
   import { showError } from '../lib/errors.svelte';
   import { stageLabel } from '../lib/flow';
   import { assignmentRows, pickable } from '../lib/agents';
+  import { initials, avatarBg } from '../lib/jobs';
   import type { FlowStageView, FlowView, AssignmentRow } from '../lib/types';
 
   const m = $derived(route.path.match(/^\/flows\/([^/]+)\/([^/]+)$/));
-  const pack = $derived(m?.[1] ? decodeURIComponent(m[1]) : '');
-  const flowName = $derived(m?.[2] ? decodeURIComponent(m[2]) : '');
   const list = $derived(app.state?.flows ?? []);
+  // `#/flows` shows the first workflow; the list on the left picks another.
+  const pack = $derived(m?.[1] ? decodeURIComponent(m[1]) : (list[0]?.pack ?? ''));
+  const flowName = $derived(m?.[2] ? decodeURIComponent(m[2]) : (list[0]?.flow ?? ''));
+  const jobsOf = (f: string) => (app.state?.jobs ?? []).filter((j) => j.flow === f).length;
+  let sel = $state(0);
+  $effect(() => { pack; flowName; sel = 0; });
   const agents = $derived((app.state?.agents ?? []));
 
   type Row = { agent: string; human: boolean };
@@ -75,56 +81,68 @@
   });
 </script>
 
-{#if !pack}
-  <PageHead title="Team" sub="Give each stage of a workflow to a saved agent.">
-    {#snippet tabs()}<TeamTabs current="flows" />{/snippet}
-  </PageHead>
-  <div class="stack">
-    <Panel title="Workflows" flush>
-      {#if list.length}
-        <ul class="list">
-          {#each list as f (f.pack + '/' + f.flow)}
-            <li><a class="mono" href={href(`/flows/${f.pack}/${f.flow}`)}>{f.flow}</a>
-              <span class="hint">pack {f.pack} · {f.stages.length} stages: {f.stages.map(stageLabel).join(' → ')}</span></li>
-          {/each}
-        </ul>
-      {:else}<div class="cb"><p class="empty">No workflows.</p></div>{/if}
-    </Panel>
-  </div>
-{:else}
-  <PageHead title="Flow {flowName}" sub="Pack {pack}. Stages with no agent run the previous stage's agent." width="mid">
-    {#snippet actions()}<a class="btn ghost" href={href('/flows')}>All flows</a>{/snippet}
-  </PageHead>
-  <div class="stack mid">
-    {#if error}
-      <Callout tone="bad">{error}</Callout>
-    {:else if !view}
-      <p class="empty">Loading…</p>
-    {:else}
-      <Panel title="Stages" hint="A job takes a copy of these assignments when it starts." flush>
-        <div class="tscroll">
-          <table class="tbl">
-            <thead><tr><th>Stage</th><th>Agent</th><th>Gate always waits for me</th></tr></thead>
-            <tbody>
-              {#each view.stages as s, i (s.id)}
-                <tr>
-                  <td><b>{label(s)}</b> <span class="hint mono">{s.id}</span></td>
-                  <td>
-                    <select aria-label="Agent for {label(s)}" bind:value={rows[i].agent}>
-                      <option value="">{resolved[i] && !rows[i].agent ? `Same as before (${resolved[i]})` : 'No agent'}</option>
-                      {#each names(rows[i].agent) as n (n)}<option value={n}>{withDesc(n)}</option>{/each}
-                    </select>
-                    {#if s.broken && rows[i].agent === (s.agent ?? '') && s.assigned}<div class="hint err">✕ Cannot start jobs: {s.broken}</div>{/if}
-                  </td>
-                  <td><label class="chk"><input type="checkbox" bind:checked={rows[i].human} disabled={!rows[i].agent} />
-                    <span class="hint">{s.class === 'human-only' ? 'Always, for this stage' : 'Even at higher autonomy'}</span></label></td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </Panel>
-      <SaveBar {dirty} {busy} onsave={save} ondiscard={discard} />
-    {/if}
-  </div>
-{/if}
+<PageHead title="Team" sub="Give each stage of a workflow to a saved agent.">
+  {#snippet tabs()}<TeamTabs current="flows" />{/snippet}
+</PageHead>
+<div class="stack">
+  {#if !list.length}
+    <p class="empty">No workflows.</p>
+  {:else}
+    <div class="flw">
+      <nav class="flw-list" aria-label="Workflows">
+        {#each list as f (f.pack + '/' + f.flow)}
+          {@const n = jobsOf(f.flow)}
+          <a class="flw-item" class:on={f.pack === pack && f.flow === flowName} href={href(`/flows/${f.pack}/${f.flow}`)}>
+            <b class="mono">{f.flow}</b>
+            <span class="hint">{f.stages.length} stages · {n ? `${n} job${n === 1 ? '' : 's'}` : 'not used'}</span>
+          </a>
+        {/each}
+      </nav>
+      <div class="flw-main">
+        {#if error}
+          <Callout tone="bad">{error}</Callout>
+        {:else if !view}
+          <p class="empty">Loading…</p>
+        {:else}
+          {@const st = view.stages[sel] ?? view.stages[0]}
+          {@const i = view.stages.indexOf(st)}
+          <div class="flw-head"><b class="mono big">{flowName}</b> <span class="hint">from pack {pack}</span></div>
+          <div class="flw-track">
+            {#each view.stages as s, k (s.id)}
+              {@const who = resolved[k]}
+              {@const always = rows[k].human || s.class === 'human-only'}
+              <button class="flw-st" class:on={k === i} class:inh={!rows[k].agent} onclick={() => (sel = k)} aria-pressed={k === i}>
+                <b>{label(s)}</b>
+                <span class="flw-ag"><span class="av s" style:background={avatarBg(who)}>{initials(who)}</span>{who || 'no agent'}</span>
+                <span class="hint" class:flw-hand={always}>{always ? '✋ always' : 'by autonomy'}</span>
+              </button>
+              {#if k < view.stages.length - 1}<span class="flw-arr" aria-hidden="true">›</span>{/if}
+            {/each}
+          </div>
+          <p class="hint">Solid = agent set here · Dashed = same as the stage before · ✋ = the gate always waits for you</p>
+          <Panel title="Stage · {label(st)}" hint="{i + 1} of {view.stages.length} · {st.id}">
+            <div class="grp">
+              <label class="f">Agent
+                <span class="row">
+                  <select aria-label="Agent for {label(st)}" bind:value={rows[i].agent}>
+                    <option value="">{resolved[i] && !rows[i].agent ? `Same as before (${resolved[i]})` : 'No agent'}</option>
+                    {#each names(rows[i].agent) as n (n)}<option value={n}>{withDesc(n)}</option>{/each}
+                  </select>
+                  {#if rows[i].agent}<button class="btn sm" onclick={() => (rows[i].agent = '')}>Inherit instead</button>{/if}
+                </span>
+                {#if st.broken && rows[i].agent === (st.agent ?? '') && st.assigned}<span class="hint err">✕ Cannot start jobs: {st.broken}</span>{/if}
+              </label>
+              <div class="f">When it finishes
+                <Seg label="When the stage finishes" value={rows[i].human ? 'wait' : 'auto'} onchange={(v) => (rows[i].human = v === 'wait')}
+                  options={[{ value: 'auto', label: 'Follow autonomy', disabled: !rows[i].agent || st.class === 'human-only' }, { value: 'wait', label: 'Always wait for me', disabled: !rows[i].agent }]} />
+                <span class="hint">{st.class === 'human-only' ? 'This stage always waits for you.' : '“Always wait” cannot be skipped, even at higher autonomy.'}</span>
+              </div>
+            </div>
+          </Panel>
+          <p class="hint">A job takes a copy of these assignments when it starts. Saving affects new jobs only.</p>
+          <SaveBar {dirty} {busy} onsave={save} ondiscard={discard} />
+        {/if}
+      </div>
+    </div>
+  {/if}
+</div>
