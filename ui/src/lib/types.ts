@@ -252,6 +252,81 @@ export interface PluginInfo {
   chooseModel?: boolean;
   /** A Herd view plugin: its page, served at `/api/v1/plugins/{name}/view/{entry}`. */
   view?: { entry: string };
+  /** Where an installed external plugin came from; absent for built-ins and plugins copied by hand. */
+  source?: PluginSource;
+}
+
+/** The recorded source of an installed plugin (`xherd plugin install`). */
+export interface PluginSource {
+  url: string;
+  ref?: string | null;
+  path?: string | null;
+  sha?: string | null;
+  digest?: string | null;
+  installedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+/** `GET /plugins`. */
+export interface PluginsList {
+  plugins: { name: string; kind: string; version: string; builtin: boolean; source?: PluginSource }[];
+  /** The loaded plugins differ from those on disk: restart xherd. */
+  restartNeeded: boolean;
+  /** `false` when `XHERD_PLUGIN_INSTALL=off`: only removing works. */
+  installEnabled: boolean;
+}
+
+/** `POST /plugins/preview`: what a source holds, found without running any of its code. */
+export interface PluginPreview {
+  url: string;
+  ref?: string | null;
+  /** The sub-folder with the manifest; absent at the repository root or when `choices` is set. */
+  path?: string | null;
+  /** The commit the ref resolved to. */
+  sha: string;
+  /** Several plugins in the repository: send one `path` back. */
+  choices?: PluginChoice[];
+  // The plugin itself (absent while `choices` asks for a path).
+  name?: string;
+  kind?: string;
+  version?: string;
+  label?: string;
+  description?: string;
+  minXherdVersion?: string | null;
+  compatible?: boolean;
+  /** Install sends this back; a different content is refused (`changed_since_preview`). */
+  digest?: string;
+  files?: number;
+  bytes?: number;
+  /** The plugin takes the place of a built-in or an installed one. */
+  replaces?: 'builtin' | 'external' | null;
+  settings?: { key: string; label: string; secret: boolean; required: boolean }[];
+  /** Every command the plugin declares. */
+  runs?: { what: string; argv: string[] }[];
+  warning?: string;
+}
+
+export interface PluginChoice { path: string; name: string; kind?: string | null; error?: string }
+
+/** `POST /plugins/{name}/update` without a digest. */
+export interface PluginUpdatePreview extends PluginPreview {
+  installed: { url: string; ref?: string | null; path?: string | null; sha?: string | null; version?: string | null; digest?: string | null };
+  /** Unified diff of the installed manifest against the new one; empty when equal. */
+  manifestDiff: string;
+}
+
+/** `POST /plugins/install` and `POST /plugins/{name}/update` with a digest. */
+export interface InstalledPlugin {
+  name: string;
+  kind?: string;
+  version: string;
+  url: string;
+  ref?: string | null;
+  path?: string | null;
+  sha: string;
+  digest: string;
+  /** Update only. */
+  previousSha?: string | null;
 }
 
 export interface ModelSuggestion { id: string; label?: string; tier?: string }

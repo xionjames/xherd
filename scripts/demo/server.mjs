@@ -84,7 +84,10 @@ const plugins = [
   { name: 'opencode', kind: 'runtime', version: '1.0.0', builtin: true, settings: [], enabled: true, login: false },
   { name: 'codex', kind: 'runtime', version: '1.0.0', builtin: true, settings: [], enabled: true, login: true },
   { name: 'github', kind: 'host', version: '1.0.0', builtin: true, settings: [], enabled: true, login: true },
+  { name: 'gitea', kind: 'host', version: '0.2.0', builtin: false, settings: [], enabled: true, login: false, source: { url: 'https://github.com/acme/xherd-gitea', ref: null, path: null, sha: '3f2a9c1d0b7e4a5c8d9e1f2a3b4c5d6e7f8a9b0c', digest: 'a'.repeat(64), installedAt: '2026-11-01T10:00:00Z' } },
 ];
+const pluginsList = () => ({ plugins: plugins.map(({ name, kind, version, builtin, source }) => ({ name, kind, version, builtin, source })), restartNeeded: false, installEnabled: true });
+const pluginPreview = (url) => ({ url, ref: null, path: null, sha: '9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c', name: 'forgejo', kind: 'host', version: '0.1.0', label: 'Forgejo', description: 'Pull requests on a Forgejo server', compatible: true, digest: 'b'.repeat(64), files: 6, bytes: 5400, replaces: null, settings: [{ key: 'token', label: 'Access token', secret: true, required: true }], runs: [{ what: 'pr.create', argv: ['./bin/forgejo', 'pr', 'create'] }], warning: 'A plugin runs commands as you, with your environment. Install only code you trust.' });
 const state = { version: '0.4.0', buildVersion: '0.4.0', platform: 'linux', config: { maxConcurrentJobs: 12, welcomed: true }, jobs: JOBS, agents: AG, plugins, trackerLinks: [], brokenPlugins: [], flows, sandbox: false };
 const todos = [
   { id: 't1', title: 'Check the release branch is green', status: 'due', due: ago(30), repeatMinutes: 0 },
@@ -118,6 +121,12 @@ const srv = http.createServer((q, r) => {
   if (u.startsWith('/api/v1/')) {
     const k = u.slice(7); let m;
     if (routes[k]) return json(r, routes[k]);
+    if (k === '/plugins') return json(r, pluginsList());
+    if (k === '/plugins/preview') return json(r, pluginPreview('https://github.com/acme/xherd-forgejo'));
+    if (k === '/plugins/install') return json(r, { name: 'forgejo', kind: 'host', version: '0.1.0', url: 'https://github.com/acme/xherd-forgejo', sha: '9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c', digest: 'b'.repeat(64) });
+    if (k === '/admin/restart') return json(r, { restarting: true });
+    if ((m = k.match(/^\/plugins\/([^/]+)\/update$/))) return json(r, { ...pluginPreview('https://github.com/acme/xherd-' + m[1]), name: m[1], installed: { url: 'https://github.com/acme/xherd-' + m[1], sha: '3f2a9c1d0b7e4a5c8d9e1f2a3b4c5d6e7f8a9b0c', version: '0.2.0' }, manifestDiff: '--- a/xherd-plugin.json\n+++ b/xherd-plugin.json\n@@ -2,3 +2,3 @@\n-  "version": "0.2.0",\n+  "version": "0.3.0",\n' });
+    if ((m = k.match(/^\/plugins\/([^/]+)$/)) && q.method === 'DELETE') return json(r, { name: m[1], forgot: false });
     if ((m = k.match(/^\/flows\/[^/]+\/([^/]+)$/))) return json(r, flowView(m[1]));
     if ((m = k.match(/^\/jobs\/([^/]+)\/docs$/))) return json(r, { docs: docsOf(jobById[m[1]] ?? {}) });
     if ((m = k.match(/^\/jobs\/([^/]+)\/file$/))) { const p = url.searchParams.get('path') ?? ''; const t = textOf(p); return json(r, { path: p, text: t, sha256: sha(t), reviewed: null }); }
