@@ -36,6 +36,32 @@ describe('track', () => {
   it('is empty without a workflow', () => expect(track(job({}), flows)).toEqual([]));
 });
 
+import { sortJobs } from './jobs';
+describe('sortJobs', () => {
+  const names = (l: Job[]) => l.map((j) => j.name);
+  it('puts the newest first outside Needs you', () => {
+    const l = [job({ name: 'old', createdAt: 1 }), job({ name: 'new', createdAt: 3 }), job({ name: 'mid', status: 'queued', createdAt: 2 })];
+    expect(names(sortJobs(l))).toEqual(['new', 'mid', 'old']);
+  });
+  it('puts Needs you first, longest waiting first', () => {
+    const l = [
+      job({ name: 'run', createdAt: 9 }),
+      job({ name: 'late', status: 'waiting-input', statusSince: 20, createdAt: 1 }),
+      job({ name: 'early', status: 'waiting-input', statusSince: 10, createdAt: 2 }),
+    ];
+    expect(names(sortJobs(l))).toEqual(['early', 'late', 'run']);
+  });
+  it('breaks ties by name', () => {
+    const l = [job({ name: 'b', createdAt: 5 }), job({ name: 'a', createdAt: 5 })];
+    expect(names(sortJobs(l))).toEqual(['a', 'b']);
+  });
+  it('does not change its input', () => {
+    const l = [job({ name: 'x', createdAt: 1 }), job({ name: 'y', createdAt: 2 })];
+    sortJobs(l);
+    expect(names(l)).toEqual(['x', 'y']);
+  });
+});
+
 import { filterJobs, waitingDetail } from './jobs';
 describe('counters', () => {
   const l = [job({ name: 'a', status: 'running' }), job({ name: 'b', status: 'queued' }), job({ name: 'c', status: 'watching' }), job({ name: 'd', status: 'done' })];

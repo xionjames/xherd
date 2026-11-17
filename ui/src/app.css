@@ -398,7 +398,10 @@ label.f.chk.top { align-items: flex-start; }
 .list > li:first-child { border-top: 0; }
 .paper { background: var(--pen); border: 1px solid var(--fence); border-radius: var(--r-card); padding: 28px 36px 36px; min-width: 0; }
 @media (max-width: 760px) { .paper { padding: 18px 16px 24px; } }
-.md { max-width: 72ch; display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.md { display: flex; flex-direction: column; gap: 12px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+/* Text keeps its reading width; blocks holding a diagram use the full panel width. */
+.md > * { max-width: 72ch; }
+.md > :has(pre.mmd) { max-width: none; }
 .md h1 { font-size: 24px; }
 .md h2 { font-size: 15px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--fence-soft); }
 /* Mermaid diagrams in agent documents (lib/mermaid.ts). */

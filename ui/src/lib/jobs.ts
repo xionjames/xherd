@@ -18,6 +18,17 @@ export function jobGroup(a: Job): JobGroup {
   return 'waiting';
 }
 
+/** The Jobs list order (R3): the ones that need you first, longest waiting first;
+ *  then the rest, newest first. Ties by name. Returns a new list. */
+export function sortJobs(list: Job[]): Job[] {
+  return [...list].sort((a, b) => {
+    const na = jobGroup(a) === 'needs';
+    if (na !== (jobGroup(b) === 'needs')) return na ? -1 : 1;
+    const d = na ? a.statusSince - b.statusSince : b.createdAt - a.createdAt;
+    return d || a.name.localeCompare(b.name);
+  });
+}
+
 /** Two letters for an avatar: `el-chino` → EC, `archie` → AR, none → –. */
 export function initials(name?: string): string {
   if (!name) return '–';
