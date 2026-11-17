@@ -75,7 +75,7 @@ Run these in the folder of `compose.yaml`.
 
 ### Update
 
-Pause your jobs (the Herd's **Pause all**), then:
+Pause your jobs (the **Pause all** button on the Jobs page), then:
 
 ```sh
 docker compose pull && docker compose up -d
