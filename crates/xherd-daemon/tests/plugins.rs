@@ -923,3 +923,28 @@ async fn restart_request_wakes_the_waiter_even_when_made_first() {
     .await;
     assert!(waiter.is_err(), "one request wakes one wait");
 }
+
+#[tokio::test]
+async fn security_lists_external_plugins_with_their_source_or_as_by_hand() {
+    let (t, repo) = installed().await;
+    let hand = t.home.path().join("plugins/hand");
+    std::fs::create_dir_all(&hand).unwrap();
+    std::fs::write(
+        hand.join("xherd-plugin.json"),
+        manifest("hand", "host", json!({})),
+    )
+    .unwrap();
+
+    // Plugins are listed once loaded: a new start sees both.
+    let d2 = restarted(&t).await;
+    let found = d2.security_check().await;
+    let p = found.iter().find(|f| f.id == "plugins").unwrap();
+    assert!(!p.ok);
+    let pinned = format!("gitea ({}@{})", repo.url(), &repo.sha()[..7]);
+    assert!(p.detail.contains(&pinned), "{}", p.detail);
+    assert!(
+        p.detail.contains("hand (installed by hand, not pinned)"),
+        "{}",
+        p.detail
+    );
+}

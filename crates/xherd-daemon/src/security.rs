@@ -62,12 +62,28 @@ fn autonomy_finding(c: &Config, levels: &[Autonomy]) -> Finding {
     )
 }
 
+/// An external plugin and where it came from (`url@short-sha`), `None` when it
+/// was copied by hand and has no install record.
+pub struct ExternalPlugin {
+    pub name: String,
+    pub source: Option<String>,
+}
+
+impl ExternalPlugin {
+    fn describe(&self) -> String {
+        match &self.source {
+            Some(s) => format!("{} ({s})", self.name),
+            None => format!("{} (installed by hand, not pinned)", self.name),
+        }
+    }
+}
+
 /// Pure part: everything but the plugin list and the agents' levels comes from the config.
 pub fn findings(
     c: &Config,
     sandbox: bool,
     split: bool,
-    external_plugins: &[String],
+    external_plugins: &[ExternalPlugin],
     levels: &[Autonomy],
 ) -> Vec<Finding> {
     let mut out = Vec::new();
@@ -132,9 +148,13 @@ pub fn findings(
             false,
             "External plugins",
             format!(
-                "{} run with your rights and are not pinned to a version: {}",
+                "{} run with your rights; an update changes the code they run: {}",
                 external_plugins.len(),
-                external_plugins.join(", ")
+                external_plugins
+                    .iter()
+                    .map(ExternalPlugin::describe)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         )
     });
@@ -203,11 +223,18 @@ impl Daemon {
             .filter(|a| !matches!(a.status, Status::Done | Status::Cancelled | Status::Error))
             .map(|a| a.autonomy)
             .collect();
-        let external: Vec<String> = self
+        let records = self.store.plugin_records().await.unwrap_or_default();
+        let external: Vec<ExternalPlugin> = self
             .plugins
             .all()
             .filter(|p| !p.builtin())
-            .map(|p| p.name().to_string())
+            .map(|p| ExternalPlugin {
+                name: p.name().to_string(),
+                source: records.iter().find(|r| r.name == p.name()).map(|r| {
+                    let sha = r.sha.as_deref().unwrap_or("");
+                    format!("{}@{}", r.source, &sha[..sha.len().min(7)])
+                }),
+            })
             .collect();
         findings(
             &self.config,
@@ -270,10 +297,14 @@ mod tests {
             sensitive_paths: vec!["infra/**".into()],
             ..Default::default()
         };
-        let v = findings(&c, false, false, &["mine".into()], &[]);
+        let mine = ExternalPlugin {
+            name: "mine".into(),
+            source: None,
+        };
+        let v = findings(&c, false, false, &[mine], &[]);
         assert!(get(&v, "session-limit").ok && get(&v, "sensitive-paths").ok);
         assert!(get(&v, "budgets").detail.contains("per agent off"));
         let p = get(&v, "plugins");
-        assert!(!p.ok && p.detail.contains("mine"));
+        assert!(!p.ok && p.detail.contains("mine (installed by hand, not pinned)"));
     }
 }
