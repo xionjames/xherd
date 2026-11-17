@@ -11,7 +11,7 @@
   import { agentLane, agentLaneOrder, jobAgent } from '../lib/agents';
   import { ago, repoName } from '../lib/format';
   import { stageNow } from '../lib/flow';
-  import { GROUPS, GROUP_LABEL, jobGroup, initials, avatarBg, filterJobs, isFilter, type JobGroup, type JobFilter } from '../lib/jobs';
+  import { GROUPS, GROUP_LABEL, jobGroup, initials, avatarBg, filterJobs, sortJobs, isFilter, type JobGroup, type JobFilter } from '../lib/jobs';
   import type { Job, FlowInfo } from '../lib/types';
 
   let { agents, flows, open }: { agents: Job[]; flows: FlowInfo[]; open: (a: Job) => void } = $props();
@@ -24,19 +24,18 @@
 
   const by = $derived(Object.fromEntries(GROUPS.map((g) => [g, agents.filter((a) => jobGroup(a) === g)])) as Record<JobGroup, Job[]>);
   const shown = $derived(filterJobs(agents, filter));
-  const sorted = (l: Job[]) => [...l].sort((a, b) => (jobGroup(a) === 'needs' ? a.statusSince - b.statusSince : b.lastActivity - a.lastActivity));
 
   interface Block { key: string; label: string; need?: boolean; jobs: Job[] }
   const blocks = $derived.by((): Block[] => {
     if (group === 'agent') {
       const names = agentLaneOrder(shown.map(agentLane));
-      return names.map((n) => ({ key: n, label: n, jobs: sorted(shown.filter((j) => agentLane(j) === n)) }));
+      return names.map((n) => ({ key: n, label: n, jobs: sortJobs(shown.filter((j) => agentLane(j) === n)) }));
     }
     if (group === 'flow') {
       const names = [...new Set(shown.map((j) => j.flow ?? 'no workflow'))].sort();
-      return names.map((n) => ({ key: n, label: n, jobs: sorted(shown.filter((j) => (j.flow ?? 'no workflow') === n)) }));
+      return names.map((n) => ({ key: n, label: n, jobs: sortJobs(shown.filter((j) => (j.flow ?? 'no workflow') === n)) }));
     }
-    return GROUPS.filter((g) => shown.some((j) => jobGroup(j) === g)).map((g) => ({ key: g, label: GROUP_LABEL[g], need: g === 'needs', jobs: sorted(shown.filter((j) => jobGroup(j) === g)) }));
+    return GROUPS.filter((g) => shown.some((j) => jobGroup(j) === g)).map((g) => ({ key: g, label: GROUP_LABEL[g], need: g === 'needs', jobs: sortJobs(shown.filter((j) => jobGroup(j) === g)) }));
   });
 
   const slots = $derived(Number(app.state?.config.maxConcurrentJobs ?? 0));
