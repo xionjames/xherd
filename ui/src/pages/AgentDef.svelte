@@ -165,6 +165,7 @@
   const showKnown = (v: string) => (v === '' ? '(not set)' : v);
 </script>
 
+<div class="stack mid" style="padding-bottom: 0"><a class="muted" href={href('/agents')}>← Agents</a></div>
 <PageHead width="mid" title={isNew ? 'New agent' : (agent?.name ?? name)} sub={agent?.description || undefined}>
   {#snippet meta()}
     {#if agent}<span class="muted num">v{agent.version}</span>
