@@ -24,7 +24,8 @@ by theme; update it together with them.
 - [x] Board (tasks of all jobs by status) and Review with "Mark seen"; the notification bell is in
 - [x] Time (work log: job and user time per day and ticket, delivery metrics) and TODOs (reminders, once or repeating)
 - [x] Board of work units (stages, then tasks, by Pending / In progress / Done), swimlanes (job, repository, workflow) and TODO cards; the Herd's By stage layout (jobs in their flow's stage columns, a lane per workflow); TODO condition checks (runtime plugin `data.terminal.check`, a read-only headless run ending in `XHERD_RESULT`)
-- [ ] Board cards declared by packs and profiles (R-1101), checks for runtimes other than Claude Code (they need a `check` command in their plugin)
+- [ ] Board cards declared by packs and profiles (R-1101)
+- [x] TODO condition checks for runtimes other than Claude Code: opencode and Codex declare `data.terminal.check`
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [x] Plugin secrets from the UI (write-only, live)
 - [ ] Plugin install from the UI
@@ -62,7 +63,7 @@ by theme; update it together with them.
 - [x] Kill switch (R-032): `xherd pause --all`, `POST /jobs/pause-all`, "Pause all" in the Herd; immediate, no handoff (also for the budget pause, on purpose)
 - [ ] Background-task guard (R-024): done for auto-approval and the move to watching; a user approval still starts a fresh session. Runtime change between steps (R-025)
 - [ ] Recovery beyond a lost session: retry a failed start; optionally a "diagnosing" session told what failed
-- [ ] Check the Resume button on `parked` jobs (no Resume transition from `parked` in the lifecycle table)
+- [x] Resume from `parked` (lifecycle transition `Resume` from `Parked`; test `a_parked_agent_can_be_resumed_and_keeps_its_gate`)
 - [ ] xherd could also run other mechanical git/test steps itself (e.g. the task `verify` command, pushing stays the job's until guardrails)
 - [x] Ask (#121): `xherd talk` / the Ask box gives a stopped job a session with your text, held open (no auto-approval, no move to watching) until Finish or flow work
 - [x] Remove a finished job's worktree (#123): `xherd remove-worktree`, `cancel --remove-worktree`; the branch and record stay
@@ -80,7 +81,7 @@ by theme; update it together with them.
 - [x] Saved agents (#141): versioned setups jobs start from, with a skills library, agent memory and its proposals, suggestions after a finished or repeated job, and backups; "agent" now means the saved setup, a run is a job (design §18, D25)
 - [x] Agents on workflow stages (#141, D26): agents are personas; a workflow's stages are assigned to agents (Flows page, `xherd flow`), the job snapshots them and switches at each stage start; fallback runtime; Herd By agent
 - [ ] Agents on stages, still open: check in a browser and with real runtimes; mixing runtimes in one job (needs R-025); a switch between approve and `stage enter` after a pause
-- [ ] Saved agents, still open: check the pages in a browser and a job from an agent with real runtimes; a Skills tab on the agent page; update the supervisor's live count when a running job is attached to an agent; scheduled agent runs
+- [ ] Saved agents, still open: check the pages in a browser and a job from an agent with real runtimes; a Skills tab on the agent page; scheduled agent runs
 
 ## Git, accounts and credentials
 
