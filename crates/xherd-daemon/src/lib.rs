@@ -25,6 +25,7 @@ pub mod install;
 pub mod notifier;
 pub mod open_in;
 mod plugin_dirs;
+pub mod plugin_install;
 pub mod pr_round;
 pub mod profiles;
 pub mod repos;

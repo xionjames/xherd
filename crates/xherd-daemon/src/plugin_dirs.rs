@@ -66,8 +66,8 @@ fn agent_home() -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".local/share/xherd-plugins"))
 }
 
-const MAX_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_DEPTH: usize = 16;
+pub(crate) const MAX_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_DEPTH: usize = 16;
 
 /// Replace `dst` with a copy of `src`: folders 0755, files 0555 when `src`'s
 /// has an execute bit, else 0444, so the agents' user can read and run them
