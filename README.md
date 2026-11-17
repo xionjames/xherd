@@ -15,9 +15,9 @@ I got overwhelmed running several coding tasks at once: terminals piled up and a
 
 ## What is xherd?
 
-[![xherd tour video: multiple coding agents in parallel, all working with you](doc/assets/xherd-tour.jpg)](doc/assets/xherd-tour.mp4)
+https://github.com/user-attachments/assets/90958349-cb23-4cae-8a91-4de39a15c95e
 
-*A short tour (click the picture to play it), with mocked data: a team of agents, the Jobs page with a pill per stage, the Team and its flows, the Inbox, a live terminal, a design with a diagram, comments on diff lines, approving a commit and resolving merge conflicts. More screens and the CLI: [the tour](doc/user/tour.md).*
+*A short tour with mocked data: a team of agents, the Jobs page with a pill per stage, the Team and its flows, the Inbox, a live terminal, a design with a diagram, comments on diff lines, approving a commit and resolving merge conflicts. More screens and the CLI: [the tour](doc/user/tour.md).*
 
 You hand xherd your tickets. It gives each one to a coding agent in its own sandbox, and shows you all of them on one screen.
 
