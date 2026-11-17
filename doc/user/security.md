@@ -54,10 +54,10 @@ The daemon runs as `xherd-daemon`; jobs run as a user with your host ids. The da
 
 ## Plugins
 
-Built-in plugins are embedded. External plugins in `<data root>/plugins/` are not pinned to a version; the security check lists them. Install only plugins you have read.
+Built-in plugins are embedded. External plugins in `<data root>/plugins/` are code that runs with the rights below; the security check lists them. A plugin installed from a git URL (Settings → Plugins, `xherd plugin install`) is recorded with its `url@sha` and the digest of its files, and an update shows the manifest diff first, but xherd does not review the code: the preview tells you what the manifest runs, and you decide. xherd installs exactly the digest you previewed, so a repository that changes between preview and install is refused. A plugin copied in by hand is not pinned. Install only plugins you have read; `XHERD_PLUGIN_INSTALL=off` turns installing and updating off. Only the local user can install or remove (a job's token cannot), and each install, update and removal is recorded in the event log.
 
 - Natively they run with your rights.
-- In the container they run as the agents' user, not the daemon's: they can use the jobs' `gh`/`glab` logins but cannot read `config.json`, `secrets.json` or the database. The daemon copies them at start to a folder that user can read (a restart picks up a new plugin). They receive only the secrets they declare.
+- In the container they run as the agents' user, not the daemon's: they can use the jobs' `gh`/`glab` logins but cannot read `config.json`, `secrets.json` or the database. The daemon copies them at start to a folder that user can read (a restart picks up a new, updated or removed plugin). They receive only the secrets they declare.
 
 ## Reporting a problem
 

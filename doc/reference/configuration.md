@@ -41,7 +41,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `gitIdentities` | `[]` | Identities by remote: `{scope: "github.com/my-company", name, email}`, matched on the remote URL over HTTPS or SSH |
 | `gitHosts` | `[]` | Git access per host (Settings → Git access): `host`, `protocols`, `provider` (a host plugin: `github`, `gitlab`, `bitbucket` or an external one; unset = the first whose host patterns claim the name), `credential` (where git gets the HTTPS token: `provider` = the provider's CLI helper such as `gh auth git-credential`, `xherd` = the token kept in `secrets.json`, `none` = git's own configuration), `username`, `caFile`, `preferHttps` / `preferSsh` (rewrite remotes) |
 | `toolchainDefaults` | `{}` | Tool → version used when a worktree has no version file for it (`{"java": "21.0.5-tem"}`); set from Settings → Plugins → a toolchain. Version files always win |
-| `pluginSettings` | `{}` | Non-secret settings by plugin name (for example `github.gh`, the `gh` binary) |
+| `pluginSettings` | `{}` | Non-secret settings by plugin name (for example `github.gh`, the `gh` binary). Removing a plugin with *forget* drops its entry |
 | `disabledPlugins` | `[]` | Plugins switched off. At least one of each kind stays on |
 | `updateCheck` | `true` | Check for new versions |
 | `welcomed` | `false` | The first-run Welcome screen was completed or skipped |
