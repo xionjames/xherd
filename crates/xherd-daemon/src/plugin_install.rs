@@ -334,6 +334,32 @@ enum Found {
 }
 
 impl Daemon {
+    /// Record that `name` is now installed at `sha`, or gone (`None`).
+    fn note_plugin(&self, name: &str, sha: Option<&str>) {
+        let mut s = self.plugin_state.lock().unwrap_or_else(|e| e.into_inner());
+        match sha {
+            Some(sha) => s.insert(name.to_string(), sha.to_string()),
+            None => s.remove(name),
+        };
+    }
+
+    /// Installed, updated or removed plugins differ from the ones loaded at
+    /// start, so a restart is needed (R7). Equal again once changes cancel.
+    pub fn plugin_changes(&self) -> bool {
+        let s = self.plugin_state.lock().unwrap_or_else(|e| e.into_inner());
+        *s != *self.loaded_plugins
+    }
+
+    /// Ask the daemon process to restart (R7a); `restart_requested` wakes.
+    pub fn request_restart(&self) {
+        self.restart.notify_one();
+    }
+
+    /// Completes once a restart was requested (a request made earlier counts).
+    pub async fn restart_requested(&self) {
+        self.restart.notified().await;
+    }
+
     /// The checked source, or `plugin_install_off`. Tests may use `file://`.
     pub(crate) fn plugin_source(
         &self,
@@ -518,6 +544,7 @@ impl Daemon {
                 format!("cannot record the install: {e}"),
             ));
         }
+        self.note_plugin(&view.name, Some(&sha));
         Ok(Installed {
             name: view.name,
             kind: view.kind,
@@ -733,6 +760,7 @@ impl Daemon {
         if let Some(o) = old {
             let _ = std::fs::remove_dir_all(o);
         }
+        self.note_plugin(name, Some(&sha));
         Ok(Updated {
             name: name.to_string(),
             version: view.version,
@@ -862,6 +890,7 @@ impl Daemon {
         if forget {
             self.forget_plugin(name)?;
         }
+        self.note_plugin(name, None);
         Ok(Removed {
             name: name.to_string(),
             forgot: forget,

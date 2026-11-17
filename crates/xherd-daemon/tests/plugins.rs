@@ -838,3 +838,88 @@ async fn update_remove_refuses_built_ins_and_works_with_the_switch_off() {
     let e = t.d.plugin_update_preview("hand", None).await.unwrap_err();
     assert_eq!(e.code, "unknown_plugin");
 }
+
+fn restart_needed(t: &T) -> bool {
+    t.d.config_view().unwrap()["restartNeeded"] == true
+}
+
+async fn restarted(t: &T) -> Daemon {
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.allow_local_plugin_sources = true;
+    Daemon::start(Paths::at(t.home.path()), o).await.unwrap()
+}
+
+#[tokio::test]
+async fn restart_is_needed_after_install_update_and_remove_and_not_after_a_start() {
+    let t = daemon().await;
+    assert!(!restart_needed(&t));
+    let (repo, _) = install_repo();
+    let digest = digest_of(&t, &repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+    assert!(restart_needed(&t));
+    assert!(t.d.plugin_changes());
+
+    // A new start loads the installed plugin: nothing is pending.
+    let d2 = restarted(&t).await;
+    assert!(
+        !d2.config_view().unwrap()["restartNeeded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(d2.plugins.get("gitea").is_some());
+
+    // An update moves the sha, a remove drops the plugin.
+    repo.commit(&[("xherd-plugin.json", &v2_manifest())]);
+    let p = d2.plugin_update_preview("gitea", None).await.unwrap();
+    d2.plugin_update("gitea", None, json_of(&p)["digest"].as_str().unwrap())
+        .await
+        .unwrap();
+    assert!(d2.plugin_changes());
+    let d3 = restarted(&t).await;
+    assert!(!d3.plugin_changes());
+    d3.plugin_remove("gitea", false).await.unwrap();
+    assert!(
+        d3.config_view().unwrap()["restartNeeded"]
+            .as_bool()
+            .unwrap()
+    );
+    assert!(!restarted(&t).await.plugin_changes());
+}
+
+#[tokio::test]
+async fn restart_changes_cancel_out_and_a_hand_copied_plugin_counts() {
+    let (t, _repo) = installed().await;
+    // Installed after start, then removed again: same as at start.
+    assert!(t.d.plugin_changes());
+    t.d.plugin_remove("gitea", false).await.unwrap();
+    assert!(!t.d.plugin_changes());
+
+    let dir = t.home.path().join("plugins").join("hand");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        manifest("hand", "tracker", json!({})),
+    )
+    .unwrap();
+    let t2 = restarted(&t).await;
+    assert!(!t2.plugin_changes());
+    t2.plugin_remove("hand", false).await.unwrap();
+    assert!(t2.plugin_changes());
+}
+
+#[tokio::test]
+async fn restart_request_wakes_the_waiter_even_when_made_first() {
+    let t = daemon().await;
+    t.d.request_restart();
+    tokio::time::timeout(std::time::Duration::from_secs(5), t.d.restart_requested())
+        .await
+        .expect("a request made before waiting still counts");
+    let waiter = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        t.d.restart_requested(),
+    )
+    .await;
+    assert!(waiter.is_err(), "one request wakes one wait");
+}

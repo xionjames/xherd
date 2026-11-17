@@ -408,7 +408,7 @@ impl Daemon {
         Ok(json!({
             "config": shown(&saved),
             "running": shown(&running),
-            "restartNeeded": saved != running,
+            "restartNeeded": saved != running || self.plugin_changes(),
         }))
     }
 

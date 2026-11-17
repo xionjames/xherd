@@ -191,6 +191,13 @@ pub struct Daemon {
     pub plugin_install: bool,
     /// See `Options::allow_local_plugin_sources`.
     pub allow_local_plugin_sources: bool,
+    /// External plugins loaded at start (name, recorded sha or empty), to
+    /// tell whether installs, updates or removals wait for a restart (R7).
+    pub loaded_plugins: Arc<BTreeMap<String, String>>,
+    /// The same map as it is now; changed with the plugin records.
+    pub plugin_state: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
+    /// Woken by `request_restart` (R7a); the daemon process re-executes.
+    pub restart: Arc<tokio::sync::Notify>,
 }
 
 /// `GET /runtimes/{name}/models`.
@@ -258,6 +265,20 @@ impl Daemon {
         for b in plugins.broken() {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
         }
+        let recorded: BTreeMap<String, Option<String>> = store
+            .plugin_records()
+            .await?
+            .into_iter()
+            .map(|r| (r.name, r.sha))
+            .collect();
+        let loaded_plugins: BTreeMap<String, String> = plugins
+            .all()
+            .filter(|p| p.root.is_some())
+            .map(|p| {
+                let sha = recorded.get(p.name()).cloned().flatten();
+                (p.name().to_string(), sha.unwrap_or_default())
+            })
+            .collect();
 
         let packs = Arc::new(BTreeMap::from([(
             xherd_flow::BUILTIN.to_string(),
@@ -340,6 +361,9 @@ impl Daemon {
             plugins_write: Arc::default(),
             plugin_install: opts.plugin_install,
             allow_local_plugin_sources: opts.allow_local_plugin_sources,
+            plugin_state: Arc::new(std::sync::Mutex::new(loaded_plugins.clone())),
+            loaded_plugins: Arc::new(loaded_plugins),
+            restart: Arc::default(),
         };
         d.import_ledgers().await;
         d.repair_restored().await;
