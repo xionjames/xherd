@@ -2685,6 +2685,8 @@ impl Actor {
         let file = wd.join(PLAN_FILE);
         if p.steps.is_empty() {
             let _ = std::fs::remove_file(&file);
+            // A stale env file would keep a tool dir on `verify:`'s PATH (R5).
+            let _ = std::fs::remove_file(wd.join(xherd_plugin::toolchain::ENV_FILE));
             return launch;
         }
         let json = serde_json::to_vec_pretty(&p).expect("json");
