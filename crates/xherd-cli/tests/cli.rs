@@ -470,3 +470,222 @@ fn hook_reads_the_job_names() {
     xherd(home.path(), wt.path(), &["hook", "stop"], &env, "{}");
     assert_eq!(queue_lines(home.path())[1]["jobId"], "J2");
 }
+
+/// A local git repository holding `files` (path, content), as a `file://` url.
+fn plugin_repo(files: &[(&str, String)]) -> (tempfile::TempDir, String) {
+    let repo = tempfile::tempdir().unwrap();
+    for (path, text) in files {
+        let p = repo.path().join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    for args in [
+        vec!["init", "--quiet", "-b", "main"],
+        vec!["add", "--all"],
+        vec!["commit", "--quiet", "-m", "x"],
+    ] {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(&args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+    let url = format!("file://{}", repo.path().display());
+    (repo, url)
+}
+
+fn manifest(name: &str) -> String {
+    serde_json::json!({"name": name, "kind": "host", "version": "1.0.0"}).to_string()
+}
+
+/// `xherd plugin …` against a daemon run in this process, which alone may
+/// take `file://` sources (the binary never does).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_install_update_remove_and_ls() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = xherd_core::paths::Paths::at(home.path());
+    paths.ensure().unwrap();
+    let ws = home.path().join("ws");
+    xherd_core::config::Config {
+        workspace: Some(ws.to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = xherd_daemon::Options::new(
+        std::sync::Arc::new(xherd_daemon::FakeDriver::default()),
+        std::sync::Arc::new(xherd_daemon::SystemClock),
+    );
+    o.scheduler = None;
+    o.allow_local_plugin_sources = true;
+    let d = xherd_daemon::Daemon::start(paths, o).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(xherd_api::serve(d, listener, std::future::pending()));
+    let cwd = tempfile::tempdir().unwrap();
+    let env = [("XHERD_URL", url.as_str())];
+    let run = |args: &[&str]| {
+        let o = xherd(home.path(), cwd.path(), args, &env, "");
+        (
+            o.status.code(),
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+        )
+    };
+
+    let (repo, src) = plugin_repo(&[("xherd-plugin.json", manifest("gitea"))]);
+
+    // No terminal and no --yes: nothing is installed.
+    let (code, _, err) = run(&["plugin", "install", &src]);
+    assert_eq!(code, Some(2), "{err}");
+    assert!(err.contains("--yes"), "{err}");
+    assert!(!run(&["plugin", "ls"]).1.contains("gitea"));
+
+    // --yes installs, and `ls` shows where it came from.
+    let (code, out, err) = run(&["plugin", "install", &src, "--yes"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        out.contains("gitea 1.0.0") && out.contains("xherd daemon restart"),
+        "{out}"
+    );
+    let sha = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "--short=7", "HEAD"])
+            .current_dir(repo.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    // Not loaded yet: the running daemon says a restart is needed.
+    let (_, ls, _) = run(&["plugin", "ls"]);
+    assert!(
+        ls.contains("Restart needed") && ls.contains("built-in"),
+        "{ls}"
+    );
+    // A daemon started afterwards (as after a restart) lists it with its source.
+    let mut o2 = xherd_daemon::Options::new(
+        std::sync::Arc::new(xherd_daemon::FakeDriver::default()),
+        std::sync::Arc::new(xherd_daemon::SystemClock),
+    );
+    o2.scheduler = None;
+    let d2 = xherd_daemon::Daemon::start(xherd_core::paths::Paths::at(home.path()), o2)
+        .await
+        .unwrap();
+    let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url2 = format!("http://{}", l2.local_addr().unwrap());
+    tokio::spawn(xherd_api::serve(d2, l2, std::future::pending()));
+    let o = xherd(
+        home.path(),
+        cwd.path(),
+        &["plugin", "ls"],
+        &[("XHERD_URL", url2.as_str())],
+        "",
+    );
+    let ls = String::from_utf8_lossy(&o.stdout);
+    let line = ls.lines().find(|l| l.starts_with("gitea")).unwrap();
+    assert!(line.ends_with(&format!("{src}@{}", sha.trim())), "{ls}");
+    assert!(!ls.contains("Restart needed"), "{ls}");
+
+    // Installing it again is refused.
+    let (code, _, err) = run(&["plugin", "install", &src, "--yes"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        err.contains("plugin_exists") || err.contains("already"),
+        "{err}"
+    );
+
+    // Update shows the manifest diff first.
+    std::fs::write(
+        repo.path().join("xherd-plugin.json"),
+        serde_json::json!({"name": "gitea", "kind": "host", "version": "1.1.0"}).to_string(),
+    )
+    .unwrap();
+    for args in [vec!["add", "--all"], vec!["commit", "--quiet", "-m", "v2"]] {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(&args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    }
+    let (code, _, err) = run(&["plugin", "update", "gitea"]);
+    assert_eq!(code, Some(2), "{err}");
+    let (code, out, err) = run(&["plugin", "update", "gitea", "--yes"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        out.contains("-  \"version\": \"1.0.0\"") && out.contains("+  \"version\": \"1.1.0\""),
+        "{out}"
+    );
+    assert!(out.contains("Updated gitea to 1.1.0"), "{out}");
+
+    // Remove.
+    let (code, _, _) = run(&["plugin", "remove", "gitea"]);
+    assert_eq!(code, Some(2));
+    let (code, out, err) = run(&["plugin", "remove", "gitea", "--forget", "--yes"]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        out.contains("Removed gitea with its settings and secrets"),
+        "{out}"
+    );
+    // Installed and removed again: the loaded set is as it was at start.
+    assert!(!run(&["plugin", "ls"]).1.contains("Restart needed"));
+    let (code, _, err) = run(&["plugin", "remove", "github", "--yes"]);
+    assert_eq!(code, Some(2), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_install_with_several_plugins_asks_for_a_path() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = xherd_core::paths::Paths::at(home.path());
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let mut o = xherd_daemon::Options::new(
+        std::sync::Arc::new(xherd_daemon::FakeDriver::default()),
+        std::sync::Arc::new(xherd_daemon::SystemClock),
+    );
+    o.scheduler = None;
+    o.allow_local_plugin_sources = true;
+    let d = xherd_daemon::Daemon::start(paths, o).await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(xherd_api::serve(d, listener, std::future::pending()));
+    let cwd = tempfile::tempdir().unwrap();
+    let env = [("XHERD_URL", url.as_str())];
+    let (_repo, src) = plugin_repo(&[
+        ("plugins/a/xherd-plugin.json", manifest("alpha")),
+        ("plugins/b/xherd-plugin.json", manifest("beta")),
+    ]);
+    let o = xherd(
+        home.path(),
+        cwd.path(),
+        &["plugin", "install", &src, "--yes"],
+        &env,
+        "",
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    assert!(
+        err.contains("--path") && err.contains("plugins/a") && err.contains("plugins/b"),
+        "{err}"
+    );
+    let o = xherd(
+        home.path(),
+        cwd.path(),
+        &["plugin", "install", &src, "--path", "plugins/b", "--yes"],
+        &env,
+        "",
+    );
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    assert!(String::from_utf8_lossy(&o.stdout).contains("beta 1.0.0"));
+}

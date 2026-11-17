@@ -17,6 +17,7 @@ mod git;
 mod guard;
 mod init;
 mod open_in;
+mod plugin;
 mod report;
 mod toolchain;
 mod xap;
@@ -107,6 +108,9 @@ enum Cmd {
     /// Which saved agent runs which stage of a workflow.
     #[command(subcommand)]
     Flow(flow::FlowCmd),
+    /// External plugins: install from a git repository, update, remove, list.
+    #[command(subcommand)]
+    Plugin(plugin::PluginCmd),
     /// List jobs.
     Ls,
     /// Install a pack's commands for job runtimes (default: xherd, every runtime switched on).
@@ -413,6 +417,7 @@ fn main() -> ExitCode {
         Cmd::Ls => ls(),
         Cmd::Agent(c) => agent::run(c, json),
         Cmd::Flow(c) => flow::run(c, json),
+        Cmd::Plugin(c) => plugin::run(c, json),
         Cmd::Install { runtime, pack } => install(runtime, pack),
         Cmd::New {
             name,
