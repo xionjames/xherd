@@ -3226,6 +3226,38 @@ async fn memory_proposal_is_committed_on_accept() {
     );
 }
 
+/// Shared memory stays open after the PR: the accept commits on the branch
+/// (the user pushes it), it is not refused.
+#[tokio::test]
+async fn memory_accept_after_the_pr_is_open_commits_on_the_branch() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    std::fs::write(
+        wt.join(".xherd/AGENTS.proposed.md"),
+        "# Agents\n- run `make t`\n",
+    )
+    .unwrap();
+    xap(
+        &t,
+        "m1",
+        "memory.propose",
+        json!({"reason": "Adds the test command"}),
+    )
+    .await
+    .unwrap();
+    watching(&t).await;
+    let a = act(&t, UserAction::MemoryAccept { text: None })
+        .await
+        .unwrap();
+    assert!(a.memory_proposal.is_none());
+    assert_eq!(
+        std::fs::read_to_string(wt.join("AGENTS.md")).unwrap(),
+        "# Agents\n- run `make t`\n"
+    );
+    let subject = git(wt, &["show", "--format=%s", "-s", "HEAD"]);
+    assert_eq!(subject, "Update AGENTS.md (shared memory)");
+}
+
 #[tokio::test]
 async fn a_dismissed_starter_agents_md_is_not_proposed_again() {
     let t = setup().await;
