@@ -3,7 +3,9 @@
   // its settings (saved here), its checks with their fixes, for a toolchain its
   // tools and versions, and the plugin's login terminal (the only one).
   import { onMount } from 'svelte';
-  import { get, put, post } from '../lib/api';
+  import { get, put, post, pluginUpdatePreview, pluginUpdate, pluginRemove } from '../lib/api';
+  import { reload } from '../lib/store.svelte';
+  import Callout from './Callout.svelte';
   import { boundProvider } from '../lib/gitProviders';
   import { KIND_ONE } from '../lib/plugins';
   import { loadChecks, loadConfig, setup } from '../lib/setup.svelte';
@@ -14,7 +16,7 @@
   import TermView from './TermView.svelte';
   import ModelInput from './ModelInput.svelte';
   import { validModel } from '../lib/models';
-  import type { PluginInfo, GitHostsView } from '../lib/types';
+  import type { PluginInfo, GitHostsView, PluginUpdatePreview } from '../lib/types';
 
   let { plugin, onclose, autologin = false }: { plugin: PluginInfo; onclose: () => void; autologin?: boolean } = $props();
   const label = $derived(plugin.label || plugin.name);
@@ -86,6 +88,48 @@
     }
   }
 
+  // Update and Remove (R8, R9) of a plugin installed from a git URL or by hand;
+  // built-ins have neither. Each takes the dialog's place so only one is open.
+  let mode = $state<'options' | 'update' | 'remove'>('options');
+  let acting = $state(false);
+  let actionError = $state('');
+  let updateRef = $state('');
+  let upd = $state<PluginUpdatePreview | null>(null);
+  let updated = $state('');
+  let forgetSettings = $state(false);
+  const sourceText = $derived(plugin.source ? `${plugin.source.url}${plugin.source.sha ? `@${plugin.source.sha.slice(0, 7)}` : ''}` : '');
+  const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  function back() { mode = 'options'; upd = null; updated = ''; actionError = ''; }
+  async function lookForUpdate() {
+    acting = true;
+    actionError = '';
+    try { upd = await pluginUpdatePreview(plugin.name, updateRef.trim() || undefined); }
+    catch (e) { upd = null; actionError = errText(e); }
+    finally { acting = false; }
+  }
+  async function applyUpdate() {
+    if (!upd?.digest) return;
+    acting = true;
+    actionError = '';
+    try {
+      const r = await pluginUpdate(plugin.name, upd.digest, updateRef.trim() || undefined);
+      updated = `${r.version} at ${r.sha.slice(0, 7)}`;
+      await reload();
+      await loadConfig().catch(() => {});
+    } catch (e) { actionError = errText(e); }
+    finally { acting = false; }
+  }
+  async function removeIt() {
+    acting = true;
+    actionError = '';
+    try {
+      await pluginRemove(plugin.name, forgetSettings);
+      await reload();
+      await loadConfig().catch(() => {});
+      onclose();
+    } catch (e) { actionError = errText(e); acting = false; }
+  }
+
   // A Git provider (D24): the hosts of Settings → Git access that use it.
   let gitView = $state<GitHostsView | null>(null);
   $effect(() => {
@@ -96,9 +140,59 @@
   const usedBy = $derived(gitView && provider ? gitView.hosts.filter((h) => boundProvider(gitView!.providers, h)?.name === plugin.name) : []);
 </script>
 
+{#if mode === 'update'}
+<Dialog title={`Update ${label}`} onclose={back}>
+  {#if updated}
+    <Callout tone="ok">Updated <b>{plugin.name}</b> to <span class="mono">{updated}</span>.</Callout>
+    <p>Restart needed: the new version loads when xherd restarts. Running agents keep going.</p>
+  {:else}
+    <p class="hint">Installed: <span class="mono wrap-any">{sourceText}</span>{plugin.source?.ref ? ` · ${plugin.source.ref}` : ''}</p>
+    <form class="stack-in" onsubmit={(e) => { e.preventDefault(); lookForUpdate(); }}>
+      <label class="f">Branch, tag or commit (optional)
+        <input class="mono" bind:value={updateRef} oninput={() => (upd = null)} placeholder={plugin.source?.ref || 'the default branch'} autocomplete="off" spellcheck="false" /></label>
+      <div class="row"><button class="btn" type="submit" disabled={acting}>{acting && !upd ? 'Looking…' : 'Check for update'}</button></div>
+    </form>
+    {#if actionError}<Callout tone="bad"><span class="wrap-any">{actionError}</span></Callout>{/if}
+    {#if upd}
+      <dl class="kv">
+        <dt>Version</dt><dd>{upd.installed.version ?? '?'} → {upd.version}</dd>
+        <dt>Commit</dt><dd class="mono">{upd.installed.sha?.slice(0, 7) ?? '?'} → {upd.sha.slice(0, 7)}</dd>
+        <dt>Size</dt><dd>{upd.files} files</dd>
+      </dl>
+      {#if upd.warning}<Callout tone="need"><span class="wrap-any">{upd.warning}</span></Callout>{/if}
+      {#if upd.compatible === false}<Callout tone="bad">Needs xherd {upd.minXherdVersion} or newer.</Callout>{/if}
+      <span class="lbl">Manifest changes</span>
+      {#if upd.manifestDiff}<pre class="diff mono">{upd.manifestDiff}</pre>{:else}<p class="hint">The manifest is unchanged.</p>{/if}
+      {#if upd.runs?.length}
+        <span class="lbl">It will run</span>
+        <ul class="plain">{#each upd.runs as r, i (i)}<li><span class="hint">{r.what}</span> <code class="mono wrap-any">{r.argv.join(' ')}</code></li>{/each}</ul>
+      {/if}
+    {/if}
+  {/if}
+  {#snippet actions()}
+    <span class="grow"></span>
+    <button class="btn" onclick={back}>{updated ? 'Done' : 'Cancel'}</button>
+    {#if !updated}<button class="btn primary" disabled={acting || !upd?.digest || upd.compatible === false} onclick={applyUpdate}>{acting && upd ? 'Updating…' : 'Update'}</button>{/if}
+  {/snippet}
+</Dialog>
+{:else if mode === 'remove'}
+<Dialog title={`Remove ${label}`} onclose={back}>
+  <p>Remove <b>{label}</b> from this xherd? Its folder is deleted; the repository it came from is not touched. A plugin that a running agent uses cannot be removed.</p>
+  <label class="f chk"><input type="checkbox" bind:checked={forgetSettings} /> Also forget its saved settings and secrets</label>
+  <p class="hint">The plugin stays loaded until xherd restarts.</p>
+  {#if actionError}<Callout tone="bad"><span class="wrap-any">{actionError}</span></Callout>{/if}
+  {#snippet actions()}
+    <span class="grow"></span>
+    <button class="btn" onclick={back}>Cancel</button>
+    <button class="btn primary danger" disabled={acting} onclick={removeIt}>{acting ? 'Removing…' : 'Remove'}</button>
+  {/snippet}
+</Dialog>
+{:else}
 <Dialog title={`${label} options`} {onclose}>
   <p class="muted">{plugin.description}</p>
   <p class="hint">{KIND_ONE[plugin.kind] ?? plugin.kind} · {plugin.version}{plugin.builtin ? ' · built in' : ''}{plugin.enabled ? '' : ' · switched off'}</p>
+  {#if plugin.source}<p class="hint wrap-any">Installed from <span class="mono">{sourceText}</span></p>
+  {:else if !plugin.builtin}<p class="hint">Installed by hand, not pinned to a repository.</p>{/if}
   {#if loggingIn}
     <TermView path="/ws/setup/plugin-login" title={`Log in to ${label}`} height="360px" onclose={loginEnded}
       hint="Follow the steps; the check runs again when it ends." />
@@ -142,8 +236,17 @@
   {/if}
   {#snippet actions()}
     {#if loginFails && !loggingIn}<button class="btn" onclick={login}>Log in</button>{/if}
+    {#if plugin.source}<button class="btn" onclick={() => (mode = 'update')}>Update</button>{/if}
+    {#if !plugin.builtin}<button class="btn ghost danger" onclick={() => (mode = 'remove')}>Remove</button>{/if}
     <span class="grow"></span>
     <button class="btn ghost" onclick={onclose}>Close</button>
     {#if fields.length || secretFields.length || canModel}<button class="btn primary" disabled={!dirty || busy || !modelOk} onclick={save}>{busy ? 'Saving…' : 'Save settings'}</button>{/if}
   {/snippet}
 </Dialog>
+{/if}
+
+<style>
+  .stack-in { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .diff { margin: 0; padding: 8px 10px; max-height: 240px; overflow: auto; white-space: pre; background: var(--well); border: 1px solid var(--fence-soft); border-radius: var(--r-ctl); font-size: 12px; }
+</style>

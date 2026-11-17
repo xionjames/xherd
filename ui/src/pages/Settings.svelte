@@ -1,8 +1,8 @@
 <script lang="ts">
   // Settings: General, Gates & autonomy, Git access and Plugins. Saved to
   // config.json; most apply at once.
-  import { app } from '../lib/store.svelte';
-  import { put } from '../lib/api';
+  import { app, reload } from '../lib/store.svelte';
+  import { put, restartDaemon } from '../lib/api';
   import { route, href, go } from '../lib/router.svelte';
   import { setup, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -67,6 +67,31 @@
       saving = false;
     }
   }
+  // Restart the daemon in place (R7a): ask, wait until /healthz stops answering and
+  // answers again (at most 60 s), then reload what the page shows. Agent sessions keep running.
+  let restarting = $state(false);
+  async function restart() {
+    restarting = true;
+    try {
+      await restartDaemon();
+      const alive = () => fetch('/healthz', { cache: 'no-store' }).then((r) => r.ok, () => false);
+      const end = Date.now() + 60_000;
+      let wentDown = false;
+      while (Date.now() < end) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const up = await alive();
+        if (!up) wentDown = true;
+        else if (wentDown) break;
+      }
+      if (!wentDown) throw new Error('The daemon did not restart within 60 seconds.');
+      await reload();
+      await loadConfig();
+    } catch (e) {
+      showError('Could not restart xherd', e);
+    } finally {
+      restarting = false;
+    }
+  }
   const TAB_LABEL: Record<string, string> = { general: 'General', gates: 'Gates & autonomy', notifications: 'Notifications', openin: 'Open in', git: 'Git access', profiles: 'Repo profiles', backups: 'Backups', plugins: 'Plugins', about: 'About' };
   const tabItems = $derived(TABS.map((t) => ({
     id: t, label: TAB_LABEL[t], href: href('/settings', t === 'general' ? {} : { tab: t }),
@@ -80,7 +105,12 @@
 
 <div class="stack mid">
   {#if setup.config?.restartNeeded}
-    <Callout tone="info">Saved settings differ from the running daemon. <b>Restart the daemon</b> to apply them.</Callout>
+    <Callout tone="info">
+      <div class="row">
+        <span class="grow">{#if restarting}Restarting…{:else}Saved settings or plugin changes differ from the running daemon. <b>Restart xherd</b> to apply them; running agents keep going.{/if}</span>
+        <button class="btn sm" disabled={restarting} onclick={restart}>{restarting ? 'Restarting…' : 'Restart xherd'}</button>
+      </div>
+    </Callout>
   {/if}
   {#if tab === 'git'}
     <GitIdentity />
