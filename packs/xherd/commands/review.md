@@ -32,9 +32,11 @@ run a sub-agent with a fresh context, give it this review to do.
    `AGENTS.md` stays for every future job. If this work taught something a
    future job here would need (a build or test command, a convention, a
    trap that cost time) that `AGENTS.md` does not say yet, write the **whole**
-   proposed file (today's `AGENTS.md`, or a new one, with your additions:
-   short facts, no task history, no secrets) to `.xherd/AGENTS.proposed.md`
-   and run
+   proposed file (today's `AGENTS.md`, or a new one, with your additions) to
+   `.xherd/AGENTS.proposed.md`. Keep it small: only lasting facts a later job
+   needs (commands, conventions, traps), each one short; no task history,
+   status or changelog, no secrets; remove what this change made stale or
+   wrong, and anything you noted in `memory.md` for it. Then run
    `xherd memory propose --reason "Adds the integration test command and the fixture rule"`.
    Nothing worth sharing: skip this step. Never commit `AGENTS.md` or
    `CLAUDE.md` yourself: the user accepts or dismisses the proposal and xherd
