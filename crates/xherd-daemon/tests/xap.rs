@@ -3182,6 +3182,11 @@ async fn memory_proposal_is_committed_on_accept() {
     assert_eq!(view["proposed"], "# Agents\n- run `make t`");
     assert!(view["current"].is_null());
     assert_eq!(view["claude"]["next"], "@AGENTS.md\n");
+    // The base is HEAD: an uncommitted edit in the worktree is not it.
+    std::fs::write(wt.join("AGENTS.md"), "# stray edit\n").unwrap();
+    let view = t.d.memory("SC-1").await.unwrap();
+    assert!(view["current"].is_null());
+    std::fs::remove_file(wt.join("AGENTS.md")).unwrap();
 
     // Not while the agent works.
     let busy = act(&t, UserAction::MemoryAccept { text: None })
