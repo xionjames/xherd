@@ -15,9 +15,9 @@ I got overwhelmed running several coding tasks at once: terminals piled up and a
 
 ## What is xherd?
 
-https://github.com/user-attachments/assets/d9fe9a6b-00df-4fe2-a009-7a0889b572e9
+[![xherd tour video: multiple coding agents in parallel, all working with you](doc/assets/xherd-tour.jpg)](doc/assets/xherd-tour.mp4)
 
-*A short tour, with mocked data: the Herd, jobs by stage, a job's panels, a design with a diagram, an inline comment on a diff, approving a commit, the Board, Needs attention and the plugins. More screens and the CLI: [the tour](doc/user/tour.md).*
+*A short tour (click the picture to play it), with mocked data: a team of agents, the Jobs page with a pill per stage, the Team and its flows, the Inbox, a live terminal, a design with a diagram, comments on diff lines, approving a commit and resolving merge conflicts. More screens and the CLI: [the tour](doc/user/tour.md).*
 
 You hand xherd your tickets. It gives each one to a coding agent in its own sandbox, and shows you all of them on one screen.
 
@@ -27,7 +27,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 - **Bring your own job and process.** Claude Code, opencode or Codex; the runtime, the flow and the integrations are plugins.
 - **Docker or native.** Docker keeps jobs and toolchains in a container and shares only your workspace; you can still open the code in your IDE.
 
-![The Herd: two jobs waiting for you on top, every job below with its status, progress and tasks](doc/assets/herd.jpg)
+![Jobs: counters that filter, every job with a pill per stage of its workflow and the initials of the agent that runs it, and who in the team is busy](doc/assets/herd.jpg)
 
 > **Status: early, but it runs.** Jobs work end to end (worktree, runtime in tmux, approval gates, commits, draft PR, PR follow-up), with a web UI, a Docker image and Linux packages ([releases](https://github.com/xionjames/xherd/releases)). It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
 
@@ -57,11 +57,15 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 - **Resolve conflicts** has the job merge the base branch (never a rebase), and the merge commit always waits for you.
 - GitHub and GitLab for pull requests; Bitbucket for git access only.
 
-### Saved agents
+### Agents, flows and skills
 
-- Save a setup once (runtime, model, workflow, autonomy, instructions, guardrails, skills, a memory) as a named, versioned **agent**, and start jobs from it in the UI, the CLI or the API.
-- A job keeps a snapshot of its agent, so editing the agent never changes a running job; the agent's memory grows through proposals you accept.
-- xherd suggests saving a job as an agent when you finish one, or when you start the same setup a third time.
+- A **flow** is the list of stages a job goes through (the built-in pack has `feature` and `bugfix`). Give each stage to a saved **agent**: for example one agent writes the spec and the design, another builds, another reviews and ships. A job runs the agent of its current stage, in a fresh session.
+- Save an agent once (runtime, model, autonomy, instructions, guardrails, skills, a memory) as a named, versioned persona, and start jobs from it in the UI, the CLI or the API.
+- A job keeps a snapshot of its agents, so editing one never changes a running job; an agent's memory grows through proposals you accept. If an agent's runtime is switched off, its fallback runtime takes over.
+- Skills are a library of reusable instructions that agents list; each job gets its own copy.
+- xherd suggests saving a job's setup as an agent when you finish one, or when you start the same setup a third time.
+
+![Team: one card per saved agent, with its runtime, live jobs and tokens today](doc/assets/team.jpg)
 
 ### Autonomy and guardrails
 
@@ -72,7 +76,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 
 ### Your view of the work
 
-- The Herd (as a list, by stage, or a view plugin of your own), a Board of every stage and task, and **Needs attention** with what waits for you.
+- **Jobs**: four counters that filter, every job with a pill per stage and the agent that runs it, by list, by stage, or a view plugin of your own. A **Board** of every stage and task. An **Inbox** with everything that stops a job and what xherd approved for you. A **Team** page for agents, flows and skills.
 - Notifications in the bell, the browser, the desktop (native installs) and on your phone through ntfy.
 - Issue trackers (Jira, GitHub issues, GitLab issues): ticket keys become links, the ticket shows beside the job, and you can post a summary once the PR is open.
 - Time tracking per ticket, and TODOs: reminders, or conditions a read-only job run checks for you.

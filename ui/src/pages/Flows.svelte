@@ -4,6 +4,7 @@
   // workflows, `#/flows/<pack>/<flow>` edits one. A stage with no agent of its
   // own runs the previous stage's (or the job's, when it starts from one).
   import PageHead from '../components/PageHead.svelte';
+  import TeamTabs from '../components/TeamTabs.svelte';
   import Panel from '../components/Panel.svelte';
   import SaveBar from '../components/SaveBar.svelte';
   import Callout from '../components/Callout.svelte';
@@ -75,7 +76,9 @@
 </script>
 
 {#if !pack}
-  <PageHead title="Flows" sub="Give each stage of a workflow to a saved agent." />
+  <PageHead title="Team" sub="Give each stage of a workflow to a saved agent.">
+    {#snippet tabs()}<TeamTabs current="flows" />{/snippet}
+  </PageHead>
   <div class="stack">
     <Panel title="Workflows" flush>
       {#if list.length}

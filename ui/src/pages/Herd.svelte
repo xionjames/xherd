@@ -35,7 +35,7 @@
   }
 </script>
 
-<PageHead title="Herd">
+<PageHead title="Jobs">
   {#snippet actions()}
     <Seg label="Layout" value={view.id} onchange={setLayout}
       options={views.map((v) => ({ value: v.id, label: v.label }))} />
