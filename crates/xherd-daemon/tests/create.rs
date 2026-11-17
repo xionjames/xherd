@@ -1,6 +1,6 @@
 //! `Daemon::new_job` against a real temp git repo (R-001..R-005c).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -331,6 +331,121 @@ async fn path_repo_without_remote_is_quiet() {
     assert!(v["warning"].is_null());
     let a = t.d.new_job(req(&t, "SC-10")).await.unwrap();
     assert_eq!(a.base.as_deref(), Some("main"));
+}
+
+fn rev(dir: &Path, r: &str) -> String {
+    String::from_utf8(git(dir, &["rev-parse", r]).stdout)
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+/// A clone of the test repo (kept alive by the returned dir), after which
+/// the remote gets one more commit that adds `new.txt`.
+fn clone_then_remote_moves(t: &T) -> (tempfile::TempDir, PathBuf, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let src = t.repo.path().to_string_lossy().into_owned();
+    assert!(
+        git(dir.path(), &["clone", "-q", &src, "c"])
+            .status
+            .success()
+    );
+    let c = dir.path().join("c");
+    std::fs::write(t.repo.path().join("new.txt"), "remote\n").unwrap();
+    assert!(git(t.repo.path(), &["add", "new.txt"]).status.success());
+    assert!(
+        git(t.repo.path(), &["commit", "-q", "-m", "newer"])
+            .status
+            .success()
+    );
+    let newest = rev(t.repo.path(), "HEAD");
+    (dir, c, newest)
+}
+
+/// A plain local base branch that is behind `origin` is fast-forwarded (R-002).
+#[tokio::test]
+async fn local_base_behind_is_fast_forwarded() {
+    let t = setup().await;
+    let (_dir, c, newest) = clone_then_remote_moves(&t);
+    // `main` is not checked out in the clone.
+    assert!(git(&c, &["checkout", "-q", "-b", "other"]).status.success());
+    let mut r = req(&t, "SC-11");
+    r.repo = c.to_string_lossy().into_owned();
+    r.base = Some("main".into());
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.base.as_deref(), Some("main"));
+    assert_eq!(rev(&c, "main"), newest);
+    assert_eq!(rev(&t.ws.path().join("worktrees/c/sc-11"), "HEAD"), newest);
+}
+
+#[tokio::test]
+async fn checked_out_local_base_behind_is_fast_forwarded() {
+    let t = setup().await;
+    let (_dir, c, newest) = clone_then_remote_moves(&t);
+    let mut r = req(&t, "SC-12");
+    r.repo = c.to_string_lossy().into_owned();
+    r.base = Some("main".into());
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.base.as_deref(), Some("main"));
+    assert_eq!(rev(&c, "HEAD"), newest);
+    assert!(c.join("new.txt").exists());
+    assert_eq!(rev(&t.ws.path().join("worktrees/c/sc-12"), "HEAD"), newest);
+}
+
+/// Diverged: never reset, rebase or merge; the job starts from the local branch.
+#[tokio::test]
+async fn diverged_local_base_is_left_alone() {
+    let t = setup().await;
+    let (_dir, c, newest) = clone_then_remote_moves(&t);
+    assert!(
+        git(&c, &["commit", "-q", "--allow-empty", "-m", "unpushed"])
+            .status
+            .success()
+    );
+    let local = rev(&c, "main");
+    let mut r = req(&t, "SC-13");
+    r.repo = c.to_string_lossy().into_owned();
+    r.base = Some("main".into());
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.base.as_deref(), Some("main"));
+    assert_eq!(rev(&c, "main"), local);
+    assert_ne!(local, newest);
+    assert_eq!(rev(&t.ws.path().join("worktrees/c/sc-13"), "HEAD"), local);
+}
+
+/// A dirty file the fast-forward would overwrite: nothing changes, the job is created.
+#[tokio::test]
+async fn dirty_checked_out_base_is_left_alone() {
+    let t = setup().await;
+    let (_dir, c, newest) = clone_then_remote_moves(&t);
+    let local = rev(&c, "main");
+    std::fs::write(c.join("new.txt"), "mine\n").unwrap();
+    let mut r = req(&t, "SC-14");
+    r.repo = c.to_string_lossy().into_owned();
+    r.base = Some("main".into());
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.base.as_deref(), Some("main"));
+    assert_eq!(rev(&c, "main"), local);
+    assert_eq!(
+        std::fs::read_to_string(c.join("new.txt")).unwrap(),
+        "mine\n"
+    );
+    assert_eq!(rev(&c, "origin/main"), newest);
+}
+
+/// A remote base leaves the local branch alone.
+#[tokio::test]
+async fn remote_base_leaves_local_branch() {
+    let t = setup().await;
+    let (_dir, c, newest) = clone_then_remote_moves(&t);
+    let local = rev(&c, "main");
+    let mut r = req(&t, "SC-15");
+    r.repo = c.to_string_lossy().into_owned();
+    r.base = Some("origin/main".into());
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.base.as_deref(), Some("origin/main"));
+    assert_eq!(rev(&c, "main"), local);
+    assert_eq!(rev(&t.ws.path().join("worktrees/c/sc-15"), "HEAD"), newest);
 }
 
 #[tokio::test]
