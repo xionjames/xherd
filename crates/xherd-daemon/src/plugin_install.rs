@@ -233,6 +233,100 @@ fn copy_plugin(src: &Path, dst: &Path, depth: usize) -> std::io::Result<()> {
     Ok(())
 }
 
+fn nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos())
+}
+
+/// Copy the checked folder `dir` to `<plugins>/.<name>.staging-<nanos>` and
+/// return it; nothing is left behind when the copy fails.
+fn stage_plugin(plugins: &Path, name: &str, dir: &Path) -> Result<PathBuf, ActionError> {
+    let io = |e: std::io::Error| refuse_action("io", format!("{name}: {e}"));
+    std::fs::create_dir_all(plugins).map_err(io)?;
+    let staging = plugins.join(format!(".{name}.staging-{}", nanos()));
+    let copied = std::fs::create_dir(&staging).and_then(|()| copy_plugin(dir, &staging, 0));
+    if let Err(e) = copied {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(io(e));
+    }
+    Ok(staging)
+}
+
+/// What `plugin_update` and `plugin_update_preview` say about the installed
+/// plugin: its recorded source.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Recorded {
+    pub url: String,
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    pub path: Option<String>,
+    pub sha: Option<String>,
+    pub version: Option<String>,
+    pub digest: Option<String>,
+}
+
+impl Recorded {
+    fn of(r: &xherd_store::PluginRecord) -> Recorded {
+        let text = |k: &str| r.data[k].as_str().map(str::to_string);
+        Recorded {
+            url: r.source.clone(),
+            git_ref: text("ref"),
+            path: text("path"),
+            sha: r.sha.clone(),
+            version: text("version"),
+            digest: text("digest"),
+        }
+    }
+}
+
+/// `POST /plugins/{name}/update` without a digest (R8): the new source as in
+/// a preview, what is installed now, and the manifest's diff.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePreview {
+    #[serde(flatten)]
+    pub preview: Preview,
+    pub installed: Recorded,
+    /// Unified diff of the installed manifest against the new one; empty when
+    /// they are equal.
+    pub manifest_diff: String,
+}
+
+/// What `plugin_update` changed.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Updated {
+    pub name: String,
+    pub version: String,
+    pub url: String,
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    pub path: Option<String>,
+    pub sha: String,
+    pub digest: String,
+    pub previous_sha: Option<String>,
+}
+
+/// What `plugin_remove` did.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Removed {
+    pub name: String,
+    /// Its settings and secrets were dropped too.
+    pub forgot: bool,
+}
+
+/// The manifest as pretty JSON (the same text for the same content), so a
+/// diff shows changes, not formatting.
+fn pretty_manifest(text: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(text)
+        .and_then(|v| serde_json::to_string_pretty(&v))
+        .map(|s| s + "\n")
+        .unwrap_or_else(|_| text.to_string())
+}
+
 /// Where the manifest is in a fetched repository.
 enum Found {
     One(PathBuf, Option<String>),
@@ -373,18 +467,10 @@ impl Daemon {
                         format!("a plugin named {} is already installed", view.name),
                     ));
                 }
-                let io = |e: std::io::Error| refuse_action("io", format!("{}: {e}", view.name));
-                std::fs::create_dir_all(&plugins).map_err(io)?;
-                let nanos = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos());
-                let staging = plugins.join(format!(".{}.staging-{nanos}", view.name));
-                let placed = std::fs::create_dir(&staging)
-                    .and_then(|()| copy_plugin(&dir, &staging, 0))
-                    .and_then(|()| std::fs::rename(&staging, plugins.join(&view.name)));
-                if let Err(e) = placed {
+                let staging = stage_plugin(&plugins, &view.name, &dir)?;
+                if let Err(e) = std::fs::rename(&staging, plugins.join(&view.name)) {
                     let _ = std::fs::remove_dir_all(&staging);
-                    return Err(io(e));
+                    return Err(refuse_action("io", format!("{}: {e}", view.name)));
                 }
                 Ok((view, found_path, sha))
             })
@@ -442,6 +528,362 @@ impl Daemon {
             sha,
             digest: view.digest,
         })
+    }
+
+    /// The record of an installed external plugin: `builtin_plugin` for a
+    /// built-in, `unknown_plugin` when it was not installed from a source.
+    async fn plugin_record(&self, name: &str) -> Result<xherd_store::PluginRecord, ActionError> {
+        if self.plugins.get(name).is_some_and(|p| p.builtin()) {
+            return Err(refuse_action(
+                "builtin_plugin",
+                format!("{name} is built in: it cannot be changed or removed"),
+            ));
+        }
+        let records = self
+            .store
+            .plugin_records()
+            .await
+            .map_err(|e| refuse_action("io", e.to_string()))?;
+        records.into_iter().find(|r| r.name == name).ok_or_else(|| {
+            refuse_action(
+                "unknown_plugin",
+                format!("{name} was not installed from a source"),
+            )
+        })
+    }
+
+    /// The source an update fetches: the recorded one, at `new_ref` when given.
+    fn update_source(
+        &self,
+        r: &xherd_store::PluginRecord,
+        new_ref: Option<&str>,
+    ) -> Result<PluginSource, ActionError> {
+        let rec = Recorded::of(r);
+        self.plugin_source(
+            &rec.url,
+            new_ref.or(rec.git_ref.as_deref()),
+            rec.path.as_deref(),
+        )
+    }
+
+    /// R8: fetch the recorded source of `name` (at `new_ref` when given) and
+    /// show it as a preview, with the diff of its manifest against the
+    /// installed one. Writes nothing.
+    pub async fn plugin_update_preview(
+        &self,
+        name: &str,
+        new_ref: Option<&str>,
+    ) -> Result<UpdatePreview, ActionError> {
+        let record = self.plugin_record(name).await?;
+        let src = self.update_source(&record, new_ref)?;
+        let (preview, new_manifest) = self
+            .with_fetched(&src, |root, sha| {
+                let Found::One(dir, path) = locate(root, src.path.as_deref())? else {
+                    return Err(refuse_action(
+                        "no_manifest",
+                        "several plugins in the repository: the recorded path is gone",
+                    ));
+                };
+                let view = self.inspect(&dir)?;
+                same_name(name, &view.name)?;
+                let text = std::fs::read_to_string(dir.join(MANIFEST_FILE)).unwrap_or_default();
+                Ok((
+                    Preview {
+                        url: src.url.clone(),
+                        git_ref: src.git_ref.clone(),
+                        path,
+                        sha,
+                        plugin: Some(view),
+                        choices: Vec::new(),
+                    },
+                    pretty_manifest(&text),
+                ))
+            })
+            .await?;
+        let old = std::fs::read_to_string(self.paths.plugins().join(name).join(MANIFEST_FILE))
+            .map(|t| pretty_manifest(&t))
+            .unwrap_or_default();
+        let manifest_diff = self.diff_text(&old, &new_manifest).await?;
+        Ok(UpdatePreview {
+            preview,
+            installed: Recorded::of(&record),
+            manifest_diff,
+        })
+    }
+
+    /// Unified diff of two texts, through git (no diff crate in the workspace).
+    async fn diff_text(&self, old: &str, new: &str) -> Result<String, ActionError> {
+        let io = |e: std::io::Error| refuse_action("io", e.to_string());
+        let dir = self
+            .config
+            .workspace_root()
+            .join("repos")
+            .join(format!(".xherd-plugin-diff-{}", nanos()));
+        std::fs::create_dir_all(&dir).map_err(io)?;
+        let (a, b) = (dir.join("installed.json"), dir.join("new.json"));
+        let diff = match std::fs::write(&a, old).and_then(|()| std::fs::write(&b, new)) {
+            Ok(()) => Git::new("git")
+                .with_timeout(CLONE_TIMEOUT)
+                .diff_files(&a, &b)
+                .await
+                .map_err(|e| refuse_action("io", e.to_string())),
+            Err(e) => Err(io(e)),
+        };
+        let _ = std::fs::remove_dir_all(&dir);
+        diff
+    }
+
+    /// R8, R11: replace the installed `name` by what `plugin_update_preview`
+    /// showed. The source is fetched again and must digest to
+    /// `expect_digest` (`changed_since_preview` otherwise, nothing written).
+    /// The old folder is kept aside until the record is saved, so the swap is
+    /// whole or undone. Needs a restart to load.
+    pub async fn plugin_update(
+        &self,
+        name: &str,
+        new_ref: Option<&str>,
+        expect_digest: &str,
+    ) -> Result<Updated, ActionError> {
+        let _write = self.plugins_write.lock().await;
+        let record = self.plugin_record(name).await?;
+        let src = self.update_source(&record, new_ref)?;
+        let plugins = self.paths.plugins();
+        let (view, found_path, sha, old) = self
+            .with_fetched(&src, |root, sha| {
+                let Found::One(dir, found_path) = locate(root, src.path.as_deref())? else {
+                    return Err(refuse_action(
+                        "no_manifest",
+                        "several plugins in the repository: the recorded path is gone",
+                    ));
+                };
+                let view = self.inspect(&dir)?;
+                same_name(name, &view.name)?;
+                if view.digest != expect_digest {
+                    return Err(refuse_action(
+                        "changed_since_preview",
+                        "the source changed since the preview: preview it again",
+                    ));
+                }
+                let staging = stage_plugin(&plugins, name, &dir)?;
+                let (target, aside) = (
+                    plugins.join(name),
+                    plugins.join(format!(".{name}.old-{}", nanos())),
+                );
+                let old = if target.exists() {
+                    if let Err(e) = std::fs::rename(&target, &aside) {
+                        let _ = std::fs::remove_dir_all(&staging);
+                        return Err(refuse_action("io", format!("{name}: {e}")));
+                    }
+                    Some(aside)
+                } else {
+                    None
+                };
+                if let Err(e) = std::fs::rename(&staging, &target) {
+                    let _ = std::fs::remove_dir_all(&staging);
+                    if let Some(o) = &old {
+                        let _ = std::fs::rename(o, &target);
+                    }
+                    return Err(refuse_action("io", format!("{name}: {e}")));
+                }
+                Ok((view, found_path, sha, old))
+            })
+            .await?;
+        let now = self.clock.now();
+        let mut data = record.data.clone();
+        data["ref"] = serde_json::json!(src.git_ref);
+        data["path"] = serde_json::json!(found_path);
+        data["digest"] = serde_json::json!(view.digest);
+        data["version"] = serde_json::json!(view.version);
+        data["updatedAt"] = serde_json::json!(now);
+        let updated = xherd_store::PluginRecord {
+            sha: Some(sha.clone()),
+            data,
+            ..record.clone()
+        };
+        let recorded = async {
+            self.store.upsert_plugin_record(&updated).await?;
+            self.store
+                .insert_event(xherd_store::Event {
+                    id: xherd_core::new_id(),
+                    job_id: String::new(),
+                    kind: "plugin-update".into(),
+                    payload: Some(serde_json::json!({
+                        "name": name, "source": src.url, "sha": sha,
+                        "previousSha": record.sha,
+                        "digest": view.digest, "version": view.version,
+                    })),
+                    at: now,
+                })
+                .await
+        }
+        .await;
+        if let Err(e) = recorded {
+            // Put the old plugin and its record back.
+            let target = plugins.join(name);
+            let _ = std::fs::remove_dir_all(&target);
+            if let Some(o) = &old {
+                let _ = std::fs::rename(o, &target);
+            }
+            let _ = self.store.upsert_plugin_record(&record).await;
+            return Err(refuse_action(
+                "io",
+                format!("cannot record the update: {e}"),
+            ));
+        }
+        if let Some(o) = old {
+            let _ = std::fs::remove_dir_all(o);
+        }
+        Ok(Updated {
+            name: name.to_string(),
+            version: view.version,
+            url: src.url,
+            git_ref: src.git_ref,
+            path: found_path,
+            sha,
+            digest: view.digest,
+            previous_sha: record.sha,
+        })
+    }
+
+    /// The first job that still needs plugin `name`: as its runtime, or as
+    /// the host of its pull request. A job that is paused, done, cancelled or
+    /// in error does not count (R9).
+    async fn plugin_user(&self, name: &str) -> Result<Option<String>, ActionError> {
+        use xherd_core::Status;
+        let jobs = self
+            .store
+            .list_jobs()
+            .await
+            .map_err(|e| refuse_action("io", e.to_string()))?;
+        let cfg = self.live_config();
+        let hosts = crate::host_plugins(
+            &self.plugins,
+            &self.paths,
+            &self.config,
+            &self.secrets,
+            &self.xherd_bin,
+        );
+        for j in jobs {
+            if matches!(
+                j.status,
+                Status::Paused | Status::Done | Status::Cancelled | Status::Error
+            ) {
+                continue;
+            }
+            let runtime = j.runtime.as_deref().unwrap_or(&cfg.default_runtime);
+            let host = j.pr_url.as_deref().and_then(|u| {
+                crate::actor::pick_host(
+                    &hosts,
+                    &cfg.git_hosts,
+                    &cfg.disabled_plugins,
+                    crate::git_access::remote_host(u).as_deref(),
+                )
+            });
+            if runtime == name || host.is_some_and(|h| h.plugin.name() == name) {
+                return Ok(Some(j.name));
+            }
+        }
+        Ok(None)
+    }
+
+    /// R9, R11: delete an external plugin's folder and record. Refused
+    /// (`plugin_in_use`) while a live job needs it, `builtin_plugin` for a
+    /// built-in. Its settings and secrets stay unless `forget`. Allowed with
+    /// the install switch off: taking code away is no risk.
+    pub async fn plugin_remove(&self, name: &str, forget: bool) -> Result<Removed, ActionError> {
+        let _write = self.plugins_write.lock().await;
+        if self.plugins.get(name).is_some_and(|p| p.builtin()) {
+            return Err(refuse_action(
+                "builtin_plugin",
+                format!("{name} is built in: it cannot be changed or removed"),
+            ));
+        }
+        let unknown = || refuse_action("unknown_plugin", format!("no installed plugin {name}"));
+        if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\']) {
+            return Err(unknown());
+        }
+        let plugins = self.paths.plugins();
+        let target = plugins.join(name);
+        let record = self
+            .store
+            .plugin_records()
+            .await
+            .map_err(|e| refuse_action("io", e.to_string()))?
+            .into_iter()
+            .find(|r| r.name == name);
+        if record.is_none() && !target.is_dir() {
+            return Err(unknown());
+        }
+        if let Some(job) = self.plugin_user(name).await? {
+            return Err(refuse_action(
+                "plugin_in_use",
+                format!("job {job} uses {name}: pause or finish it first"),
+            ));
+        }
+        let aside = plugins.join(format!(".{name}.old-{}", nanos()));
+        let moved = target.is_dir();
+        if moved && let Err(e) = std::fs::rename(&target, &aside) {
+            return Err(refuse_action("io", format!("{name}: {e}")));
+        }
+        let now = self.clock.now();
+        let recorded = async {
+            self.store.delete_plugin_record(name).await?;
+            self.store
+                .insert_event(xherd_store::Event {
+                    id: xherd_core::new_id(),
+                    job_id: String::new(),
+                    kind: "plugin-remove".into(),
+                    payload: Some(serde_json::json!({
+                        "name": name,
+                        "source": record.as_ref().map(|r| r.source.clone()),
+                        "sha": record.as_ref().and_then(|r| r.sha.clone()),
+                        "forget": forget,
+                    })),
+                    at: now,
+                })
+                .await
+        }
+        .await;
+        if let Err(e) = recorded {
+            if moved {
+                let _ = std::fs::rename(&aside, &target);
+            }
+            if let Some(r) = &record {
+                let _ = self.store.upsert_plugin_record(r).await;
+            }
+            return Err(refuse_action(
+                "io",
+                format!("cannot record the removal: {e}"),
+            ));
+        }
+        if moved {
+            let _ = std::fs::remove_dir_all(&aside);
+        }
+        if forget {
+            self.forget_plugin(name)?;
+        }
+        Ok(Removed {
+            name: name.to_string(),
+            forgot: forget,
+        })
+    }
+
+    /// Drop `name`'s settings (`config.json`) and secrets (`secrets.json`).
+    fn forget_plugin(&self, name: &str) -> Result<(), ActionError> {
+        let io = |e: std::io::Error| refuse_action("io", e.to_string());
+        {
+            let _w = self.config_write.lock().unwrap_or_else(|e| e.into_inner());
+            let mut c = self.live_config();
+            if c.plugin_settings.remove(name).is_some() {
+                c.save(&self.paths.config()).map_err(io)?;
+            }
+        }
+        let _w = self.secrets_write.lock().unwrap_or_else(|e| e.into_inner());
+        let mut s = self.live_secrets();
+        if s.0.remove(name).is_some() {
+            s.save(&self.paths.secrets()).map_err(io)?;
+        }
+        Ok(())
     }
 
     /// Check the plugin folder `dir` and describe it (R3, R5, R5a).
@@ -506,6 +948,18 @@ impl Daemon {
             warning: WARNING,
         })
     }
+}
+
+/// An update keeps the plugin's name: its settings, secrets and record are
+/// filed under it.
+fn same_name(installed: &str, fetched: &str) -> Result<(), ActionError> {
+    if installed == fetched {
+        return Ok(());
+    }
+    Err(refuse_action(
+        "bad_manifest",
+        format!("the source now holds the plugin {fetched}, not {installed}"),
+    ))
 }
 
 /// Every argv the manifest declares: what the plugin can run (R3).

@@ -594,3 +594,247 @@ async fn install_is_off_with_the_switch_and_cleans_staging_at_start() {
     left.sort();
     assert_eq!(left, ["keep"]);
 }
+
+async fn installed() -> (T, Repo) {
+    let t = daemon().await;
+    let (repo, _) = install_repo();
+    let digest = digest_of(&t, &repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+    (t, repo)
+}
+
+fn v2_manifest() -> String {
+    all_argv_manifest().replace("1.2.3", "1.3.0")
+}
+
+#[tokio::test]
+async fn update_remove_update_previews_the_manifest_diff_and_writes_nothing() {
+    let (t, repo) = installed().await;
+    let before = t.d.store.plugin_records().await.unwrap();
+    let same = json_of(&t.d.plugin_update_preview("gitea", None).await.unwrap());
+    assert_eq!(same["manifestDiff"], "");
+    assert_eq!(same["installed"]["sha"], repo.sha());
+    assert_eq!(same["installed"]["version"], "1.2.3");
+
+    let new_sha = repo.commit(&[("xherd-plugin.json", &v2_manifest())]);
+    let p = json_of(&t.d.plugin_update_preview("gitea", None).await.unwrap());
+    assert_eq!(p["sha"], new_sha);
+    assert_eq!(p["version"], "1.3.0");
+    let diff = p["manifestDiff"].as_str().unwrap();
+    assert!(
+        diff.contains("-  \"version\": \"1.2.3\"") && diff.contains("+  \"version\": \"1.3.0\""),
+        "{diff}"
+    );
+    assert_eq!(t.d.store.plugin_records().await.unwrap(), before);
+    let on_disk =
+        std::fs::read_to_string(t.home.path().join("plugins/gitea/xherd-plugin.json")).unwrap();
+    assert!(on_disk.contains("1.2.3"));
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn update_remove_update_swaps_the_folder_and_moves_the_record() {
+    let (t, repo) = installed().await;
+    let old_sha = repo.sha();
+    repo.commit(&[("xherd-plugin.json", &v2_manifest()), ("bin/new", "x")]);
+    let p = json_of(&t.d.plugin_update_preview("gitea", None).await.unwrap());
+    let digest = p["digest"].as_str().unwrap().to_string();
+
+    // A source that moved on since the preview is refused, nothing changes.
+    repo.commit(&[("README.md", "later")]);
+    let e = t.d.plugin_update("gitea", None, &digest).await.unwrap_err();
+    assert_eq!(e.code, "changed_since_preview");
+    assert!(!t.home.path().join("plugins/gitea/bin/new").exists());
+
+    let digest = json_of(&t.d.plugin_update_preview("gitea", None).await.unwrap())["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let u = json_of(&t.d.plugin_update("gitea", None, &digest).await.unwrap());
+    assert_eq!(u["sha"], repo.sha());
+    assert_eq!(u["previousSha"], old_sha);
+    let dir = t.home.path().join("plugins/gitea");
+    assert!(dir.join("bin/new").is_file());
+    let left: Vec<_> = std::fs::read_dir(t.home.path().join("plugins"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["gitea"]);
+
+    let recs = t.d.store.plugin_records().await.unwrap();
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0].sha.as_deref(), Some(repo.sha().as_str()));
+    assert_eq!(recs[0].data["version"], "1.3.0");
+    assert_eq!(recs[0].data["digest"], digest);
+    assert!(recs[0].data["installedAt"].as_i64().unwrap() > 0);
+    let events = t.d.store.events("", 10).await.unwrap();
+    assert_eq!(
+        events.iter().filter(|e| e.kind == "plugin-update").count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn update_remove_update_takes_a_new_ref_and_keeps_the_name() {
+    let (t, repo) = installed().await;
+    repo.git(&["checkout", "--quiet", "-b", "next"]);
+    repo.commit(&[("xherd-plugin.json", &v2_manifest())]);
+    let digest = json_of(
+        &t.d.plugin_update_preview("gitea", Some("next"))
+            .await
+            .unwrap(),
+    )["digest"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    t.d.plugin_update("gitea", Some("next"), &digest)
+        .await
+        .unwrap();
+    let r = &t.d.store.plugin_records().await.unwrap()[0];
+    assert_eq!(r.data["ref"], "next");
+
+    // A source that now holds another plugin is refused.
+    repo.commit(&[("xherd-plugin.json", &manifest("other", "host", json!({})))]);
+    let e =
+        t.d.plugin_update_preview("gitea", Some("next"))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "bad_manifest");
+}
+
+#[tokio::test]
+async fn update_remove_update_refuses_built_ins_and_unknown_plugins() {
+    let t = daemon().await;
+    for (name, code) in [("github", "builtin_plugin"), ("nope", "unknown_plugin")] {
+        let e = t.d.plugin_update_preview(name, None).await.unwrap_err();
+        assert_eq!(e.code, code, "{name}");
+        let e = t.d.plugin_update(name, None, "x").await.unwrap_err();
+        assert_eq!(e.code, code, "{name}");
+    }
+}
+
+#[tokio::test]
+async fn update_remove_remove_deletes_folder_and_record_and_keeps_settings() {
+    let (t, _repo) = installed().await;
+    let mut cfg = xherd_core::config::Config::load(&t.d.paths.config())
+        .unwrap()
+        .0;
+    cfg.plugin_settings
+        .insert("gitea".into(), json!({"url": "https://git.example"}));
+    cfg.save(&t.d.paths.config()).unwrap();
+    let mut s = xherd_core::config::Secrets::default();
+    s.0.insert("gitea".into(), json!({"token": "t"}));
+    s.save(&t.d.paths.secrets()).unwrap();
+
+    let r = json_of(&t.d.plugin_remove("gitea", false).await.unwrap());
+    assert_eq!(
+        (r["name"].as_str(), r["forgot"].as_bool()),
+        (Some("gitea"), Some(false))
+    );
+    assert!(!t.home.path().join("plugins/gitea").exists());
+    assert!(t.d.store.plugin_records().await.unwrap().is_empty());
+    let events = t.d.store.events("", 10).await.unwrap();
+    assert_eq!(
+        events.iter().filter(|e| e.kind == "plugin-remove").count(),
+        1
+    );
+    let cfg = xherd_core::config::Config::load(&t.d.paths.config())
+        .unwrap()
+        .0;
+    assert!(cfg.plugin_settings.contains_key("gitea"));
+    assert!(
+        xherd_core::config::Secrets::load(&t.d.paths.secrets())
+            .unwrap()
+            .0
+            .contains_key("gitea")
+    );
+    let e = t.d.plugin_remove("gitea", false).await.unwrap_err();
+    assert_eq!(e.code, "unknown_plugin");
+}
+
+#[tokio::test]
+async fn update_remove_forget_drops_settings_and_secrets() {
+    let (t, _repo) = installed().await;
+    let mut cfg = xherd_core::config::Config::load(&t.d.paths.config())
+        .unwrap()
+        .0;
+    cfg.plugin_settings
+        .insert("gitea".into(), json!({"url": "https://git.example"}));
+    cfg.plugin_settings.insert("other".into(), json!({"a": 1}));
+    cfg.save(&t.d.paths.config()).unwrap();
+    let mut s = xherd_core::config::Secrets::default();
+    s.0.insert("gitea".into(), json!({"token": "t"}));
+    s.0.insert("other".into(), json!({"token": "o"}));
+    s.save(&t.d.paths.secrets()).unwrap();
+
+    let r = json_of(&t.d.plugin_remove("gitea", true).await.unwrap());
+    assert_eq!(r["forgot"], true);
+    let cfg = xherd_core::config::Config::load(&t.d.paths.config())
+        .unwrap()
+        .0;
+    assert!(!cfg.plugin_settings.contains_key("gitea"));
+    assert!(cfg.plugin_settings.contains_key("other"));
+    let s = xherd_core::config::Secrets::load(&t.d.paths.secrets()).unwrap();
+    assert!(!s.0.contains_key("gitea") && s.0.contains_key("other"));
+}
+
+#[tokio::test]
+async fn update_remove_is_refused_for_a_live_job_and_allowed_when_paused() {
+    let t = daemon().await;
+    // A runtime plugin, installed from a source.
+    let m = manifest(
+        "gemini",
+        "runtime",
+        json!({"data": {"terminal": {"launch": ["gemini"]}}}),
+    );
+    let repo = Repo::new(&[("xherd-plugin.json", &m)]);
+    let digest = digest_of(&t, &repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+
+    let mut job = xherd_core::Job::new("rt-1", 1);
+    job.runtime = Some("gemini".into());
+    job.status = xherd_core::Status::Running;
+    t.d.store.put_job(&job).await.unwrap();
+    let e = t.d.plugin_remove("gemini", false).await.unwrap_err();
+    assert_eq!(e.code, "plugin_in_use");
+    assert!(e.message.contains("rt-1"), "{}", e.message);
+    assert!(t.home.path().join("plugins/gemini").is_dir());
+    assert_eq!(t.d.store.plugin_records().await.unwrap().len(), 1);
+
+    job.status = xherd_core::Status::Paused;
+    t.d.store.put_job(&job).await.unwrap();
+    t.d.plugin_remove("gemini", false).await.unwrap();
+    assert!(!t.home.path().join("plugins/gemini").exists());
+}
+
+#[tokio::test]
+async fn update_remove_refuses_built_ins_and_works_with_the_switch_off() {
+    let t = daemon().await;
+    assert_eq!(
+        t.d.plugin_remove("github", false).await.unwrap_err().code,
+        "builtin_plugin"
+    );
+    assert_eq!(
+        t.d.plugin_remove("../x", false).await.unwrap_err().code,
+        "unknown_plugin"
+    );
+
+    // A plugin copied by hand (no record) can be removed, switch off or not.
+    let t = daemon_with(|o| o.plugin_install = false).await;
+    let dir = t.home.path().join("plugins/hand");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        manifest("hand", "host", json!({})),
+    )
+    .unwrap();
+    t.d.plugin_remove("hand", false).await.unwrap();
+    assert!(!dir.exists());
+    let e = t.d.plugin_update_preview("hand", None).await.unwrap_err();
+    assert_eq!(e.code, "unknown_plugin");
+}
