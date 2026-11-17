@@ -71,6 +71,17 @@ impl Daemon {
             let extra = std::env::var("XHERD_EXTRA_PATHS").unwrap_or_default();
             outside_mounts(&found.path, &self.config.workspace_root(), &extra)?;
         }
+        // A repository given as a path is fetched too (a URL's clone already
+        // was), so the base is current. A failure is only a hint (R-002).
+        if !new::is_url(input)
+            && git.has_remote(&found.path, "origin").await
+            && let Err(e) = git.fetch(&found.path, "origin").await
+        {
+            tracing::warn!(repo = %found.path.display(), error = %e, "fetch origin failed");
+            found.warning = Some(format!(
+                "could not fetch origin ({e}); using the refs the repository has"
+            ));
+        }
         Ok(found)
     }
 

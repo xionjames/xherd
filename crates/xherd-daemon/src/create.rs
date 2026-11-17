@@ -358,6 +358,15 @@ impl Daemon {
             ));
         }
         let base = resolve_base(&git, &repo, eff.base.as_deref()).await?;
+        // A plain local base branch follows its origin counterpart when that
+        // is a fast-forward; anything else leaves it as it is.
+        let upstream = format!("origin/{base}");
+        if git.branch_exists(&repo, &base).await
+            && git.rev_parse(&repo, &upstream).await.is_ok()
+            && let Err(e) = git.fast_forward_branch(&repo, &base, &upstream).await
+        {
+            tracing::warn!(base = %base, error = %e, "base branch not fast-forwarded");
+        }
 
         // Everything checked; create.
         if let Some(parent) = workdir.parent() {

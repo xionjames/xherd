@@ -232,6 +232,8 @@ fn end_to_end_replay_and_live_hooks() {
         .arg("daemon")
         .env("XHERD_HOME", home.path())
         .env("XHERD_LOG", "warn")
+        // The container exports its own queue file; the test replays its own.
+        .env_remove("XHERD_QUEUE")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
