@@ -3,6 +3,7 @@
   import type { Job, FlowInfo } from '../lib/types';
   import { steps, stageLabel } from '../lib/flow';
   import { stageRuns } from '../lib/agents';
+  import { initials } from '../lib/jobs';
   let { agent, flow }: { agent: Job; flow?: FlowInfo } = $props();
   // Each stage names its agent when the job has any (D26, R42).
   const runs = $derived(flow ? stageRuns(agent, flow.stages) : []);
@@ -16,7 +17,7 @@
       <li class="st {s.state === 'todo' ? '' : s.state}" aria-current={s.state === 'now' || s.state === 'cur' ? 'step' : undefined}>
         <i>{#if s.state === 'ok'}✓{:else if s.state === 'now'}<Icon name="handSolid" size={18} solid />{:else if s.state === 'skip'}–{:else}{i + 1}{/if}</i>
         {stageLabel(s.stage)}
-        {#if named && runs[i]?.agent}<span class="t mono" title={runs[i].human ? 'Its gate always waits for you' : 'The agent that runs this stage'}>{runs[i].agent}{runs[i].human ? ' ✋' : ''}</span>{/if}
+        {#if named && runs[i]?.agent}<span class="t mono" title={runs[i].agent + (runs[i].human ? ' (its gate always waits for you)' : ' runs this stage')}>{initials(runs[i].agent)}{runs[i].human ? ' ✋' : ''}</span>{/if}
         {#if s.state === 'now'}<span class="t">waiting for you</span>{:else if s.state === 'cur' && agent.status === 'running'}<span class="t">running</span>{:else if s.state === 'skip'}<span class="t">skipped</span>{/if}
       </li>
     {/each}
