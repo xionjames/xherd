@@ -57,6 +57,11 @@ where a gate would be, telling the user what to review.
   This includes `.xherd/spec/*.md` (`tasks.md`, `commits.md`, `memory.md`).
   Never edit the `status:` / `evidence:` lines of tasks or the `status:` / `sha:`
   lines of commits: xherd writes them.
+- `AGENTS.md` and `CLAUDE.md` are shared memory for every job in this
+  repository: never put them in a task commit, even when the repository's own
+  instructions say to keep them current. Note what should change in
+  `memory.md` and propose it at the review step; xherd refuses a commit
+  proposal that lists either file.
 - Use the repository's own commands to build, test and lint, and say which
   ones you ran in each task's evidence.
 

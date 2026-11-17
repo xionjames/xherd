@@ -590,16 +590,30 @@ impl Daemon {
             return Ok(serde_json::json!({"proposal": null}));
         };
         let wd = workdir_of(&a)?.to_path_buf();
-        let read = |f: &str| std::fs::read_to_string(wd.join(f)).ok();
+        // The committed files (`HEAD`), not the worktree's: an edit the job
+        // left there must show up in the diff, not hide in the base.
+        let git = xherd_git::Git::new("git");
+        let read = |f: &str| {
+            let git = git.clone();
+            let wd = wd.clone();
+            let spec = format!("HEAD:{f}");
+            async move {
+                // `Git::run` trims the trailing newline; files end with one.
+                git.run(&wd, &["show", &spec])
+                    .await
+                    .ok()
+                    .map(|t| if t.is_empty() { t } else { t + "\n" })
+            }
+        };
         let proposed = xherd_flow::xap::doc_path(&p.file, &wd)
             .ok()
             .and_then(|d| actor::inside(&wd, &d))
             .and_then(|f| std::fs::read_to_string(f).ok());
-        let claude = read("CLAUDE.md");
+        let claude = read("CLAUDE.md").await;
         Ok(serde_json::json!({
             "proposal": p,
             "proposed": proposed,
-            "current": read("AGENTS.md"),
+            "current": read("AGENTS.md").await,
             "claude": {
                 "current": claude,
                 "next": xherd_flow::memory::claude_md(claude.as_deref()),

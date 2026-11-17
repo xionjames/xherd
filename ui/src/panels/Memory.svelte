@@ -40,11 +40,7 @@
   const edited = $derived(!!view?.proposed && text !== view.proposed);
   const agents = $derived(lineDiff(view?.current ?? '', text));
   const claude = $derived(view?.claude?.next ? lineDiff(view.claude.current ?? '', view.claude.next) : null);
-  const blocked = $derived(
-    agent.status === 'running' ? 'The agent is working: accept when it stops.'
-    : agent.prUrl ? 'The pull request is open and xherd never pushes: copy the text into AGENTS.md yourself, or dismiss it.'
-    : '',
-  );
+  const blocked = $derived(agent.status === 'running' ? 'The agent is working: accept when it stops.' : '');
 
   async function act(action: 'memory-accept' | 'memory-dismiss') {
     busy = true;

@@ -3135,6 +3135,24 @@ async fn cancel_while_a_pause_waits_for_the_note() {
     assert_eq!(a.pause_requested_at, None);
 }
 
+/// AGENTS.md and CLAUDE.md are shared memory: a commit proposal naming them
+/// is refused (#153).
+#[tokio::test]
+async fn memory_file_is_refused_in_a_commit_proposal() {
+    let t = setup().await;
+    for (i, f) in ["AGENTS.md", "./CLAUDE.md"].into_iter().enumerate() {
+        let e = xap(
+            &t,
+            &format!("mf{i}"),
+            "commit.propose",
+            json!({"id": "C01", "subject": "a", "files": ["a.txt", f]}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(e.code, "memory_file");
+    }
+}
+
 /// Shared memory (spec §16.6): a proposal waits for the user; accepting
 /// commits AGENTS.md and a CLAUDE.md importing it on the agent's branch.
 #[tokio::test]
@@ -3164,6 +3182,11 @@ async fn memory_proposal_is_committed_on_accept() {
     assert_eq!(view["proposed"], "# Agents\n- run `make t`");
     assert!(view["current"].is_null());
     assert_eq!(view["claude"]["next"], "@AGENTS.md\n");
+    // The base is HEAD: an uncommitted edit in the worktree is not it.
+    std::fs::write(wt.join("AGENTS.md"), "# stray edit\n").unwrap();
+    let view = t.d.memory("SC-1").await.unwrap();
+    assert!(view["current"].is_null());
+    std::fs::remove_file(wt.join("AGENTS.md")).unwrap();
 
     // Not while the agent works.
     let busy = act(&t, UserAction::MemoryAccept { text: None })
@@ -3201,6 +3224,38 @@ async fn memory_proposal_is_committed_on_accept() {
         )
         .is_empty()
     );
+}
+
+/// Shared memory stays open after the PR: the accept commits on the branch
+/// (the user pushes it), it is not refused.
+#[tokio::test]
+async fn memory_accept_after_the_pr_is_open_commits_on_the_branch() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    std::fs::write(
+        wt.join(".xherd/AGENTS.proposed.md"),
+        "# Agents\n- run `make t`\n",
+    )
+    .unwrap();
+    xap(
+        &t,
+        "m1",
+        "memory.propose",
+        json!({"reason": "Adds the test command"}),
+    )
+    .await
+    .unwrap();
+    watching(&t).await;
+    let a = act(&t, UserAction::MemoryAccept { text: None })
+        .await
+        .unwrap();
+    assert!(a.memory_proposal.is_none());
+    assert_eq!(
+        std::fs::read_to_string(wt.join("AGENTS.md")).unwrap(),
+        "# Agents\n- run `make t`\n"
+    );
+    let subject = git(wt, &["show", "--format=%s", "-s", "HEAD"]);
+    assert_eq!(subject, "Update AGENTS.md (shared memory)");
 }
 
 #[tokio::test]

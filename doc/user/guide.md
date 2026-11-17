@@ -166,7 +166,7 @@ With a tracker plugin on (Jira through `acli`, GitHub issues, GitLab issues), ti
 
 ## Shared memory
 
-During review, a job may propose an update of the repository's `AGENTS.md` (what later jobs should know about the code). The *Shared memory* tab shows the diff and lets you edit it. Accepting commits `AGENTS.md` (and a `CLAUDE.md` that imports it, if missing) on the job's branch; dismissing drops it. A proposal never blocks the flow.
+During review, a job may propose an update of the repository's `AGENTS.md` (what later jobs should know about the code). The *Shared memory* tab shows the diff and lets you edit it. Accepting commits `AGENTS.md` (and a `CLAUDE.md` that imports it, if missing) on the job's branch, also after the pull request is open; xherd never pushes, so push the branch to update the PR. Accepting is refused only while the job works. Dismissing drops the proposal. A proposal never blocks the flow. The diff is against `AGENTS.md` as committed at `HEAD`, so an edit a job left in the worktree shows up too. Jobs cannot put `AGENTS.md` or `CLAUDE.md` in a task's commit (xherd refuses the proposal): the only way in is this tab. Jobs are told to keep it small and to record only lasting facts about the code.
 
 ## Agents on workflow stages
 

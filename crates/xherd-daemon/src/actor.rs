@@ -1827,6 +1827,20 @@ impl Actor {
             let file = self.workdir()?.join(SPEC_DIR).join("memory.md");
             xherd_flow::memory::check(std::fs::read_to_string(file).ok().as_deref())?;
         }
+        // AGENTS.md and CLAUDE.md at the root are shared memory: they change
+        // through `xherd memory propose`, not in a task's commit, except while
+        // merging the base branch (conflicts in them need resolving).
+        if let XapCmd::CommitPropose { files, .. } = cmd
+            && files
+                .iter()
+                .any(|f| matches!(f.trim_start_matches("./"), "AGENTS.md" | "CLAUDE.md"))
+            && !self.env.git.merge_in_progress(&self.workdir()?).await
+        {
+            return Err(refusal(
+                "memory_file",
+                "AGENTS.md and CLAUDE.md are shared memory: do not commit them; propose changes with `xherd memory propose`",
+            ));
+        }
         Ok(match cmd {
             XapCmd::GateOpen { .. } => {
                 let wd = self.workdir()?;
@@ -3273,14 +3287,8 @@ impl Actor {
                 format!("{name} is working; accept when it stops"),
             ));
         }
-        if self.job.pr_url.is_some() {
-            return Err(refuse(
-                "pr_open",
-                format!(
-                    "{name}'s pull request is already open and xherd never pushes; copy the text into AGENTS.md yourself, or dismiss it"
-                ),
-            ));
-        }
+        // An open pull request does not block it: the commit goes on the
+        // branch, and the user pushes it (xherd never pushes).
         let wd = self.workdir()?;
         let mut text = match edited.filter(|t| !t.trim().is_empty()) {
             Some(t) => t,
