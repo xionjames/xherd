@@ -4,12 +4,13 @@
   // plugin on or off; Options (and Log in) open PluginDetail in a dialog.
   import { onMount } from 'svelte';
   import { app, reload } from '../lib/store.svelte';
-  import { get, put } from '../lib/api';
-  import { setup, loadChecks } from '../lib/setup.svelte';
+  import { get, put, pluginsList } from '../lib/api';
+  import { setup, loadChecks, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
   import { KIND_LABEL, KIND_ONE, KIND_ORDER, lastOn, matches } from '../lib/plugins';
   import PluginDetail from './PluginDetail.svelte';
-  import type { PluginInfo } from '../lib/types';
+  import PluginAdd from './PluginAdd.svelte';
+  import type { PluginInfo, PluginsList } from '../lib/types';
 
   let { selected, onselect }: { selected: string | null; onselect: (name: string | null) => void } = $props();
 
@@ -29,7 +30,18 @@
   // Versions found installed per tool, for the language cards (local commands, native or container).
   let installed = $state<Record<string, string[]>>({});
   let toolsByPlugin = $state<Record<string, string[]>>({});
+  // Installing from a git URL: off with XHERD_PLUGIN_INSTALL=off; a change needs a restart.
+  let list = $state<PluginsList | null>(null);
+  let adding = $state(false);
+  const refreshList = () => pluginsList().then((r) => (list = r)).catch(() => {});
+  async function afterInstall() {
+    await refreshList();
+    await reload();
+    await loadConfig().catch(() => {});
+  }
+  const short = (s: { url: string; sha?: string | null }) => `${s.url}${s.sha ? `@${s.sha.slice(0, 7)}` : ''}`;
   onMount(() => {
+    refreshList();
     get<{ installed: Record<string, string[]> }>('/toolchains/installed').then((r) => (installed = r.installed)).catch(() => {});
     get<{ tools: { plugin: string; tool: string }[] }>('/toolchains').then((r) => {
       const m: Record<string, string[]> = {};
@@ -82,7 +94,16 @@
   }
 </script>
 
-<input type="search" placeholder="Search plugins" aria-label="Filter plugins" bind:value={query} />
+<div class="row">
+  <input class="grow" type="search" placeholder="Search plugins" aria-label="Filter plugins" bind:value={query} />
+  {#if list?.installEnabled !== false}<button class="btn" onclick={() => (adding = true)}>Add plugin</button>{/if}
+</div>
+{#if list?.restartNeeded}
+  <p class="hint"><b>Restart needed</b> for the plugin changes to load. Running agents keep going.</p>
+{/if}
+{#if list?.installEnabled === false}
+  <p class="hint">Installing plugins is switched off here (<span class="mono">XHERD_PLUGIN_INSTALL=off</span>).</p>
+{/if}
 
 {#if broken.length}
   <div class="cards">
@@ -109,7 +130,8 @@
               disabled={last} title={last ? 'At least one is needed' : ''} onchange={() => toggle(p)} />
             <span class="tick" aria-hidden="true">✓</span>
             <div><h3>{p.label || p.name}</h3><p class="hint">{p.description}</p>
-              <p class="hint">{KIND_ONE[p.kind] ?? p.kind} · {p.version}{p.builtin ? ' · built in' : ''}</p></div></label>
+              <p class="hint">{KIND_ONE[p.kind] ?? p.kind} · {p.version}{p.builtin ? ' · built in' : ''}</p>
+              {#if p.source}<p class="hint wrap-any">from {short(p.source)}</p>{:else if !p.builtin}<p class="hint">installed by hand, not pinned</p>{/if}</div></label>
           <div class="tf">
             <span class="ckst {st.tone === 'off' ? '' : st.tone}" aria-hidden="true">{st.tone === 'ok' ? '✓' : st.tone === 'bad' ? '✕' : st.tone === 'opt' ? '–' : '○'}</span>
             <span class="grow wrap-any" class:muted={st.tone === 'off'}>{st.text}</span>
@@ -123,6 +145,10 @@
 {:else}
   <p class="empty">{query.trim() ? 'No plugin matches.' : 'No plugin is installed.'}</p>
 {/each}
+
+{#if adding}
+  <PluginAdd onclose={() => (adding = false)} oninstalled={afterInstall} />
+{/if}
 
 {#if open}
   {#key open.name}<PluginDetail plugin={open} autologin={autologin === open.name} onclose={close} />{/key}
