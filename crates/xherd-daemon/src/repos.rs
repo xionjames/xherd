@@ -17,7 +17,7 @@ use crate::create::{outside_mounts, refuse, resolve_base};
 use crate::{ActionError, Daemon};
 
 /// A clone of a large repository can take a while.
-const CLONE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub(crate) const CLONE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// A repository ready for a worktree.
 #[derive(Debug, Clone)]
@@ -139,7 +139,7 @@ impl Daemon {
 
 /// Remove a folder git made: as the agent user, who owns what is inside it
 /// (the daemon's user cannot delete those files, R-1203).
-async fn remove_tree(dir: &Path) {
+pub(crate) async fn remove_tree(dir: &Path) {
     use xherd_core::exec::{Cmd, run};
     let dir = dir.to_string_lossy().into_owned();
     let _ = run(Cmd::new(["rm", "-rf", "--", dir.as_str()]).as_agent()).await;

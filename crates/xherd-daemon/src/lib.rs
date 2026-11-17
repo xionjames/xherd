@@ -78,6 +78,11 @@ pub struct Options {
     pub verify_timeout: std::time::Duration,
     /// Time between PR polls; `None` = `prPollMinutes` of the config (tests).
     pub pr_poll: Option<std::time::Duration>,
+    /// Plugins may be previewed, installed and updated (R10); the CLI sets
+    /// it to false for `XHERD_PLUGIN_INSTALL=off`.
+    pub plugin_install: bool,
+    /// Tests only: let a `file://` URL be a plugin source (no network).
+    pub allow_local_plugin_sources: bool,
 }
 
 impl Options {
@@ -94,6 +99,8 @@ impl Options {
             local_peers: Vec::new(),
             verify_timeout: actor::VERIFY_TIMEOUT,
             pr_poll: None,
+            plugin_install: true,
+            allow_local_plugin_sources: false,
         }
     }
 }
@@ -178,6 +185,10 @@ pub struct Daemon {
     pub config_write: Arc<std::sync::Mutex<()>>,
     /// Held while saved agents are changed (create, edit, archive, delete, import).
     pub agents_write: Arc<tokio::sync::Mutex<()>>,
+    /// See `Options::plugin_install`.
+    pub plugin_install: bool,
+    /// See `Options::allow_local_plugin_sources`.
+    pub allow_local_plugin_sources: bool,
 }
 
 /// `GET /runtimes/{name}/models`.
@@ -323,6 +334,8 @@ impl Daemon {
             secrets_write: Arc::default(),
             config_write: Arc::default(),
             agents_write: Arc::default(),
+            plugin_install: opts.plugin_install,
+            allow_local_plugin_sources: opts.allow_local_plugin_sources,
         };
         d.import_ledgers().await;
         d.repair_restored().await;
