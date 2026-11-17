@@ -884,6 +884,42 @@ async fn an_agents_max_live_jobs_holds_its_next_job_back() {
     wait_status(&t.d, "R-3", Status::Running).await;
 }
 
+/// A running job attached to an agent counts against its `maxLiveJobs` at
+/// once, not from its next spawn.
+#[tokio::test]
+async fn attaching_a_running_job_counts_it_against_the_agents_limit() {
+    let t = daemon(5).await;
+    let def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "reviewer",
+        "runtime": "claude-code",
+        "maxLiveJobs": 1,
+    }))
+    .unwrap();
+    let def = t.d.create_agent(def).await.unwrap().def;
+
+    t.d.create_job(agent("FREE-1", 1)).await.unwrap();
+    wait_status(&t.d, "FREE-1", Status::Running).await;
+    t.d.action(
+        "FREE-1",
+        UserAction::AttachAgent {
+            snapshot: Box::new(def.snapshot()),
+        },
+    )
+    .await
+    .unwrap();
+
+    // FREE-1 holds the agent's only slot, so its next job waits.
+    t.d.create_job(of_agent("R-1", 2, &def)).await.unwrap();
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(status(&t.d, "R-1").await, Status::Queued);
+
+    // It starts once FREE-1 leaves a live status.
+    t.d.action("FREE-1", UserAction::Pause).await.unwrap();
+    wait_status(&t.d, "R-1", Status::Running).await;
+}
+
 #[tokio::test]
 async fn worklog_and_tokens_are_kept_per_saved_agent() {
     let t = daemon(4).await;
