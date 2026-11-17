@@ -249,6 +249,90 @@ async fn flow_none_and_origin_base() {
     assert_eq!(a.next_prompt.as_deref(), Some("add login"));
 }
 
+/// A repository given as a path gets its `origin` fetched before the job (R-002).
+#[tokio::test]
+async fn path_repo_fetches_origin() {
+    let t = setup().await;
+    let clone = tempfile::tempdir().unwrap();
+    let src = t.repo.path().to_string_lossy().into_owned();
+    assert!(
+        git(clone.path(), &["clone", "-q", &src, "c"])
+            .status
+            .success()
+    );
+    let c = clone.path().join("c");
+    // The remote moves on after the clone.
+    assert!(
+        git(
+            t.repo.path(),
+            &["commit", "-q", "--allow-empty", "-m", "newer"]
+        )
+        .status
+        .success()
+    );
+    let newest = String::from_utf8(git(t.repo.path(), &["rev-parse", "HEAD"]).stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let mut r = req(&t, "SC-8");
+    r.repo = c.to_string_lossy().into_owned();
+    let a = t.d.new_job(r).await.unwrap();
+    assert_eq!(a.base.as_deref(), Some("origin/main"));
+    let wt = t.ws.path().join("worktrees/c/sc-8");
+    let head = String::from_utf8(git(&wt, &["rev-parse", "HEAD"]).stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(head, newest);
+}
+
+/// A failed fetch never refuses: resolve warns, the job is created.
+#[tokio::test]
+async fn path_repo_fetch_failure_is_a_hint() {
+    let t = setup().await;
+    let clone = tempfile::tempdir().unwrap();
+    let src = t.repo.path().to_string_lossy().into_owned();
+    assert!(
+        git(clone.path(), &["clone", "-q", &src, "c"])
+            .status
+            .success()
+    );
+    let c = clone.path().join("c");
+    let gone = clone.path().join("gone");
+    assert!(
+        git(
+            &c,
+            &["remote", "set-url", "origin", &gone.to_string_lossy()]
+        )
+        .status
+        .success()
+    );
+    let v = t.d.resolve_repo(&c.to_string_lossy()).await.unwrap();
+    assert!(
+        v["warning"]
+            .as_str()
+            .unwrap()
+            .starts_with("could not fetch origin")
+    );
+    let mut r = req(&t, "SC-9");
+    r.repo = c.to_string_lossy().into_owned();
+    assert!(t.d.new_job(r).await.is_ok());
+}
+
+/// No `origin`: nothing to fetch, no warning.
+#[tokio::test]
+async fn path_repo_without_remote_is_quiet() {
+    let t = setup().await;
+    let v =
+        t.d.resolve_repo(&t.repo.path().to_string_lossy())
+            .await
+            .unwrap();
+    assert!(v["warning"].is_null());
+    let a = t.d.new_job(req(&t, "SC-10")).await.unwrap();
+    assert_eq!(a.base.as_deref(), Some("main"));
+}
+
 #[tokio::test]
 async fn starts_claude_code_with_hooks() {
     let t = setup().await;
