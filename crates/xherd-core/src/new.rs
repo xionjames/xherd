@@ -289,7 +289,7 @@ pub fn instructions_md(a: &Job, repo_instructions: Option<&str>) -> String {
     // The saved agent's text comes after the repository's (#141, R19).
     let repo = match a.agent().and_then(|g| g.instructions.as_deref()) {
         Some(t) if !t.trim().is_empty() => format!(
-            "{repo}## Agent instructions\n\nFrom the saved agent {}:\n\n{}\n\n",
+            "{repo}## Agent instructions\n\nFrom the saved agent {}. They set how you work (style, conventions). If they conflict with the stage command you were given, follow the stage command and the xherd rules; they decide what to do and when to stop.\n\n{}\n\n",
             a.agent().map_or("", |g| g.name.as_str()),
             t.trim()
         ),

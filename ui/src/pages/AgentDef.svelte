@@ -237,7 +237,7 @@
       </div>
       <label class="f">Instructions
         <textarea rows="6" bind:value={form.instructions} placeholder="Added to every job's instructions, after the repository's"></textarea>
-        <span class="hint">Jobs read this text as their own instructions: write only what you trust.</span></label>
+        <span class="hint">Jobs read this text as their own instructions: write only what you trust. They set how the agent works; if they conflict with a stage's own instructions, the stage wins.</span></label>
       <div class="g2">
         <label class="f">Live jobs at once
           <input type="number" min="1" max="100" bind:value={form.maxLiveJobs} />
