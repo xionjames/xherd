@@ -225,6 +225,36 @@ impl Git {
             .map(drop)
     }
 
+    /// Whether the repository has a remote with this name.
+    pub async fn has_remote(&self, dir: &Path, remote: &str) -> bool {
+        self.run(dir, &["remote"])
+            .await
+            .is_ok_and(|out| out.lines().any(|l| l.trim() == remote))
+    }
+
+    /// Fast-forwards the local `branch` to `upstream` (R-002). A branch
+    /// checked out in `dir` is merged with `--ff-only`; any other one is
+    /// updated through `git fetch . upstream:branch`. Git itself refuses a
+    /// non-fast-forward, a dirty file in the way and a branch checked out in
+    /// another worktree; the error is returned and nothing changes.
+    pub async fn fast_forward_branch(
+        &self,
+        dir: &Path,
+        branch: &str,
+        upstream: &str,
+    ) -> Result<()> {
+        if self.current_branch(dir).await.as_deref() == Some(branch) {
+            self.run(dir, &["merge", "--ff-only", "--quiet", upstream])
+                .await
+                .map(drop)
+        } else {
+            let spec = format!("{upstream}:{branch}");
+            self.run_env(dir, NO_PROMPT, &["fetch", "--quiet", ".", &spec])
+                .await
+                .map(drop)
+        }
+    }
+
     /// `git clone <url> <dest>`, run in `dest`'s parent (which must exist).
     pub async fn clone_repo(&self, url: &str, dest: &Path) -> Result<()> {
         let parent = dest.parent().unwrap_or(Path::new("/"));

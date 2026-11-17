@@ -239,6 +239,118 @@ async fn clone_and_branches() {
     assert!(g.is_repo(&dest).await);
 }
 
+/// A source repo and a clone of it, the source one commit ahead and the
+/// clone's `origin/main` already fetched.
+async fn clone_behind(d: &Path) -> (Git, std::path::PathBuf, std::path::PathBuf) {
+    let src = d.join("src");
+    std::fs::create_dir(&src).unwrap();
+    let g = init_repo(&src).await;
+    let dest = d.join("clone");
+    g.clone_repo(&src.to_string_lossy(), &dest).await.unwrap();
+    for args in [
+        &["config", "user.email", "t@example.com"][..],
+        &["config", "user.name", "t"],
+        &["config", "commit.gpgsign", "false"],
+    ] {
+        g.run(&dest, args).await.unwrap();
+    }
+    std::fs::write(src.join("a.txt"), "two\n").unwrap();
+    g.run(&src, &["commit", "--quiet", "-am", "two"])
+        .await
+        .unwrap();
+    g.fetch(&dest, "origin").await.unwrap();
+    (g, src, dest)
+}
+
+#[tokio::test]
+async fn has_remote_tells_origin_apart() {
+    let d = tempfile::tempdir().unwrap();
+    let (g, src, dest) = clone_behind(d.path()).await;
+    assert!(g.has_remote(&dest, "origin").await);
+    assert!(!g.has_remote(&dest, "upstream").await);
+    assert!(!g.has_remote(&src, "origin").await);
+}
+
+#[tokio::test]
+async fn fast_forward_branch_moves_a_branch_that_is_behind() {
+    let d = tempfile::tempdir().unwrap();
+    let (g, _src, dest) = clone_behind(d.path()).await;
+    let target = g.rev_parse(&dest, "origin/main").await.unwrap();
+
+    // Not checked out: the ref moves.
+    g.run(&dest, &["checkout", "--quiet", "-b", "other"])
+        .await
+        .unwrap();
+    g.fast_forward_branch(&dest, "main", "origin/main")
+        .await
+        .unwrap();
+    assert_eq!(g.rev_parse(&dest, "main").await.unwrap(), target);
+
+    // Checked out: the working tree follows.
+    g.run(&dest, &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    g.run(&dest, &["reset", "--quiet", "--hard", "HEAD~1"])
+        .await
+        .unwrap();
+    g.fast_forward_branch(&dest, "main", "origin/main")
+        .await
+        .unwrap();
+    assert_eq!(g.rev_parse(&dest, "main").await.unwrap(), target);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("a.txt")).unwrap(),
+        "two\n"
+    );
+}
+
+#[tokio::test]
+async fn fast_forward_branch_refuses_diverged_and_dirty() {
+    let d = tempfile::tempdir().unwrap();
+    let (g, _src, dest) = clone_behind(d.path()).await;
+
+    // Diverged: a local commit the remote lacks.
+    std::fs::write(dest.join("b.txt"), "local\n").unwrap();
+    g.run(&dest, &["add", "b.txt"]).await.unwrap();
+    g.run(&dest, &["commit", "--quiet", "-m", "local"])
+        .await
+        .unwrap();
+    let before = g.rev_parse(&dest, "main").await.unwrap();
+    assert!(
+        g.fast_forward_branch(&dest, "main", "origin/main")
+            .await
+            .is_err()
+    );
+    g.run(&dest, &["checkout", "--quiet", "-b", "other"])
+        .await
+        .unwrap();
+    assert!(
+        g.fast_forward_branch(&dest, "main", "origin/main")
+            .await
+            .is_err()
+    );
+    assert_eq!(g.rev_parse(&dest, "main").await.unwrap(), before);
+
+    // Dirty: an uncommitted change the update would overwrite.
+    g.run(&dest, &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    g.run(&dest, &["reset", "--quiet", "--hard", "HEAD~1"])
+        .await
+        .unwrap();
+    std::fs::write(dest.join("a.txt"), "mine\n").unwrap();
+    let before = g.rev_parse(&dest, "main").await.unwrap();
+    assert!(
+        g.fast_forward_branch(&dest, "main", "origin/main")
+            .await
+            .is_err()
+    );
+    assert_eq!(g.rev_parse(&dest, "main").await.unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("a.txt")).unwrap(),
+        "mine\n"
+    );
+}
+
 #[tokio::test]
 async fn commit_paths_takes_exactly_the_given_files() {
     let d = tempfile::tempdir().unwrap();
