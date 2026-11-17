@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use xherd_core::exec::{Cmd, run};
-use xherd_plugin::toolchain::{PLAN_FILE, Plan, Step, resolved_dir, step_env};
+use xherd_plugin::toolchain::{ENV_FILE, PLAN_FILE, Plan, Step, resolved_dir, step_env};
 
 const CACHE_FILE: &str = ".xherd/toolchain.resolved.json";
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -137,7 +137,6 @@ fn sh_quote(s: &str) -> String {
 /// The `toolchain.env` text for a resolved plan: a POSIX `sh` script that
 /// prepends the resolved directories to `PATH`, exports the variables and, when
 /// `prev_bash_env` is set, sources the `BASH_ENV` that `exec` replaced.
-#[allow(dead_code)] // used by `exec` from T02
 fn env_file(r: &Resolved, prev_bash_env: Option<&str>) -> String {
     let mut s = String::from(
         "# Written by `xherd toolchain exec`; source it with `. ./.xherd/toolchain.env`.\n",
@@ -165,6 +164,17 @@ fn env_file(r: &Resolved, prev_bash_env: Option<&str>) -> String {
         s.push_str(&format!("if [ -f {q} ]; then . {q}; fi\n"));
     }
     s
+}
+
+/// Write `.xherd/toolchain.env` (R-652) and return its absolute path, or
+/// `None` (after printing why) when it could not be written.
+fn write_env_file(r: &Resolved) -> Option<PathBuf> {
+    let prev = std::env::var("BASH_ENV").ok();
+    let file = Path::new(ENV_FILE);
+    let saved =
+        xherd_core::paths::write_atomic(file, env_file(r, prev.as_deref()).as_bytes(), None)
+            .and_then(|()| std::env::current_dir().map(|d| d.join(file)));
+    saved.map_err(|e| eprintln!("xherd: {ENV_FILE}: {e}")).ok()
 }
 
 pub fn exec(argv: Vec<String>) -> i32 {
@@ -210,11 +220,17 @@ pub fn exec(argv: Vec<String>) -> i32 {
     // Replace this process with the runtime (not `exec::run`: it must own the
     // terminal, like the browser terminal's tmux client).
     use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(program)
-        .args(&argv[1..])
+    let env_path = write_env_file(&r);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&argv[1..])
         .env("PATH", new_path(&r.path))
-        .envs(r.env)
-        .exec();
+        .envs(r.env);
+    // Shells the runtime starts (bash, sh) source the file, so login profiles
+    // that reset `PATH` do not hide the resolved tools.
+    if let Some(p) = env_path {
+        cmd.env("BASH_ENV", &p).env("ENV", &p);
+    }
+    let err = cmd.exec();
     eprintln!("xherd: cannot start {program}: {err}");
     1
 }
@@ -358,6 +374,43 @@ mod tests {
         assert_eq!(out, "/a/bin:/usr/bin:/bin\n");
         let out = sourced(&env_file(&Resolved::default(), None), "echo \"$PATH\"").await;
         assert_eq!(out, "/usr/bin:/bin\n");
+    }
+
+    #[tokio::test]
+    async fn bash_login_shell_finds_tools_through_bash_env() {
+        let have_bash = run(Cmd::new(["bash", "-c", "true"].map(String::from).to_vec()))
+            .await
+            .is_ok_and(|o| o.success());
+        if !have_bash {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let bin = d.path().join("tc/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("t");
+        std::fs::write(&tool, "#!/bin/sh\necho from-toolchain\n").unwrap();
+        std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let env = d.path().join("toolchain.env");
+        std::fs::write(
+            &env,
+            env_file(&resolved(&[&bin.to_string_lossy()], &[]), None),
+        )
+        .unwrap();
+        let home = d.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".profile"), "PATH=/usr/bin:/bin\n").unwrap();
+        std::fs::write(home.join(".bash_profile"), "PATH=/usr/bin:/bin\n").unwrap();
+        let o = run(
+            Cmd::new(["bash", "-l", "-c", "t"].map(String::from).to_vec())
+                .env("HOME", home.to_string_lossy().to_string())
+                .env("PATH", "/usr/bin:/bin")
+                .env("BASH_ENV", env.to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(o.success(), "{}", o.stderr);
+        assert_eq!(o.stdout_str(), "from-toolchain\n");
     }
 
     #[test]
