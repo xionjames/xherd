@@ -79,7 +79,7 @@ The full spec is larger than one release. v1.0 ships a usable tool; the rest fol
 | SDD | xherd built in; dynamic flows (§8.6) | External packs with `parse`, panel plugins |
 | Hosts / trackers | GitHub; tracker `none` and Jira (link only) | GitLab, Linear… |
 | Deployment | Local Docker, native binary (Linux, macOS) | Server/Kubernetes, Electron app |
-| UI | Overview, Job page, Settings, Setup checks, Welcome | Kanban, Needs attention page, Work log, command palette |
+| UI | Overview, Job page, Settings, Setup checks, Welcome | Kanban, Inbox page, Work log, command palette |
 | Autonomy | `ask` and `important` with tripwires | `never` (unattended) after the guardrails have run in practice |
 | Plugins | Built-in plugins, `xherd plugin new/test/link` | Install from the UI, catalogue |
 | Toolchains | Version managers in the image; per-worktree resolution | Welcome installer, toolchain plugins |
@@ -283,7 +283,7 @@ Each stage has an **autonomy class**. The level decides which classes xherd may 
 |---|---|
 | R-109 | Autonomy is set per job (default from profile, then Settings) and can change live; `instructions.md` is rewritten when it does. |
 | R-110 | Auto-approval runs when the job stops at an allowed gate: mark "checking", evaluate tripwires (some run commands), and approve only if the gate is unchanged and the coding agent did not ask anything. A user message in the meantime cancels the check; it re-runs at the next stop. |
-| R-111 | Each auto-approval is listed in **Needs attention** with the reason, the files, and the job's stated assumptions, and notifies the user. |
+| R-111 | Each auto-approval is listed in the **Inbox** (*Updates*) with the reason, the files, and the job's stated assumptions, and notifies the user. |
 
 ### 6.4 Tripwires
 
@@ -759,7 +759,7 @@ Memory has three levels: `memory.md` (one job, carried between its steps), the s
 |---|---|
 | **Overview** | "Needs you" first (longest wait first: what is waiting and the one useful action), then every job: status, stage, task progress, branch, tokens, last activity; filters. |
 | **Job page** | Header (name, ticket link, status, autonomy, runtime, tokens, actions); gate box (what to approve, held reason, assumptions, the job's reply, Approve / Request changes, review changes for commits); message box; rail of panels from the view declaration (terminal or transcript, documents with "changed since reviewed", tasks, commits, diff with "viewed" marks, PR, issues, memory, log); profile commands; Open in. |
-| **Needs attention** | Jobs waiting for you, due TODOs, and auto-approved items with reason, assumptions, diff since last review, Mark seen. |
+| **Inbox** (was Needs attention) | Jobs waiting for you, due TODOs, and auto-approved items with reason, assumptions, diff since last review, Mark seen. |
 | **Kanban** | Tasks of all jobs plus stage cards and TODOs; filters and swimlanes in the URL. |
 | **New job / New TODO** | Generated form including pack inputs; ticket link preview; repo picker or clone; branch list. |
 | **Settings** | General, Notifications, Open in, Git access, Toolchains, Repo profiles, Plugins (install, settings, ACP badges), Runtime per step, Backups, Remote access. |

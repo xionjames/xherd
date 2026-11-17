@@ -18,7 +18,7 @@ For people changing xherd itself. Read [Architecture](architecture.md) first; [R
 | `packs/xherd/` | The built-in flow pack: `xherd-flow.yaml`, `FORMAT.md` (document formats), `commands/*.md` (job prompts) |
 | `plugins/` | Built-in plugin manifests: runtimes `claude-code`, `opencode`, `codex`; hosts `github`, `gitlab`, `bitbucket`; trackers `jira`, `github-issues`, `gitlab-issues`; toolchains `sdkman`, `nvm`, `uv`, `go`, `rustup` |
 | `deploy/docker`, `deploy/compose`, `deploy/nfpm` | Dockerfile, the compose files (build from source, and the release one), `.deb`/`.rpm` packaging |
-| `scripts/` | `demo.sh` and its seed data, for screenshots |
+| `scripts/` | `demo/server.mjs` (mock API for screenshots and videos); `demo.sh` and its seed data (older, needs updating) |
 | `doc/` | This documentation ([index](../README.md)) |
 
 ## Build, run, test
@@ -47,7 +47,9 @@ xherd marks each new worktree trusted in Claude Code's config, so no trust step 
 
 ### Demo data for screenshots
 
-`scripts/demo.sh [dir]` runs a throwaway daemon on <http://127.0.0.1:4741/> with fake jobs (`scripts/demo-seed.py`): two waiting at a gate, one watching a PR, one paused, one done. It uses its own data root, workspace and `HOME` plus stub `claude`/`gh` commands, so nothing of yours is touched. It needs a built daemon and `ui/dist`. Jobs are never "running" (that needs a live tmux session). Warnings about "restored worktree not prepared" are expected: the fake worktrees are plain folders.
+`node scripts/demo/server.mjs [port]` (default 4811) serves `ui/dist` with a mock API: generic agents, five flows, sixteen jobs in three repositories, a fake document, diff and terminal. It needs no daemon, tmux or `HOME`; build the UI first (`pnpm -C ui build`). It is what the screenshots in `doc/assets/` and the tour video come from.
+
+`scripts/demo.sh [dir]` is older and **needs updating before use** (its seed fills the table `agents` from before the job rename). It runs a throwaway daemon on <http://127.0.0.1:4741/> with fake jobs (`scripts/demo-seed.py`): two waiting at a gate, one watching a PR, one paused, one done. It uses its own data root, workspace and `HOME` plus stub `claude`/`gh` commands, so nothing of yours is touched. It needs a built daemon and `ui/dist`. Jobs are never "running" (that needs a live tmux session). Warnings about "restored worktree not prepared" are expected: the fake worktrees are plain folders.
 
 ### Tests
 
