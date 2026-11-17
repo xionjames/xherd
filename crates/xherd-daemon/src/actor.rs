@@ -1972,8 +1972,15 @@ impl Actor {
     /// no other work meanwhile. `sh -c` with the agent user's allowlisted env.
     async fn run_verify(&self, command: String) -> Result<VerifyFact, Refusal> {
         let wd = self.workdir()?;
+        // With the job's resolved toolchain, run through the same PATH the
+        // agent's shells get (#180). `./`: dash's `.` searches PATH for bare names.
+        let script = if wd.join(xherd_plugin::toolchain::ENV_FILE).is_file() {
+            format!(". ./{}\n{command}", xherd_plugin::toolchain::ENV_FILE)
+        } else {
+            command.clone()
+        };
         let out = xherd_core::exec::run(
-            xherd_core::exec::Cmd::new(["sh", "-c", command.as_str()])
+            xherd_core::exec::Cmd::new(["sh", "-c", script.as_str()])
                 .cwd(wd)
                 .timeout(self.env.settings.get().verify_timeout)
                 // As the user the agent is (R-1203): it can run the same.
