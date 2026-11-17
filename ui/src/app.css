@@ -612,3 +612,20 @@ label.f.chk.top { align-items: flex-start; }
 .stc i { font: 700 9.5px var(--sans); font-style: normal; letter-spacing: .03em; color: var(--ink-4); }
 .stc.cur i, .stc.now i { color: var(--ink); }
 .stc.ok i { color: var(--ink-3); }
+
+/* ---- Team → Flows: list of workflows, a card per stage, the picked stage below. */
+.flw { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 20px; align-items: start; }
+.flw-list { display: flex; flex-direction: column; gap: 4px; padding: 8px; background: var(--pen); border: 1px solid var(--fence); border-radius: 12px; }
+.flw-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 8px; color: var(--ink); text-decoration: none; }
+.flw-item:hover { background: var(--pen-2); }
+.flw-item.on { background: var(--accent-wash); }
+.flw-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.flw-head .big { font-size: 20px; }
+.flw-track { display: flex; align-items: stretch; gap: 6px; overflow-x: auto; padding: 2px; }
+.flw-st { flex: 1 0 128px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; text-align: left; padding: 12px; background: var(--pen); color: var(--ink); border: 1px solid var(--fence-strong); border-radius: 10px; cursor: pointer; font: inherit; }
+.flw-st.inh { border-style: dashed; color: var(--ink-3); }
+.flw-st.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); border-style: solid; }
+.flw-ag { display: inline-flex; align-items: center; gap: 6px; }
+.flw-hand { color: var(--gate); }
+.flw-arr { align-self: center; color: var(--ink-4); }
+@media (max-width: 760px) { .flw { grid-template-columns: 1fr; } .flw-list { flex-direction: row; overflow-x: auto; } }
