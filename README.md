@@ -109,6 +109,16 @@ Start with **[Getting started](doc/user/getting-started.md)** (install with Dock
 | Extending | [Plugins](doc/extend/plugins.md) · [Flow packs](doc/extend/flow-packs.md) · [Add xherd support to your SDD](doc/extend/integrate-your-sdd.md) |
 | Contributing | [Running from source](doc/dev/from-source.md) · [Development](doc/dev/development.md) · [Architecture](doc/dev/architecture.md) · [Roadmap](ROADMAP.md) |
 
+## Inspirations
+
+xherd borrows ideas from other projects. Thanks to their authors.
+
+- **[ai-parrot](https://github.com/phenobarbital/ai-parrot)**: its spec-driven tooling. One methodology rendered for several runtimes, an installer manifest with per-file hashes, an issue ledger and approvals tied to document hashes.
+- **[herdr](https://github.com/herdrdev/herdr)**: a terminal workspace for coding agents. The CLI as the plugin API, an install preview, a GitHub-topic catalogue and job status pushed with a sequence number.
+- **[Rex](https://www.superlogical.com/rex/docs/installation)**: files and ports through a remote terminal. Dropping a local file into the terminal puts it on the machine that runs the job, and a `localhost` link in the terminal is forwarded to your browser (planned, [#192](https://github.com/xionjames/xherd/issues/192)).
+
+The full list of ideas adopted, deferred or dropped is in [design.md §14](doc/internal/design.md).
+
 ## License
 
 [GPL-3.0-or-later](LICENSE)
