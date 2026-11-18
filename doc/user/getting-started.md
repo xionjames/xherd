@@ -11,9 +11,9 @@ To build xherd yourself (an unreleased branch, or to change it), see [Running fr
 | What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code (or opencode, or Codex) and `gh` / `glab` |
 | Coding-agent CLI and tools | In the image (Claude Code, `git`, `gh`, `glab`, toolchain managers) | Yours, on `PATH` |
 | Isolation | Jobs see only the workspace folder | None: jobs run as you |
-| Platforms | macOS and Linux (amd64, arm64) | Linux (x86_64, arm64) |
+| Platforms | macOS and Linux (amd64, arm64) | macOS and Linux (arm64, x86_64) |
 
-macOS binaries are not published yet ([roadmap](../../ROADMAP.md)): on a Mac, use Docker.
+On a Mac: `brew install xionjames/tap/xherd` (installs git and tmux too), or use Docker. The binaries are not signed or notarized; Homebrew and `curl` downloads are not quarantined, a browser download is.
 
 xherd is a single-user tool: one person, one daemon, one workspace folder.
 

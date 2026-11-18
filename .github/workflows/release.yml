@@ -1,9 +1,12 @@
 # Release (issue #41): a tag `vX.Y.Z` on a commit of main publishes
 # - binaries: static Linux (musl), x86_64 and arm64, on a GitHub release, as
-#   .tar.gz, .deb and .rpm (deploy/nfpm/nfpm.yaml); macOS is on the roadmap;
+#   .tar.gz, .deb and .rpm (deploy/nfpm/nfpm.yaml); macOS (Intel and Apple silicon) as
+#   .tar.gz, built natively and not signed or notarized;
 # - the image ghcr.io/<owner>/<repo> for amd64 + arm64, tagged X.Y.Z, X.Y, X and latest
 #   (no X for 0.x: those are development versions);
-# - compose.yaml (deploy/compose/compose.release.yaml) for running the image.
+# - compose.yaml (deploy/compose/compose.release.yaml) for running the image;
+# - the Homebrew formula in xionjames/homebrew-tap (deploy/homebrew/formula.sh), pushed with
+#   the secret HOMEBREW_TAP_TOKEN; not for prereleases.
 # A tag with a suffix (`v0.2.0-rc.1`) is a prerelease: no X.Y, X or latest.
 name: Release
 
@@ -115,6 +118,42 @@ jobs:
             dist/*.deb*
             dist/*.rpm*
 
+  binaries-macos:
+    needs: [on-main, ci, ui]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-apple-darwin }
+          - { target: aarch64-apple-darwin }
+    runs-on: macos-14
+    env:
+      XHERD_VERSION: ${{ needs.on-main.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: ui-dist
+          path: ui/dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked -p xherd-cli --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          name="xherd-${XHERD_VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/xherd" LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/*.tar.gz*
+
   image:
     needs: [on-main, ci]
     strategy:
@@ -190,7 +229,7 @@ jobs:
           docker buildx imagetools inspect "${{ env.IMAGE }}:${{ steps.meta.outputs.version }}"
 
   release:
-    needs: [binaries, manifest]
+    needs: [binaries, binaries-macos, manifest]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -211,3 +250,34 @@ jobs:
           case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes $pre
+
+  homebrew:
+    needs: [on-main, release]
+    # A prerelease (a tag with a suffix) is not offered through brew.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bin-*-apple-darwin
+          path: dist
+          merge-multiple: true
+      - uses: actions/checkout@v7
+        with:
+          repository: xionjames/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Write and push the formula
+        env:
+          VERSION: ${{ needs.on-main.outputs.version }}
+        run: |
+          sha() { cut -d' ' -f1 "dist/xherd-${VERSION}-$1.tar.gz.sha256"; }
+          mkdir -p tap/Formula
+          deploy/homebrew/formula.sh "$VERSION" "$(sha aarch64-apple-darwin)" "$(sha x86_64-apple-darwin)" > tap/Formula/xherd.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/xherd.rb
+          git commit -m "xherd ${VERSION}"
+          git push
