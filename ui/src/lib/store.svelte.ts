@@ -39,6 +39,7 @@ type WsMsg = { type: 'job'; job: Job } | { type: 'agents' } | { type: 'notify'; 
 
 let retry = 500;
 let opened = false;
+let offlineTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Load the state now, then keep it live over the websocket. */
 export function start() {
@@ -51,6 +52,7 @@ function connect() {
   const ws = new WebSocket(`${proto}://${location.host}/api/v1/ws`);
   ws.onopen = async () => {
     retry = 500;
+    clearTimeout(offlineTimer);
     app.connected = true;
     // The first load is done by start(); every reconnect reloads in full.
     if (opened) await reload();
@@ -63,7 +65,9 @@ function connect() {
     else if (m.type === 'notify') addNotice(m.jobId, m.kind, m.text);
   };
   ws.onclose = () => {
-    app.connected = false;
+    // A short drop (tab waking up, a quick reconnect) is not worth the toast: show it after 3 s offline.
+    clearTimeout(offlineTimer);
+    offlineTimer = setTimeout(() => (app.connected = false), 3000);
     setTimeout(connect, retry);
     retry = Math.min(retry * 2, 10_000);
   };
