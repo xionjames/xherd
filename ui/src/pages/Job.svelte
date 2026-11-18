@@ -23,7 +23,8 @@
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
   import { agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
-  import { defaultOpen, groups, headerMarks, headerText, lastResult, needsApproval, running, tabId as actionTab, visible, type GroupKind } from '../lib/actions';
+  import ActionPanel from '../panels/Action.svelte';
+  import { actionOfTab, defaultOpen, groups, headerMarks, headerText, lastResult, needsApproval, running, tabId as actionTab, visible, type GroupKind } from '../lib/actions';
 
   let { agent }: { agent: Job } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -93,6 +94,8 @@
     try { localStorage.setItem(openKey(k), next ? '1' : '0'); } catch { /* private mode */ }
   }
   const actionSel = $derived(route.query.get('s'));
+  // `?s=act-<id>` opens an action's page instead of a tab's panel (R25).
+  const openAction = $derived(actionOfTab(actionSel));
   const live = $derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
 
   function badge(id: string): { n: string | number; tone: string } | undefined {
@@ -306,6 +309,8 @@
   <div class="apanel">
     {#if removed && tab?.worktree}
       <Callout tone="plain">The worktree was removed {agoText(agent.worktreeRemovedAt ?? 0)}. The branch <span class="mono">{agent.branch}</span> is kept.</Callout>
+    {:else if openAction}
+      {#key `${agent.id}/${openAction}`}<ActionPanel {agent} actionId={openAction} />{/key}
     {:else if Panel}
       {#key agent.id}<Panel {agent} />{/key}
     {/if}
