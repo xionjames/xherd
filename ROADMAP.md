@@ -122,7 +122,7 @@ by theme; update it together with them.
 - [ ] Notifier plugins, replacing an earlier ntfy message, Windows desktop notifications
 - [x] GitHub Actions (#41): CI on main and PRs; a `v*` tag on main releases Linux binaries (static musl, `.tar.gz`/`.deb`/`.rpm`) and the multi-arch image `ghcr.io/xionjames/xherd`
 - [x] GPL-3.0-or-later licence (#134); builds without git or `XHERD_VERSION` show `dev` (#137)
-- [ ] macOS binaries (x86_64 + arm64, `macos-14` runner) and a Homebrew tap (`xionjames/homebrew-tap`, formula pushed by the release with a `HOMEBREW_TAP_TOKEN` secret, depends on git and tmux): built in `release.yml` and `deploy/homebrew/formula.sh`, **not run yet** (first tag, e.g. an `-rc` one, will show; the tap push is skipped for prereleases); a signed, notarized `.pkg` only with an Apple Developer account
+- [ ] macOS binaries (x86_64 + arm64, `macos-15` runner) and a Homebrew tap (`xionjames/homebrew-tap`, formula pushed by the release with a `HOMEBREW_TAP_TOKEN` secret, depends on git and tmux): built in `release.yml` and `deploy/homebrew/formula.sh`, **not run yet** (first tag, e.g. an `-rc` one, will show; the tap push is skipped for prereleases); a signed, notarized `.pkg` only with an Apple Developer account
 - [ ] Rest of R-1313: signatures (cosign), SBOMs, install script; Docker smoke and migration tests in CI
 
 ## v1.x
