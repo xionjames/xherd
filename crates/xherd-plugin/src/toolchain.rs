@@ -59,7 +59,7 @@ pub struct VersionFile {
     /// Worktree-relative.
     pub path: String,
     pub format: Format,
-    /// `sdkmanrc`: the key to read (default: the tool name).
+    /// `sdkmanrc`, `package-manager`: the key to read (default: the tool name).
     #[serde(default)]
     pub key: Option<String>,
 }
@@ -77,6 +77,9 @@ pub enum Format {
     GoMod,
     /// `channel = "…"` (TOML), else plain.
     RustToolchain,
+    /// `package.json`'s `"packageManager": "<key>@<version>[+hash]"`, when
+    /// the name is the key.
+    PackageManager,
 }
 
 impl Toolchain {
@@ -135,6 +138,12 @@ pub fn read_version(text: &str, format: Format, key: &str) -> Option<String> {
             None if text.contains('[') => None,
             None => plain(),
         },
+        Format::PackageManager => {
+            let json: serde_json::Value = serde_json::from_str(text).ok()?;
+            let (name, version) = json.get("packageManager")?.as_str()?.split_once('@')?;
+            // Drop the `+sha512…` integrity suffix.
+            (name == key).then(|| version.split('+').next().unwrap_or("").to_string())
+        }
     }?;
     let v: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
     VERSION.is_match(&v).then_some(v)
@@ -310,6 +319,26 @@ mod tests {
             read_version("[toolchain]\n", Format::RustToolchain, ""),
             None
         );
+    }
+
+    #[test]
+    fn package_manager_field() {
+        let pm = |json: &str, key: &str| read_version(json, Format::PackageManager, key);
+        assert_eq!(
+            pm(r#"{"packageManager":"pnpm@9.12.0"}"#, "pnpm"),
+            Some("9.12.0".into())
+        );
+        assert_eq!(
+            pm(r#"{"packageManager":"pnpm@9.12.0+sha512.abc"}"#, "pnpm"),
+            Some("9.12.0".into())
+        );
+        assert_eq!(pm(r#"{"packageManager":"yarn@4.1.0"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":"pnpm"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":9}"#, "pnpm"), None);
+        assert_eq!(pm("{not json", "pnpm"), None);
+        assert_eq!(pm(r#"{"name":"x"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":"pnpm@"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":"pnpm@+sha512.abc"}"#, "pnpm"), None);
     }
 
     #[test]
