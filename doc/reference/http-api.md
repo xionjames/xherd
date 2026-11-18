@@ -29,7 +29,7 @@ All paths are under `/api/v1`. `{id}` is a job id or name.
 
 | Method and path | Does |
 |---|---|
-| `GET /healthz` | Liveness, no auth |
+| `GET /healthz` | Liveness, no auth. Returns `ok`, `version`, `buildVersion` and `startId`: a string fixed for each process start (it changes on every restart, re-exec included), so a client can tell a restarted daemon from one that never went down |
 | `GET /state` | Everything the UI starts from: jobs, saved agents (`agents`), flows (each pack flow's stages), plugins (with `enabled`, and `view: {entry}` for a view plugin), tracker links, `buildVersion` |
 | `GET /ws` (WebSocket) | The change feed: one JSON message per change, tagged `type` (kebab-case). The UI reloads `/state` when it reconnects. A client that falls behind is disconnected |
 | `GET /checks`, `POST /checks/{id}/fix` | Setup checks, and running a check's fix |

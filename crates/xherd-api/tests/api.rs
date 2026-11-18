@@ -95,6 +95,15 @@ async fn auth_rules() {
     )
     .await;
     assert_eq!((s, v["ok"].clone()), (StatusCode::OK, json!(true)));
+    // R2: the start id is present and the same on every call of one process.
+    let start_id = v["startId"].as_str().expect("startId").to_string();
+    assert!(!start_id.is_empty());
+    let (_, again) = call(
+        remote.clone(),
+        get("/api/v1/healthz").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(again["startId"], json!(start_id));
 
     let (s, _) = call(
         remote.clone(),

@@ -3,7 +3,7 @@
   // config.json; most apply at once.
   import { app, reload } from '../lib/store.svelte';
   import { put, restartDaemon } from '../lib/api';
-  import { waitForRestart } from '../lib/restart';
+  import { startId, waitForRestart } from '../lib/restart';
   import { route, href, go } from '../lib/router.svelte';
   import { setup, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -74,8 +74,9 @@
   async function restart() {
     restarting = true;
     try {
+      const before = await startId();
       await restartDaemon();
-      await waitForRestart();
+      await waitForRestart(before);
       await reload();
       await loadConfig();
     } catch (e) {
