@@ -83,7 +83,8 @@ export function open(n: Notice) {
   n.read = true;
   if (n.jobId.startsWith('todo:')) return go('/todos');
   const a = jobByName(n.jobId);
-  if (a) go(`/jobs/${a.name}`);
+  // Pull request notices (conflict, checks, merged) land on the Pull request tab.
+  if (a) go(`/jobs/${a.name}`, n.kind === 'pr' ? { s: 'pr' } : {});
 }
 
 // A notice that the agent waits for you is read once it no longer waits:
