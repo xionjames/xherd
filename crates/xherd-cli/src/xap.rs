@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use clap::Subcommand;
 use serde_json::Value;
+use xherd_core::action::ActionKind;
 use xherd_core::domain::Role;
 use xherd_core::paths::Paths;
 use xherd_core::xap::{Severity, XapCall, XapCmd};
@@ -138,6 +139,67 @@ pub enum IssueCmd {
         #[arg(long)]
         body: Option<String>,
     },
+}
+
+fn action_kind(s: &str) -> Result<ActionKind, String> {
+    serde_json::from_value(Value::String(s.to_string()))
+        .map_err(|_| "one of service, task".to_string())
+}
+
+#[derive(Subcommand)]
+pub enum ActionCmd {
+    /// Register (or replace) an action the user can run from xherd.
+    Add {
+        /// Slug: lowercase letters, digits and `-`.
+        id: String,
+        #[arg(long)]
+        label: String,
+        /// The shell command to run.
+        #[arg(long)]
+        run: String,
+        #[arg(long, value_parser = action_kind)]
+        kind: Option<ActionKind>,
+        /// Folder inside the worktree.
+        #[arg(long)]
+        cwd: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        icon: Option<String>,
+    },
+    /// Remove an action of this job.
+    Rm { id: String },
+    /// List this job's actions.
+    Ls,
+    /// Show the tail of an action's last output.
+    Log { id: String },
+}
+
+impl From<ActionCmd> for XapCmd {
+    fn from(c: ActionCmd) -> XapCmd {
+        match c {
+            ActionCmd::Add {
+                id,
+                label,
+                run,
+                kind,
+                cwd,
+                description,
+                icon,
+            } => XapCmd::ActionAdd {
+                id,
+                label,
+                run,
+                kind,
+                cwd,
+                description,
+                icon,
+            },
+            ActionCmd::Rm { id } => XapCmd::ActionRm { id },
+            ActionCmd::Ls => XapCmd::ActionLs {},
+            ActionCmd::Log { id } => XapCmd::ActionLog { id },
+        }
+    }
 }
 
 #[derive(Subcommand)]

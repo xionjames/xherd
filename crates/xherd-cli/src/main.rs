@@ -245,6 +245,9 @@ enum Cmd {
     /// XAP: propose an update of the repo's shared memory (AGENTS.md).
     #[command(subcommand)]
     Memory(xap::MemoryCmd),
+    /// XAP: register actions the user can run (dev server, tests…).
+    #[command(subcommand)]
+    Action(xap::ActionCmd),
 }
 
 #[derive(Subcommand)]
@@ -532,6 +535,7 @@ fn main() -> ExitCode {
         Cmd::Handoff(c) => xap::run(c.into(), json),
         Cmd::Issue(c) => xap::run(c.into(), json),
         Cmd::Memory(c) => xap::run(c.into(), json),
+        Cmd::Action(c) => xap::run(c.into(), json),
     };
     ExitCode::from(code as u8)
 }
