@@ -186,6 +186,31 @@ pub struct ActionError {
     pub message: String,
 }
 
+/// R3: an action's folder, once symlinks are followed, stays inside the
+/// worktree. A folder that does not exist yet is judged by its nearest
+/// existing parent (the lexical check already ran).
+fn cwd_inside(wd: &Path, cwd: &str) -> Result<(), Refusal> {
+    let root = wd
+        .canonicalize()
+        .map_err(|e| refusal("no_workspace", format!("worktree: {e}")))?;
+    let mut p = wd.join(cwd);
+    let real = loop {
+        match p.canonicalize() {
+            Ok(r) => break r,
+            Err(_) if p.pop() => {}
+            Err(_) => return Ok(()),
+        }
+    };
+    if real.starts_with(&root) {
+        Ok(())
+    } else {
+        Err(refusal(
+            "path_outside_workspace",
+            "cwd leaves the worktree through a link",
+        ))
+    }
+}
+
 fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
     ActionError {
         code,
@@ -270,6 +295,10 @@ pub struct ActorSettings {
     /// Offer to save a job's setup as an agent (`suggestAgents`, R30).
     pub suggest_agents: bool,
     pub muted_notifications: Vec<String>,
+    /// Job actions are on (`jobActions`, R6) and how many a job holds
+    /// (`maxActionsPerJob`).
+    pub job_actions: bool,
+    pub max_actions_per_job: usize,
 }
 
 impl ActorSettings {
@@ -299,6 +328,8 @@ impl ActorSettings {
             git_hosts: c.git_hosts.clone(),
             muted_notifications: c.muted_notifications.clone(),
             suggest_agents: c.suggest_agents,
+            job_actions: c.job_actions,
+            max_actions_per_job: c.max_actions_per_job,
             ..base
         }
     }
@@ -443,6 +474,8 @@ impl Default for ActorSettings {
             disabled_plugins: Vec::new(),
             muted_notifications: Vec::new(),
             suggest_agents: true,
+            job_actions: true,
+            max_actions_per_job: 12,
         }
     }
 }
@@ -473,6 +506,8 @@ pub struct Env {
     pub runtimes: Arc<BTreeMap<String, crate::RuntimeKit>>,
     /// The skills library (`<data>/skills`), copied from at a switch of agent.
     pub skills: std::path::PathBuf,
+    /// The data root: action logs live under it (R13).
+    pub paths: xherd_core::paths::Paths,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -1432,6 +1467,16 @@ impl Actor {
         if self.env.store.event_exists(&call.id).await.unwrap_or(false) {
             return Ok(json!({"changed": false, "duplicate": true}));
         }
+        // Actions are not flow work (R7): handled before the flow checks.
+        if matches!(
+            call.cmd,
+            XapCmd::ActionAdd { .. }
+                | XapCmd::ActionRm { .. }
+                | XapCmd::ActionLs { .. }
+                | XapCmd::ActionLog { .. }
+        ) {
+            return self.on_action_xap(&call).await;
+        }
         self.commit_tripwires(&mut call.cmd).await;
         let packs = self.env.packs.clone();
         let pack = self.job.pack.as_deref().and_then(|p| packs.get(p));
@@ -1486,6 +1531,103 @@ impl Actor {
             self.commit(before).await;
         }
         Ok(json!({"changed": changed, "stage": self.job.stage, "gate": self.job.gate}))
+    }
+
+    /// `action.add|rm|ls|log` (R1–R7, R17): the job's own list of actions.
+    /// Running, stopping and approving are the user's, never an XAP call.
+    async fn on_action_xap(&mut self, call: &XapCall) -> Result<Value, Refusal> {
+        use xherd_core::action::{self, ActionDef, ActionState};
+        let settings = self.env.settings.get();
+        if !settings.job_actions {
+            return Err(refusal("actions_off", "job actions are switched off"));
+        }
+        let before = self.job.status;
+        let (changed, text) = match &call.cmd {
+            XapCmd::ActionAdd {
+                id,
+                label,
+                run,
+                kind,
+                cwd,
+                description,
+                icon,
+            } => {
+                let wd = self.workdir()?;
+                let mut def = ActionDef {
+                    id: id.clone(),
+                    label: label.clone(),
+                    description: description.clone().unwrap_or_default(),
+                    run: run.clone(),
+                    cwd: cwd.clone().unwrap_or_default(),
+                    kind: kind.unwrap_or_default(),
+                    icon: icon.clone().unwrap_or_default(),
+                };
+                action::check_def(&mut def)?;
+                cwd_inside(&wd, &def.cwd)?;
+                let replaced = self.job.actions.iter().any(|a| a.def.id == def.id);
+                let changed =
+                    action::add(&mut self.job, def.clone(), settings.max_actions_per_job)?;
+                if changed {
+                    let p = json!({"id": def.id, "label": def.label, "run": def.run,
+                        "cwd": def.cwd, "kind": def.kind, "replaced": replaced});
+                    self.log(Some(call.id.clone()), "xap.action.add", Some(p))
+                        .await;
+                }
+                (changed, None)
+            }
+            XapCmd::ActionRm { id } => {
+                let gone = action::remove(&mut self.job, id)?;
+                if matches!(&gone.last, Some(r) if r.state == ActionState::Running) {
+                    let session = action::session_name(&self.job.name, id);
+                    if let Err(e) = self.env.driver.stop_session(&session).await {
+                        tracing::warn!(job = %self.job.name, %session, "{}", e);
+                    }
+                }
+                self.log(
+                    Some(call.id.clone()),
+                    "xap.action.rm",
+                    Some(json!({"id": id})),
+                )
+                .await;
+                (true, None)
+            }
+            XapCmd::ActionLs {} => (false, Some(action::ls_text(&self.job))),
+            XapCmd::ActionLog { id } => {
+                let a = self
+                    .job
+                    .actions
+                    .iter()
+                    .find(|a| a.def.id == *id)
+                    .ok_or_else(|| refusal("action_unknown", format!("no action `{id}`")))?;
+                let state = match &a.last {
+                    None => "never run".to_string(),
+                    Some(r) => {
+                        let s = serde_json::to_value(r.state)
+                            .ok()
+                            .and_then(|v| v.as_str().map(String::from))
+                            .unwrap_or_default();
+                        match r.exit {
+                            Some(c) => format!("{s}, exit code {c}"),
+                            None => s,
+                        }
+                    }
+                };
+                let body = crate::actions::read_log(
+                    &self.env.paths,
+                    &self.job.id,
+                    id,
+                    crate::actions::MAX_READ_BYTES,
+                )
+                .unwrap_or_default();
+                let wrapped = xherd_core::untrusted::wrap(&format!("action {id} output"), &body);
+                (false, Some(format!("{id}: {state}\n{wrapped}")))
+            }
+            _ => return Err(refusal("internal", "not an action call")),
+        };
+        if changed {
+            self.commit(before).await;
+        }
+        Ok(json!({"changed": changed, "text": text}))
     }
 
     /// Approving the `pr-review` gate (R-306): settle one decision per comment

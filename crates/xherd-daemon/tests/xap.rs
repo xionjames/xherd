@@ -4367,3 +4367,201 @@ async fn the_profiles_ceiling_still_lowers_the_arriving_agents_autonomy() {
     assert_eq!(a.lowered[0].field, "autonomy");
     assert_eq!(a.lowered[0].to, "ask");
 }
+
+// ---- job actions (R1–R7, R17) ----------------------------------------------
+
+fn add_args(id: &str, run: &str) -> Value {
+    json!({"id": id, "label": "Dev server", "run": run, "kind": "service"})
+}
+
+#[tokio::test]
+async fn action_add_replace_ls_rm_and_events() {
+    let t = setup().await;
+    let r = xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], true);
+    // The same call again changes nothing; the approval is kept only while
+    // run and cwd stay (R2).
+    let r = xap(&t, "a2", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    let r = xap(&t, "a3", "action.add", add_args("dev", "npm start"))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], true);
+    let j = get(&t).await;
+    assert_eq!(j.actions.len(), 1);
+    assert_eq!(j.actions[0].def.run, "npm start");
+    let r = xap(&t, "a4", "action.ls", json!({})).await.unwrap();
+    let text = r["text"].as_str().unwrap();
+    assert!(
+        text.contains("dev [service] Dev server | run: npm start"),
+        "{text}"
+    );
+    xap(&t, "a5", "action.rm", json!({"id": "dev"}))
+        .await
+        .unwrap();
+    assert!(get(&t).await.actions.is_empty());
+    let e = xap(&t, "a6", "action.rm", json!({"id": "dev"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    let kinds: Vec<String> =
+        t.d.store
+            .events(&t.a.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+    assert_eq!(kinds.iter().filter(|k| *k == "xap.action.add").count(), 2);
+    assert!(kinds.contains(&"xap.action.rm".to_string()));
+}
+
+#[tokio::test]
+async fn action_calls_check_their_arguments_and_the_folder() {
+    let t = setup().await;
+    for (args, code) in [
+        (add_args("Bad Id", "x"), "usage"),
+        (add_args("a", ""), "usage"),
+        (add_args("a", "one\ntwo"), "usage"),
+        (
+            json!({"id": "a", "label": "A", "run": "x", "cwd": "../x"}),
+            "path_outside_workspace",
+        ),
+        (
+            json!({"id": "a", "label": "A", "run": "x", "cwd": "/etc"}),
+            "path_outside_workspace",
+        ),
+    ] {
+        let e = xap(&t, "c", "action.add", args).await.unwrap_err();
+        assert_eq!(e.code, code);
+    }
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), t.wt.path().join("link")).unwrap();
+    let e = xap(
+        &t,
+        "c2",
+        "action.add",
+        json!({"id": "a", "label": "A", "run": "x", "cwd": "link/sub"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, "path_outside_workspace");
+    std::fs::create_dir_all(t.wt.path().join("web")).unwrap();
+    xap(
+        &t,
+        "c3",
+        "action.add",
+        json!({"id": "a", "label": "A", "run": "x", "cwd": "./web/"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(get(&t).await.actions[0].def.cwd, "web");
+}
+
+#[tokio::test]
+async fn action_limit_off_switch_and_no_worktree() {
+    let t = setup_config(json!({"maxActionsPerJob": 1})).await;
+    xap(&t, "c1", "action.add", add_args("a", "x"))
+        .await
+        .unwrap();
+    let e = xap(&t, "c2", "action.add", add_args("b", "x"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "action_limit");
+    // Replacing is not adding.
+    xap(&t, "c3", "action.add", add_args("a", "y"))
+        .await
+        .unwrap();
+
+    let t = setup_config(json!({"jobActions": false})).await;
+    let e = xap(&t, "c1", "action.ls", json!({})).await.unwrap_err();
+    assert_eq!(e.code, "actions_off");
+
+    // A job on flow none works, but one without a worktree is refused (R3, R7).
+    let t = setup_flow("none").await;
+    xap(&t, "c1", "action.add", add_args("a", "x"))
+        .await
+        .unwrap();
+    let mut b = Job::new("SC-2", 2);
+    b.launch = Some(vec!["rt".into()]);
+    let b = t.d.create_job(b).await.unwrap();
+    for _ in 0..200 {
+        if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let e =
+        t.d.xap(call(&b, "n1", "action.add", add_args("a", "x")))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "no_workspace");
+}
+
+#[tokio::test]
+async fn action_ls_lists_profile_actions_and_rm_stops_a_running_one() {
+    use xherd_core::action::{ActionDef, ActionRun, ActionState, from_profile};
+    let t = setup_tweaked(json!({}), None, None, "feature", |j| {
+        let def = ActionDef {
+            id: "test".into(),
+            label: "Tests".into(),
+            run: "cargo test".into(),
+            ..Default::default()
+        };
+        let mut a = from_profile(&def);
+        a.last = Some(ActionRun {
+            started_at: 1,
+            ended_at: None,
+            state: ActionState::Running,
+            exit: None,
+        });
+        j.actions.push(a);
+    })
+    .await;
+    let r = xap(&t, "c1", "action.ls", json!({})).await.unwrap();
+    assert!(
+        r["text"]
+            .as_str()
+            .unwrap()
+            .contains("source: profile | running")
+    );
+    xap(&t, "c2", "action.rm", json!({"id": "test"}))
+        .await
+        .unwrap();
+    assert!(
+        t.drv
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("stop-session ") && c.ends_with("-act-test"))
+    );
+}
+
+#[tokio::test]
+async fn action_log_is_wrapped_capped_and_read_only() {
+    let t = setup().await;
+    let e = xap(&t, "c1", "action.log", json!({"id": "dev"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    xap(&t, "c2", "action.add", add_args("dev", "x"))
+        .await
+        .unwrap();
+    let r = xap(&t, "c3", "action.log", json!({"id": "dev"}))
+        .await
+        .unwrap();
+    assert!(r["text"].as_str().unwrap().starts_with("dev: never run"));
+    let big = "y".repeat(200_000) + "THE END";
+    xherd_daemon::actions::write_log(&t.d.paths, &t.a.id, "dev", &big).unwrap();
+    let r = xap(&t, "c4", "action.log", json!({"id": "dev"}))
+        .await
+        .unwrap();
+    let text = r["text"].as_str().unwrap();
+    assert!(text.contains("THE END") && text.to_lowercase().contains("untrusted"));
+    assert!(text.len() < 70_000, "{}", text.len());
+    // Reading does not log an event nor change the job.
+    assert_eq!(r["changed"], false);
+}

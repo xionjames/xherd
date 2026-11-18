@@ -329,6 +329,7 @@ impl Daemon {
             toolchains: Arc::new(toolchains),
             runtimes,
             skills: paths.skills(),
+            paths: paths.clone(),
         };
         let agents = store.list_jobs().await?;
         let limits = store
