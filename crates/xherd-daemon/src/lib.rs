@@ -14,6 +14,7 @@ use xherd_flow::Pack;
 use xherd_plugin::Registry;
 use xherd_store::Store;
 
+pub mod actions;
 pub mod actor;
 pub mod agents;
 pub mod backup;
