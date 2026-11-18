@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-vi.mock('./store.svelte', () => ({ jobByName: () => undefined }));
-vi.mock('./router.svelte', () => ({ go: () => {} }));
-import { addNotice, BLOCK_TEXT, browserBlock, notices, settle } from './notices.svelte';
+const go = vi.hoisted(() => vi.fn());
+vi.mock('./store.svelte', () => ({ jobByName: (id: string) => (id === 'A1' ? { name: 'a' } : undefined) }));
+vi.mock('./router.svelte', () => ({ go }));
+import { addNotice, BLOCK_TEXT, browserBlock, notices, open, settle } from './notices.svelte';
 import type { Job } from './types';
 
 const agent = (status: Job['status'], gate?: Job['gate']) =>
@@ -53,5 +54,17 @@ describe('browserBlock', () => {
     expect(BLOCK_TEXT.insecure).toContain('127.0.0.1');
     expect(BLOCK_TEXT.denied).toContain('blocked');
     expect(BLOCK_TEXT.unsupported).toContain('does not support');
+  });
+});
+
+describe('open', () => {
+  it('opens the Pull request tab for a pull request notice, the job page for the rest', () => {
+    notices.list = [];
+    addNotice('A1', 'pr', 'conflict');
+    addNotice('A1', 'gate', 'gate');
+    open(notices.list.find((n) => n.kind === 'pr')!);
+    expect(go).toHaveBeenLastCalledWith('/jobs/a', { s: 'pr' });
+    open(notices.list.find((n) => n.kind === 'gate')!);
+    expect(go).toHaveBeenLastCalledWith('/jobs/a', {});
   });
 });
