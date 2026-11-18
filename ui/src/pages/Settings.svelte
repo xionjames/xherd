@@ -3,6 +3,7 @@
   // config.json; most apply at once.
   import { app, reload } from '../lib/store.svelte';
   import { put, restartDaemon } from '../lib/api';
+  import { startId, waitForRestart } from '../lib/restart';
   import { route, href, go } from '../lib/router.svelte';
   import { setup, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -67,23 +68,15 @@
       saving = false;
     }
   }
-  // Restart the daemon in place (R7a): ask, wait until /healthz stops answering and
+  // Restart the daemon in place (R7a): ask, wait until /api/v1/healthz stops answering and
   // answers again (at most 60 s), then reload what the page shows. Agent sessions keep running.
   let restarting = $state(false);
   async function restart() {
     restarting = true;
     try {
+      const before = await startId();
       await restartDaemon();
-      const alive = () => fetch('/healthz', { cache: 'no-store' }).then((r) => r.ok, () => false);
-      const end = Date.now() + 60_000;
-      let wentDown = false;
-      while (Date.now() < end) {
-        await new Promise((r) => setTimeout(r, 1000));
-        const up = await alive();
-        if (!up) wentDown = true;
-        else if (wentDown) break;
-      }
-      if (!wentDown) throw new Error('The daemon did not restart within 60 seconds.');
+      await waitForRestart(before);
       await reload();
       await loadConfig();
     } catch (e) {

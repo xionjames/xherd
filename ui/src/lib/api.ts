@@ -41,5 +41,5 @@ export const pluginUpdate = (name: string, digest: string, ref?: string) =>
   post<InstalledPlugin>(`/plugins/${encodeURIComponent(name)}/update`, { ref: ref || undefined, digest });
 export const pluginRemove = (name: string, forget = false) =>
   del<{ name: string; forgot: boolean }>(`/plugins/${encodeURIComponent(name)}${forget ? '?forget=true' : ''}`);
-/** Re-executes the daemon in place; poll `/healthz` until it answers again. */
+/** Re-executes the daemon in place; `waitForRestart` (restart.ts) polls `/api/v1/healthz` until it answers again. */
 export const restartDaemon = () => post<{ restarting: boolean }>('/admin/restart');
