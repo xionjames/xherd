@@ -944,8 +944,10 @@ impl Daemon {
         if size.parse::<u64>().unwrap_or(0) > MAX {
             return Err(fail("too_large", format!("{path} is larger than 2 MiB")));
         }
+        // Raw, not `run`: a trimmed text would drop the file's trailing blank lines
+        // and disagree with the worktree side (which is read as written).
         let text = git
-            .run(wd, &["show", &spec])
+            .run_raw(wd, &["show", &spec])
             .await
             .map_err(|e| fail("git", e.to_string()))?;
         Ok(serde_json::json!({ "path": rel, "rev": rev, "text": text }))

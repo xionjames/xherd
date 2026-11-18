@@ -99,7 +99,20 @@ impl Git {
         self.run_env(dir, &[], args).await
     }
 
+    /// Run git in `dir`; returns stdout exactly as written (file contents, e.g. `show`).
+    pub async fn run_raw(&self, dir: &Path, args: &[&str]) -> Result<String> {
+        self.run_raw_env(dir, &[], args).await
+    }
+
     async fn run_env(&self, dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Result<String> {
+        Ok(self
+            .run_raw_env(dir, env, args)
+            .await?
+            .trim_end_matches('\n')
+            .to_string())
+    }
+
+    async fn run_raw_env(&self, dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Result<String> {
         let mut argv = vec![self.bin.clone()];
         argv.extend(args.iter().map(|s| s.to_string()));
         let mut cmd = Cmd::new(argv)
@@ -123,7 +136,7 @@ impl Git {
                 stderr: out.stderr.trim().to_string(),
             });
         }
-        Ok(out.stdout_str().trim_end_matches('\n').to_string())
+        Ok(out.stdout_str())
     }
 
     pub async fn is_repo(&self, dir: &Path) -> bool {
@@ -801,5 +814,35 @@ mod tests {
         assert_eq!(w[0].branch.as_deref(), Some("main"));
         assert_eq!(w[1].branch, None);
         assert_eq!(w[1].head.as_deref(), Some("def"));
+    }
+
+    #[tokio::test]
+    async fn run_raw_keeps_trailing_newlines_that_run_trims() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = Git::new("git");
+        let d = dir.path();
+        git.run(d, &["init", "-q"]).await.unwrap();
+        std::fs::write(d.join("f.txt"), "a\n\n\n").unwrap();
+        git.run(d, &["add", "f.txt"]).await.unwrap();
+        git.run(
+            d,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "-m",
+                "m",
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(git.run(d, &["show", "HEAD:f.txt"]).await.unwrap(), "a");
+        assert_eq!(
+            git.run_raw(d, &["show", "HEAD:f.txt"]).await.unwrap(),
+            "a\n\n\n"
+        );
     }
 }

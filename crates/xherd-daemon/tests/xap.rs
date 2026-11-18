@@ -1601,7 +1601,10 @@ async fn diff_source_reads_the_new_side() {
         t.d.diff_source("SC-1", "a.txt", Some("commit"), Some("C01"))
             .await
             .unwrap();
-    assert_eq!(text(&v).trim_end(), committed.trim_end());
+    // The committed text keeps its trailing newline exactly, as the worktree side does
+    // (a trimmed `git show` would return "a" and the panel would disagree).
+    assert_eq!(committed, "a\n");
+    assert_eq!(text(&v), committed);
     assert_ne!(v["rev"], "worktree");
 
     // Over 2 MiB, escaping the worktree, missing, and the diff's own refusals.
