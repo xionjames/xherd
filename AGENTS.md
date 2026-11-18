@@ -19,6 +19,7 @@ Cite requirement ids (`R-009`) in doc comments where code implements one.
 - **Job**: one unit of work (worktree + tmux session + branch). Code: `Job`, table `jobs`, `/api/v1/jobs/…`, `XHERD_JOB_ID`, `.xherd/job.json`.
 - **Agent**: a saved persona (`AgentDef`: runtime, model, mode, autonomy, instructions, skills, memory). A flow stage can be assigned an agent; `Job.agents` holds snapshots, `Job.current_agent` the one running.
 - **Flow / pack / stage**: a flow pack (`packs/xherd`) defines flows (`feature`, `bugfix`), each a list of stages with gates.
+- **Action**: a named command a job registers (`xherd action add`) and the user runs in its own tmux session `xherd-<job>-act-<id>`; `service` or `task`. Code: `xherd_core::action` (`ActionDef`, `JobAction`), `Job.actions`/`port_base`, `Profile.actions`, daemon `actions.rs`, `/api/v1/jobs/…/actions`. Not a flow command or a saved agent.
 - **Runtime**: a plugin that provides the coding CLI (`claude-code`, `opencode`, `codex`). The OS user that runs sessions is the "agents' user" (`as_agent`, `XHERD_AGENT_*` are about that user, not saved agents).
 
 ## Layout
@@ -113,6 +114,7 @@ Test rules: set `workspace` in `config.json` or tests write to the real `~/xherd
 - `.xherd/` is excluded through the repo's shared `.git/info/exclude`. The daemon writes only progress lines (`status`, `evidence`, `sha`) of job documents.
 - `Git::diff_proposed` uses a temporary index (`--force`, literal pathspecs) and never touches the worktree's; a file over 8 MiB is not read (`TOO_LARGE`) and turns into a tripwire hold.
 - A runtime `Notification` at a stop is an idle reminder and changes nothing; a blocked job cannot be approved. A question gate (`xherd ask`) is answered with `xherd send`, not approved.
+- Job actions: the actor handles `action.*` XAP before the flow checks; they run only for the user (never agent, never autonomy), after approval of the exact `run`+`cwd` hash, with the job's env minus `XHERD_JOB_TOKEN`. `remain-on-exit` must be set before the command starts (`start_held`: placeholder, then respawn-pane). A running action keeps the job's port block in the supervisor. Static `/jobs/{id}/actions…` routes go before the `/jobs/{id}/{action}` catch-all.
 - `Tmux::send_text` pauses 300 ms before each Enter, or Claude Code takes text and Enter as one paste. tmux runs with `-u` and the image sets `LANG=C.UTF-8`.
 - Local rights are given by address (loopback peer, local Host, no proxy headers) and a local or absent `Origin`; in the container only `local_peers` (the gateway) counts and the CLI needs its token.
 - Two users in the container: `xherd-daemon` and the agents' user; the daemon sends `as_agent` commands and file operations to `xherd runner`. Worktree files the daemon reads must be group/world-readable; use `runner::agent_env` for the jobs' `HOME`/`PATH`. External plugins are copied to `$XHERD_SHARED/plugins` at start.
