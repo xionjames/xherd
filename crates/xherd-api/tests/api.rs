@@ -826,6 +826,42 @@ async fn findings_endpoint_reads_review_md() {
     );
 }
 
+#[tokio::test]
+async fn diff_source_route() {
+    let (dir, d, _a) = setup().await;
+    let wt = dir.path().join("wt");
+    std::fs::create_dir_all(&wt).unwrap();
+    std::fs::write(wt.join("a.txt"), "one\ntwo\n").unwrap();
+    let mut b = Job::new("SC-3", 3);
+    b.launch = Some(vec!["rt".into()]);
+    b.workdir = Some(wt.to_string_lossy().into_owned());
+    d.create_job(b).await.unwrap();
+    let local =
+        xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let (s, v) = call(
+        local.clone(),
+        get("/api/v1/jobs/SC-3/diff/source?path=a.txt&view=uncommitted")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["text"].clone()),
+        (StatusCode::OK, json!("one\ntwo\n"))
+    );
+    let (s, v) = call(
+        local,
+        get("/api/v1/jobs/SC-3/diff/source?path=../x")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!("bad_path"))
+    );
+}
+
 /// A plugin's secret settings are set from the UI: the value is stored in
 /// secrets.json and never sent back; only declared secrets are accepted.
 #[tokio::test]
