@@ -7,8 +7,17 @@ const docs = { kind: 'docs', stage: 'design', role: 'design', files: [{ path: 'd
 
 describe('waitsAtGate and needsYou (R4)', () => {
   it('an open gate waits for you', () => {
-    expect(waitsAtGate(a({ gate: docs }))).toBe(true);
-    expect(needsYou(a({ gate: docs }))).toBe(true);
+    expect(waitsAtGate(a({ status: 'waiting-input', gate: docs }))).toBe(true);
+    expect(needsYou(a({ status: 'waiting-input', gate: docs }))).toBe(true);
+  });
+  it('an open gate waits for you only once the agent stopped there', () => {
+    const running = a({ status: 'running', gate: docs });
+    expect(waitsAtGate(running)).toBe(false);
+    expect(needsYou(running)).toBe(false);
+    for (const status of ['waiting-input', 'idle'] as const) {
+      expect(waitsAtGate(a({ status, gate: docs }))).toBe(true);
+      expect(needsYou(a({ status, gate: docs }))).toBe(true);
+    }
   });
   it('a gate autonomy will approve at the stop does not', () => {
     const x = a({ gate: docs, autoApprovePending: true });
