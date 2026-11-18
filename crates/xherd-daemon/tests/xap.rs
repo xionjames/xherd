@@ -1681,6 +1681,45 @@ async fn task_done_runs_the_verify_command() {
     );
 }
 
+/// #180: `verify:` runs through `.xherd/toolchain.env` when it exists.
+#[tokio::test]
+async fn task_done_verify_uses_the_toolchain_env() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = setup_full(json!({}), Some(Duration::from_secs(10))).await;
+    let wt = t.wt.path();
+    let bin = tempfile::tempdir().unwrap();
+    let tool = bin.path().join("mytool");
+    std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        wt.join(".xherd/toolchain.env"),
+        format!("PATH='{}':\"$PATH\"\nexport PATH\n", bin.path().display()),
+    )
+    .unwrap();
+    std::fs::write(
+        wt.join(".xherd/spec/tasks.md"),
+        "## T01: tool\n- verify: `mytool`\n## T02: tool again\n- verify: `mytool`\n",
+    )
+    .unwrap();
+    xap(&t, "e0", "tasks.sync", json!({})).await.unwrap();
+    xap(&t, "e1", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    xap(&t, "e2", "task.done", json!({"id": "T01", "evidence": "x"}))
+        .await
+        .unwrap();
+
+    // Without the file the tool is not found: refused.
+    std::fs::remove_file(wt.join(".xherd/toolchain.env")).unwrap();
+    xap(&t, "e3", "task.start", json!({"id": "T02"}))
+        .await
+        .unwrap();
+    let e = xap(&t, "e4", "task.done", json!({"id": "T02", "evidence": "x"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "verify_failed");
+}
+
 #[tokio::test]
 async fn gates_and_commit_proposals_need_a_valid_memory() {
     let t = setup().await;

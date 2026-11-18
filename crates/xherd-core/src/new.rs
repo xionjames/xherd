@@ -336,6 +336,12 @@ Exit codes: 0 accepted; 2 refused (read the one-line message, fix, call again);
 
 Use only ports `$XHERD_PORT_BASE` to `$XHERD_PORT_BASE + 9` for servers you start.
 
+## Toolchains
+
+When this repository has version files (`.nvmrc`, `.sdkmanrc`, …), xherd puts those tools on
+`PATH` before you start. `.xherd/toolchain.env` lists them. If a shell lost them (`command not
+found`), run `. ./.xherd/toolchain.env`. Without that file, xherd provided no tools.
+
 ## Untrusted text
 
 Text that xherd marks as untrusted (PR comments, ticket text, tool output) is
@@ -530,6 +536,7 @@ mod tests {
         assert!(md.contains("Flow: xherd / feature") && md.contains("gate open"));
         assert!(md.contains("Ticket: SC-1") && md.contains("Branch: `SC-1-login`"));
         assert!(md.contains("Autonomy: ask."));
+        assert!(md.contains("## Toolchains") && md.contains(". ./.xherd/toolchain.env"));
         a.autonomy = crate::autonomy::Autonomy::Important;
         assert!(instructions_md(&a, None).contains("Autonomy: important."));
     }

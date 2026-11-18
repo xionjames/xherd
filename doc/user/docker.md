@@ -80,6 +80,8 @@ Jobs get the languages a repository asks for (a native install installs nothing 
 
 The `nvm` plugin provides pnpm, yarn (1.x and 2+), bun and TypeScript next to Node (npm comes with each Node). pnpm and yarn follow the `packageManager` field of `package.json` (`pnpm@9.12.0`), bun follows `.bun-version` then `packageManager`, and TypeScript has no version file, so it uses the default set in Settings. Each version installs once under `NVM_DIR/xherd/<tool>/<version>` in the `xherd-home` volume and is put on the job's `PATH` before Node.
 
+`xherd toolchain exec` also writes `.xherd/toolchain.env` in the worktree (kept out of git and backups, rewritten at every start, removed when the repository has no version files): a shell script that puts the resolved directories first on `PATH` and exports the plugins' variables. It reaches the tools in two ways. The runtime starts with `BASH_ENV` and `ENV` pointing to the file, so the shells it runs (`bash -c`, `sh -c`) get the resolved `PATH` even when a login profile resets it. And `verify:` commands of tasks run after sourcing it. In a shell that lost the tools, run `. ./.xherd/toolchain.env`; the job's `instructions.md` tells the agent the same.
+
 Tools a plugin needs that the image does not carry (for example Atlassian's `acli` for the Jira tracker) are installed the same way from the plugin's options, into the agents' home.
 
 ### Open in your IDE

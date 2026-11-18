@@ -3,6 +3,8 @@
 //! `GET /ws` for the live state stream, and the web UI at `/`.
 
 use std::net::SocketAddr;
+use std::sync::LazyLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
@@ -25,7 +27,19 @@ mod ws;
 
 pub const BODY_LIMIT: usize = 5 * 1024 * 1024;
 
+/// Identifies this process start in `/healthz` (`startId`), so the UI can tell a restart
+/// apart from a daemon that never went down. The start time, not the pid: a re-exec keeps
+/// the pid. Forced in `router()`, so it is fixed from daemon start on.
+static START_ID: LazyLock<String> = LazyLock::new(|| {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    nanos.to_string()
+});
+
 pub fn router(d: Daemon) -> Router {
+    LazyLock::force(&START_ID);
     Router::new()
         .route("/", get(ui::index))
         .route("/assets/{*rest}", get(ui::asset))
@@ -424,9 +438,12 @@ impl FromRequestParts<Daemon> for AgentAuth {
 // ---- handlers ------------------------------------------------------------------
 
 async fn healthz() -> Json<Value> {
-    Json(
-        json!({"ok": true, "version": xherd_core::VERSION, "buildVersion": xherd_core::BUILD_VERSION}),
-    )
+    Json(json!({
+        "ok": true,
+        "version": xherd_core::VERSION,
+        "buildVersion": xherd_core::BUILD_VERSION,
+        "startId": START_ID.as_str(),
+    }))
 }
 
 async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {

@@ -1,6 +1,6 @@
 <script lang="ts">
   // The plugin view of Welcome step 2 and Settings → Plugins (R1): search, broken
-  // plugins, then Enabled and Available grouped by kind. A card switches its
+  // plugins, then an Enabled / Available switch and a kind filter, cards grouped by kind. A card switches its
   // plugin on or off; Options (and Log in) open PluginDetail in a dialog.
   import { onMount } from 'svelte';
   import { app, reload } from '../lib/store.svelte';
@@ -8,6 +8,7 @@
   import { setup, loadChecks, loadConfig } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
   import { KIND_LABEL, KIND_ONE, KIND_ORDER, lastOn, matches } from '../lib/plugins';
+  import Seg from './Seg.svelte';
   import PluginDetail from './PluginDetail.svelte';
   import PluginAdd from './PluginAdd.svelte';
   import type { PluginInfo, PluginsList } from '../lib/types';
@@ -19,10 +20,18 @@
   let query = $state('');
   const shown = $derived(plugins.filter((p) => matches(p, query)));
   const kinds = $derived([...KIND_ORDER, ...new Set(plugins.map((p) => p.kind).filter((k) => !KIND_ORDER.includes(k)))]);
-  const sections = $derived([
-    { title: 'Enabled', hint: '', list: shown.filter((p) => p.enabled) },
-    { title: 'Available', hint: 'Installed but switched off.', list: shown.filter((p) => !p.enabled) },
-  ].filter((s) => s.list.length));
+  // Enabled and Available (installed but switched off) are two views; the kind filter narrows both.
+  let view = $state<'enabled' | 'available'>('enabled');
+  let kind = $state('all');
+  const byKind = $derived(shown.filter((p) => kind === 'all' || p.kind === kind));
+  const enabledList = $derived(byKind.filter((p) => p.enabled));
+  const availableList = $derived(byKind.filter((p) => !p.enabled));
+  const viewList = $derived(view === 'enabled' ? enabledList : availableList);
+  const otherCount = $derived((view === 'enabled' ? availableList : enabledList).length);
+  const kindOptions = $derived([
+    { value: 'all', label: 'All' },
+    ...kinds.filter((k) => plugins.some((p) => p.kind === k)).map((k) => ({ value: k, label: KIND_LABEL[k] ?? k })),
+  ]);
   const open = $derived(plugins.find((p) => p.name === selected));
   // The plugin whose dialog was opened by its card's Log in: the dialog starts the login.
   let autologin = $state<string | null>(null);
@@ -95,6 +104,10 @@
 </script>
 
 <div class="row">
+  <Seg label="Plugins" value={view} onchange={(v) => (view = v)} options={[
+    { value: 'enabled', label: `Enabled ${enabledList.length}` },
+    { value: 'available', label: `Available ${availableList.length}`, title: 'Installed but switched off' },
+  ]} />
   <input class="grow" type="search" placeholder="Search plugins" aria-label="Filter plugins" bind:value={query} />
   {#if list?.installEnabled !== false}<button class="btn" onclick={() => (adding = true)}>Add plugin</button>{/if}
 </div>
@@ -117,12 +130,15 @@
   </div>
 {/if}
 
-{#each sections as s (s.title)}
-  <div class="sect"><h2>{s.title}</h2>{#if s.hint}<span class="hint">{s.hint}</span>{/if}</div>
-  {#each kinds.filter((k) => s.list.some((p) => p.kind === k)) as k (k)}
-    <span class="lbl">{KIND_LABEL[k] ?? k}</span>
-    <div class="cards">
-      {#each s.list.filter((p) => p.kind === k) as p (p.name)}
+{#if kindOptions.length > 2}
+  <Seg label="Kind" value={kind} onchange={(v) => (kind = v)} options={kindOptions} />
+{/if}
+{#if view === 'available'}<p class="hint">Installed but switched off.</p>{/if}
+
+{#each kinds.filter((k) => viewList.some((p) => p.kind === k)) as k (k)}
+  {#if kind === 'all'}<span class="lbl">{KIND_LABEL[k] ?? k}</span>{/if}
+  <div class="cards">
+    {#each viewList.filter((p) => p.kind === k) as p (p.name)}
         {@const st = pstate(p)}
         {@const last = lastOn(p, plugins)}
         <div class="tool" class:on={p.enabled}>
@@ -139,11 +155,12 @@
             <button class="btn sm" onclick={() => options(p)}>Options</button>
           </div>
         </div>
-      {/each}
-    </div>
-  {/each}
+    {/each}
+  </div>
 {:else}
-  <p class="empty">{query.trim() ? 'No plugin matches.' : 'No plugin is installed.'}</p>
+  <p class="empty">{query.trim() || kind !== 'all'
+    ? `No ${view} plugin matches.${otherCount ? ` ${otherCount} in the other tab.` : ''}`
+    : view === 'enabled' ? 'No plugin is enabled.' : 'Every installed plugin is enabled.'}</p>
 {/each}
 
 {#if adding}

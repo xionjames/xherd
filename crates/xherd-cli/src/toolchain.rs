@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use xherd_core::exec::{Cmd, run};
-use xherd_plugin::toolchain::{PLAN_FILE, Plan, Step, resolved_dir, step_env};
+use xherd_plugin::toolchain::{ENV_FILE, PLAN_FILE, Plan, Step, resolved_dir, step_env};
 
 const CACHE_FILE: &str = ".xherd/toolchain.resolved.json";
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -129,6 +129,54 @@ fn new_path(entries: &[PathBuf]) -> std::ffi::OsString {
     std::env::join_paths(entries.iter().cloned().chain(std::env::split_paths(&old))).unwrap_or(old)
 }
 
+/// `s` as one single-quoted `sh` word.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// The `toolchain.env` text for a resolved plan: a POSIX `sh` script that
+/// prepends the resolved directories to `PATH`, exports the variables and, when
+/// `prev_bash_env` is set, sources the `BASH_ENV` that `exec` replaced.
+fn env_file(r: &Resolved, prev_bash_env: Option<&str>) -> String {
+    let mut s = String::from(
+        "# Written by `xherd toolchain exec`; source it with `. ./.xherd/toolchain.env`.\n",
+    );
+    if !r.path.is_empty() {
+        let dirs: Vec<String> = r
+            .path
+            .iter()
+            .map(|p| sh_quote(&p.to_string_lossy()))
+            .collect();
+        s.push_str(&format!("PATH={}:\"$PATH\"\nexport PATH\n", dirs.join(":")));
+    }
+    for (k, v) in &r.env {
+        let mut chars = k.chars();
+        let valid = chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if valid {
+            s.push_str(&format!("export {k}={}\n", sh_quote(v)));
+        }
+    }
+    if let Some(prev) = prev_bash_env.filter(|p| !p.is_empty()) {
+        let q = sh_quote(prev);
+        s.push_str(&format!("if [ -f {q} ]; then . {q}; fi\n"));
+    }
+    s
+}
+
+/// Write `.xherd/toolchain.env` (R-652) and return its absolute path, or
+/// `None` (after printing why) when it could not be written.
+fn write_env_file(r: &Resolved) -> Option<PathBuf> {
+    let prev = std::env::var("BASH_ENV").ok();
+    let file = Path::new(ENV_FILE);
+    let saved =
+        xherd_core::paths::write_atomic(file, env_file(r, prev.as_deref()).as_bytes(), None)
+            .and_then(|()| std::env::current_dir().map(|d| d.join(file)));
+    saved.map_err(|e| eprintln!("xherd: {ENV_FILE}: {e}")).ok()
+}
+
 pub fn exec(argv: Vec<String>) -> i32 {
     let Some(program) = argv.first() else {
         eprintln!("xherd toolchain exec: nothing to run");
@@ -172,11 +220,17 @@ pub fn exec(argv: Vec<String>) -> i32 {
     // Replace this process with the runtime (not `exec::run`: it must own the
     // terminal, like the browser terminal's tmux client).
     use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(program)
-        .args(&argv[1..])
+    let env_path = write_env_file(&r);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&argv[1..])
         .env("PATH", new_path(&r.path))
-        .envs(r.env)
-        .exec();
+        .envs(r.env);
+    // Shells the runtime starts (bash, sh) source the file, so login profiles
+    // that reset `PATH` do not hide the resolved tools.
+    if let Some(p) = env_path {
+        cmd.env("BASH_ENV", &p).env("ENV", &p);
+    }
+    let err = cmd.exec();
     eprintln!("xherd: cannot start {program}: {err}");
     1
 }
@@ -243,6 +297,120 @@ mod tests {
         .await;
         assert!(r.path.is_empty());
         assert_eq!(r.env, [("GOTOOLCHAIN".to_string(), "auto".to_string())]);
+    }
+
+    /// Source `text` with `sh` (`PATH=/usr/bin:/bin`) and print what `script` shows.
+    async fn sourced(text: &str, script: &str) -> String {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("toolchain.env");
+        std::fs::write(&f, text).unwrap();
+        let o = run(Cmd::new(vec![
+            "sh".into(),
+            "-c".into(),
+            format!(". {}\n{script}", f.display()),
+        ])
+        .env("PATH", "/usr/bin:/bin"))
+        .await
+        .unwrap();
+        assert!(o.success(), "{}", o.stderr);
+        o.stdout_str()
+    }
+
+    fn resolved(path: &[&str], env: &[(&str, &str)]) -> Resolved {
+        Resolved {
+            path: path.iter().map(PathBuf::from).collect(),
+            env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            complete: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn env_file_prepends_dirs_and_exports_variables() {
+        let text = env_file(
+            &resolved(&["/a/bin", "/b dir/bin"], &[("T_HOME", "/a")]),
+            None,
+        );
+        let out = sourced(&text, "echo \"$PATH\"; echo \"$T_HOME\"").await;
+        assert_eq!(out, "/a/bin:/b dir/bin:/usr/bin:/bin\n/a\n");
+    }
+
+    #[tokio::test]
+    async fn env_file_quotes_values_and_skips_invalid_names() {
+        let text = env_file(
+            &resolved(
+                &["/it's/bin"],
+                &[("Q", "a'b $x"), ("1BAD", "x"), ("A-B", "y")],
+            ),
+            None,
+        );
+        assert!(!text.contains("1BAD") && !text.contains("A-B"));
+        let out = sourced(&text, "echo \"$Q\"; echo \"$PATH\"").await;
+        assert_eq!(out, "a'b $x\n/it's/bin:/usr/bin:/bin\n");
+    }
+
+    #[tokio::test]
+    async fn env_file_chains_the_previous_bash_env() {
+        let d = tempfile::tempdir().unwrap();
+        let prev = d.path().join("prev.sh");
+        std::fs::write(&prev, "PREV=yes\n").unwrap();
+        let prev = prev.to_string_lossy().to_string();
+        let r = resolved(&[], &[]);
+        let out = sourced(&env_file(&r, Some(&prev)), "echo \"$PREV\"").await;
+        assert_eq!(out, "yes\n");
+        // A missing previous file is not an error.
+        let missing = format!("{prev}.none");
+        let out = sourced(&env_file(&r, Some(&missing)), "echo ok").await;
+        assert_eq!(out, "ok\n");
+    }
+
+    #[tokio::test]
+    async fn env_file_of_a_partly_failed_plan_keeps_what_resolved() {
+        let mut r = resolved(&["/a/bin"], &[]);
+        r.complete = false;
+        let out = sourced(&env_file(&r, None), "echo \"$PATH\"").await;
+        assert_eq!(out, "/a/bin:/usr/bin:/bin\n");
+        let out = sourced(&env_file(&Resolved::default(), None), "echo \"$PATH\"").await;
+        assert_eq!(out, "/usr/bin:/bin\n");
+    }
+
+    #[tokio::test]
+    async fn bash_login_shell_finds_tools_through_bash_env() {
+        let have_bash = run(Cmd::new(["bash", "-c", "true"].map(String::from).to_vec()))
+            .await
+            .is_ok_and(|o| o.success());
+        if !have_bash {
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let bin = d.path().join("tc/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("t");
+        std::fs::write(&tool, "#!/bin/sh\necho from-toolchain\n").unwrap();
+        std::fs::set_permissions(&tool, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let env = d.path().join("toolchain.env");
+        std::fs::write(
+            &env,
+            env_file(&resolved(&[&bin.to_string_lossy()], &[]), None),
+        )
+        .unwrap();
+        let home = d.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".profile"), "PATH=/usr/bin:/bin\n").unwrap();
+        std::fs::write(home.join(".bash_profile"), "PATH=/usr/bin:/bin\n").unwrap();
+        let o = run(
+            Cmd::new(["bash", "-l", "-c", "t"].map(String::from).to_vec())
+                .env("HOME", home.to_string_lossy().to_string())
+                .env("PATH", "/usr/bin:/bin")
+                .env("BASH_ENV", env.to_string_lossy().to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(o.success(), "{}", o.stderr);
+        assert_eq!(o.stdout_str(), "from-toolchain\n");
     }
 
     #[test]

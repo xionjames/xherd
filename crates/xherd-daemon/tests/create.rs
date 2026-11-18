@@ -692,6 +692,39 @@ async fn version_files_wrap_the_launch_in_the_toolchain_step() {
     panic!("agent never started");
 }
 
+/// A worktree with no version files has no `toolchain.env`, and a stale one
+/// (here a tracked file, so the worktree starts with it) is removed (R5).
+#[tokio::test]
+async fn no_version_files_means_no_toolchain_env() {
+    let t = setup().await;
+    std::fs::create_dir_all(t.repo.path().join(".xherd")).unwrap();
+    std::fs::write(
+        t.repo.path().join(".xherd/toolchain.env"),
+        "PATH=/x:$PATH\n",
+    )
+    .unwrap();
+    git(t.repo.path(), &["add", "-f", ".xherd/toolchain.env"]);
+    assert!(
+        git(t.repo.path(), &["commit", "-q", "-m", "stale"])
+            .status
+            .success()
+    );
+    t.d.new_job(req(&t, "SC-10")).await.unwrap();
+    let wt =
+        t.ws.path()
+            .join("worktrees")
+            .join(repo_name(&t))
+            .join("sc-10");
+    for _ in 0..200 {
+        if t.fake.calls().iter().any(|c| c.starts_with("start sc-10 ")) {
+            assert!(!wt.join(".xherd/toolchain.env").exists());
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("agent never started");
+}
+
 /// Each new worktree is marked trusted in the runtime's file, other entries
 /// kept, so no agent stops at the trust dialog (design §4.1).
 #[tokio::test]
