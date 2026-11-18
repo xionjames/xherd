@@ -427,8 +427,13 @@ pub fn run(cmd: XapCmd, json: bool) -> i32 {
             if json {
                 println!("{v}");
             } else if ok {
-                let changed = v["result"]["changed"].as_bool() != Some(false);
-                println!("{name}: {}", if changed { "accepted" } else { "no change" });
+                // `action ls` and `action log` answer with text to show (R5).
+                if let Some(text) = v["result"]["text"].as_str() {
+                    println!("{text}");
+                } else {
+                    let changed = v["result"]["changed"].as_bool() != Some(false);
+                    println!("{name}: {}", if changed { "accepted" } else { "no change" });
+                }
             } else {
                 eprintln!(
                     "xherd {name}: {} ({})",

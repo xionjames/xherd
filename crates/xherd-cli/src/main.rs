@@ -190,7 +190,24 @@ enum Cmd {
         app: Option<String>,
     },
     /// Attach this terminal to a job's session (in the container when xherd runs in Docker).
-    Attach { job: String },
+    Attach {
+        job: String,
+        /// Attach to this action's session instead (it must be running).
+        #[arg(long)]
+        action: Option<String>,
+    },
+    /// List a job's actions and whether they run.
+    Actions { job: String },
+    /// Run one of a job's actions (a changed or new command needs --approve).
+    Run {
+        job: String,
+        action: String,
+        /// Approve the command as it stands now.
+        #[arg(long)]
+        approve: bool,
+    },
+    /// Stop a running action (Ctrl-C, killed after 5 s).
+    Stop { job: String, action: String },
     /// A shell in a job's worktree (in the container when xherd runs in Docker).
     Shell { job: String },
     /// Register the xherd-term:// link that opens a terminal in a worktree.
@@ -495,8 +512,23 @@ fn main() -> ExitCode {
         Cmd::Credential { op } => git::credential(&op),
         Cmd::Guard(GuardCmd::PrePush { branch, .. }) => guard::pre_push(&branch),
         Cmd::Open { job, app } => with_client(|c| open_in::open(c, &job, app)),
-        Cmd::Attach { job } => with_client(|c| open_in::attach(c, &job, false)),
-        Cmd::Shell { job } => with_client(|c| open_in::attach(c, &job, true)),
+        Cmd::Attach { job, action } => {
+            with_client(|c| open_in::attach(c, &job, false, action.as_deref()))
+        }
+        Cmd::Shell { job } => with_client(|c| open_in::attach(c, &job, true, None)),
+        Cmd::Actions { job } => with_client(|c| actions_list(c, &job, json)),
+        Cmd::Run {
+            job,
+            action: id,
+            approve,
+        } => action_call(
+            &job,
+            &id,
+            "run",
+            approve.then(|| serde_json::json!({"approve": true})),
+            json,
+        ),
+        Cmd::Stop { job, action: id } => action_call(&job, &id, "stop", None, json),
         Cmd::TerminalHandler(TerminalHandlerCmd::Install) => open_in::terminal_handler(false),
         Cmd::TerminalHandler(TerminalHandlerCmd::Uninstall) => open_in::terminal_handler(true),
         Cmd::Git(GitCmd::Doctor { host, repo }) => with_client(|c| git::doctor(c, host, repo)),
@@ -1155,6 +1187,69 @@ fn diff(agent: &str, json: bool) -> i32 {
     0
 }
 
+/// `xherd actions <job>` (R29): one line per action, from the job's own
+/// listing, with the ports it was given.
+fn actions_list(c: &Client, job: &str, json: bool) -> i32 {
+    let v = match c.call("GET", &format!("/jobs/{job}/actions"), None) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    if json {
+        println!("{v}");
+        return 0;
+    }
+    let list = v["actions"].as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        println!("No actions registered.");
+    }
+    for a in &list {
+        let d = &a["def"];
+        let state = match (a["last"]["state"].as_str(), a["last"]["exit"].as_i64()) {
+            (None, _) => "never run".to_string(),
+            (Some("exited"), Some(c)) => format!("exited {c}"),
+            (Some(s), _) => s.to_string(),
+        };
+        let approved = if a["approved"].is_string() {
+            ""
+        } else {
+            " (not approved)"
+        };
+        println!(
+            "{} [{}] {} | {} | {state}{approved}",
+            d["id"].as_str().unwrap_or("?"),
+            d["kind"].as_str().unwrap_or("task"),
+            d["label"].as_str().unwrap_or(""),
+            d["run"].as_str().unwrap_or("")
+        );
+    }
+    if let Some(p) = v["portBase"].as_u64() {
+        println!("ports from {p}");
+    }
+    0
+}
+
+/// `xherd run|stop <job> <action>`.
+fn action_call(job: &str, id: &str, what: &str, body: Option<Value>, json: bool) -> i32 {
+    let path = format!("/jobs/{job}/actions/{id}/{what}");
+    match Client::new().and_then(|c| c.call("POST", &path, body)) {
+        Ok(v) => {
+            if json {
+                println!("{v}");
+            } else {
+                println!("{what} {id}: ok");
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
 fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
     match Client::new().and_then(|c| c.call("POST", &format!("/jobs/{agent}/{what}"), body)) {
         Ok(v) => {
@@ -1187,6 +1282,26 @@ mod tests {
                 action: Some(DaemonCmd::Restart)
             }
         ));
+    }
+
+    #[test]
+    fn action_commands_parse() {
+        let cli = Cli::try_parse_from(["xherd", "run", "feat", "dev", "--approve"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Run { approve: true, .. }));
+        let cli = Cli::try_parse_from(["xherd", "stop", "feat", "dev"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Stop { .. }));
+        let cli = Cli::try_parse_from(["xherd", "actions", "feat"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Actions { .. }));
+        let cli = Cli::try_parse_from(["xherd", "attach", "feat", "--action", "dev"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Attach {
+                action: Some(_),
+                ..
+            }
+        ));
+        let cli = Cli::try_parse_from(["xherd", "attach", "feat"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Attach { action: None, .. }));
     }
 
     #[test]
