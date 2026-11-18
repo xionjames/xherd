@@ -105,8 +105,8 @@
 
 <div class="row">
   <Seg label="Plugins" value={view} onchange={(v) => (view = v)} options={[
-    { value: 'enabled', label: `Enabled ${enabledList.length}` },
-    { value: 'available', label: `Available ${availableList.length}`, title: 'Installed but switched off' },
+    { value: 'enabled', label: `Enabled ${plugins.filter((p) => p.enabled).length}` },
+    { value: 'available', label: 'Available', title: 'Installed but switched off' },
   ]} />
   <input class="grow" type="search" placeholder="Search plugins" aria-label="Filter plugins" bind:value={query} />
   {#if list?.installEnabled !== false}<button class="btn" onclick={() => (adding = true)}>Add plugin</button>{/if}

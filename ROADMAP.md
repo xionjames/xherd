@@ -45,6 +45,8 @@ by theme; update it together with them.
 - [ ] Check the terminal handler on Linux desktops in Chrome and Firefox
 - [x] Git access setup and doctor
 - [x] Commit identity: global, and by repository owner (personal and work on the same host)
+- [ ] Terminal file sharing in Docker: send a file into a job's worktree or fetch one out from the browser terminal, without a bind mount or `docker cp`
+- [ ] Port forwarding in Docker: reach a job's dev server (a port it opens inside the container) from the host browser, per job, without publishing ports in the compose file
 - [ ] SSH job forwarding for Colima, openvscode-server (R-705), `xherd login`
 - [x] Issue trackers: `data.tracker.links` and built-in `jira`, `github-issues`, `gitlab-issues`; the Ticket tab reads the ticket and its comments through `gh` / `glab` (read-only). Jira reading through `acli` is built and the output of `view` and `comment list` is checked against the real CLI. Posting a user-accepted summary comment is built (fake CLIs only). Not done: automatic or stage-hook posting, status transitions, GitHub Projects, giving ticket text to jobs
 - [ ] Git providers (proposed, D24, R-689…R-693; steps 1, 2 and 3 done, plus `requires` (R-691: install in the container, instructions natively), token reuse, plugin secrets from the UI and installed versions on the language cards (3: built-in `gitlab` merge requests through `glab api`, the host plugin chosen per job by its remote; **not run against a real GitLab or `glab`**, only a fake `glab`): `data.git` in the `github` manifest and built-in `gitlab` and `bitbucket` with git access only, read by `git_access.rs`; hosts carry a `provider` field): `host` plugins carry the API, credential helper, login, doctor API checks and their own CLI install; hosts bind to a provider; a built-in `gitlab` on `glab`; Gitea and Bitbucket as external plugins. Order: move `gh`/`glab` out of `git_access.rs` into the manifest, provider field in the UI, `gitlab`, the rest
@@ -94,7 +96,7 @@ by theme; update it together with them.
 - [x] Secret tripwire on commit proposals (R-117) and the pre-push guard (R-1204), for jobs created from now on
 - [x] Code tripwires: `sensitivePaths` and `maxDiffLines` global settings (R-115); scope fence holds the commit (R-116)
 - [x] Repo profiles, first slice: matched by remote URL then path; base branch, autonomy, `sensitivePaths`, `maxDiffLines`, per-job token budget, test command tripwire (R-115) and repo instructions, with the global values as defaults; Settings → Repo profiles, JSON export/import (R-1407)
-- [ ] More profile fields: commands, untracked-file copy (R-005a), `toolchain:`/`setup:` (R-654), runtime/model per step, plugin setting overrides, spec folder mode, default flow/pack, ticket prefix, tool permissions; the daily budget and a cost estimate per profile
+- [ ] More profile fields: commands, untracked-file copy (R-005a), runtime/model per step, plugin setting overrides, spec folder mode, default flow/pack, ticket prefix, tool permissions; the daily budget and a cost estimate per profile
 - [x] Untrusted-text blocks (R-1201): `untrusted::wrap` and the block format in the rules; wrap PR comments and ticket text with it when those arrive (PR follow-up)
 - [x] Max session length (R-1206): `maxSessionMinutes` pauses a session that runs too long; asks for a handoff first
 - [x] `xherd security check` (R-1210), first version; autonomy and budgets are in; the branch protection finding waits for the host command (`security::PENDING`)
@@ -121,7 +123,7 @@ by theme; update it together with them.
 - [x] GitHub Actions (#41): CI on main and PRs; a `v*` tag on main releases Linux binaries (static musl, `.tar.gz`/`.deb`/`.rpm`) and the multi-arch image `ghcr.io/xionjames/xherd`
 - [x] GPL-3.0-or-later licence (#134); builds without git or `XHERD_VERSION` show `dev` (#137)
 - [ ] macOS binaries (x86_64 + arm64, `macos-14` runners) and a Homebrew tap (`xionjames/homebrew-tap`, formula updated by the release with a `HOMEBREW_TAP_TOKEN` secret, depends on git and tmux); a signed, notarized `.pkg` only with an Apple Developer account
-- [ ] Rest of R-1313: signatures (cosign), SBOMs, install script, Homebrew tap; Docker smoke and migration tests in CI
+- [ ] Rest of R-1313: signatures (cosign), SBOMs, install script; Docker smoke and migration tests in CI
 
 ## v1.x
 
@@ -131,13 +133,16 @@ by theme; update it together with them.
 - [ ] A model per step (R-522: per role, plus tier and effort)
 - [x] To review and Work log views (per-ticket cycle time, review loops and rework)
 - [x] Kanban Board: stages and tasks as work units, TODOs, swimlanes; jobs by stage on the Herd
-- [ ] Pack-declared Kanban cards (R-1101)
-- [ ] Toolchain plugins and the Welcome installer; a plugin catalogue (install from a git URL is done)
+- [x] Toolchain plugins (`sdkman`, `nvm`, `uv`, `go`, `rustup`) with installs in Settings → Plugins
+- [ ] A plugin catalogue (install from a git URL is done)
 - [x] TODO reminders
 - [ ] Daily budget per profile, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
 
 ## Later
 
+- [ ] Dynamic job actions: buttons on the job page and `xherd` calls declared by plugins, flow packs and repo profiles (for example run the app, open a preview, run a script), shown by the job's state and stage
+- [ ] Mobile access (R-672, T7): bind xherd beyond loopback with HTTPS and device pairing (`xherd pair`, one-time codes, phones with steering rights only, token rotation revokes them), a layout checked on a phone, push notifications beyond the browser's
+- [ ] Windows: native binary and WSL2 guidance
 - [ ] ACP driver per runtime, selectable per job
 - [ ] Server / Kubernetes deployment; VS Code Remote-SSH entries
 - [ ] Electron desktop app (tray, notifications, built-in host companion)
@@ -148,5 +153,3 @@ by theme; update it together with them.
 
 - [ ] `claude auth status` exits non-zero when logged out (only run logged in)
 - [ ] `claude --resume` finds its transcript after a container recreate (assumes the home volume persists)
-- [ ] The new UI layout in a browser at several widths
-- [x] A full job run (spec → ship) with the plain-`xherd` prompts, the allow rules and the `edits` default
