@@ -225,6 +225,19 @@ With the container runner, tmux still runs in the daemon's container and the pan
 - **Toolchain setup** runs in the job's tmux window before the runtime starts: the session runs `xherd toolchain exec -- <runtime argv>`, which carries out the plan the daemon wrote to `.xherd/toolchain.json` (install output shown live in that window) and then replaces itself with the runtime, `PATH` and variables set (§8.6).
 - **Remove worktree** archives `.xherd/` to `<data>/archive/<repo>/<job>/`.
 
+### 5.1 Job actions (#193, spec R-609…R-613)
+
+- **State.** `Job.actions: Vec<JobAction>`; a `JobAction` is `{ def: ActionDef, source: job|profile, approved: Option<hash>, last: Option<ActionRun>, succeeded }`. `def` is nested, not flattened, because serde `flatten` breaks `deny_unknown_fields`. `ActionDef` is also the profile's action (stored in the profile JSON, so no migration). All transitions are pure functions in `xherd_core::action` (`add`, `remove`, `may_run`, `approve`, `on_started|exited|stopped|lost`, `save_offer`, `from_profile`, `ls_text`); the approval is `approval_hash(run, cwd)`.
+- **XAP.** `action.add|rm|ls|log` are handled by the actor before the flow checks (`Actor::on_action_xap`): they need a live job, work for flow `none` and do not count as flow work. `cwd` is resolved against the worktree (symlinks included). `log` returns the last 64 KiB wrapped with `untrusted::wrap`. `action` joins `XAP_ALLOW`.
+- **Running.** `UserAction::ActionRun|ActionStop|ActionRestart|ActionApprove|ActionRemove|ActionsCardDismiss`. Run asks the supervisor for a port block when the job has none, then `Driver::start_action` starts `xherd-<job>-act-<id>` with the session environment (extracted from the launch code, minus every token) and `remain-on-exit` set before the command starts (a placeholder pane, then `respawn-pane`; `Tmux::start_held`). Stop sends Ctrl-C and kills after `STOP_GRACE` (5 s). The actor looks at its action sessions on the 3 s screen tick (`check_actions`, work returns as `WorkResult::ActionEnded|ActionAlive|ActionGone`): on exit it captures the pane history, writes `<data>/jobs/<job>/actions/<id>.log` (the daemon writes it, not `pipe-pane`: the agents' user cannot write the data directory; capped at 1 MiB) and kills the dead session. A service counts as succeeded when still alive 10 s after it started.
+- **Ports.** `Job.port_base` stores the first port of the block; the supervisor's `Entry.actions_running` keeps the block while an action runs, also for parked and watching jobs, and `register` restores it from `port_base` after a restart. It is freed when no action runs and the job is not live.
+- **Restart.** Reconcile lists the sessions: a running `act-` session of a known action is adopted, a known one that vanished becomes `lost`, an unknown one is killed (`kill_unknown_actions`).
+- **Stops.** Pause, cancel, done and worktree removal stop every action; hand-on, park and watching leave them running.
+- **Profile.** `new_job` copies the profile's actions as approved snapshots; `instructions_md` lists them. `Daemon::save_actions_to_profile` writes under `Daemon.profiles_write` and approves the command.
+- **API and CLI.** Routes (`GET /jobs/:id/actions`, `POST …/actions/:a/{run,stop,restart,save-to-profile}`, `POST …/actions/{save-to-profile,card-dismiss}`, `DELETE …/actions/:a`, `GET …/actions/:a/log`) are `User`-only and sit before the `/jobs/{id}/{action}` catch-all; the terminal websocket takes `?session=act-<id>` for ids in `job.actions` only. CLI: `xherd actions|run|stop` and `attach --action`.
+- **UI.** `lib/actions.ts` holds the pure helpers (groups, default open state, header marks, save card; vitest); `Job.svelte` renders the Services/Actions groups, `panels/Action.svelte` the action page, `components/SaveActions.svelte` the end-of-job card, an Actions group in the profile form, `▶ n` in `HerdList`, entries in `JumpBox`. The demo server mocks it all.
+- **Alternatives dropped.** Windows in the job's session (an action would share the agent's lifetime and respawns); `pipe-pane` for logs (permissions); a global service limit; an agent-side `run` call (the agent would run commands outside its permission mode).
+
 ## 6. Pluggable SDD
 
 ### 6.1 Layers
@@ -356,6 +369,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 | Area | Routes |
 |---|---|
 | Health and state | `GET /healthz` (no auth), `GET /state` (config, platform, client kind, version, jobs, profiles, plugins, todos), `GET /checks`, `POST /checks/:id/fix` |
+| Job actions | `GET /jobs/:id/actions`, `POST /jobs/:id/actions/:a/{run,stop,restart,save-to-profile}`, `POST /jobs/:id/actions/{save-to-profile,card-dismiss}`, `DELETE /jobs/:id/actions/:a`, `GET /jobs/:id/actions/:a/log`; terminal `GET /ws/term/:id?session=act-<a>` (user only, §5.1) |
 | Jobs | `GET/POST /jobs`, `GET/DELETE /jobs/:id`, `POST /jobs/:id/{pause,resume,cancel,approve,request-changes,send,answer,ask,finish,resolve-conflicts,mode,model,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,notes,my-time,reviewed,viewed}`, `GET /jobs/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /jobs/pause-all` |
 | Reports and XAP | `POST /hooks`, `POST /xap` (job tokens) |
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
@@ -507,6 +521,7 @@ No same-path requirement (clients do not read the files). Open-in is resolved pe
 | Kill switch (R-032) | `POST /jobs/pause-all`: every queued and live job is paused at once (`UserAction::PauseNow`), with no handoff note, so a budget or a runaway job cannot wait on a timeout; queued jobs first so no freed slot starts one. |
 | Network (R-1207) | Accept loop drops connections whose peer is not loopback, an allowed private LAN address (LAN access on) or a configured remote host, before HTTP parsing. |
 | UI content (T8) | Markdown sanitised with DOMPurify; Mermaid `securityLevel: strict`, no HTML labels; remote images blocked unless allowed; strict CSP on the app. |
+| Job actions (T11, R-611) | Approval is `sha256(run + "\0" + cwd)` stored on the action and checked in `action::may_run`; `UserAction::ActionRun` is the only path that starts a session and no XAP call maps to it; autonomy never reaches it; the action's environment is built from the launch environment with the token variables removed; `cwd` is canonicalised inside the worktree. |
 | Audit (R-1208) | Events for approvals, XAP calls, plugin installs/updates, settings changes, token rotations. |
 
 ## 10. Updates, releases and backups: implementation
@@ -743,6 +758,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [x] Ask sessions and Finish (#121), worktree removal (#123), auto-approval mark and Needs attention order (#120, #124, #127)
   - [x] PR Check now (#131) and Resolve conflicts (#139: `UserAction::ResolveConflicts`, pack command `conflicts`, merge proposals always held)
   - [x] Gate notices (#133) and no notices for automatic approvals (#135)
+  - [x] Job actions (#193, branch `193-dynamic-job-actions`; §5.1, R-609…R-613): `xherd action add|rm|ls|log`, one tmux session per action with approval by command hash, ports kept while an action runs, output logs, repo-profile actions and the Save card, job menu groups, action page, Herd and ⌘K marks, CLI `actions|run|stop|attach --action`, config `jobActions`/`maxActionsPerJob`. Not checked with a real runtime
   - [ ] Phones
 - [ ] **v1.x**
   - [ ] Stage hooks (R-401…R-404): `pre.<role>`, `post.<role>`, `gate.<role>`, `pr.opened`, `pr.merged`, `job.created` declared by profiles and pack `stageHooks`; kinds command, job, builtin

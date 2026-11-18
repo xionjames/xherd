@@ -528,7 +528,7 @@ Screens are built from **panels** arranged by declarations. xherd's own job page
 | R-1102 | Built-in specific panels: `gate`, `documents`, `tasks`, `commits`, `diff`, `pr`, `terminal`, `transcript`, `log`, `issues`, `memory`, `toolchain`. |
 | R-1103 | Built-in generic panels: `markdown`, `table`, `checklist`, `keyValue`, `timeline`, `gallery`, `media`, `files`, `progress`, reading from the normalised state, the pack's `extra.*`, or artifact globs. |
 | R-1104 | Panels declare the capabilities they need (git, diff, pr, terminal…); unmet panels are hidden. Unknown types render a placeholder; `xherd flow test` validates views (`ui: 1`). |
-| R-1105 | Actions are a fixed set: `approve`, `requestChanges`, `send` (message template), `runCommand`, `pluginCommand`, `openArtifact`, `openIn`; same API and permission rules as built-in buttons; `confirm:` for costly or destructive ones; only `visibleWhen` conditions, no scripting. |
+| R-1105 | Actions are a fixed set: `approve`, `requestChanges`, `send` (message template), `runCommand` (runs through the job-actions runner, R-609…R-613, not yet built), `pluginCommand`, `openArtifact`, `openIn`; same API and permission rules as built-in buttons; `confirm:` for costly or destructive ones; only `visibleWhen` conditions, no scripting. |
 | R-1106 | Panel plugins (post-v1): a web component in a sandboxed iframe on a separate origin, without the daemon token, talking to the page through `postMessage` (`getData`, `onData`, `requestAction`, `openArtifact`), receiving the UI's design tokens as CSS variables. |
 | R-1107 | A `terminal` panel type runs a plugin's terminal program in a tmux window and shows it in the browser, so terminal tools can be plugins without web code. |
 | R-1108 | A command palette (Ctrl/Cmd+K) lists built-in and plugin actions for the current context, with configurable shortcuts. |
@@ -547,6 +547,11 @@ Screens are built from **panels** arranged by declarations. xherd's own job page
 | R-606 | `xherd docker init` (host) writes the compose file and `.env` for the detected engine; `xherd docker doctor` checks same-path mounts, ownership, host-side file changes seen in the container, SSH job, and port binding to `127.0.0.1`, each with a fix. |
 | R-607 | The native binary (host tmux) is supported with the same behaviour. |
 | R-608 | Each job gets `XHERD_PORT_BASE` (a free block of 10 ports) so dev servers of parallel jobs do not collide. |
+| R-609 | **Job actions** (#193). A job registers named commands with `xherd action add|rm|ls|log` (kind `service` or `task`, `id` a slug, `run` one line, `cwd` inside the worktree). The coding agent can register and read the output of an action, never run, stop or approve one. Limit `maxActionsPerJob` (12); `jobActions` turns the calls off. |
+| R-610 | The user runs an action from the job page, `xherd run` or the API: its own tmux session `xherd-<job>-act-<id>` (`sh -lc`, `remain-on-exit`, same server and OS user as the job), the job's environment without any token, `XHERD_PORT_BASE` included. One instance per action; Stop is Ctrl-C then kill. Actions survive hand-on and daemon restarts, run while a job is parked or watching (its port block stays reserved) and stop on pause, cancel, done and worktree removal. The last 1 MiB of output is kept in `<data>/jobs/<job>/actions/<id>.log`. |
+| R-611 | **Approval by command.** A job-registered action runs only after the user approved `sha256(run + "\0" + cwd)` (**Allow and run**); changing either drops the approval. Autonomy never approves or runs an action. The full command is shown wherever an action can be run; id, label and description are plain text. Every add, remove, approval, run, stop and exit is an Activity event. |
+| R-612 | **Repo profiles hold actions.** A new job copies its profile's actions (approved, source `profile`); `instructions.md` lists them; **Save to repo profile** (action page, and the end-of-job card for actions that succeeded) writes an action to the profile and counts as approval. Profile export/import carries them. |
+| R-613 | UI: the job menu groups Services and Actions (state marks never colour alone), the action page shows command, state, terminal and saved output, Herd cards show "▶ n" for running services, ⌘K lists the job's actions. CLI `xherd actions|run|stop|attach --action`; config `jobActions`, `maxActionsPerJob` (live). |
 
 ### 12.2 Container engines on macOS
 
@@ -630,6 +635,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 | T8 | **Untrusted content in the UI** (XSS via job-written Markdown, PR comments, diagrams) | Sanitised Markdown; Mermaid in strict mode without HTML labels; no remote images in job content by default; panel plugins in sandboxed iframes without the token. |
 | T9 | **Secret leakage** in logs, hook output, PR text or specs | Redaction of known secrets in every captured output; secrets passed only on stdin; secret tripwire; secrets never in `instructions.md`. |
 | T10 | **Supply chain** of the image and binary | Pinned versions of bundled CLIs, signed releases and images, SBOM (§14.4). |
+| T11 | **A job smuggles a command into the user's session** (registers `curl … | sh` as an action, or changes an approved one) | Registering runs nothing; the first run needs the user's approval of the exact command and cwd (hash, R-611) and a change asks again; autonomy never approves; the coding agent has no call to run, stop or approve; actions get the job's environment without its token; cwd must stay inside the worktree; the full command is always shown. Limit: once approved, the command runs with the user's rights like any command typed in a shell (in Docker, as the agents' user). |
 
 ### 13.3 Requirements
 
