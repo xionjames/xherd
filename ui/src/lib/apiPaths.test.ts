@@ -8,22 +8,45 @@ const sources = import.meta.glob(['../**/*.ts', '../**/*.svelte', '!../**/*.test
   eager: true,
 }) as Record<string, string>;
 
-/** Literal URLs starting with `/` passed to `fetch(`, as `file: url`. */
-function fetchUrls(): string[] {
-  const found: string[] = [];
-  const call = /\bfetch\(\s*(['"`])(\/[^'"`]*)\1?/g;
+const CALL = /\bfetch(?:Fn)?\(\s*/g;
+// A string or template literal that starts with `/api/v1/` or `/api/v1${`.
+const API_LITERAL = /^(['"`])\/api\/v1(?:\/|\$\{)/;
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+interface FetchCall {
+  file: string;
+  arg: string;
+  ok: boolean;
+}
+
+/** Every `fetch(` / `fetchFn(` call in the non-test sources, with its first argument. */
+function fetchCalls(): FetchCall[] {
+  const calls: FetchCall[] = [];
   for (const [path, text] of Object.entries(sources)) {
-    for (const m of text.matchAll(call)) found.push(`${path.replace(/^\.\.\//, '')}: ${m[2]}`);
+    const file = path.replace(/^\.\.\//, '');
+    for (const m of text.matchAll(CALL)) {
+      const rest = text.slice((m.index ?? 0) + m[0].length);
+      const end = rest.search(/[,)]/);
+      const arg = (end < 0 ? rest : rest.slice(0, end)).trim();
+      calls.push({ file, arg, ok: argIsApi(text, arg) });
+    }
   }
-  return found.sort();
+  return calls;
+}
+
+/** The argument is an /api/v1 literal, or a `const` of the same file assigned one. */
+function argIsApi(text: string, arg: string): boolean {
+  if (API_LITERAL.test(arg)) return true;
+  if (!IDENTIFIER.test(arg)) return false;
+  const name = arg.replace(/\$/g, '\\$');
+  const decl = new RegExp(`\\bconst\\s+${name}\\s*(?::[^=]+)?=\\s*`).exec(text);
+  return decl !== null && API_LITERAL.test(text.slice(decl.index + decl[0].length));
 }
 
 describe('UI fetch paths', () => {
   it('go through /api/v1', () => {
-    const urls = fetchUrls();
-    expect(urls.length).toBeGreaterThan(0);
-    // A template literal may continue the prefix with `${path}` (api.ts).
-    const outside = urls.filter((u) => !/: \/api\/v1(\/|\$\{)/.test(u));
-    expect(outside).toEqual([]);
+    const calls = fetchCalls();
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.filter((c) => !c.ok).map((c) => `${c.file}: ${c.arg}`)).toEqual([]);
   });
 });
