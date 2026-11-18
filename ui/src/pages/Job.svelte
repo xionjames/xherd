@@ -24,6 +24,7 @@
   import { canChooseModel, validModel } from '../lib/models';
   import { agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
   import ActionPanel from '../panels/Action.svelte';
+  import SaveActions from '../components/SaveActions.svelte';
   import { actionOfTab, defaultOpen, groups, headerMarks, headerText, lastResult, needsApproval, running, tabId as actionTab, visible, type GroupKind } from '../lib/actions';
 
   let { agent }: { agent: Job } = $props();
@@ -312,7 +313,7 @@
     {:else if openAction}
       {#key `${agent.id}/${openAction}`}<ActionPanel {agent} actionId={openAction} />{/key}
     {:else if Panel}
-      {#key agent.id}<Panel {agent} />{/key}
+      {#key agent.id}<SaveActions {agent} /><Panel {agent} />{/key}
     {/if}
   </div>
 </div>
