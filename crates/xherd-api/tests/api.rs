@@ -2052,3 +2052,171 @@ async fn plugin_install_off_is_forbidden() {
         (StatusCode::FORBIDDEN, json!("plugin_install_off"))
     );
 }
+
+/// Job actions (R28): the routes need the user, refuse a command nobody
+/// approved, run an approved one, and the terminal takes only the job's own
+/// actions.
+#[tokio::test]
+async fn action_routes() {
+    use xherd_core::action::{ActionDef, ActionKind, ActionSource, JobAction, from_profile};
+    let home = tempfile::tempdir().unwrap();
+    let wt = tempfile::tempdir().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&Paths::at(home.path()).config())
+    .unwrap();
+    let paths = Paths::at(home.path());
+    paths.ensure().unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let d = Daemon::start(paths, o).await.unwrap();
+    let def = |id: &str, kind| ActionDef {
+        id: id.into(),
+        label: id.into(),
+        run: "sleep 60".into(),
+        kind,
+        ..ActionDef::default()
+    };
+    let mut j = Job::new("SC-1", 1);
+    j.launch = Some(vec!["rt".into()]);
+    j.workdir = Some(wt.path().to_string_lossy().into_owned());
+    j.actions = vec![
+        JobAction {
+            def: def("dev", ActionKind::Service),
+            source: ActionSource::Job,
+            approved: None,
+            last: None,
+            succeeded: false,
+        },
+        from_profile(&def("ok", ActionKind::Task)),
+    ];
+    let j = d.create_job(j).await.unwrap();
+    for _ in 0..200 {
+        if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/jobs/SC-1/actions")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["actions"].as_array().unwrap().len(), 2);
+    assert_eq!(v["saveOffer"], json!([]));
+    assert_eq!(v["hasProfile"], json!(false));
+
+    // A job's agent token is not the user.
+    let token = mint_token(
+        &d.store,
+        TOKEN_AGENT,
+        Some(&j.id),
+        &[SCOPE_HOOKS, SCOPE_XAP],
+        1,
+    )
+    .await
+    .unwrap();
+    let denied = Request::post("/api/v1/jobs/SC-1/actions/ok/run")
+        .header("host", "127.0.0.1:4740")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (s, _) = call(app.clone(), denied).await;
+    assert!(
+        s == StatusCode::UNAUTHORIZED || s == StatusCode::FORBIDDEN,
+        "{s}"
+    );
+
+    let run = |id: &str, body: Option<Value>| {
+        send("POST", &format!("/api/v1/jobs/SC-1/actions/{id}/run"), body)
+    };
+    let (s, v) = call(app.clone(), run("dev", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("action_not_approved"))
+    );
+    let (s, v) = call(app.clone(), run("nope", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("action_unknown"))
+    );
+    let (s, v) = call(app.clone(), run("dev", Some(json!({"approve": true})))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["job"]["actions"][0]["last"]["state"], "running");
+    let (s, v) = call(app.clone(), run("ok", None)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = call(app.clone(), run("ok", None)).await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("action_running"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/jobs/SC-1/actions/ok/stop", None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/jobs/SC-1/actions/dev/log")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!((s, v["log"].clone()), (StatusCode::OK, Value::Null));
+
+    let (s, v) = call(
+        app.clone(),
+        send(
+            "POST",
+            "/api/v1/jobs/SC-1/actions/dev/save-to-profile",
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("no_profile"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        send("POST", "/api/v1/jobs/SC-1/actions/card-dismiss", None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["job"]["actionsCardDismissed"], json!(true));
+
+    // The terminal takes only the job's own actions.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(xherd_api::serve(
+        d.clone(),
+        listener,
+        std::future::pending(),
+    ));
+    for session in ["act-nope", "other"] {
+        let url = format!("ws://127.0.0.1:{port}/api/v1/ws/term/SC-1?session={session}");
+        match tokio_tungstenite::connect_async(url).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(r)) => {
+                assert_eq!(r.status(), StatusCode::NOT_FOUND, "{session}")
+            }
+            other => panic!("{session}: {:?}", other.map(|_| ())),
+        }
+    }
+
+    let (s, v) = call(
+        app.clone(),
+        send("DELETE", "/api/v1/jobs/SC-1/actions/dev", None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["job"]["actions"].as_array().unwrap().len(), 1);
+}
