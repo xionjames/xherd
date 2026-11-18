@@ -370,6 +370,13 @@ export interface DiffAnswer {
   diff: string;
 }
 
+/** `GET /jobs/:id/diff/source`: the new side of one file of a diff. */
+export interface DiffSource {
+  path: string;
+  rev: string;
+  text: string;
+}
+
 export interface Check {
   id: string;
   group: 'system' | 'plugins' | 'runtime' | 'security';

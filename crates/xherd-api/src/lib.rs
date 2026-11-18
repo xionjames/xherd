@@ -53,6 +53,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/jobs/pause-all", post(pause_all))
         .route("/api/v1/jobs/{id}", get(get_job))
         .route("/api/v1/jobs/{id}/diff", get(diff))
+        .route("/api/v1/jobs/{id}/diff/source", get(diff_source))
         .route("/api/v1/jobs/{id}/docs", get(docs))
         .route("/api/v1/jobs/{id}/findings", get(findings))
         .route("/api/v1/jobs/{id}/memory", get(memory))
@@ -1347,6 +1348,28 @@ async fn diff(
 ) -> ApiResult<Json<Value>> {
     Ok(Json(
         d.diff(&id, q.view.as_deref(), q.commit.as_deref()).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceQuery {
+    path: String,
+    view: Option<String>,
+    commit: Option<String>,
+}
+
+/// `GET /jobs/:id/diff/source`: the whole new-side file of a diff, so the
+/// Changes panel can expand context around hunks (`Daemon::diff_source`).
+async fn diff_source(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Query(q): Query<SourceQuery>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        d.diff_source(&id, &q.path, q.view.as_deref(), q.commit.as_deref())
+            .await?,
     ))
 }
 

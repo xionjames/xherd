@@ -444,6 +444,9 @@ label.f.chk.top { align-items: flex-start; }
 .ln.a { background: var(--add); }
 .ln.d { background: var(--del); }
 .ln.h { color: var(--ink-3); background: var(--pen-2); }
+.ln .gx { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; vertical-align: middle; white-space: normal; }
+.ln .gx .btn.sm { height: 22px; padding: 0 8px; }
+.ln .gnote { font: 12px/1.3 var(--sans); font-style: normal; color: var(--ink-3); }
 .lnc { all: unset; cursor: pointer; color: inherit; }
 .lnc:hover, .lnc:focus-visible { color: var(--ink); text-decoration: underline; }
 .lnote { margin: 4px 0 4px 108px; padding: 8px 10px; border: 1px solid var(--fence); border-radius: var(--r-ctl); background: var(--pen-2); font: 13px/1.45 var(--sans); white-space: normal; display: flex; gap: 8px; flex-direction: column; }
@@ -454,6 +457,7 @@ label.f.chk.top { align-items: flex-start; }
   .ln { grid-template-columns: 34px 34px 16px minmax(0, 1fr); }
   .ln b { padding-right: 6px; }
   .lnote { margin-left: 0; }
+  .ln .gx .btn.sm { height: 40px; min-width: 40px; }
 }
 .blk, .ln { position: relative; }
 .blk .bc { position: absolute; top: 0; right: -4px; opacity: 0; }

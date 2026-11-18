@@ -1570,6 +1570,66 @@ async fn diff_views_uncommitted_branch_and_commit() {
 }
 
 #[tokio::test]
+async fn diff_source_reads_the_new_side() {
+    let t = setup().await;
+    git(t.wt.path(), &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(t.wt.path().join(".git/info/exclude"), ".xherd/\n").unwrap();
+    commit_gate(&t).await;
+    t.d.action("SC-1", approve(None)).await.unwrap();
+    let text = |v: &Value| v["text"].as_str().unwrap().to_string();
+
+    // The worktree has moved on since the commit: a.txt is edited, b.txt is new.
+    let committed = std::fs::read_to_string(t.wt.path().join("a.txt")).unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "edited later\n").unwrap();
+
+    let v =
+        t.d.diff_source("SC-1", "a.txt", Some("uncommitted"), None)
+            .await
+            .unwrap();
+    assert_eq!(
+        (text(&v), v["rev"].as_str()),
+        ("edited later\n".into(), Some("worktree"))
+    );
+    let v =
+        t.d.diff_source("SC-1", "b.txt", Some("branch"), None)
+            .await
+            .unwrap();
+    assert_eq!(v["rev"], "worktree");
+
+    // A recorded commit reads from its sha, not the worktree.
+    let v =
+        t.d.diff_source("SC-1", "a.txt", Some("commit"), Some("C01"))
+            .await
+            .unwrap();
+    // The committed text keeps its trailing newline exactly, as the worktree side does
+    // (a trimmed `git show` would return "a" and the panel would disagree).
+    assert_eq!(committed, "a\n");
+    assert_eq!(text(&v), committed);
+    assert_ne!(v["rev"], "worktree");
+
+    // Over 2 MiB, escaping the worktree, missing, and the diff's own refusals.
+    std::fs::write(t.wt.path().join("big.txt"), vec![b'x'; 2 * 1024 * 1024 + 1]).unwrap();
+    for (path, view, commit, code) in [
+        ("big.txt", Some("uncommitted"), None, "too_large"),
+        ("../x", Some("uncommitted"), None, "bad_path"),
+        ("missing.txt", Some("uncommitted"), None, "no_such_doc"),
+        ("missing.txt", Some("commit"), Some("C01"), "no_such_doc"),
+        ("a.txt", Some("nope"), None, "bad_request"),
+        ("a.txt", Some("commit"), None, "bad_request"),
+        ("a.txt", Some("commit"), Some("C99"), "commit_unknown"),
+    ] {
+        assert_eq!(
+            t.d.diff_source("SC-1", path, view, commit)
+                .await
+                .unwrap_err()
+                .code,
+            code,
+            "{path} {view:?} {commit:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn task_done_runs_the_verify_command() {
     let t = setup_full(json!({}), Some(Duration::from_millis(400))).await;
     let wt = t.wt.path();
