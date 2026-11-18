@@ -43,6 +43,7 @@ const XHERD_SKIP: &[&str] = &[
     "hooks",
     "toolchain.json",
     "toolchain.resolved.json",
+    "toolchain.env",
     "backup.bundle",
     "backup.patch",
 ];

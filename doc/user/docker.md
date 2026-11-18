@@ -78,6 +78,8 @@ Settings → Git access stores a token per host (HTTPS) or lets you use SSH. On 
 
 Jobs get the languages a repository asks for (a native install installs nothing and uses your `PATH`). At every session start the daemon reads the worktree's version files (`.sdkmanrc`, `.nvmrc`, `.node-version`, `go.mod`, `rust-toolchain.toml`, `rust-toolchain`, `.python-version`, `pyproject.toml`) and starts the runtime through `xherd toolchain exec`, which installs missing tools into the `xherd-home` volume first. Nothing is baked into the image except the version managers' seeds. Settings → Plugins → a language shows its installed versions, sets a default for repositories without a version file (`toolchainDefaults`), and installs a version in a terminal in the browser.
 
+`xherd toolchain exec` also writes `.xherd/toolchain.env` in the worktree (kept out of git and backups, rewritten at every start, removed when the repository has no version files): a shell script that puts the resolved directories first on `PATH` and exports the plugins' variables. It reaches the tools in two ways. The runtime starts with `BASH_ENV` and `ENV` pointing to the file, so the shells it runs (`bash -c`, `sh -c`) get the resolved `PATH` even when a login profile resets it. And `verify:` commands of tasks run after sourcing it. In a shell that lost the tools, run `. ./.xherd/toolchain.env`; the job's `instructions.md` tells the agent the same.
+
 Tools a plugin needs that the image does not carry (for example Atlassian's `acli` for the Jira tracker) are installed the same way from the plugin's options, into the agents' home.
 
 ### Open in your IDE
