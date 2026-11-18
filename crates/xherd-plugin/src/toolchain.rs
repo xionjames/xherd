@@ -59,7 +59,7 @@ pub struct VersionFile {
     /// Worktree-relative.
     pub path: String,
     pub format: Format,
-    /// `sdkmanrc`: the key to read (default: the tool name).
+    /// `sdkmanrc`, `package-manager`: the key to read (default: the tool name).
     #[serde(default)]
     pub key: Option<String>,
 }
@@ -77,6 +77,9 @@ pub enum Format {
     GoMod,
     /// `channel = "…"` (TOML), else plain.
     RustToolchain,
+    /// `package.json`'s `"packageManager": "<key>@<version>[+hash]"`, when
+    /// the name is the key.
+    PackageManager,
 }
 
 impl Toolchain {
@@ -135,6 +138,12 @@ pub fn read_version(text: &str, format: Format, key: &str) -> Option<String> {
             None if text.contains('[') => None,
             None => plain(),
         },
+        Format::PackageManager => {
+            let json: serde_json::Value = serde_json::from_str(text).ok()?;
+            let (name, version) = json.get("packageManager")?.as_str()?.split_once('@')?;
+            // Drop the `+sha512…` integrity suffix.
+            (name == key).then(|| version.split('+').next().unwrap_or("").to_string())
+        }
     }?;
     let v: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
     VERSION.is_match(&v).then_some(v)
@@ -317,6 +326,26 @@ mod tests {
     }
 
     #[test]
+    fn package_manager_field() {
+        let pm = |json: &str, key: &str| read_version(json, Format::PackageManager, key);
+        assert_eq!(
+            pm(r#"{"packageManager":"pnpm@9.12.0"}"#, "pnpm"),
+            Some("9.12.0".into())
+        );
+        assert_eq!(
+            pm(r#"{"packageManager":"pnpm@9.12.0+sha512.abc"}"#, "pnpm"),
+            Some("9.12.0".into())
+        );
+        assert_eq!(pm(r#"{"packageManager":"yarn@4.1.0"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":"pnpm"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":9}"#, "pnpm"), None);
+        assert_eq!(pm("{not json", "pnpm"), None);
+        assert_eq!(pm(r#"{"name":"x"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":"pnpm@"}"#, "pnpm"), None);
+        assert_eq!(pm(r#"{"packageManager":"pnpm@+sha512.abc"}"#, "pnpm"), None);
+    }
+
+    #[test]
     fn hostile_versions_are_ignored() {
         assert_eq!(read_version("$(rm -rf /)\n", Format::Plain, ""), None);
         assert_eq!(read_version("-rf\n", Format::Plain, ""), None);
@@ -388,6 +417,60 @@ mod tests {
                 .steps
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn nvm_plan_reads_package_json() {
+        let nvm = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "nvm")
+            .unwrap();
+        let tcs = vec![("nvm".to_string(), Toolchain::of(&nvm).unwrap())];
+        let pos = |p: &Plan, tool: &str| p.steps.iter().position(|s| s.tool == tool).unwrap();
+
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("package.json"),
+            r#"{"packageManager":"pnpm@9.12.0+sha512.abc"}"#,
+        )
+        .unwrap();
+        std::fs::write(d.path().join(".nvmrc"), "22\n").unwrap();
+        let p = plan(d.path(), &tcs, true, &BTreeMap::new());
+        let s = &p.steps[pos(&p, "pnpm")];
+        assert_eq!(
+            (s.version.as_str(), s.file.as_str()),
+            ("9.12.0", "package.json")
+        );
+        assert!(pos(&p, "pnpm") < pos(&p, "node"));
+        assert!(p.steps.iter().all(|s| s.tool != "yarn"));
+
+        let bun = tempfile::tempdir().unwrap();
+        std::fs::write(bun.path().join(".bun-version"), "1.1.38\n").unwrap();
+        std::fs::write(
+            bun.path().join("package.json"),
+            r#"{"packageManager":"bun@1.0.0"}"#,
+        )
+        .unwrap();
+        let p = plan(bun.path(), &tcs, true, &BTreeMap::new());
+        let s = &p.steps[pos(&p, "bun")];
+        assert_eq!(
+            (s.version.as_str(), s.file.as_str()),
+            ("1.1.38", ".bun-version")
+        );
+
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join(".nvmrc"), "22\n").unwrap();
+        let defaults = BTreeMap::from([
+            ("yarn".to_string(), "1.22.22".to_string()),
+            ("typescript".into(), "5.6.3".into()),
+        ]);
+        let p = plan(empty.path(), &tcs, true, &defaults);
+        for tool in ["yarn", "typescript"] {
+            let s = &p.steps[pos(&p, tool)];
+            assert_eq!(s.file, "xherd default");
+            assert!(pos(&p, tool) < pos(&p, "node"));
+        }
+        assert!(p.steps.iter().all(|s| s.tool != "pnpm" && s.tool != "bun"));
     }
 
     #[test]

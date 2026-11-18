@@ -1,15 +1,146 @@
 {
   "name": "nvm",
   "kind": "toolchain",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "label": "nvm",
-  "description": "Node.js versions from .nvmrc or .node-version, with corepack (pnpm, yarn).",
+  "description": "Node.js from .nvmrc or .node-version (with its npm); pnpm, yarn and bun from package.json's packageManager; TypeScript; or a default for each.",
   "data": {
     "toolchain": {
       "passEnv": [
         "NVM_DIR"
       ],
       "tools": [
+        {
+          "name": "pnpm",
+          "files": [
+            {
+              "path": "package.json",
+              "format": "package-manager"
+            }
+          ],
+          "resolve": [
+            "bash",
+            "-c",
+            "d=\"${NVM_DIR:-$HOME/.nvm}/xherd/pnpm/$1\"; test -x \"$d/bin/pnpm\" && echo \"$d/bin\"",
+            "_",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "r=\"${NVM_DIR:-$HOME/.nvm}/xherd/pnpm\"; d=\"$r/$1\"; test -x \"$d/bin/pnpm\" && exit 0; mkdir -p \"$r\" && t=$(mktemp -d \"$r/.tmp.XXXXXX\") && { npm install -g --prefix \"$t\" --no-audit --no-fund \"pnpm@$1\" </dev/null && mv -T \"$t\" \"$d\"; } || { rm -rf \"$t\"; test -x \"$d/bin/pnpm\"; }",
+            "_",
+            "{v}"
+          ],
+          "list": [
+            "bash",
+            "-c",
+            "npm view pnpm versions --json </dev/null | jq -r '.[]' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$' | sort -ruV | head -80"
+          ],
+          "installed": [
+            "sh",
+            "-c",
+            "ls \"${NVM_DIR:-$HOME/.nvm}/xherd/pnpm\" 2>/dev/null | sort -ruV"
+          ]
+        },
+        {
+          "name": "yarn",
+          "files": [
+            {
+              "path": "package.json",
+              "format": "package-manager"
+            }
+          ],
+          "resolve": [
+            "bash",
+            "-c",
+            "d=\"${NVM_DIR:-$HOME/.nvm}/xherd/yarn/$1\"; test -x \"$d/bin/yarn\" && echo \"$d/bin\"",
+            "_",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "r=\"${NVM_DIR:-$HOME/.nvm}/xherd/yarn\"; d=\"$r/$1\"; test -x \"$d/bin/yarn\" && exit 0; case \"$1\" in 0.*|1.*) p=yarn;; *) p=@yarnpkg/cli-dist;; esac; mkdir -p \"$r\" && t=$(mktemp -d \"$r/.tmp.XXXXXX\") && { npm install -g --prefix \"$t\" --no-audit --no-fund \"$p@$1\" </dev/null && mv -T \"$t\" \"$d\"; } || { rm -rf \"$t\"; test -x \"$d/bin/yarn\"; }",
+            "_",
+            "{v}"
+          ],
+          "list": [
+            "bash",
+            "-c",
+            "{ npm view yarn versions --json </dev/null; npm view @yarnpkg/cli-dist versions --json </dev/null; } | jq -r '.[]' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$' | sort -ruV | head -80"
+          ],
+          "installed": [
+            "sh",
+            "-c",
+            "ls \"${NVM_DIR:-$HOME/.nvm}/xherd/yarn\" 2>/dev/null | sort -ruV"
+          ]
+        },
+        {
+          "name": "bun",
+          "files": [
+            {
+              "path": ".bun-version",
+              "format": "plain"
+            },
+            {
+              "path": "package.json",
+              "format": "package-manager"
+            }
+          ],
+          "resolve": [
+            "bash",
+            "-c",
+            "d=\"${NVM_DIR:-$HOME/.nvm}/xherd/bun/$1\"; test -x \"$d/bin/bun\" && echo \"$d/bin\"",
+            "_",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "r=\"${NVM_DIR:-$HOME/.nvm}/xherd/bun\"; d=\"$r/$1\"; test -x \"$d/bin/bun\" && exit 0; mkdir -p \"$r\" && t=$(mktemp -d \"$r/.tmp.XXXXXX\") && { npm install -g --prefix \"$t\" --no-audit --no-fund \"bun@$1\" </dev/null && mv -T \"$t\" \"$d\"; } || { rm -rf \"$t\"; test -x \"$d/bin/bun\"; }",
+            "_",
+            "{v}"
+          ],
+          "list": [
+            "bash",
+            "-c",
+            "npm view bun versions --json </dev/null | jq -r '.[]' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$' | sort -ruV | head -80"
+          ],
+          "installed": [
+            "sh",
+            "-c",
+            "ls \"${NVM_DIR:-$HOME/.nvm}/xherd/bun\" 2>/dev/null | sort -ruV"
+          ]
+        },
+        {
+          "name": "typescript",
+          "files": [],
+          "resolve": [
+            "bash",
+            "-c",
+            "d=\"${NVM_DIR:-$HOME/.nvm}/xherd/typescript/$1\"; test -x \"$d/bin/tsc\" && echo \"$d/bin\"",
+            "_",
+            "{v}"
+          ],
+          "install": [
+            "bash",
+            "-c",
+            "r=\"${NVM_DIR:-$HOME/.nvm}/xherd/typescript\"; d=\"$r/$1\"; test -x \"$d/bin/tsc\" && exit 0; mkdir -p \"$r\" && t=$(mktemp -d \"$r/.tmp.XXXXXX\") && { npm install -g --prefix \"$t\" --no-audit --no-fund \"typescript@$1\" </dev/null && mv -T \"$t\" \"$d\"; } || { rm -rf \"$t\"; test -x \"$d/bin/tsc\"; }",
+            "_",
+            "{v}"
+          ],
+          "list": [
+            "bash",
+            "-c",
+            "npm view typescript versions --json </dev/null | jq -r '.[]' | grep -E '^[0-9]+\\.[0-9]+\\.[0-9]+$' | sort -ruV | head -80"
+          ],
+          "installed": [
+            "sh",
+            "-c",
+            "ls \"${NVM_DIR:-$HOME/.nvm}/xherd/typescript\" 2>/dev/null | sort -ruV"
+          ]
+        },
         {
           "name": "node",
           "files": [

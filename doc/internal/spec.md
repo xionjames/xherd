@@ -575,7 +575,7 @@ Supported: Docker Desktop (reference), and OrbStack, Colima, Podman Desktop, Ran
 | ID | Requirement |
 |---|---|
 | R-651 | The image ships version managers, not language runtimes (except what the agent CLIs need). Languages are installed into `xherd-home`. |
-| R-652 | Before a job starts, xherd reads the worktree's version files (`.sdkmanrc`, `.nvmrc`, `.node-version`, `.python-version`, `pyproject.toml`, `go.mod`, `rust-toolchain.toml`), installs missing versions with the matching toolchain plugin, and starts the runtime with that `PATH`. Each worktree gets its own versions; no global "current version" is switched. |
+| R-652 | Before a job starts, xherd reads the worktree's version files (`.sdkmanrc`, `.nvmrc`, `.node-version`, `package.json` (`packageManager`), `.bun-version`, `.python-version`, `pyproject.toml`, `go.mod`, `rust-toolchain.toml`), installs missing versions with the matching toolchain plugin, and starts the runtime with that `PATH`. Each worktree gets its own versions; no global "current version" is switched. |
 | R-653 | Welcome step "Toolchains" and Settings → Toolchains: languages with version pickers (defaults Java 21 + Maven + Gradle, Node LTS + pnpm, Python 3.12 + uv, Go, Rust stable), install with a live log, skip allowed. Native installs only detect, never install on the host. |
 | R-654 | Profiles may declare `toolchain:` versions for repos without version files and `setup:` commands run once per new worktree. |
 | R-655 | Setup checks show whether each profile's toolchain resolves, with "Install missing". |
