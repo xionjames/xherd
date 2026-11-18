@@ -217,6 +217,9 @@
           {/if}
         </div>
       {/if}
+      {#if canRemove}
+        <button class="btn danger" title="Delete the worktree folder; the branch is kept" onclick={() => (confirmRemove = true)}>Remove worktree…</button>
+      {/if}
       <div class="anchor">
         <button class="btn icon" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}><Icon name="more" /></button>
         {#if menu}
@@ -228,9 +231,6 @@
               <button role="menuitem" class="btn ghost" onclick={() => { menu = false; saveOpen = true; }}>Save as agent…</button>
             {/if}
             <button role="menuitem" class="btn ghost danger" disabled={finished} onclick={openCancel}>Cancel job…</button>
-            {#if canRemove}
-              <button role="menuitem" class="btn ghost danger" onclick={() => { menu = false; confirmRemove = true; }}>Remove worktree…</button>
-            {/if}
           </div>
         {/if}
       </div>
