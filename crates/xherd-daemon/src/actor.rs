@@ -3,7 +3,7 @@
 //! and publishes. Slow work runs in spawned tasks and comes back as `WorkDone`
 //! tagged with the agent's generation; stale results are dropped.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -127,6 +127,15 @@ pub enum UserAction {
         approve: bool,
         port_base: Option<u16>,
     },
+    /// Stop a running action: Ctrl-C, then a kill after `STOP_GRACE` (R11).
+    ActionStop {
+        id: String,
+    },
+    /// Stop it, then run it again; `approve` as for `ActionRun` (R11).
+    ActionRestart {
+        id: String,
+        approve: bool,
+    },
     Get,
 }
 
@@ -177,10 +186,14 @@ pub enum WorkResult {
     },
     /// The pane of a running action is dead: its exit status (`None` when a
     /// signal killed it) and what it printed (R11, R13).
+    /// `stopped`: the user (or the job's end) stopped it; `restart` carries
+    /// the approval flag of a Restart, which runs it again.
     ActionEnded {
         id: String,
         exit: Option<i32>,
         output: String,
+        stopped: bool,
+        restart: Option<bool>,
     },
     /// The action's pane still runs (a service counts as succeeded, R23).
     ActionAlive {
@@ -223,6 +236,8 @@ pub struct ActionError {
 
 /// Lines of scrollback an action's pane keeps for its log (R13).
 const ACTION_HISTORY_LINES: u32 = 20_000;
+/// How long Stop waits after Ctrl-C before killing the session (R11).
+const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// R3: an action's folder, once symlinks are followed, stays inside the
 /// worktree. A folder that does not exist yet is judged by its nearest
@@ -247,6 +262,36 @@ fn cwd_inside(wd: &Path, cwd: &str) -> Result<(), Refusal> {
             "cwd leaves the worktree through a link",
         ))
     }
+}
+
+/// Ctrl-C an action's session, wait up to `STOP_GRACE` for its pane to die,
+/// and take what it printed: its exit status (`None` when killed by a signal
+/// or still alive) and its output. The caller ends the session (R11).
+async fn stop_action_session(driver: &dyn Driver, session: &str) -> (Option<i32>, String) {
+    if let Err(e) = driver.interrupt_session(session).await {
+        tracing::warn!(%session, "{}", e);
+    }
+    let deadline = std::time::Instant::now() + STOP_GRACE;
+    let mut exit = None;
+    loop {
+        match driver.action_status(session).await {
+            Ok(Some(st)) if st.dead => {
+                exit = st.exit;
+                break;
+            }
+            Ok(None) => break,
+            _ => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let output = driver
+        .action_history(session, crate::actions::MAX_LOG_BYTES)
+        .await
+        .unwrap_or_default();
+    (exit, output)
 }
 
 fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
@@ -581,6 +626,7 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         notified_gate: None,
         auto_resumes: Vec::new(),
         actions_running,
+        stopping: BTreeSet::new(),
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -635,6 +681,8 @@ struct Actor {
     auto_resumes: Vec<i64>,
     /// What the supervisor was last told about running actions.
     actions_running: bool,
+    /// Actions with a stop under way: the screen tick leaves them to it.
+    stopping: BTreeSet<String>,
 }
 
 impl Actor {
@@ -945,6 +993,15 @@ impl Actor {
                 id: self.job.id.clone(),
                 running,
             });
+        }
+        // R12: a paused, cancelled or done job leaves no action running.
+        if matches!(
+            self.job.status,
+            Status::Paused | Status::Cancelled | Status::Done
+        ) {
+            for id in self.running_action_ids() {
+                self.begin_stop(&id, None).await;
+            }
         }
         if self.job.status != before {
             tracing::info!(agent = %self.job.name, from = %before, to = %self.job.status, "status");
@@ -2547,6 +2604,19 @@ impl Actor {
                 self.run_action(id, *approve, *port_base).await?;
                 return Ok(());
             }
+            UserAction::ActionStop { id } => {
+                self.require_running_action(id)?;
+                self.begin_stop(id, None).await;
+                return Ok(());
+            }
+            UserAction::ActionRestart { id, approve } => {
+                self.require_running_action(id)?;
+                if self.stopping.contains(id) {
+                    return Err(refuse("action_stopping", format!("`{id}` is stopping")));
+                }
+                self.begin_stop(id, Some(*approve)).await;
+                return Ok(());
+            }
             UserAction::SetMode { mode, launch } => {
                 if self.job.permission_mode == Some(*mode) {
                     return Ok(());
@@ -2717,6 +2787,13 @@ impl Actor {
             ));
         };
         let (wd, repo) = (PathBuf::from(wd), PathBuf::from(repo));
+        // R12: nothing runs in a worktree that goes away.
+        for id in self.running_action_ids() {
+            self.stopping.insert(id.clone());
+            let session = xherd_core::action::session_name(&self.job.name, &id);
+            let (exit, output) = stop_action_session(self.env.driver.as_ref(), &session).await;
+            self.action_ended(&id, exit, &output, true, None).await;
+        }
         let res = if wd.exists() {
             self.env.git.worktree_remove(&repo, &wd, true).await
         } else {
@@ -2901,7 +2978,8 @@ impl Actor {
             .job
             .actions
             .iter()
-            .filter(|a| matches!(&a.last, Some(r) if r.state == ActionState::Running));
+            .filter(|a| matches!(&a.last, Some(r) if r.state == ActionState::Running))
+            .filter(|a| !self.stopping.contains(&a.def.id));
         for a in running {
             let id = a.def.id.clone();
             let session = xherd_core::action::session_name(&self.job.name, &id);
@@ -2919,6 +2997,8 @@ impl Actor {
                             .action_history(&session, crate::actions::MAX_LOG_BYTES)
                             .await
                             .unwrap_or_default(),
+                        stopped: false,
+                        restart: None,
                     },
                     Ok(Some(_)) => WorkResult::ActionAlive { id },
                     Ok(None) => WorkResult::ActionGone { id },
@@ -2932,8 +3012,16 @@ impl Actor {
     /// An action's command ended by itself: keep its output (R13), record the
     /// exit (R11, R17) and free the dead session. A second report of the same
     /// end (two ticks in flight) is ignored.
-    async fn action_ended(&mut self, id: &str, exit: Option<i32>, output: &str) {
+    async fn action_ended(
+        &mut self,
+        id: &str,
+        exit: Option<i32>,
+        output: &str,
+        stopped: bool,
+        restart: Option<bool>,
+    ) {
         use xherd_core::action;
+        self.stopping.remove(id);
         if !self.action_runs(id) {
             return;
         }
@@ -2947,12 +3035,70 @@ impl Actor {
         }
         let now = self.now();
         match exit {
-            Some(code) => action::on_exited(&mut self.job, id, now, code),
-            None => action::on_stopped(&mut self.job, id, now, None),
+            Some(code) if !stopped => action::on_exited(&mut self.job, id, now, code),
+            _ => action::on_stopped(&mut self.job, id, now, exit),
         }
         self.log(None, "action-exited", Some(json!({"id": id, "code": exit})))
             .await;
         self.commit(before).await;
+        if let Some(approve) = restart
+            && let Err(e) = self.run_action(id, approve, None).await
+        {
+            self.log(
+                None,
+                "action-restart-failed",
+                Some(json!({"id": id, "error": e.message})),
+            )
+            .await;
+        }
+    }
+
+    fn running_action_ids(&self) -> Vec<String> {
+        self.job
+            .actions
+            .iter()
+            .filter(|a| self.action_runs(&a.def.id))
+            .map(|a| a.def.id.clone())
+            .collect()
+    }
+
+    /// Stop and Restart apply to a running action only.
+    fn require_running_action(&self, id: &str) -> Result<(), ActionError> {
+        if !self.job.actions.iter().any(|a| a.def.id == id) {
+            return Err(refuse("action_unknown", format!("no action `{id}`")));
+        }
+        if !self.action_runs(id) {
+            return Err(refuse("action_not_running", format!("`{id}` does not run")));
+        }
+        Ok(())
+    }
+
+    /// Start stopping a running action (R11): Ctrl-C now, the rest (wait,
+    /// capture, kill) in the background; the result arrives as `ActionEnded`.
+    /// Nothing happens when a stop is already under way.
+    async fn begin_stop(&mut self, id: &str, restart: Option<bool>) {
+        if !self.stopping.insert(id.to_string()) {
+            return;
+        }
+        self.log(None, "action-stop", Some(json!({"id": id}))).await;
+        let session = xherd_core::action::session_name(&self.job.name, id);
+        let (driver, tx, generation) = (
+            self.env.driver.clone(),
+            self.tx.clone(),
+            self.job.generation,
+        );
+        let id = id.to_string();
+        tokio::spawn(async move {
+            let (exit, output) = stop_action_session(driver.as_ref(), &session).await;
+            let result = WorkResult::ActionEnded {
+                id,
+                exit,
+                output,
+                stopped: true,
+                restart,
+            };
+            let _ = tx.send(Msg::WorkDone { generation, result });
+        });
     }
 
     /// The environment of a session of this job: `XHERD_*` (the job token only
@@ -4254,8 +4400,15 @@ impl Actor {
 
     async fn on_work(&mut self, w: WorkResult) {
         match w {
-            WorkResult::ActionEnded { id, exit, output } => {
-                self.action_ended(&id, exit, &output).await;
+            WorkResult::ActionEnded {
+                id,
+                exit,
+                output,
+                stopped,
+                restart,
+            } => {
+                self.action_ended(&id, exit, &output, stopped, restart)
+                    .await;
             }
             WorkResult::ActionAlive { id } => {
                 let (before, now) = (self.job.status, self.now());

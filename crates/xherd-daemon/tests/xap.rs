@@ -4594,7 +4594,7 @@ fn end_pane(t: &T, id: &str, exit: i32, text: &str) {
 }
 
 async fn wait_action(t: &T, id: &str, state: xherd_core::action::ActionState) -> Job {
-    for _ in 0..400 {
+    for _ in 0..1000 {
         t.d.sup.tick(TickKind::ScreenScan);
         tokio::time::sleep(Duration::from_millis(10)).await;
         let j = get(t).await;
@@ -4723,4 +4723,164 @@ async fn action_run_refusals() {
     let e = act(&t, run_action("dev", true)).await.unwrap_err();
     assert_eq!(e.code, "cwd_missing");
     assert!(!t.drv.calls().iter().any(|c| c.starts_with("start-action")));
+}
+
+fn stop_action(id: &str) -> UserAction {
+    UserAction::ActionStop { id: id.into() }
+}
+
+#[tokio::test]
+async fn action_stop_interrupts_keeps_the_output_and_frees_the_session() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    let e = act(&t, stop_action("dev")).await.unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    let e = act(&t, stop_action("dev")).await.unwrap_err();
+    assert_eq!(e.code, "action_not_running");
+    act(&t, run_action("dev", true)).await.unwrap();
+    let s = session_of(&t, "dev");
+    t.drv.held.lock().unwrap().get_mut(&s).unwrap().1 = "listening\n".into();
+
+    act(&t, stop_action("dev")).await.unwrap();
+    let j = wait_action(&t, "dev", ActionState::Stopped).await;
+    assert_eq!(j.actions[0].last.as_ref().unwrap().exit, Some(130));
+    let log = xherd_daemon::actions::read_log(&t.d.paths, &t.a.id, "dev", 1000).unwrap();
+    assert_eq!(log, "listening\n");
+    let calls = t.drv.calls();
+    assert!(
+        calls.contains(&format!("interrupt-session {s}")),
+        "{calls:?}"
+    );
+    assert!(calls.contains(&format!("stop-session {s}")), "{calls:?}");
+    let kinds: Vec<String> =
+        t.d.store
+            .events(&t.a.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+    assert!(kinds.contains(&"action-stop".to_string()), "{kinds:?}");
+    assert!(kinds.contains(&"action-exited".to_string()), "{kinds:?}");
+    // Stopped, so it can run again without a new approval.
+    act(&t, run_action("dev", false)).await.unwrap();
+}
+
+#[tokio::test]
+async fn action_stop_kills_what_ignores_ctrl_c_after_the_grace_period() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "sleep 999"))
+        .await
+        .unwrap();
+    act(&t, run_action("dev", true)).await.unwrap();
+    t.drv
+        .stubborn
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    act(&t, stop_action("dev")).await.unwrap();
+    // A second Stop while one is under way changes nothing.
+    act(&t, stop_action("dev")).await.unwrap();
+    let e = act(
+        &t,
+        UserAction::ActionRestart {
+            id: "dev".into(),
+            approve: false,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, "action_stopping");
+    let started = std::time::Instant::now();
+    let j = wait_action(&t, "dev", ActionState::Stopped).await;
+    assert!(started.elapsed() >= Duration::from_secs(4));
+    assert_eq!(j.actions[0].last.as_ref().unwrap().exit, None);
+    let s = session_of(&t, "dev");
+    let calls = t.drv.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| **c == format!("interrupt-session {s}"))
+            .count(),
+        1
+    );
+    assert!(calls.contains(&format!("stop-session {s}")), "{calls:?}");
+}
+
+#[tokio::test]
+async fn action_restart_stops_then_runs_again() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    act(&t, run_action("dev", true)).await.unwrap();
+    act(
+        &t,
+        UserAction::ActionRestart {
+            id: "dev".into(),
+            approve: false,
+        },
+    )
+    .await
+    .unwrap();
+    for _ in 0..400 {
+        let starts = t
+            .drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start-action"))
+            .count();
+        if starts == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let j = get(&t).await;
+    let r = j.actions[0].last.as_ref().unwrap();
+    assert_eq!(r.state, ActionState::Running);
+    let calls = t.drv.calls();
+    let s = session_of(&t, "dev");
+    let stop = calls
+        .iter()
+        .position(|c| *c == format!("stop-session {s}"))
+        .unwrap();
+    let second = calls
+        .iter()
+        .rposition(|c| c.starts_with("start-action"))
+        .unwrap();
+    assert!(stop < second, "{calls:?}");
+}
+
+#[tokio::test]
+async fn a_cancelled_or_paused_job_stops_its_running_actions() {
+    use xherd_core::action::ActionState;
+    for cancel in [true, false] {
+        let t = setup().await;
+        xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+            .await
+            .unwrap();
+        act(&t, run_action("dev", true)).await.unwrap();
+        if cancel {
+            act(
+                &t,
+                UserAction::Cancel {
+                    remove_worktree: false,
+                },
+            )
+            .await
+            .unwrap();
+        } else {
+            act(&t, UserAction::PauseNow).await.unwrap();
+        }
+        let j = wait_action(&t, "dev", ActionState::Stopped).await;
+        assert!(!xherd_core::action::running(&j), "cancel={cancel}");
+        let s = session_of(&t, "dev");
+        assert!(
+            t.drv.calls().contains(&format!("interrupt-session {s}")),
+            "cancel={cancel}"
+        );
+    }
 }

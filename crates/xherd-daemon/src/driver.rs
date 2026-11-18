@@ -52,6 +52,8 @@ pub trait Driver: Send + Sync + 'static {
     async fn action_status(&self, session: &str) -> Result<Option<PaneStatus>>;
     /// The scrollback of an action session, cut to its last `max_bytes` (R13).
     async fn action_history(&self, session: &str, max_bytes: usize) -> Result<String>;
+    /// Press Ctrl-C in an action session (the first step of Stop, R11).
+    async fn interrupt_session(&self, session: &str) -> Result<()>;
     /// End an action session by name. Not an error when it is already gone.
     async fn stop_session(&self, session: &str) -> Result<()>;
 }
@@ -146,6 +148,11 @@ impl Driver for TerminalDriver {
         self.tmux.history(session, max_bytes).await.map_err(err)
     }
 
+    async fn interrupt_session(&self, session: &str) -> Result<()> {
+        // A held session has one window, the one that runs the command.
+        self.tmux.send_key(session, None, "C-c").await.map_err(err)
+    }
+
     async fn stop_session(&self, session: &str) -> Result<()> {
         if !self.tmux.has_session(session).await {
             return Ok(());
@@ -164,6 +171,8 @@ pub struct FakeDriver {
     /// Action sessions: pane state and scrollback, set by tests to simulate
     /// an exit (`start_action` inserts a running pane with no history).
     pub held: std::sync::Mutex<std::collections::BTreeMap<String, (PaneStatus, String)>>,
+    /// An action that ignores Ctrl-C: `interrupt_session` leaves the pane alive.
+    pub stubborn: std::sync::atomic::AtomicBool,
 }
 
 impl FakeDriver {
@@ -245,6 +254,18 @@ impl Driver for FakeDriver {
             from += 1;
         }
         Ok(text[from..].to_string())
+    }
+    async fn interrupt_session(&self, session: &str) -> Result<()> {
+        self.log(format!("interrupt-session {session}"));
+        if !self.stubborn.load(std::sync::atomic::Ordering::SeqCst)
+            && let Some(h) = self.held.lock().unwrap().get_mut(session)
+        {
+            h.0 = PaneStatus {
+                dead: true,
+                exit: Some(130),
+            };
+        }
+        Ok(())
     }
     async fn stop_session(&self, session: &str) -> Result<()> {
         self.log(format!("stop-session {session}"));
