@@ -139,6 +139,19 @@ xherd agent propose --name SLUG [--description TEXT] [--instructions-file PATH]
 
 `agent propose` is the opposite call, for a job **without** a saved agent: it drafts the agent the job could become, so the user can save it (a suggestion when the job ends, or *Save as agent*). `--name` is a slug like a job's name, `--description` one line (up to 200 characters), `--instructions-file` (a `./.xherd/…` path) holds up to 4 000 characters of general instructions: what the user had to repeat or correct, nothing about this task. Without the file the instructions are empty. One draft per job; proposing again replaces it. xherd keeps the user's own messages, answers and change requests for the job and writes them to `.xherd/spec/user-notes.md` when a ship-role stage starts, as the input for the draft; ticket and PR text never go in. Nothing is saved without the user. Refusals: `has_agent` (the job already started from an agent), `usage` (a bad name or description), `doc_missing`, `doc_schema` (over 4 000 characters).
 
+### Job actions
+
+```
+xherd action add <ID> --label TEXT --run COMMAND [--kind service|task] [--cwd DIR] [--description TEXT] [--icon NAME]
+xherd action rm <ID>
+xherd action ls
+xherd action log <ID>
+```
+
+Actions are named commands the **user** can run from the job page (a dev server, the tests, a demo script). The coding agent registers and reads them; it can never run, stop or approve one. `add` registers an action, or replaces the one with the same id (a changed command loses its approval): `ID` is a slug (lowercase letters, digits and `-`), `--run` one line of shell, `--kind` `service` (long-running, the default) or `task` (ends), `--cwd` a folder inside the worktree (symlinks are resolved; default the worktree root). Inside a running action `$XHERD_PORT_BASE` is the first port of the job's block, so a service should listen on it (`pnpm dev --port $XHERD_PORT_BASE`). A new or changed command must be approved by the user before it runs, so `add` never starts anything. `rm` removes the action from this job (a running one is stopped); the repo profile is not touched. `ls` prints each action with its state and whether it is approved. `log` prints the last 64 KiB of the last run's output, wrapped as untrusted text.
+
+The calls need a live job, work in a job with no workflow and are not flow work. Refusals: `actions_off` (`jobActions` is false), `action_limit` (`maxActionsPerJob`), `action_unknown`, `usage` (a bad id, an empty or multi-line command, a `--cwd` outside the worktree).
+
 ## 7. MCP transport
 
 > Planned: `xherd mcp` is not built yet.
