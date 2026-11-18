@@ -724,21 +724,11 @@ impl Daemon {
     /// approval would record (`doc_sha256`), and the text last approved, if
     /// any, for "changed since you reviewed". `path` as in XAP calls.
     pub async fn doc(&self, who: &str, path: &str) -> Result<serde_json::Value, ActionError> {
-        const MAX: u64 = 2 * 1024 * 1024;
         let fail = |code: &'static str, message: String| ActionError { code, message };
         let a = self.action(who, UserAction::Get).await?;
         let wd = workdir_of(&a)?;
         let canon = xherd_flow::xap::doc_path(path, wd).map_err(|r| fail("bad_path", r.message))?;
-        let abs = wd
-            .join(xherd_flow::xap::worktree_rel(&canon))
-            .canonicalize()
-            .ok()
-            .filter(|p| wd.canonicalize().is_ok_and(|w| p.starts_with(w)) && p.is_file())
-            .ok_or_else(|| fail("no_such_doc", format!("{path} does not exist")))?;
-        if std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0) > MAX {
-            return Err(fail("too_large", format!("{path} is larger than 2 MiB")));
-        }
-        let bytes = std::fs::read(&abs).map_err(|e| fail("io", e.to_string()))?;
+        let (abs, bytes) = read_worktree_file(wd, xherd_flow::xap::worktree_rel(&canon), path)?;
         let flow = a
             .pack
             .as_deref()
@@ -919,6 +909,48 @@ impl Daemon {
         }))
     }
 
+    /// The whole new-side file of a diff, for the Changes panel's "show more
+    /// lines" buttons. The side is resolved from `view`/`commit` exactly as
+    /// `diff` does (never a revision from the caller): the worktree, a
+    /// recorded commit's sha, or `HEAD` at a ship gate. Files over 2 MiB are
+    /// refused (`too_large`). Read-only, run here rather than in the actor.
+    pub async fn diff_source(
+        &self,
+        who: &str,
+        path: &str,
+        view: Option<&str>,
+        commit: Option<&str>,
+    ) -> Result<serde_json::Value, ActionError> {
+        const MAX: u64 = 2 * 1024 * 1024;
+        let fail = |code: &'static str, message: String| ActionError { code, message };
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = workdir_of(&a)?;
+        let canon = xherd_flow::xap::doc_path(&format!("./{path}"), wd)
+            .map_err(|r| fail("bad_path", r.message))?;
+        let rel = xherd_flow::xap::worktree_rel(&canon);
+        let Some(rev) = diff_new_side(&a, view, commit)? else {
+            let (_, bytes) = read_worktree_file(wd, rel.clone(), path)?;
+            return Ok(serde_json::json!({
+                "path": rel, "rev": "worktree",
+                "text": String::from_utf8_lossy(&bytes),
+            }));
+        };
+        let git = xherd_git::Git::new("git");
+        let spec = format!("{rev}:{rel}");
+        let size = git
+            .run(wd, &["cat-file", "-s", &spec])
+            .await
+            .map_err(|_| fail("no_such_doc", format!("{path} does not exist")))?;
+        if size.parse::<u64>().unwrap_or(0) > MAX {
+            return Err(fail("too_large", format!("{path} is larger than 2 MiB")));
+        }
+        let text = git
+            .run(wd, &["show", &spec])
+            .await
+            .map_err(|e| fail("git", e.to_string()))?;
+        Ok(serde_json::json!({ "path": rel, "rev": rev, "text": text }))
+    }
+
     /// Apply `hook-queue.jsonl` in order (R-014). Returns how many were applied.
     pub async fn replay_queue(&self) -> std::io::Result<usize> {
         let path = self.paths.hook_queue();
@@ -1013,6 +1045,63 @@ impl Daemon {
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "event pruning failed"),
         }
+    }
+}
+
+/// A file inside the worktree: canonical path and bytes. `shown` names it in
+/// errors. At most 2 MiB (`too_large`); outside the worktree or not a file is
+/// `no_such_doc`.
+fn read_worktree_file(
+    wd: &std::path::Path,
+    rel: String,
+    shown: &str,
+) -> Result<(std::path::PathBuf, Vec<u8>), ActionError> {
+    const MAX: u64 = 2 * 1024 * 1024;
+    let fail = |code: &'static str, message: String| ActionError { code, message };
+    let abs = wd
+        .join(rel)
+        .canonicalize()
+        .ok()
+        .filter(|p| wd.canonicalize().is_ok_and(|w| p.starts_with(w)) && p.is_file())
+        .ok_or_else(|| fail("no_such_doc", format!("{shown} does not exist")))?;
+    if std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0) > MAX {
+        return Err(fail("too_large", format!("{shown} is larger than 2 MiB")));
+    }
+    let bytes = std::fs::read(&abs).map_err(|e| fail("io", e.to_string()))?;
+    Ok((abs, bytes))
+}
+
+/// The revision holding a diff's new side, or `None` for the worktree; the
+/// same view rules as `Daemon::diff`.
+fn diff_new_side(
+    a: &Job,
+    view: Option<&str>,
+    commit: Option<&str>,
+) -> Result<Option<String>, ActionError> {
+    let fail = |code: &'static str, message: String| ActionError { code, message };
+    match view {
+        Some("uncommitted" | "branch") => Ok(None),
+        Some("commit") => {
+            let id = commit.ok_or_else(|| fail("bad_request", "commit=<id> is needed".into()))?;
+            let c = a
+                .commits
+                .iter()
+                .find(|c| c.id == id)
+                .ok_or_else(|| fail("commit_unknown", format!("no commit {id}")))?;
+            Ok(c.sha.clone())
+        }
+        Some(v) => Err(fail("bad_request", format!("unknown view {v:?}"))),
+        None => Ok(matches!(
+            (&a.gate, &a.base),
+            (
+                Some(xherd_core::domain::Gate::Docs {
+                    role: xherd_core::domain::Role::Ship,
+                    ..
+                }),
+                Some(_)
+            )
+        )
+        .then(|| "HEAD".to_string())),
     }
 }
 
