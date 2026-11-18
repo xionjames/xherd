@@ -92,7 +92,10 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 ### Planned
 
 - A runtime, model and effort per step.
-- Secure access from your phone or another device (pairing), beyond notifications.
+- Secure access from your phone or another device (binding beyond loopback, HTTPS and device pairing), beyond notifications.
+- Dynamic job actions: buttons and commands that plugins, flow packs and profiles add to a job (run the app, open a preview, run a script).
+- In Docker: file sharing with the job's terminal and port forwarding to a job's dev server.
+- macOS binaries (Intel and Apple silicon) and a Homebrew tap.
 - Board cards and views declared by flow packs and profiles.
 - Your own spec-driven method under xherd, through your own flow pack or a few `xherd` calls ([draft guide](doc/extend/integrate-your-sdd.md)).
 
