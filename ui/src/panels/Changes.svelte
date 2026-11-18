@@ -1,12 +1,12 @@
 <script lang="ts">
   // `diff` panel: what the user reviews before approving (GET /jobs/:id/diff):
   // the proposed commit, the branch at a ship gate, else every uncommitted change.
-  import type { Job, DiffAnswer } from '../lib/types';
-  import { get, post } from '../lib/api';
+  import type { Job, DiffAnswer, DiffSource } from '../lib/types';
+  import { get, post, ApiError } from '../lib/api';
   import { mdNoteText, type MdNote } from '../lib/notes';
   import { showError } from '../lib/errors.svelte';
   import { route, go } from '../lib/router.svelte';
-  import { parseUnified } from '../lib/diff';
+  import { parseUnified, expand, matches, sourceLines, STEP, type FileDiff, type Reveal } from '../lib/diff';
   import DiffLines, { lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
   import FilePath from '../components/FilePath.svelte';
@@ -42,7 +42,7 @@
   async function sendNotes() {
     const out: string[] = [];
     for (const f of files) {
-      for (const l of f.lines) {
+      for (const l of shown(f)) {
         const t = notes[f.path]?.[lineKey(l)];
         if (t) out.push(`${f.path}:${l.new ?? l.old}${l.kind === 'd' ? ' (removed line)' : ''}\n> ${l.text}\n${t}`);
       }
@@ -77,6 +77,44 @@
     const a = id;
     get<{ viewed: Record<string, string> }>(`/jobs/${a}/viewed`).then((r) => { if (a === id) viewed = r.viewed; }, () => {});
   });
+  // Expansion (unchanged lines around hunks): per file, tied to the diff it was made
+  // for (fingerprint + query) so a reload of the same diff keeps it and a new one drops it.
+  type Ex = { fp: string; q: string; reveal: Record<number, Reveal>; src: string[] | null; note?: string; sticky?: boolean; busy?: boolean };
+  let ex = $state<Record<string, Ex>>({});
+  const cur = (f: FileDiff) => {
+    const e = ex[f.path];
+    return e && e.fp === fingerprint(f) && e.q === query ? e : null;
+  };
+  const expandable = (f: FileDiff) => (f.status === 'modified' || f.status === 'renamed') && !f.note;
+  const shown = (f: FileDiff) => {
+    if (!expandable(f)) return f.lines;
+    const e = cur(f);
+    return expand(f, e?.src ?? null, e?.reveal ?? {});
+  };
+  const expandAt = (f: FileDiff) => async (gap: number, side: 'up' | 'down') => {
+    const a = id;
+    let e = cur(f);
+    if (!e) { ex[f.path] = { fp: fingerprint(f), q: query, reveal: {}, src: null }; e = ex[f.path]; }
+    if (e.note || e.busy) return;
+    if (!e.src) {
+      e.busy = true;
+      try {
+        const r = await get<DiffSource>(`/jobs/${a}/diff/source${query ? `${query}&` : '?'}path=${encodeURIComponent(f.path)}`);
+        if (a !== id || ex[f.path] !== e) return;
+        const src = sourceLines(r.text);
+        if (matches(f, src)) e.src = src;
+        else { e.note = 'The file changed since this diff was loaded: refresh.'; e.sticky = true; }
+      } catch (err) {
+        if (a !== id || ex[f.path] !== e) return;
+        const big = err instanceof ApiError && err.code === 'too_large';
+        e.note = big ? 'The file is too large to expand.' : `Could not load the file: ${(err as Error).message}`;
+        e.sticky = big;
+      } finally { e.busy = false; }
+      if (!e.src) return;
+    }
+    const r = e.reveal[gap] ?? { up: 0, down: 0 };
+    e.reveal[gap] = { up: r.up + (side === 'up' ? STEP : 0), down: r.down + (side === 'down' ? STEP : 0) };
+  };
   let collapsed = $state<Record<string, boolean>>({});
   let previewing = $state<Record<string, boolean>>({});
   const previewKind = (p: string) => {
@@ -104,7 +142,11 @@
 
   async function load() {
     loading = true;
-    try { d = await get<DiffAnswer>(`/jobs/${id}/diff${query}`); error = null; }
+    try {
+      d = await get<DiffAnswer>(`/jobs/${id}/diff${query}`); error = null;
+      // A failed fetch may have been transient: let the next click try again.
+      for (const e of Object.values(ex)) if (e.note && !e.sticky) e.note = undefined;
+    }
     catch (e) { error = (e as Error).message; }
     finally { loading = false; }
   }
@@ -185,7 +227,8 @@
           {#if !collapsed[f.path]}
             {@const k = previewKind(f.path)}
             {#if f.note}<p class="empty cb">{f.note}</p>
-            {:else if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} notes={mdNotes[f.path]} onnote={setMd(f.path)} />{:else}<DiffLines lines={f.lines} notes={notes[f.path]} onnote={setNote(f.path)} />{/if}
+            {:else if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} notes={mdNotes[f.path]} onnote={setMd(f.path)} />{:else}<DiffLines lines={shown(f)} notes={notes[f.path]} onnote={setNote(f.path)}
+                onexpand={expandable(f) ? expandAt(f) : undefined} expandNote={cur(f)?.note} />{/if}
           {/if}
         </section>
       {/each}
