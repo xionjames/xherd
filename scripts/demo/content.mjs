@@ -147,3 +147,15 @@ export const terminal = [
   '',
   '\x1b[2m> \x1b[0m',
 ].join('\r\n');
+
+// Output of the demo build action.
+export const actionLog = [
+  '> web-store@1.4.0 build',
+  '> vite build',
+  '',
+  'vite v5.4.0 building for production...',
+  '✓ 128 modules transformed.',
+  'dist/index.html           0.46 kB',
+  'dist/assets/index.js    212.31 kB',
+  '✓ built in 2.31s',
+].join('\n');
