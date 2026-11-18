@@ -2603,28 +2603,8 @@ impl Actor {
         )
         .await
         .map_err(|e| refuse("store", e.to_string()))?;
-        let s = self.env.settings.get();
         let mut ctx = self.ctx();
-        ctx.env = vec![
-            ("XHERD_ENV".into(), "1".into()),
-            ("XHERD_BIN".into(), s.xherd_bin.clone()),
-            ("XHERD_URL".into(), s.xherd_url.clone()),
-            ("XHERD_JOB_ID".into(), self.job.id.clone()),
-            ("XHERD_JOB_TOKEN".into(), token),
-            ("XHERD_PORT_BASE".into(), port_base.to_string()),
-        ];
-        // The prompts call plain `xherd …`: a command with a variable in it
-        // cannot be checked by the runtime and asks every time.
-        if let Some(dir) = Path::new(&s.xherd_bin).parent().filter(|d| d.is_absolute()) {
-            // The agents' PATH, not ours: the daemon's is the system's (R-1203).
-            let old = xherd_core::runner::agent_env("PATH").unwrap_or_default();
-            ctx.env.push((
-                "PATH".into(),
-                format!("{}:{old}", dir.display())
-                    .trim_end_matches(':')
-                    .to_string(),
-            ));
-        }
+        ctx.env = self.session_env(port_base, Some(token));
         self.env
             .driver
             .start(&ctx, &self.session_argv(argv).await)
@@ -2632,6 +2612,35 @@ impl Actor {
             .map_err(|e| refuse("driver", e.0))?;
         self.job.session_since = Some(self.now());
         Ok(())
+    }
+
+    /// The environment of a session of this job: `XHERD_*` (the job token only
+    /// when given) and the agents' `PATH` with xherd's directory in front.
+    fn session_env(&self, port_base: u16, token: Option<String>) -> Vec<(String, String)> {
+        let s = self.env.settings.get();
+        let mut env = vec![
+            ("XHERD_ENV".into(), "1".into()),
+            ("XHERD_BIN".into(), s.xherd_bin.clone()),
+            ("XHERD_URL".into(), s.xherd_url.clone()),
+            ("XHERD_JOB_ID".into(), self.job.id.clone()),
+        ];
+        if let Some(token) = token {
+            env.push(("XHERD_JOB_TOKEN".into(), token));
+        }
+        env.push(("XHERD_PORT_BASE".into(), port_base.to_string()));
+        // The prompts call plain `xherd …`: a command with a variable in it
+        // cannot be checked by the runtime and asks every time.
+        if let Some(dir) = Path::new(&s.xherd_bin).parent().filter(|d| d.is_absolute()) {
+            // The agents' PATH, not ours: the daemon's is the system's (R-1203).
+            let old = xherd_core::runner::agent_env("PATH").unwrap_or_default();
+            env.push((
+                "PATH".into(),
+                format!("{}:{old}", dir.display())
+                    .trim_end_matches(':')
+                    .to_string(),
+            ));
+        }
+        env
     }
 
     /// `argv` with the pending `next_prompt` on it, for a runtime that takes
