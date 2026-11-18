@@ -384,6 +384,15 @@ impl Daemon {
         a.permission_mode = Some(mode);
         a.model = model;
         a.profile = profile.as_ref().map(|p| p.id.clone());
+        // R19: a snapshot of the profile's actions, approved; later edits of
+        // the profile do not change this job.
+        if let Some(p) = profile.as_ref() {
+            a.actions = p
+                .actions
+                .iter()
+                .map(xherd_core::action::from_profile)
+                .collect();
+        }
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);

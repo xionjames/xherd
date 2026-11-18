@@ -536,6 +536,42 @@ async fn permission_mode_from_the_request_and_changed_later() {
     assert_eq!(e.code, "mode_unavailable");
 }
 
+/// R19, R20: a new job holds an approved snapshot of its profile's actions,
+/// lists them in `instructions.md`, and later profile edits do not touch it.
+#[tokio::test]
+async fn a_new_job_copies_the_profiles_actions() {
+    let t = setup().await;
+    let p: xherd_core::profile::Profile = serde_json::from_value(serde_json::json!({
+        "name": "app",
+        "match": [t.repo.path().canonicalize().unwrap().to_string_lossy()],
+        "actions": [{"id": "dev", "label": "Dev server", "run": "pnpm dev", "kind": "service"}]
+    }))
+    .unwrap();
+    let p = t.d.create_profile(p).await.unwrap();
+    let a = t.d.new_job(req(&t, "SC-41")).await.unwrap();
+    assert_eq!(a.actions.len(), 1);
+    let act = &a.actions[0];
+    assert_eq!(act.def.id, "dev");
+    assert_eq!(act.source, xherd_core::action::ActionSource::Profile);
+    assert_eq!(
+        act.approved.as_deref(),
+        Some(xherd_core::action::approval_hash(&act.def).as_str())
+    );
+    let md = std::fs::read_to_string(
+        std::path::Path::new(a.workdir.as_deref().unwrap()).join(".xherd/instructions.md"),
+    )
+    .unwrap();
+    assert!(md.contains("- `dev`: Dev server: `pnpm dev`"), "{md}");
+
+    let mut edited = p.clone();
+    edited.actions[0].run = "pnpm start".into();
+    t.d.update_profile(&p.id, edited).await.unwrap();
+    let again = t.d.store.get_job(&a.id).await.unwrap().unwrap();
+    assert_eq!(again.actions[0].def.run, "pnpm dev");
+    let b = t.d.new_job(req(&t, "SC-42")).await.unwrap();
+    assert_eq!(b.actions[0].def.run, "pnpm start");
+}
+
 /// The model (issue #112): request, then the profile's entry for the
 /// runtime, then Settings' `runtimeModels`; it goes on the launch line and
 /// can be changed (or cleared) later, keeping the permission mode.
