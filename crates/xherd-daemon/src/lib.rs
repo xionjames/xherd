@@ -186,6 +186,9 @@ pub struct Daemon {
     pub config_write: Arc<std::sync::Mutex<()>>,
     /// Held while saved agents are changed (create, edit, archive, delete, import).
     pub agents_write: Arc<tokio::sync::Mutex<()>>,
+    /// Held while a profile is read, changed and saved (an edit, or actions
+    /// saved from a job), so two writers never drop each other's change.
+    pub profiles_write: Arc<tokio::sync::Mutex<()>>,
     /// Held while plugins are installed, updated or removed.
     pub plugins_write: Arc<tokio::sync::Mutex<()>>,
     /// See `Options::plugin_install`.
@@ -360,6 +363,7 @@ impl Daemon {
             secrets_write: Arc::default(),
             config_write: Arc::default(),
             agents_write: Arc::default(),
+            profiles_write: Arc::default(),
             plugins_write: Arc::default(),
             plugin_install: opts.plugin_install,
             allow_local_plugin_sources: opts.allow_local_plugin_sources,

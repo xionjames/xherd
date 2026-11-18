@@ -142,6 +142,20 @@ pub enum UserAction {
         id: String,
         approve: bool,
     },
+    /// Remove an action of the job; a running one is stopped first (R17).
+    ActionRemove {
+        id: String,
+    },
+    /// The user allowed the command whose hash this is, by saving it to the
+    /// repo profile `profile` (R22); refused `action_changed` when the
+    /// action's command moved on since.
+    ActionApprove {
+        id: String,
+        hash: String,
+        profile: String,
+    },
+    /// Hide the "Save actions to repo profile" card for this job (R23).
+    ActionsCardDismiss,
     Get,
 }
 
@@ -2623,6 +2637,48 @@ impl Actor {
                 }
                 self.begin_stop(id, Some(*approve)).await;
                 return Ok(());
+            }
+            UserAction::ActionRemove { id } => {
+                let gone = xherd_core::action::remove(&mut self.job, id)?;
+                if matches!(&gone.last, Some(r) if r.state == xherd_core::action::ActionState::Running)
+                {
+                    let session = xherd_core::action::session_name(&self.job.name, id);
+                    if let Err(e) = self.env.driver.stop_session(&session).await {
+                        tracing::warn!(job = %self.job.name, %session, "{}", e);
+                    }
+                }
+                self.stopping.remove(id);
+                let _ = std::fs::remove_file(self.env.paths.action_log(&self.job.id, id));
+                self.log(None, "action-removed", Some(json!({"id": id})))
+                    .await;
+                self.commit(before).await;
+                return Ok(());
+            }
+            UserAction::ActionApprove { id, hash, profile } => {
+                if !self.job.actions.iter().any(|a| a.def.id == *id) {
+                    return Err(refuse("action_unknown", format!("no action `{id}`")));
+                }
+                if !xherd_core::action::approve(&mut self.job, id, hash) {
+                    return Err(refuse(
+                        "action_changed",
+                        format!("the command of `{id}` changed since it was shown"),
+                    ));
+                }
+                self.log(
+                    None,
+                    "action-saved",
+                    Some(json!({"id": id, "profile": profile})),
+                )
+                .await;
+                self.commit(before).await;
+                return Ok(());
+            }
+            UserAction::ActionsCardDismiss => {
+                if self.job.actions_card_dismissed {
+                    return Ok(());
+                }
+                self.job.actions_card_dismissed = true;
+                "user.actions-card-dismiss"
             }
             UserAction::SetMode { mode, launch } => {
                 if self.job.permission_mode == Some(*mode) {

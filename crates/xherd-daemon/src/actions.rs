@@ -2,13 +2,92 @@
 
 use std::path::Path;
 
+use xherd_core::Job;
+use xherd_core::action::approval_hash;
 use xherd_core::paths::{Paths, write_atomic};
+use xherd_core::profile;
+
+use crate::{ActionError, Daemon, UserAction};
+
+fn err(code: &'static str, message: impl Into<String>) -> ActionError {
+    ActionError {
+        code,
+        message: message.into(),
+    }
+}
 
 /// Most bytes of an action's log kept on disk: the end of the output (R13).
 pub const MAX_LOG_BYTES: usize = 1024 * 1024;
 
 /// Most bytes `xherd action log` returns (R5a).
 pub const MAX_READ_BYTES: usize = 64 * 1024;
+
+impl Daemon {
+    /// Save the job's actions `ids` to its repo profile (R22, R23): each
+    /// replaces the profile's action with the same id, and counts as the
+    /// user's approval of its command. All or nothing for the profile;
+    /// `no_profile` when the job has none that still exists.
+    pub async fn save_actions_to_profile(
+        &self,
+        who: &str,
+        ids: &[String],
+    ) -> Result<Job, ActionError> {
+        if ids.is_empty() {
+            return Err(err("usage", "say which actions to save"));
+        }
+        let job = self.action(who, UserAction::Get).await?;
+        let mut picked = Vec::new();
+        for id in ids {
+            let a = job
+                .actions
+                .iter()
+                .find(|a| a.def.id == *id)
+                .ok_or_else(|| err("action_unknown", format!("no action `{id}`")))?;
+            picked.push(a.def.clone());
+        }
+        let _w = self.profiles_write.lock().await;
+        let mut p = self.profile_of(&job).await.ok_or_else(|| {
+            err(
+                "no_profile",
+                format!("{} has no repo profile to save to", job.name),
+            )
+        })?;
+        for def in &picked {
+            match p.actions.iter_mut().find(|x| x.id == def.id) {
+                Some(x) => *x = def.clone(),
+                None => p.actions.push(def.clone()),
+            }
+        }
+        let others: Vec<String> = self
+            .profiles()
+            .await?
+            .into_iter()
+            .filter(|x| x.id != p.id)
+            .map(|x| x.name)
+            .collect();
+        let names: Vec<&str> = others.iter().map(String::as_str).collect();
+        profile::check(&mut p, &names).map_err(|m| err("bad_profile", m))?;
+        self.store
+            .put_profile(&p)
+            .await
+            .map_err(|e| err("store", e.to_string()))?;
+        drop(_w);
+        let mut job = job;
+        for def in picked {
+            job = self
+                .action(
+                    who,
+                    UserAction::ActionApprove {
+                        hash: approval_hash(&def),
+                        id: def.id,
+                        profile: p.name.clone(),
+                    },
+                )
+                .await?;
+        }
+        Ok(job)
+    }
+}
 
 /// Keep the last `max` bytes of `text`, starting at a character boundary.
 fn tail(text: &str, max: usize) -> &str {
