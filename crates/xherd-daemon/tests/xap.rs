@@ -4605,7 +4605,10 @@ async fn wait_action(t: &T, id: &str, state: xherd_core::action::ActionState) ->
             return j;
         }
     }
-    panic!("action {id} never reached {state:?}");
+    panic!(
+        "action {id} never reached {state:?}: {:?}",
+        get(t).await.actions
+    );
 }
 
 #[tokio::test]
@@ -4883,4 +4886,44 @@ async fn a_cancelled_or_paused_job_stops_its_running_actions() {
             "cancel={cancel}"
         );
     }
+}
+
+#[tokio::test]
+async fn reconcile_at_start_loses_and_adopts_action_sessions_and_kills_unknown_ones() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    for id in ["gone", "ended", "alive"] {
+        xap(&t, id, "action.add", add_args(id, "x")).await.unwrap();
+        act(&t, run_action(id, true)).await.unwrap();
+    }
+    // The terminal server restarted: one session is missing, one pane ended
+    // while xherd was down, one still runs. An unknown action session lingers.
+    t.drv.held.lock().unwrap().remove(&session_of(&t, "gone"));
+    end_pane(&t, "ended", 3, "bye");
+    let ghost = xherd_core::action::session_name(&t.a.name, "ghost");
+    t.drv.alive.lock().unwrap().insert(ghost.clone());
+
+    let before = t.drv.calls().len();
+    t.d.reconcile_with(true).await;
+    wait_action(&t, "gone", ActionState::Lost).await;
+    let j = wait_action(&t, "ended", ActionState::Exited).await;
+    let st = |id: &str| {
+        j.actions
+            .iter()
+            .find(|a| a.def.id == id)
+            .unwrap()
+            .last
+            .clone()
+    };
+    assert_eq!(st("ended").unwrap().exit, Some(3));
+    assert_eq!(st("alive").unwrap().state, ActionState::Running);
+    let calls = t.drv.calls().split_off(before);
+    assert!(
+        calls.contains(&format!("stop-session {ghost}")),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&format!("stop-session {}", session_of(&t, "alive"))),
+        "{calls:?}"
+    );
 }

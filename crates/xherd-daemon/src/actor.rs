@@ -34,7 +34,13 @@ pub enum Msg {
     User(UserAction, oneshot::Sender<Result<Job, ActionError>>),
     Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
-    WorkDone { generation: u64, result: WorkResult },
+    /// At the daemon's start: the terminal sessions that are not any job's
+    /// own, so the job can kill the action sessions it does not know (R12).
+    Sessions(Arc<Vec<String>>),
+    WorkDone {
+        generation: u64,
+        result: WorkResult,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -731,6 +737,7 @@ impl Actor {
                     let _ = reply.send(self.on_xap(call).await);
                 }
                 Msg::Tick(t) => self.on_tick(t).await,
+                Msg::Sessions(alive) => self.kill_unknown_actions(&alive),
                 Msg::WorkDone { generation, result } => {
                     if generation != self.job.generation && !result.about_action() {
                         tracing::debug!(agent = %self.job.name, "dropping stale async result");
@@ -2970,6 +2977,35 @@ impl Actor {
         Ok(())
     }
 
+    /// The sessions of this job's actions that its state does not list as
+    /// running (a removed action, a stale run) are killed at start. A session
+    /// whose id part holds `-act-` may belong to a job named like that, so it
+    /// is left alone (R12).
+    fn kill_unknown_actions(&self, alive: &[String]) {
+        let known: BTreeSet<String> = self
+            .job
+            .actions
+            .iter()
+            .filter(|a| matches!(&a.last, Some(r) if r.state == xherd_core::action::ActionState::Running))
+            .map(|a| xherd_core::action::session_name(&self.job.name, &a.def.id))
+            .collect();
+        let prefix = xherd_core::action::session_name(&self.job.name, "");
+        for session in alive {
+            let Some(id) = session.strip_prefix(&prefix) else {
+                continue;
+            };
+            if id.is_empty() || id.contains("-act-") || known.contains(session) {
+                continue;
+            }
+            let (driver, session) = (self.env.driver.clone(), session.clone());
+            tokio::spawn(async move {
+                if let Err(e) = driver.stop_session(&session).await {
+                    tracing::warn!(session, error = %e, "unknown action session not killed");
+                }
+            });
+        }
+    }
+
     /// The tick of the running actions: a dead pane, a living one, or a session
     /// that is gone, each answered as a `WorkResult` (R11, R13).
     fn check_actions(&self) {
@@ -4304,6 +4340,9 @@ impl Actor {
                     }
                     self.commit(before).await;
                 }
+                // Actions outlive the agent's session: after a restart each
+                // running one is adopted (alive or dead pane) or lost (R12).
+                self.check_actions();
             }
             TickKind::IdleCheck => {
                 let m = self.env.settings.get().idle_alert_minutes;

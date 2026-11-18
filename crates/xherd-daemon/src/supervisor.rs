@@ -262,10 +262,32 @@ impl Supervisor {
                 }
             }
             SupMsg::Reconcile(alive, recover) => {
-                for e in self.agents.values().filter(|e| e.status.is_live()) {
+                // A job that is not live but has a running action is checked
+                // too: the actor adopts or loses its action sessions (R12).
+                for e in self
+                    .agents
+                    .values()
+                    .filter(|e| e.status.is_live() || e.actions_running)
+                {
                     let alive = alive.contains(&e.name);
                     let _ =
                         e.tx.send(Msg::Tick(TickKind::SessionCheck { alive, recover }));
+                }
+                if recover {
+                    // A job's own session is its name: those are not action
+                    // sessions, whatever they look like (`a-act-b`).
+                    let names: BTreeSet<&str> =
+                        self.agents.values().map(|e| e.name.as_str()).collect();
+                    let others: std::sync::Arc<Vec<String>> = std::sync::Arc::new(
+                        alive
+                            .iter()
+                            .filter(|s| !names.contains(s.as_str()))
+                            .cloned()
+                            .collect(),
+                    );
+                    for e in self.agents.values() {
+                        let _ = e.tx.send(Msg::Sessions(others.clone()));
+                    }
                 }
             }
             SupMsg::AgentLimit(id, limit) => {
