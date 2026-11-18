@@ -17,6 +17,8 @@ use crate::actor::{
 /// First port handed to agents; each live agent gets a block of 10 (`XHERD_PORT_BASE`).
 pub const PORT_RANGE_START: u16 = 41000;
 pub const PORT_BLOCK: u16 = 10;
+/// How many blocks fit in the range (up to port 49999).
+const PORT_BLOCKS: u16 = (50000 - PORT_RANGE_START) / PORT_BLOCK;
 
 pub enum SupMsg {
     Create(Box<Job>, oneshot::Sender<Result<Job, ActionError>>),
@@ -100,7 +102,10 @@ struct Entry {
     ticket_key: Option<String>,
     status: Status,
     created_at: Millis,
+    /// Index of the job's port block: base = `PORT_RANGE_START + block * PORT_BLOCK`.
     port_block: Option<u16>,
+    /// An action of the job runs: the port block is kept (R12a).
+    actions_running: bool,
 }
 
 struct Supervisor {
@@ -158,7 +163,9 @@ impl Supervisor {
             ticket_key: a.ticket_key().map(str::to_string),
             status: a.status,
             created_at: a.created_at,
-            port_block: None,
+            // A block survives a restart through `Job.port_base` (R12a).
+            port_block: a.port_base.and_then(block_of),
+            actions_running: xherd_core::action::running(&a),
         };
         self.agents.insert(a.id, entry);
     }
@@ -273,6 +280,15 @@ impl Supervisor {
     fn on_event(&mut self, ev: SupEvent) {
         let (id, to) = match ev {
             SupEvent::StatusChanged { id, to } => (id, to),
+            SupEvent::ActionsRunning { id, running } => {
+                if let Some(e) = self.agents.get_mut(&id) {
+                    e.actions_running = running;
+                    if !running && !e.status.is_live() {
+                        e.port_block = None;
+                    }
+                }
+                return;
+            }
             SupEvent::AgentChanged { id, agent } => {
                 if let Some(e) = self.agents.get_mut(&id) {
                     e.agent = agent;
@@ -282,7 +298,7 @@ impl Supervisor {
         };
         if let Some(e) = self.agents.get_mut(&id) {
             e.status = to;
-            if !to.is_live() {
+            if !to.is_live() && !e.actions_running {
                 e.port_block = None;
             }
         }
@@ -334,7 +350,11 @@ impl Supervisor {
             chosen.push(id);
         }
         for id in chosen {
-            let block = self.free_block();
+            // No free block: the job stays queued until one is released.
+            let Some(block) = self.free_block() else {
+                tracing::warn!(agent = %id, "no_ports: every port block is in use");
+                break;
+            };
             let e = self.agents.get_mut(&id).expect("queued agent");
             e.port_block = Some(block);
             let port_base = PORT_RANGE_START + block * PORT_BLOCK;
@@ -344,8 +364,39 @@ impl Supervisor {
         }
     }
 
-    fn free_block(&self) -> u16 {
-        let used: BTreeSet<u16> = self.agents.values().filter_map(|e| e.port_block).collect();
-        (0..).find(|b| !used.contains(b)).expect("a free block")
+    /// The lowest unused block, `None` when the range is exhausted.
+    fn free_block(&self) -> Option<u16> {
+        first_free(self.agents.values().filter_map(|e| e.port_block))
+    }
+}
+
+/// The block index of a job's `port_base`; `None` outside the range.
+fn block_of(port_base: u16) -> Option<u16> {
+    let block = port_base.checked_sub(PORT_RANGE_START)? / PORT_BLOCK;
+    (block < PORT_BLOCKS).then_some(block)
+}
+
+fn first_free(used: impl Iterator<Item = u16>) -> Option<u16> {
+    let used: BTreeSet<u16> = used.collect();
+    (0..PORT_BLOCKS).find(|b| !used.contains(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_block_comes_back_from_the_job_port_base() {
+        assert_eq!(block_of(PORT_RANGE_START), Some(0));
+        assert_eq!(block_of(PORT_RANGE_START + 3 * PORT_BLOCK), Some(3));
+        assert_eq!(block_of(PORT_RANGE_START - 1), None);
+        assert_eq!(block_of(60000), None);
+    }
+
+    #[test]
+    fn the_lowest_free_block_is_taken_and_none_is_left_when_all_are_used() {
+        assert_eq!(first_free([0, 1, 3].into_iter()), Some(2));
+        assert_eq!(first_free(std::iter::empty()), Some(0));
+        assert_eq!(first_free(0..PORT_BLOCKS), None);
     }
 }

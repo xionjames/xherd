@@ -206,6 +206,12 @@ pub enum SupEvent {
         id: String,
         agent: Option<String>,
     },
+    /// Whether an action of the job runs: the supervisor keeps the job's
+    /// port block while one does (R12a).
+    ActionsRunning {
+        id: String,
+        running: bool,
+    },
 }
 
 /// The settings actors read, replaced as a whole when the config is saved
@@ -486,6 +492,7 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
     let auth_screen_block = agent.status == Status::Blocked
         && agent.gate.is_some()
         && agent.block_reason.as_deref() == Some("git access");
+    let actions_running = xherd_core::action::running(&agent);
     let actor = Actor {
         job: agent,
         env,
@@ -500,6 +507,7 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         resume_unconfirmed: false,
         notified_gate: None,
         auto_resumes: Vec::new(),
+        actions_running,
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -552,6 +560,8 @@ struct Actor {
     notified_gate: Option<Gate>,
     /// When the daemon resumed this agent by itself (bounded, see above).
     auto_resumes: Vec<i64>,
+    /// What the supervisor was last told about running actions.
+    actions_running: bool,
 }
 
 impl Actor {
@@ -824,6 +834,11 @@ impl Actor {
         if !self.job.status.is_live() {
             self.job.pause_requested_at = None;
         }
+        // R12a: the port block stays with the job while an action runs.
+        let running = xherd_core::action::running(&self.job);
+        if !self.job.status.is_live() && !running {
+            self.job.port_base = None;
+        }
         // Every end of the session ends an Ask hold (queued = still starting).
         if !self.job.status.is_live() && self.job.status != Status::Queued {
             self.job.ask_hold = None;
@@ -851,6 +866,13 @@ impl Actor {
         let _ = self.env.hub.send(Change::Job {
             job: Box::new(self.job.clone()),
         });
+        if running != self.actions_running {
+            self.actions_running = running;
+            let _ = self.env.sup.send(SupEvent::ActionsRunning {
+                id: self.job.id.clone(),
+                running,
+            });
+        }
         if self.job.status != before {
             tracing::info!(agent = %self.job.name, from = %before, to = %self.job.status, "status");
             let _ = self.env.sup.send(SupEvent::StatusChanged {
@@ -2536,6 +2558,7 @@ impl Actor {
                 format!("{} is {}", self.job.name, self.job.status),
             ));
         }
+        self.job.port_base = Some(port_base);
         let res = self.launch(port_base).await;
         if let Err(e) = &res {
             self.revoke_tokens().await;
