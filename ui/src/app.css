@@ -342,6 +342,29 @@ label.f.chk.top { align-items: flex-start; }
 .x a.vtb:hover { background: var(--pen-2); color: var(--ink); }
 .x a.vtb.on { background: var(--accent-wash); color: var(--ink); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
 .vtb .tc { margin-left: auto; }
+/* Services and Actions groups of the job menu (R24). */
+.agrp { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.agh { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 0; background: none; color: var(--ink-2); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; text-align: left; }
+.agh:hover { background: var(--pen-2); color: var(--ink); }
+.agh .am { margin-left: auto; font-size: 11px; color: var(--live); }
+.agh .am.gt { color: var(--gate); }
+.agl { display: none; flex-direction: column; gap: 2px; }
+.agl.open { display: flex; }
+.x a.vtb.act { height: 34px; }
+.act .al { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.act .ad { width: 16px; text-align: center; flex: none; font-size: 13px; }
+.act .ad.ok { color: var(--live); }
+.act .ad.fail { color: var(--halt); }
+.act .ad.run { color: var(--live); }
+.aall { align-self: flex-start; margin-left: 8px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 760px) {
+  .agrp { margin-top: 0; flex: none; }
+  .agh { height: 44px; }
+  .agl.open { display: none; }
+  .agl.sheet { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; max-height: 60vh; overflow-y: auto; padding: 8px; background: var(--pen); border-top: 1px solid var(--fence-strong); box-shadow: var(--shadow); }
+  .x a.vtb.act { height: 44px; border-radius: 8px; }
+}
 @media (max-width: 760px) {
   .aview { grid-template-columns: minmax(0, 1fr); }
   .vnav { position: static; flex-direction: row; overflow-x: auto; scrollbar-width: none; min-height: 0; padding: 0 4px; border-right: 0; border-bottom: 1px solid var(--fence); background: var(--pen); }

@@ -23,6 +23,7 @@
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
   import { agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
+  import { defaultOpen, groups, headerMarks, headerText, lastResult, needsApproval, running, tabId as actionTab, visible, type GroupKind } from '../lib/actions';
 
   let { agent }: { agent: Job } = $props();
   // Work log (spec §16.4): while this page is visible and focused, tell the
@@ -68,6 +69,30 @@
   const tabId = $derived(tabs.find((t) => t.id === route.query.get('s'))?.id ?? fallback);
   const tab = $derived(tabs.find((t) => t.id === tabId) ?? tabs[0]);
   const Panel = $derived(tab ? PANELS[tab.panel] : undefined);
+  // Services and Actions after the tabs (R24): open by default with at most 4
+  // entries; the choice is kept per viewer; under 760px a group is a sheet.
+  const KINDS: GroupKind[] = ['service', 'task'];
+  const grouped = $derived(groups(agent.actions));
+  const openKey = (k: GroupKind) => `xherd.actions.${k}`;
+  let openSet = $state<Partial<Record<GroupKind, boolean>>>({});
+  let showAll = $state<Partial<Record<GroupKind, boolean>>>({});
+  let sheet = $state<GroupKind | null>(null);
+  function isOpen(k: GroupKind): boolean {
+    const o = openSet[k];
+    if (o !== undefined) return o;
+    try {
+      const s = localStorage.getItem(openKey(k));
+      if (s === '1' || s === '0') return s === '1';
+    } catch { /* private mode */ }
+    return defaultOpen(grouped[k].length);
+  }
+  function toggleGroup(k: GroupKind) {
+    if (window.matchMedia('(max-width: 760px)').matches) { sheet = sheet === k ? null : k; return; }
+    const next = !isOpen(k);
+    openSet[k] = next;
+    try { localStorage.setItem(openKey(k), next ? '1' : '0'); } catch { /* private mode */ }
+  }
+  const actionSel = $derived(route.query.get('s'));
   const live = $derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
 
   function badge(id: string): { n: string | number; tone: string } | undefined {
@@ -247,6 +272,35 @@
         href={href(`/jobs/${agent.name}`, { s: t.id })}>
         <Icon name={t.icon} />{t.label}{#if b?.n === '✋'}<span class="tc mark {b.tone}" title="Needs you"><Icon name="handSolid" size={16} solid /></span>{:else if b}<span class="tc {b.tone}">{b.n}</span>{/if}
       </a>
+    {/each}
+    {#each KINDS as k (k)}
+      {#if grouped[k].length}
+        {@const marks = headerMarks(grouped[k])}
+        {@const open = isOpen(k)}
+        {@const list = visible(grouped[k], !!showAll[k])}
+        <div class="agrp">
+          <button class="agh" aria-expanded={open || sheet === k} onclick={() => toggleGroup(k)}>
+            <span aria-hidden="true">{open || sheet === k ? '▾' : '▸'}</span>{headerText(k, grouped[k])}
+            {#if !open && marks.running && k === 'service'}<span class="am" title="A service is running">▶</span>{/if}
+            {#if !open && marks.approval}<span class="am gt" title="Waiting for your approval">?</span>{/if}
+          </button>
+          <div class="agl" class:open class:sheet={sheet === k}>
+            {#each list.shown as a (a.def.id)}
+              {@const r = lastResult(a)}
+              <a class="vtb act" class:on={actionSel === actionTab(a.def.id)} href={href(`/jobs/${agent.name}`, { s: actionTab(a.def.id) })}
+                aria-current={actionSel === actionTab(a.def.id) ? 'page' : undefined} onclick={() => (sheet = null)}>
+                <span class="ad {r.tone}" title={r.text}><span aria-hidden="true">{r.icon}</span><span class="sr">{r.text}</span></span>
+                <span class="al">{a.def.label || a.def.id}</span>
+                {#if a.source === 'profile'}<span class="tc" title="From the repository profile">repo</span>{/if}
+                {#if needsApproval(a) && !running(a)}<span class="tc g" title="Needs your approval to run">?</span>{/if}
+              </a>
+            {/each}
+            {#if list.hidden}
+              <button class="btn ghost aall" onclick={() => (showAll[k] = true)}>Show all ({grouped[k].length})</button>
+            {/if}
+          </div>
+        </div>
+      {/if}
     {/each}
   </nav>
   <div class="apanel">
