@@ -36,9 +36,13 @@ export function hollow(s: Status): boolean {
   return ['queued', 'paused', 'watching', 'parked', 'cancelled'].includes(s);
 }
 
-/** An open gate for the user: not one autonomy will approve at the next stop (R4). */
+/**
+ * An open gate for the user: not one autonomy will approve at the next stop (R4),
+ * and only once the agent has stopped there. While the job is `running` the daemon
+ * refuses approval (`not_waiting`), so the gate does not wait for you yet.
+ */
 export function waitsAtGate(a: Job): boolean {
-  return !!a.gate && !a.autoApprovePending;
+  return !!a.gate && !a.autoApprovePending && a.status !== 'running';
 }
 
 /** Needs you = waiting for input, blocked, or an open gate (R-007). */
