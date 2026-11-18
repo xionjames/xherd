@@ -416,6 +416,60 @@ mod tests {
     }
 
     #[test]
+    fn nvm_plan_reads_package_json() {
+        let nvm = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "nvm")
+            .unwrap();
+        let tcs = vec![("nvm".to_string(), Toolchain::of(&nvm).unwrap())];
+        let pos = |p: &Plan, tool: &str| p.steps.iter().position(|s| s.tool == tool).unwrap();
+
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("package.json"),
+            r#"{"packageManager":"pnpm@9.12.0+sha512.abc"}"#,
+        )
+        .unwrap();
+        std::fs::write(d.path().join(".nvmrc"), "22\n").unwrap();
+        let p = plan(d.path(), &tcs, true, &BTreeMap::new());
+        let s = &p.steps[pos(&p, "pnpm")];
+        assert_eq!(
+            (s.version.as_str(), s.file.as_str()),
+            ("9.12.0", "package.json")
+        );
+        assert!(pos(&p, "pnpm") < pos(&p, "node"));
+        assert!(p.steps.iter().all(|s| s.tool != "yarn"));
+
+        let bun = tempfile::tempdir().unwrap();
+        std::fs::write(bun.path().join(".bun-version"), "1.1.38\n").unwrap();
+        std::fs::write(
+            bun.path().join("package.json"),
+            r#"{"packageManager":"bun@1.0.0"}"#,
+        )
+        .unwrap();
+        let p = plan(bun.path(), &tcs, true, &BTreeMap::new());
+        let s = &p.steps[pos(&p, "bun")];
+        assert_eq!(
+            (s.version.as_str(), s.file.as_str()),
+            ("1.1.38", ".bun-version")
+        );
+
+        let empty = tempfile::tempdir().unwrap();
+        std::fs::write(empty.path().join(".nvmrc"), "22\n").unwrap();
+        let defaults = BTreeMap::from([
+            ("yarn".to_string(), "1.22.22".to_string()),
+            ("typescript".into(), "5.6.3".into()),
+        ]);
+        let p = plan(empty.path(), &tcs, true, &defaults);
+        for tool in ["yarn", "typescript"] {
+            let s = &p.steps[pos(&p, tool)];
+            assert_eq!(s.file, "xherd default");
+            assert!(pos(&p, tool) < pos(&p, "node"));
+        }
+        assert!(p.steps.iter().all(|s| s.tool != "pnpm" && s.tool != "bun"));
+    }
+
+    #[test]
     fn env_uses_the_resolved_dir() {
         let mut s = plan(Path::new("/nonexistent"), &tc(), false, &BTreeMap::new());
         assert!(s.steps.is_empty());
