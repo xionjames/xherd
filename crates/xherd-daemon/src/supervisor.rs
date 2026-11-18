@@ -240,7 +240,8 @@ impl Supervisor {
                 }
                 match self.resolve(&who) {
                     Ok(id) => {
-                        let _ = self.agents[id].tx.send(Msg::User(action, reply));
+                        let id = id.to_string();
+                        self.send_user(&id, action, reply);
                     }
                     Err(e) => {
                         let _ = reply.send(Err(e));
@@ -362,6 +363,60 @@ impl Supervisor {
             let _ = e.tx.send(Msg::User(UserAction::Start { port_base }, tx));
             self.starting.insert(id);
         }
+    }
+
+    /// Hand a user action to the job's actor. A Run gets the job's port block
+    /// (R12a): the one it holds, else a free one reserved now, refused
+    /// `no_ports` when none is free. A reserved block the actor does not use
+    /// (the Run was refused) is released again.
+    fn send_user(
+        &mut self,
+        id: &str,
+        mut action: UserAction,
+        reply: oneshot::Sender<Result<Job, ActionError>>,
+    ) {
+        let mut reserved = false;
+        if let UserAction::ActionRun { port_base, .. } = &mut action {
+            let e = &self.agents[id];
+            let block = match e.port_block {
+                Some(b) => Some(b),
+                None => {
+                    reserved = true;
+                    self.free_block()
+                }
+            };
+            let Some(block) = block else {
+                let _ = reply.send(Err(ActionError {
+                    code: "no_ports",
+                    message: "every port block is in use".into(),
+                }));
+                return;
+            };
+            *port_base = Some(PORT_RANGE_START + block * PORT_BLOCK);
+            if reserved {
+                self.agents.get_mut(id).expect("agent").port_block = Some(block);
+            }
+        }
+        let e = &self.agents[id];
+        if !reserved {
+            let _ = e.tx.send(Msg::User(action, reply));
+            return;
+        }
+        let (tx, rx) = oneshot::channel();
+        let _ = e.tx.send(Msg::User(action, tx));
+        let (sup, id) = (self.env.sup.clone(), id.to_string());
+        tokio::spawn(async move {
+            let res = rx.await.unwrap_or_else(|_| {
+                Err(ActionError {
+                    code: "internal",
+                    message: "the job is gone".into(),
+                })
+            });
+            if res.is_err() {
+                let _ = sup.send(SupEvent::ActionsRunning { id, running: false });
+            }
+            let _ = reply.send(res);
+        });
     }
 
     /// The lowest unused block, `None` when the range is exhausted.

@@ -120,6 +120,13 @@ pub enum UserAction {
     /// Merge the PR's base into its branch (#139, R14): a new session with
     /// the pack's `conflicts` command.
     ResolveConflicts,
+    /// Run an action of the job (R9, R14): `approve` is the user's allowance
+    /// of its exact command; `port_base` is filled in by the supervisor.
+    ActionRun {
+        id: String,
+        approve: bool,
+        port_base: Option<u16>,
+    },
     Get,
 }
 
@@ -168,6 +175,34 @@ pub enum WorkResult {
         session: String,
         tokens: u64,
     },
+    /// The pane of a running action is dead: its exit status (`None` when a
+    /// signal killed it) and what it printed (R11, R13).
+    ActionEnded {
+        id: String,
+        exit: Option<i32>,
+        output: String,
+    },
+    /// The action's pane still runs (a service counts as succeeded, R23).
+    ActionAlive {
+        id: String,
+    },
+    /// The action's session is gone with no exit status.
+    ActionGone {
+        id: String,
+    },
+}
+
+impl WorkResult {
+    /// Results about actions stay valid when the agent's generation moved on
+    /// (hand-on, resume): an action outlives the session.
+    fn about_action(&self) -> bool {
+        matches!(
+            self,
+            WorkResult::ActionEnded { .. }
+                | WorkResult::ActionAlive { .. }
+                | WorkResult::ActionGone { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -185,6 +220,9 @@ pub struct ActionError {
     pub code: &'static str,
     pub message: String,
 }
+
+/// Lines of scrollback an action's pane keeps for its log (R13).
+const ACTION_HISTORY_LINES: u32 = 20_000;
 
 /// R3: an action's folder, once symlinks are followed, stays inside the
 /// worktree. A folder that does not exist yet is judged by its nearest
@@ -646,7 +684,7 @@ impl Actor {
                 }
                 Msg::Tick(t) => self.on_tick(t).await,
                 Msg::WorkDone { generation, result } => {
-                    if generation != self.job.generation {
+                    if generation != self.job.generation && !result.about_action() {
                         tracing::debug!(agent = %self.job.name, "dropping stale async result");
                         continue;
                     }
@@ -2501,6 +2539,14 @@ impl Actor {
                 self.resolve_conflicts().await?;
                 "user.resolve-conflicts"
             }
+            UserAction::ActionRun {
+                id,
+                approve,
+                port_base,
+            } => {
+                self.run_action(id, *approve, *port_base).await?;
+                return Ok(());
+            }
             UserAction::SetMode { mode, launch } => {
                 if self.job.permission_mode == Some(*mode) {
                     return Ok(());
@@ -2777,6 +2823,136 @@ impl Actor {
             .map_err(|e| refuse("driver", e.0))?;
         self.job.session_since = Some(self.now());
         Ok(())
+    }
+
+    fn action_runs(&self, id: &str) -> bool {
+        use xherd_core::action::ActionState;
+        self.job.actions.iter().any(|a| {
+            a.def.id == id && matches!(&a.last, Some(r) if r.state == ActionState::Running)
+        })
+    }
+
+    /// Run an action for the user (R9–R11, R14, R17): its own tmux session in
+    /// the action's folder, with the job's environment but no token (R10).
+    async fn run_action(
+        &mut self,
+        id: &str,
+        approve: bool,
+        port_base: Option<u16>,
+    ) -> Result<(), ActionError> {
+        use xherd_core::action;
+        if !self.env.settings.get().job_actions {
+            return Err(refuse("actions_off", "job actions are switched off"));
+        }
+        let before = self.job.status;
+        let plan = action::may_run(&self.job, id, approve)?;
+        let wd = self.workdir()?;
+        cwd_inside(&wd, &plan.def.cwd)?;
+        let cwd = wd.join(&plan.def.cwd);
+        if !cwd.is_dir() {
+            return Err(refuse(
+                "cwd_missing",
+                format!("the folder `{}` does not exist", plan.def.cwd),
+            ));
+        }
+        let base = self
+            .job
+            .port_base
+            .or(port_base)
+            .ok_or_else(|| refuse("no_ports", "the job holds no port block"))?;
+        let session = action::session_name(&self.job.name, id);
+        // A dead pane left by an earlier run that was never captured.
+        if let Err(e) = self.env.driver.stop_session(&session).await {
+            tracing::warn!(job = %self.job.name, %session, "{}", e);
+        }
+        let mut ctx = self.ctx();
+        ctx.workdir = cwd;
+        ctx.env = self.session_env(base, None);
+        let argv = self
+            .session_argv(vec!["sh".into(), "-lc".into(), plan.def.run.clone()])
+            .await;
+        self.env
+            .driver
+            .start_action(&ctx, &session, &argv, ACTION_HISTORY_LINES)
+            .await
+            .map_err(|e| refuse("driver", e.0))?;
+        self.job.port_base = Some(base);
+        let now = self.now();
+        action::on_started(&mut self.job, id, now, plan.store_approval.clone());
+        if plan.store_approval.is_some() {
+            self.log(None, "action-approved", Some(json!({"id": id})))
+                .await;
+        }
+        self.log(
+            None,
+            "action-run",
+            Some(json!({"id": id, "run": plan.def.run, "cwd": plan.def.cwd})),
+        )
+        .await;
+        self.commit(before).await;
+        Ok(())
+    }
+
+    /// The tick of the running actions: a dead pane, a living one, or a session
+    /// that is gone, each answered as a `WorkResult` (R11, R13).
+    fn check_actions(&self) {
+        use xherd_core::action::ActionState;
+        let running = self
+            .job
+            .actions
+            .iter()
+            .filter(|a| matches!(&a.last, Some(r) if r.state == ActionState::Running));
+        for a in running {
+            let id = a.def.id.clone();
+            let session = xherd_core::action::session_name(&self.job.name, &id);
+            let (driver, tx, generation) = (
+                self.env.driver.clone(),
+                self.tx.clone(),
+                self.job.generation,
+            );
+            tokio::spawn(async move {
+                let result = match driver.action_status(&session).await {
+                    Ok(Some(st)) if st.dead => WorkResult::ActionEnded {
+                        id,
+                        exit: st.exit,
+                        output: driver
+                            .action_history(&session, crate::actions::MAX_LOG_BYTES)
+                            .await
+                            .unwrap_or_default(),
+                    },
+                    Ok(Some(_)) => WorkResult::ActionAlive { id },
+                    Ok(None) => WorkResult::ActionGone { id },
+                    Err(_) => return,
+                };
+                let _ = tx.send(Msg::WorkDone { generation, result });
+            });
+        }
+    }
+
+    /// An action's command ended by itself: keep its output (R13), record the
+    /// exit (R11, R17) and free the dead session. A second report of the same
+    /// end (two ticks in flight) is ignored.
+    async fn action_ended(&mut self, id: &str, exit: Option<i32>, output: &str) {
+        use xherd_core::action;
+        if !self.action_runs(id) {
+            return;
+        }
+        let before = self.job.status;
+        if let Err(e) = crate::actions::write_log(&self.env.paths, &self.job.id, id, output) {
+            tracing::warn!(job = %self.job.name, action = id, error = %e, "action log not written");
+        }
+        let session = action::session_name(&self.job.name, id);
+        if let Err(e) = self.env.driver.stop_session(&session).await {
+            tracing::warn!(job = %self.job.name, %session, "{}", e);
+        }
+        let now = self.now();
+        match exit {
+            Some(code) => action::on_exited(&mut self.job, id, now, code),
+            None => action::on_stopped(&mut self.job, id, now, None),
+        }
+        self.log(None, "action-exited", Some(json!({"id": id, "code": exit})))
+            .await;
+        self.commit(before).await;
     }
 
     /// The environment of a session of this job: `XHERD_*` (the job token only
@@ -4069,6 +4245,7 @@ impl Actor {
                         }
                     });
                 }
+                self.check_actions();
             }
             TickKind::PrPoll => self.poll_pr(),
             TickKind::TodoTick => {}
@@ -4077,6 +4254,23 @@ impl Actor {
 
     async fn on_work(&mut self, w: WorkResult) {
         match w {
+            WorkResult::ActionEnded { id, exit, output } => {
+                self.action_ended(&id, exit, &output).await;
+            }
+            WorkResult::ActionAlive { id } => {
+                let (before, now) = (self.job.status, self.now());
+                if self.action_runs(&id) && xherd_core::action::on_alive(&mut self.job, &id, now) {
+                    self.commit(before).await;
+                }
+            }
+            WorkResult::ActionGone { id } => {
+                if self.action_runs(&id) {
+                    let (before, now) = (self.job.status, self.now());
+                    xherd_core::action::on_lost(&mut self.job, &id, now);
+                    self.log(None, "action-lost", Some(json!({"id": id}))).await;
+                    self.commit(before).await;
+                }
+            }
             WorkResult::Screen(screen) => {
                 // Only a running agent can be stuck on a failing command; a
                 // stopped one's screen is its own text about the work.

@@ -4565,3 +4565,162 @@ async fn action_log_is_wrapped_capped_and_read_only() {
     // Reading does not log an event nor change the job.
     assert_eq!(r["changed"], false);
 }
+
+fn run_action(id: &str, approve: bool) -> UserAction {
+    UserAction::ActionRun {
+        id: id.into(),
+        approve,
+        port_base: None,
+    }
+}
+
+fn session_of(t: &T, id: &str) -> String {
+    xherd_core::action::session_name(&t.a.name, id)
+}
+
+/// Make the fake pane of an action's session end with `exit` and `text`.
+fn end_pane(t: &T, id: &str, exit: i32, text: &str) {
+    let s = session_of(t, id);
+    t.drv.held.lock().unwrap().insert(
+        s,
+        (
+            xherd_term::PaneStatus {
+                dead: true,
+                exit: Some(exit),
+            },
+            text.to_string(),
+        ),
+    );
+}
+
+async fn wait_action(t: &T, id: &str, state: xherd_core::action::ActionState) -> Job {
+    for _ in 0..400 {
+        t.d.sup.tick(TickKind::ScreenScan);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let j = get(t).await;
+        if j.actions
+            .iter()
+            .any(|a| a.def.id == id && a.last.as_ref().is_some_and(|r| r.state == state))
+        {
+            return j;
+        }
+    }
+    panic!("action {id} never reached {state:?}");
+}
+
+#[tokio::test]
+async fn action_run_needs_approval_then_runs_without_the_token() {
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    let e = act(&t, run_action("dev", false)).await.unwrap_err();
+    assert_eq!(e.code, "action_not_approved");
+    assert!(!t.drv.calls().iter().any(|c| c.starts_with("start-action")));
+
+    let j = act(&t, run_action("dev", true)).await.unwrap();
+    let a = &j.actions[0];
+    assert!(a.approved.is_some());
+    assert_eq!(
+        a.last.as_ref().unwrap().state,
+        xherd_core::action::ActionState::Running
+    );
+    let call = t
+        .drv
+        .calls()
+        .into_iter()
+        .find(|c| c.starts_with("start-action"))
+        .unwrap();
+    assert!(call.contains(&session_of(&t, "dev")), "{call}");
+    assert!(call.ends_with("sh -lc npm run dev"), "{call}");
+    let kinds: Vec<String> =
+        t.d.store
+            .events(&t.a.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+    assert!(kinds.contains(&"action-approved".to_string()), "{kinds:?}");
+    assert!(kinds.contains(&"action-run".to_string()), "{kinds:?}");
+
+    // At most one instance (R11).
+    let e = act(&t, run_action("dev", true)).await.unwrap_err();
+    assert_eq!(e.code, "action_running");
+}
+
+#[tokio::test]
+async fn action_exit_is_recorded_with_its_log_and_runs_again_unasked() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "make"))
+        .await
+        .unwrap();
+    act(&t, run_action("dev", true)).await.unwrap();
+    end_pane(&t, "dev", 3, "building…\nfailed\n");
+    let j = wait_action(&t, "dev", ActionState::Exited).await;
+    let r = j.actions[0].last.as_ref().unwrap();
+    assert_eq!(r.exit, Some(3));
+    assert!(r.ended_at.is_some());
+    assert!(!j.actions[0].succeeded);
+    let log = xherd_daemon::actions::read_log(&t.d.paths, &t.a.id, "dev", 1000).unwrap();
+    assert_eq!(log, "building…\nfailed\n");
+    // The dead session was freed.
+    let s = session_of(&t, "dev");
+    assert!(
+        t.drv
+            .calls()
+            .iter()
+            .any(|c| *c == format!("stop-session {s}"))
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    let ex = events.iter().find(|e| e.kind == "action-exited").unwrap();
+    assert_eq!(ex.payload.as_ref().unwrap()["code"], 3);
+
+    // The same command runs again with no new approval (R14).
+    act(&t, run_action("dev", false)).await.unwrap();
+    // A changed command asks again (after it ended).
+    end_pane(&t, "dev", 0, "ok");
+    wait_action(&t, "dev", ActionState::Exited).await;
+    xap(&t, "a2", "action.add", add_args("dev", "make all"))
+        .await
+        .unwrap();
+    let e = act(&t, run_action("dev", false)).await.unwrap_err();
+    assert_eq!(e.code, "action_not_approved");
+}
+
+#[tokio::test]
+async fn action_task_exit_zero_succeeds_and_autonomy_never_approves() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    act(
+        &t,
+        UserAction::SetAutonomy {
+            level: xherd_core::autonomy::Autonomy::Important,
+        },
+    )
+    .await
+    .unwrap();
+    let mut args = add_args("t", "true");
+    args["kind"] = json!("task");
+    xap(&t, "a1", "action.add", args).await.unwrap();
+    let e = act(&t, run_action("t", false)).await.unwrap_err();
+    assert_eq!(e.code, "action_not_approved");
+    act(&t, run_action("t", true)).await.unwrap();
+    end_pane(&t, "t", 0, "");
+    let j = wait_action(&t, "t", ActionState::Exited).await;
+    assert!(j.actions[0].succeeded);
+}
+
+#[tokio::test]
+async fn action_run_refusals() {
+    let t = setup().await;
+    let e = act(&t, run_action("nope", true)).await.unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    let mut args = add_args("dev", "x");
+    args["cwd"] = json!("missing");
+    xap(&t, "a1", "action.add", args).await.unwrap();
+    let e = act(&t, run_action("dev", true)).await.unwrap_err();
+    assert_eq!(e.code, "cwd_missing");
+    assert!(!t.drv.calls().iter().any(|c| c.starts_with("start-action")));
+}
