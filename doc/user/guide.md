@@ -60,6 +60,8 @@ The built-in `feature` flow goes through these stages. Each ends at a gate where
 | ship | `pr.md` | The branch as it will be pushed, and the PR text. The job then pushes and opens a **draft** pull request |
 | pr-review | `pr-review.md` | Its decision on each new PR comment (fix, reply, skip). Always yours to approve |
 
+At the review gate, the findings table has a `fix` or `skip` choice on each open finding. **Fix N findings** sends the choices to the agent, which fixes them and returns to the gate. Approving ships the work; it does not fix open findings.
+
 ## The bugfix flow
 
 The built-in `bugfix` flow is for a defect: find the cause, prove it with a failing test, then fix it.
