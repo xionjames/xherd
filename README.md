@@ -29,7 +29,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 
 ![Jobs: counters that filter, every job with a pill per stage of its workflow and the initials of the agent that runs it, and who in the team is busy](doc/assets/herd.jpg)
 
-> **Status: early, but it runs.** Jobs work end to end (worktree, runtime in tmux, approval gates, commits, draft PR, PR follow-up), with a web UI, a Docker image and Linux packages ([releases](https://github.com/xionjames/xherd/releases)). It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
+> **Status: early, but it runs.** Jobs work end to end (worktree, runtime in tmux, approval gates, commits, draft PR, PR follow-up), with a web UI, a Docker image, Linux packages and macOS binaries ([releases](https://github.com/xionjames/xherd/releases)). It is a single-user tool for now, and the planned items below are not built yet. See the [roadmap](ROADMAP.md) and open an issue with feedback.
 
 ## Features
 
@@ -100,7 +100,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 
 ## Documentation
 
-Start with **[Getting started](doc/user/getting-started.md)** (install with Docker or a Linux package, first job), then **[Using xherd](doc/user/guide.md)**. Everything else is in the [documentation index](doc/README.md):
+Start with **[Getting started](doc/user/getting-started.md)** (install with Docker, Homebrew or a Linux package, first job), then **[Using xherd](doc/user/guide.md)**. Everything else is in the [documentation index](doc/README.md):
 
 | | |
 |---|---|
