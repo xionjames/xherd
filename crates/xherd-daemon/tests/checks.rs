@@ -386,3 +386,38 @@ async fn a_first_run_starts_with_the_plugins_off() {
         assert!(saved.disabled_plugins.contains(&"opencode".to_string()));
     }
 }
+
+/// With everything off after a first run, switching on one plugin is allowed
+/// even though other required kinds (toolchains) still have none on; the
+/// default runtime follows to the runtime that is on; the last runtime on
+/// still cannot be switched off.
+#[tokio::test]
+async fn enabling_plugins_one_by_one_after_a_first_run() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    o.sandbox = true;
+    o.builtin_plugins
+        .retain(|m| ["claude-code", "opencode", "nvm", "uv"].contains(&m.name.as_str()));
+    let d = Daemon::start(paths.clone(), o).await.unwrap();
+    let load = || xherd_core::config::Config::load(&paths.config()).unwrap().0;
+    let off_but = |on: &[&str]| -> serde_json::Value {
+        let all = ["claude-code", "opencode", "nvm", "uv"];
+        json!({"disabledPlugins": all.iter().filter(|n| !on.contains(n)).collect::<Vec<_>>()})
+    };
+    let save = |v: serde_json::Value| d.save_config(serde_json::from_value(v).unwrap());
+    assert!(!d.plugin_enabled("claude-code") && !d.plugin_enabled("nvm"));
+
+    // Only opencode on: toolchains have none on, and that is fine.
+    save(off_but(&["opencode"])).unwrap();
+    assert!(d.plugin_enabled("opencode"));
+    // The default (claude-code) is off, so the default moves to opencode.
+    assert_eq!(load().default_runtime, "opencode");
+
+    // A toolchain too; then the last of each kind cannot be switched off.
+    save(off_but(&["opencode", "nvm"])).unwrap();
+    assert!(save(off_but(&["nvm"])).is_err());
+    assert!(save(off_but(&["opencode"])).is_err());
+    save(off_but(&["opencode", "uv"])).unwrap();
+}
