@@ -3530,6 +3530,7 @@ async fn an_ask_without_an_ask_command_sends_the_bare_text() {
 #[tokio::test]
 async fn a_commit_made_outside_xherd_is_listed_and_held() {
     let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
     let wt = t.wt.path();
     git(wt, &["checkout", "-q", "-b", "SC-1"]);
     std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
@@ -3569,6 +3570,12 @@ async fn a_commit_made_outside_xherd_is_listed_and_held() {
     );
     let events = t.d.store.events(&t.a.id, 50).await.unwrap();
     assert!(events.iter().any(|e| e.kind == "outside-commit"));
+    let said = notices(&mut rx, "outside-commit");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains(&sha[..7]) && !said[0].contains("Rename the retry helper"),
+        "{said:?}"
+    );
 
     // A second stop lists nothing new.
     stop(&t, 2).await;

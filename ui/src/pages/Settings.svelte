@@ -29,7 +29,7 @@
   type Form = Record<string, string | boolean>;
   const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications', 'suggestAgents'];
   let form = $state<Form>({});
-  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due'], ['suggestion', 'Save a job\'s setup as an agent']];
+  const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due'], ['suggestion', 'Save a job\'s setup as an agent'], ['outside-commit', 'A commit was made outside xherd']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
   function toggleKind(k: string, on: boolean) {
     const next = new Set(muted);

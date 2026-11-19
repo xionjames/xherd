@@ -1135,7 +1135,7 @@ impl Actor {
         if n > 0 {
             let (s, was) = if n == 1 { ("", "was") } else { ("s", "were") };
             self.notify(
-                "gate",
+                "outside-commit",
                 format!(
                     "{}: {n} commit{s} {was} made outside xherd ({})",
                     self.job.name,
