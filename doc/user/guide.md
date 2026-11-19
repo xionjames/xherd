@@ -99,7 +99,7 @@ If the coding agent asks a question (`xherd ask`), the band shows it with an ans
 
 | Tab | Shows |
 |---|---|
-| Terminal | The live session. Type into it. Selecting text needs Shift+drag (Option+drag on a Mac) because the runtime takes the mouse. With no session, *Ask* (below) |
+| Terminal | The live session. A green dot after the label means the agent is running (the job's status is *running*), whichever tab is open. Type into it. Selecting text needs Shift+drag (Option+drag on a Mac) because the runtime takes the mouse. With no session, *Ask* (below) |
 | Tasks | Tasks with status, evidence and dependencies; tasks from a review or PR round are tagged. Long file lists and evidence are cut to two lines, with *Show all* to open them in place |
 | Commits | Proposed and made commits, with message and files |
 | Ticket | The ticket and its comments, read from the tracker, and posting a summary (below) |
