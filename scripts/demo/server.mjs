@@ -112,7 +112,7 @@ const textOf = (p) => (p.endsWith('design.md') ? C.design : p.endsWith('spec.md'
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
 const events = [['stage.enter', { stage: 'implement' }], ['task.start', { task: 'T03' }], ['commit.propose', { id: 'C02' }], ['gate.open', { stage: 'design' }], ['approval', { gate: 'spec', actor: 'user' }], ['stage.enter', { stage: 'spec' }]].map(([kind, payload], i) => ({ id: i + 1, kind, payload, at: ago(5 + i * 9) }));
 
-const routes = { '/state': state, '/checks': { checks: [] }, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/todos': { todos }, '/reviews': { reviews }, '/agents': { agents: AG }, '/skills': { skills }, '/healthz': { ok: true }, '/worklog': { days: [], tickets: [] } };
+const routes = { '/state': state, '/checks': { checks: [{ id: 'plugin:opencode:requires:opencode', group: 'plugins', label: 'opencode · requires:opencode', required: false, ok: false, detail: 'Installing opencode 1.19.0…', installing: true }] }, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/todos': { todos }, '/reviews': { reviews }, '/agents': { agents: AG }, '/skills': { skills }, '/healthz': { ok: true }, '/worklog': { days: [], tickets: [] } };
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.json': 'application/json' };
 const json = (r, o) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify(o)); };
 
