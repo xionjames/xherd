@@ -1,6 +1,7 @@
 # xherd image (spec R-601, R-651; design §8): the daemon, git, tmux, gh, glab,
-# openssh, the agent CLIs and the version managers. Languages are not in the
-# image: they are installed into the xherd-home volume on first use.
+# openssh and the version managers. Languages and the agent CLIs (Claude Code,
+# opencode, Codex; no Node either) are not in the image: the daemon installs
+# each runtime plugin's pinned binary into the xherd-home volume.
 #
 #   docker build -f deploy/docker/Dockerfile -t ghcr.io/xionjames/xherd:dev .
 # (plain `docker build` works; releases use `docker buildx` for amd64 + arm64)
@@ -31,16 +32,12 @@ RUN cargo build --release --locked -p xherd-cli \
     && cp target/release/xherd /usr/local/bin/xherd
 
 # ---- runtime --------------------------------------------------------------------
-FROM node:${NODE_MAJOR}-trixie-slim AS node
 FROM ghcr.io/astral-sh/uv:0.13.7 AS uv
 
 FROM debian:trixie-slim
 ARG GO_VERSION=1.27.3
 ARG GLAB_VERSION=1.128.0
 ARG NVM_VERSION=0.41.0
-ARG CLAUDE_CODE_VERSION=2.1.319
-ARG OPENCODE_VERSION=1.19.0
-ARG CODEX_VERSION=0.167.2
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -57,17 +54,6 @@ RUN apt-get update \
        "https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/packages/generic/glab/${GLAB_VERSION}/glab_${GLAB_VERSION}_linux_$(dpkg --print-architecture).deb" \
     && apt-get install -y --no-install-recommends /tmp/glab.deb \
     && rm -rf /tmp/glab.deb /var/lib/apt/lists/*
-
-# Node (for the agent CLIs only; projects get theirs through nvm), Claude Code,
-# opencode and Codex.
-COPY --from=node /usr/local/bin/node /usr/local/bin/node
-COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
-    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
-    && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-       "opencode-ai@${OPENCODE_VERSION}" \
-       "@openai/codex@${CODEX_VERSION}" \
-    && npm cache clean --force
 
 # Version managers (R-532). uv and go are single binaries; SDKMAN, nvm and
 # rustup are seeds that `xherd init` copies into the home volume once.

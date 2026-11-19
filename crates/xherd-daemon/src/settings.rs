@@ -473,6 +473,7 @@ impl Daemon {
         // Held from reading the config to saving it (`set_git_hosts` too).
         let write = self.config_write.lock().unwrap_or_else(|e| e.into_inner());
         let mut c = self.saved_config()?;
+        let was_disabled = c.disabled_plugins.clone();
         apply(&mut c, patch)?;
         self.check_disabled(&c.disabled_plugins)?;
         self.check_runtime(&c.default_runtime, &c.disabled_plugins)
@@ -486,6 +487,13 @@ impl Daemon {
             message: e.to_string(),
         })?;
         drop(write);
+        // A runtime switched on installs its CLI (R3); this only spawns.
+        for name in was_disabled
+            .iter()
+            .filter(|n| !c.disabled_plugins.contains(n))
+        {
+            self.ensure_runtime(name);
+        }
         // Settings the actors read apply at once (the rest needs a restart).
         self.settings.set(ActorSettings::from_config(
             &c,

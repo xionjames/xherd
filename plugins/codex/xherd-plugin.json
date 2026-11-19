@@ -112,10 +112,15 @@
         "codex",
         "--version"
       ],
+      "version": "0.167.2",
+      "sha256": {
+        "x86_64": "8246e846c550ea21197fcc4067bc270dca895e94ea42ed6a282e6f4e0125b15f",
+        "aarch64": "ed81fa2c7d209689af061b6f305ed554218de92a1c2c4019142b28f66fa64add"
+      },
       "install": [
         "sh",
         "-c",
-        "npm install -g --prefix \"$HOME/.local\" @openai/codex@0.167.2"
+        "set -eu\nd=$(mkdir -p \"$HOME/.cache\" && mktemp -d \"$HOME/.cache/xherd-install.XXXXXX\")\ntrap 'rm -rf \"$d\"' EXIT\ncase \"$XHERD_INSTALL_ARCH\" in x86_64) a=x86_64;; aarch64) a=aarch64;; *) echo \"unsupported: $XHERD_INSTALL_ARCH\" >&2; exit 1;; esac\ncurl -fsSL --retry 3 -o \"$d/pkg\" \"https://github.com/openai/codex/releases/download/rust-v$XHERD_INSTALL_VERSION/codex-$a-unknown-linux-musl.tar.gz\"\necho \"$XHERD_INSTALL_SHA256  $d/pkg\" | sha256sum -c -\ntar -xzf \"$d/pkg\" -C \"$d\" \"codex-$a-unknown-linux-musl\"\nmkdir -p \"$HOME/.local/bin\"\ninstall -m 0755 \"$d/codex-$a-unknown-linux-musl\" \"$HOME/.local/bin/codex\"\n"
       ],
       "instructions": {
         "any": "npm install -g @openai/codex   # or see https://github.com/openai/codex"

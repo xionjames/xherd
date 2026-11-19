@@ -135,10 +135,15 @@
         "claude",
         "--version"
       ],
+      "version": "2.1.319",
+      "sha256": {
+        "x86_64": "dabafec82ca1319fa43d8be36a10fc61b1d11821cb98ad5df04ad95e199b8eed",
+        "aarch64": "a7e687fd1cb054d651c7588223de3786c99d4c682365e3c3ae1e59ce7f3a591f"
+      },
       "install": [
         "sh",
         "-c",
-        "npm install -g --prefix \"$HOME/.local\" @anthropic-ai/claude-code@2.1.319"
+        "set -eu\nd=$(mkdir -p \"$HOME/.cache\" && mktemp -d \"$HOME/.cache/xherd-install.XXXXXX\")\ntrap 'rm -rf \"$d\"' EXIT\ncase \"$XHERD_INSTALL_ARCH\" in x86_64) a=x64;; aarch64) a=arm64;; *) echo \"unsupported: $XHERD_INSTALL_ARCH\" >&2; exit 1;; esac\ncurl -fsSL --retry 3 -o \"$d/pkg\" \"https://downloads.claude.ai/claude-code-releases/$XHERD_INSTALL_VERSION/linux-$a/claude\"\necho \"$XHERD_INSTALL_SHA256  $d/pkg\" | sha256sum -c -\nchmod +x \"$d/pkg\"\n\"$d/pkg\" install \"$XHERD_INSTALL_VERSION\"\n"
       ],
       "instructions": {
         "any": "npm install -g @anthropic-ai/claude-code   # or see https://docs.claude.com/en/docs/claude-code/setup"

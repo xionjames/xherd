@@ -735,6 +735,7 @@ async fn daemon_main() -> Result<bool, Box<dyn std::error::Error>> {
     opts.xherd_bin = std::env::current_exe()?.to_string_lossy().into_owned();
     opts.scheduler = Some(Default::default());
     opts.sandbox = std::env::var("XHERD_SANDBOX").is_ok_and(|v| v == "1");
+    opts.runtime_install = opts.sandbox;
     // Commands in worktrees run as the agent user through its runner (R-1203).
     if let Some(sock) = std::env::var_os("XHERD_RUNNER").filter(|s| !s.is_empty()) {
         xherd_core::runner::use_runner(sock.into());

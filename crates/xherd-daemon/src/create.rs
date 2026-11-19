@@ -309,6 +309,7 @@ impl Daemon {
         }
         let rt_name = eff.runtime.as_str();
         let rt = self.runtime_terminal(rt_name)?;
+        self.runtime_ready(rt_name).await?;
         if let Some(p) = pack
             && !p.install.contains_key(rt_name)
         {

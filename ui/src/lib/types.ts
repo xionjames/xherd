@@ -413,6 +413,8 @@ export interface Check {
   required: boolean;
   ok: boolean;
   detail: string;
+  /** The plugin's CLI is being installed or updated: no fix is offered meanwhile. */
+  installing?: boolean;
   fix?:
     | { kind: 'command'; text: string }
     | { kind: 'action'; label: string }

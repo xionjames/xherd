@@ -158,6 +158,8 @@ SQLite in WAL mode holds jobs (JSON documents), events, approvals, reviewed snap
 
 `xherd init` (the entrypoint, as root) creates two users and drops privileges. The daemon runs as `xherd-daemon` with its data in its own volume; a `xherd runner` process runs as the agents' user (your host ids), keeps the tmux server, and runs on the daemon's behalf everything that must happen as that user: git, `verify:` and tripwire commands, plugin commands and checks, reading transcripts, writing the runtime's trust and hook files. Without a runner (native installs, tests) the same calls act in place. Each worktree's `.xherd/` is shared between the two users through group permissions. Details: [Docker](../user/docker.md#two-users-inside-the-container).
 
+The runtimes' CLIs are not in the image. With `Options::runtime_install` (the CLI sets it with the sandbox), `runtime_install.rs` probes each enabled runtime plugin's requirement at start and on switch-on, and installs a missing or older-than-pin CLI as the agents' user, publishing `Change::Checks` around it; `new_job` refuses a runtime whose CLI is missing (`runtime_missing`).
+
 ## Execution rules
 
 All external commands go through `xherd_core::exec::run`: argv only (no shell), timeout with process-group kill, environment allowlist, output cap, secret redaction. The few exceptions (the interactive terminal client, processes that replace the CLI such as `toolchain exec`, long-lived helpers) are listed in [Development](development.md#conventions).

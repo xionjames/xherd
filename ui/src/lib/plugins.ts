@@ -39,6 +39,7 @@ export function matches(p: PluginInfo, query: string): boolean {
 export function needLogin(plugins: PluginInfo[], checks: Check[] | null): PluginInfo[] {
   return plugins.filter((p) => {
     if (!p.enabled || !p.login) return false;
+    if (checks?.some((c) => c.id.startsWith(`plugin:${p.name}:`) && c.installing)) return false;
     const c = checks?.find((c) => c.id === `plugin:${p.name}:login`);
     return !!c && !c.ok;
   });

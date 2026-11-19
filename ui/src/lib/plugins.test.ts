@@ -75,6 +75,11 @@ describe('plugins that need a login', () => {
     expect(needLogin(all, [check('claude-code', true), check('github', false)]).map((p) => p.name)).toEqual(['github']);
   });
 
+  it('ignores a plugin whose CLI is being installed', () => {
+    const installing: Check = { ...check('claude-code', false), id: 'plugin:claude-code:requires:claude', installing: true };
+    expect(needLogin(all, [installing, check('claude-code', false)])).toEqual([]);
+  });
+
   it('ignores plugins that are off, have no login, or no check yet', () => {
     const off = all.map((p) => (p.name === 'github' ? { ...p, enabled: false } : p));
     expect(needLogin(off, [check('github', false)])).toEqual([]);
