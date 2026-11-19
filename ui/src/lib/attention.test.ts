@@ -13,7 +13,7 @@ const item = (gate: string, files: string[] = []): AutoApproval => ({ jobId: 'a'
 describe('attentionCount (R1)', () => {
   it('counts waiting agents and due or failed TODOs, never approvals', () => {
     fake.app.state.jobs = [
-      { id: 'a', name: 'a', status: 'running', statusSince: 0, gate: { kind: 'docs', stage: 'design', files: [] } },
+      { id: 'a', name: 'a', status: 'waiting-input', statusSince: 0, gate: { kind: 'docs', stage: 'design', files: [] } },
       { id: 'b', name: 'b', status: 'running', statusSince: 0 },
       { id: 'c', name: 'c', status: 'running', statusSince: 0, gate: { kind: 'docs', stage: 'design', files: [] }, autoApprovePending: true },
     ];
