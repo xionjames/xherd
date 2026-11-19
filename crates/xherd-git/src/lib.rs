@@ -667,34 +667,50 @@ impl Git {
     /// Pre-push guard (R-1204): a hooks folder for this worktree only
     /// (`core.hooksPath` in the worktree's own config, which needs
     /// `extensions.worktreeConfig`). It links every hook of the folder git
-    /// used before, so the repository's other hooks keep running, and replaces
-    /// `pre-push` with a script that asks `xherd guard pre-push` first and then
-    /// runs the original `pre-push`, if any. Hooks can be skipped
-    /// (`--no-verify`): this stops mistakes, not a determined agent.
+    /// used before, so the repository's other hooks keep running, and writes
+    /// `pre-push` as a script that asks `xherd guard pre-push` first and then
+    /// runs the original `pre-push`, if any. The original folder is the last
+    /// `core.hooksPath` of a scope other than the worktree's (our own setting
+    /// is never mistaken for it), else the repository's `hooks`. Safe to call
+    /// again (R8): the script is rewritten only when its text changes (a new
+    /// `xherd` path), and the answer says whether anything was written.
+    /// Hooks can be skipped (`--no-verify`): this stops mistakes, not a
+    /// determined agent.
     pub async fn install_push_guard(
         &self,
         worktree: &Path,
         hooks_dir: &Path,
         xherd_bin: &str,
         branch: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let fail = |e: std::io::Error| GitError::Failed {
             args: "push guard".into(),
             stderr: format!("{}: {e}", hooks_dir.display()),
         };
-        // Where git looked for hooks so far (honours an existing core.hooksPath).
-        let base = self
-            .run(worktree, &["rev-parse", "--git-path", "hooks"])
-            .await?;
-        let base = if Path::new(&base).is_absolute() {
-            PathBuf::from(base)
-        } else {
-            worktree.join(base)
+        let configured = self
+            .run(
+                worktree,
+                &[
+                    "config",
+                    "--type=path",
+                    "--show-scope",
+                    "--get-all",
+                    "core.hooksPath",
+                ],
+            )
+            .await
+            .unwrap_or_default() // exit 1: the key is not set
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .rfind(|(scope, _)| *scope != "worktree")
+            .map(|(_, v)| v.to_string());
+        let base = match configured {
+            Some(v) if Path::new(&v).is_absolute() => PathBuf::from(v),
+            Some(v) => worktree.join(v),
+            None => self.common_dir(worktree).await?.join("hooks"),
         };
         let base = base.canonicalize().unwrap_or(base);
-        if base == hooks_dir {
-            return Ok(()); // already installed
-        }
+        let mut wrote = !hooks_dir.is_dir();
         std::fs::create_dir_all(hooks_dir).map_err(fail)?;
         for entry in std::fs::read_dir(&base).into_iter().flatten().flatten() {
             let name = entry.file_name();
@@ -704,6 +720,7 @@ impl Git {
                 continue;
             }
             std::os::unix::fs::symlink(entry.path(), link).map_err(fail)?;
+            wrote = true;
         }
         let q = sh_quote;
         let script = format!(
@@ -715,7 +732,10 @@ impl Git {
             orig = q(&base.join("pre-push").to_string_lossy()),
         );
         let hook = hooks_dir.join("pre-push");
-        xherd_core::paths::write_atomic(&hook, script.as_bytes(), Some(0o755)).map_err(fail)?;
+        if std::fs::read_to_string(&hook).ok().as_deref() != Some(script.as_str()) {
+            xherd_core::paths::write_atomic(&hook, script.as_bytes(), Some(0o755)).map_err(fail)?;
+            wrote = true;
+        }
         self.run(worktree, &["config", "extensions.worktreeConfig", "true"])
             .await?;
         self.run(
@@ -728,7 +748,7 @@ impl Git {
             ],
         )
         .await?;
-        Ok(())
+        Ok(wrote)
     }
 
     /// Append patterns to `.git/info/exclude` of the repo `dir` belongs to,
@@ -844,5 +864,76 @@ mod tests {
             git.run_raw(d, &["show", "HEAD:f.txt"]).await.unwrap(),
             "a\n\n\n"
         );
+    }
+
+    /// R8: a second install with another binary rewrites the guard, keeps
+    /// chaining the repository's own `pre-push`, and a third changes nothing.
+    #[tokio::test]
+    async fn push_guard_is_rewritten_for_a_new_binary_and_keeps_the_original_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let repo = root.join("repo");
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = Git::new("git");
+        git.run(&repo, &["init", "-q", "-b", "main"]).await.unwrap();
+        git.run(
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "m",
+            ],
+        )
+        .await
+        .unwrap();
+        let original = repo.join(".git/hooks/pre-push");
+        std::fs::write(&original, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(repo.join(".git/hooks/commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
+        git.run(
+            &repo,
+            &["worktree", "add", "-q", "-b", "feat", wt.to_str().unwrap()],
+        )
+        .await
+        .unwrap();
+        let hooks = wt.join(".xherd/hooks");
+        let hook = hooks.join("pre-push");
+
+        assert!(
+            git.install_push_guard(&wt, &hooks, "/bin/xherd-a", "feat")
+                .await
+                .unwrap()
+        );
+        let first = std::fs::read_to_string(&hook).unwrap();
+        assert!(first.contains("'/bin/xherd-a'"), "{first}");
+
+        // Same inputs: nothing is written.
+        assert!(
+            !git.install_push_guard(&wt, &hooks, "/bin/xherd-a", "feat")
+                .await
+                .unwrap()
+        );
+
+        // A new binary: rewritten, and the original hook is still the one chained
+        // (not our own script, which is what the worktree's hooksPath now names).
+        assert!(
+            git.install_push_guard(&wt, &hooks, "/bin/xherd-b", "feat")
+                .await
+                .unwrap()
+        );
+        let second = std::fs::read_to_string(&hook).unwrap();
+        assert!(second.contains("'/bin/xherd-b'"), "{second}");
+        assert!(!second.contains("xherd-a"), "{second}");
+        assert!(
+            second.contains(&format!("[ -x '{}' ]", original.display())),
+            "{second}"
+        );
+        assert!(hooks.join("commit-msg").symlink_metadata().is_ok());
     }
 }
