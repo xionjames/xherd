@@ -168,9 +168,12 @@ pub enum WorkResult {
         session: String,
         tokens: u64,
     },
-    /// The branch's commits since the base, oldest first, as
-    /// `(sha, subject, files)` (R4).
-    BranchCommits(Vec<(String, String, Vec<String>)>),
+    /// Every sha on the branch since the base, and the commits among them
+    /// no recorded commit matched, oldest first, with their files (R4).
+    BranchCommits {
+        on_branch: Vec<String>,
+        found: Vec<xherd_core::domain::BranchCommit>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -607,7 +610,7 @@ impl Actor {
                     // The branch check is idempotent (re-filtered against the
                     // current commits), and the stop that starts it often
                     // ends the session: keep it across generations (R4).
-                    let keep = matches!(result, WorkResult::BranchCommits(_));
+                    let keep = matches!(result, WorkResult::BranchCommits { .. });
                     if generation != self.job.generation && !keep {
                         tracing::debug!(agent = %self.job.name, "dropping stale async result");
                         continue;
@@ -1052,10 +1055,13 @@ impl Actor {
                 }
             };
             let mut found = Vec::new();
-            for c in xherd_core::domain::outside_commits(&recorded, &branch) {
-                let sha = c.sha.unwrap_or_default();
+            for (sha, subject) in xherd_core::domain::unrecorded_commits(&recorded, &branch) {
                 match git.commit_files(&wd, &sha).await {
-                    Ok(files) => found.push((sha, c.subject, files)),
+                    Ok(files) => found.push(xherd_core::domain::BranchCommit {
+                        sha,
+                        subject,
+                        files,
+                    }),
                     Err(e) => {
                         tracing::debug!(error = %e, "files of a branch commit not read");
                         return;
@@ -1065,50 +1071,78 @@ impl Actor {
             if found.is_empty() {
                 return;
             }
+            let on_branch = branch.into_iter().map(|(sha, _)| sha).collect();
             let _ = tx.send(Msg::WorkDone {
                 generation,
-                result: WorkResult::BranchCommits(found),
+                result: WorkResult::BranchCommits { on_branch, found },
             });
         });
     }
 
-    /// Record the branch's commits that xherd did not make or hear of as
-    /// held `Xnn` rows, with one `outside-commit` event each and one
-    /// notification (count and short shas only) (R4, R5).
-    async fn on_branch_commits(&mut self, found: Vec<(String, String, Vec<String>)>) {
-        let branch: Vec<(String, String)> = found
-            .iter()
-            .map(|(sha, subject, _)| (sha.clone(), subject.clone()))
-            .collect();
-        let new = xherd_core::domain::outside_commits(&self.job.commits, &branch);
-        if new.is_empty() {
+    /// Record the branch's commits that xherd did not make or hear of
+    /// (`domain::settle_branch_commits`): xherd's own shared-memory commits
+    /// from before `Mnn` rows (found by their `memory-accepted` events) as
+    /// `Mnn`, rebased or amended ones under their row with one
+    /// `commit-rewritten` event each, the rest as held `Xnn` rows with one
+    /// `outside-commit` event each and one notification (count and short
+    /// shas only) (R4, R5, R6).
+    async fn on_branch_commits(
+        &mut self,
+        on_branch: Vec<String>,
+        found: Vec<xherd_core::domain::BranchCommit>,
+    ) {
+        use xherd_core::domain::Settled;
+        let memory: Vec<String> = match self.env.store.events_of_kind("memory-accepted").await {
+            Ok(events) => events
+                .into_iter()
+                .filter(|e| e.job_id == self.job.id)
+                .filter_map(|e| Some(e.payload?["sha"].as_str()?.to_string()))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(agent = %self.job.name, error = %e, "memory commits not read");
+                vec![]
+            }
+        };
+        let settled = xherd_core::domain::settle_branch_commits(
+            &mut self.job.commits,
+            &on_branch,
+            &found,
+            &memory,
+        );
+        if settled.is_empty() {
             return;
         }
         let mut shas = Vec::new();
-        for mut c in new {
-            let sha = c.sha.clone().unwrap_or_default();
-            if let Some((_, _, files)) = found.iter().find(|(s, _, _)| *s == sha) {
-                c.files = files.clone();
+        for s in settled {
+            match s {
+                Settled::Outside { id, sha } => {
+                    self.log(None, "outside-commit", Some(json!({"id": id, "sha": sha})))
+                        .await;
+                    shas.push(sha.chars().take(7).collect::<String>());
+                }
+                Settled::Rewritten { id, from, sha } => {
+                    self.log(
+                        None,
+                        "commit-rewritten",
+                        Some(json!({"id": id, "from": from, "sha": sha})),
+                    )
+                    .await;
+                }
+                Settled::Memory { .. } => {}
             }
-            self.log(
-                None,
-                "outside-commit",
-                Some(json!({"id": c.id, "sha": sha})),
-            )
-            .await;
-            shas.push(sha.chars().take(7).collect::<String>());
-            self.job.commits.push(c);
         }
         let n = shas.len();
-        let (s, was) = if n == 1 { ("", "was") } else { ("s", "were") };
-        self.notify(
-            "gate",
-            format!(
-                "{}: {n} commit{s} {was} made outside xherd ({})",
-                self.job.name,
-                shas.join(", ")
-            ),
-        );
+        if n > 0 {
+            let (s, was) = if n == 1 { ("", "was") } else { ("s", "were") };
+            self.notify(
+                "gate",
+                format!(
+                    "{}: {n} commit{s} {was} made outside xherd ({})",
+                    self.job.name,
+                    shas.join(", ")
+                ),
+            );
+        }
         self.commit(self.job.status).await;
     }
 
@@ -3424,7 +3458,11 @@ impl Actor {
                 .map_err(|e| refuse("internal", format!("{f}: {e}")))?;
             files.push(f.to_string());
         }
-        let message = format!("Update AGENTS.md (shared memory)\n\n{}", p.reason);
+        let message = format!(
+            "{}\n\n{}",
+            xherd_core::domain::MEMORY_COMMIT_SUBJECT,
+            p.reason
+        );
         let git = self.env.git.clone().with_timeout(Duration::from_secs(300));
         let sha = git.commit_paths(&wd, &files, &message).await.map_err(|e| {
             refuse(
@@ -3444,7 +3482,7 @@ impl Actor {
             .unwrap_or(0);
         self.job.commits.push(Commit {
             id: format!("M{:02}", n + 1),
-            subject: "Update AGENTS.md (shared memory)".into(),
+            subject: xherd_core::domain::MEMORY_COMMIT_SUBJECT.into(),
             message: Some(message.clone()),
             files: files.clone(),
             status: CommitStatus::Done,
@@ -4091,7 +4129,9 @@ impl Actor {
                 self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
-            WorkResult::BranchCommits(found) => self.on_branch_commits(found).await,
+            WorkResult::BranchCommits { on_branch, found } => {
+                self.on_branch_commits(on_branch, found).await
+            }
             WorkResult::PrLookup(Ok(None)) => self.git_access_ok().await,
             WorkResult::PrLookup(Ok(Some(url))) => {
                 self.git_access_ok().await;

@@ -3562,6 +3562,56 @@ async fn a_commit_made_outside_xherd_before_watching_is_listed() {
     );
 }
 
+/// A commit xherd made, then amended (or rebased) with the same subject and
+/// files, keeps its row with the new sha instead of showing as `X01`.
+#[tokio::test]
+async fn a_rewritten_commit_is_not_listed_as_outside_xherd() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    git(wt, &["checkout", "-q", "-b", "SC-1"]);
+    std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
+    commit_gate(&t).await;
+    act(&t, approve(None)).await.unwrap();
+    let first = git(wt, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        get(&t).await.commits[0].sha.as_deref(),
+        Some(first.as_str())
+    );
+    git(
+        wt,
+        &[
+            "commit",
+            "-q",
+            "--amend",
+            "--no-edit",
+            "--date=2001-01-01T00:00:00",
+        ],
+    );
+    let amended = git(wt, &["rev-parse", "HEAD"]);
+    assert_ne!(first, amended);
+    until(&t, |a| a.status == Status::Running).await;
+    stop(&t, 2).await;
+    let a = until(&t, |a| {
+        a.commits[0].sha.as_deref() == Some(amended.as_str())
+    })
+    .await;
+    assert!(
+        a.commits.iter().all(|c| !c.id.starts_with('X')),
+        "{:?}",
+        a.commits
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    let e = events
+        .iter()
+        .find(|e| e.kind == "commit-rewritten")
+        .unwrap();
+    assert_eq!(
+        e.payload.as_ref().unwrap()["from"].as_str(),
+        Some(first.as_str())
+    );
+    assert!(events.iter().all(|e| e.kind != "outside-commit"));
+}
+
 #[tokio::test]
 async fn ask_then_finish_returns_to_watching() {
     let t = setup().await;
