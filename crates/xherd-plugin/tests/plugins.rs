@@ -277,3 +277,23 @@ fn runtime_installs_use_the_image_versions() {
         );
     }
 }
+
+#[tokio::test]
+async fn probe_returns_the_requirement_output() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = manifest("p");
+    m["requires"] = json!([
+        {"name": "ver", "check": ["./run", "ver"]},
+        {"name": "gone", "check": ["./run", "fail"]}
+    ]);
+    let script = format!("{SCRIPT}\n");
+    let script = script.replace("  junk)", "  ver) echo \"tool 1.2.3\" ;;\n  junk)");
+    write_plugin(d.path(), "p", m, &script);
+    let r = Registry::load(vec![], d.path());
+    let p = r.get("p").unwrap();
+    let c = ctx();
+    let reqs = &p.manifest.requires;
+    assert_eq!(probe(p, &c, &reqs[0]).await.unwrap().trim(), "tool 1.2.3");
+    let e = probe(p, &c, &reqs[1]).await.unwrap_err();
+    assert!(e.starts_with("bad token") && !e.contains("s3cr3t"), "{e}");
+}
