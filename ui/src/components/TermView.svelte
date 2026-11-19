@@ -63,7 +63,7 @@
       if (t) navigator.clipboard?.writeText(t).catch(() => {});
     });
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/api/v1${url}?cols=${term.cols}&rows=${term.rows}`);
+    const ws = new WebSocket(`${proto}://${location.host}/api/v1${url}${url.includes('?') ? '&' : '?'}cols=${term.cols}&rows=${term.rows}`);
     ws.binaryType = 'arraybuffer';
     conn = 'connecting';
     const enc = new TextEncoder();

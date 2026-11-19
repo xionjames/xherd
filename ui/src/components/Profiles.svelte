@@ -13,17 +13,22 @@
   import { app } from '../lib/store.svelte';
   import ModelInput from './ModelInput.svelte';
   import { validModel } from '../lib/models';
+  import type { ActionDef } from '../lib/types';
+
+  const MAX_ACTIONS = 20;
 
   type Profile = {
     id: string; name: string; match: string[];
     baseBranch?: string; stagingBranch?: string;
     autonomy?: string; permissionMode?: string; runtime?: string; models?: Record<string, string>; sensitivePaths?: string[]; maxDiffLines?: number;
     jobTokenBudget?: number; testCommand?: string; lintCommand?: string; instructions?: string;
+    actions?: ActionDef[];
   };
   type Form = {
     id: string; name: string; match: string; baseBranch: string; stagingBranch: string;
     autonomy: string; permissionMode: string; runtime: string; models: Record<string, string>; sensitivePaths: string; maxDiffLines: string; jobTokenBudget: string;
     testCommand: string; lintCommand: string; instructions: string;
+    actions: ActionDef[];
   };
 
   let profiles = $state<Profile[]>([]);
@@ -37,7 +42,7 @@
   // Runtimes that can choose a model get a model field each.
   const modelRuntimes = $derived(runtimes(app.state?.plugins).filter((r) => r.chooseModel));
 
-  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', jobTokenBudget: '', testCommand: '', lintCommand: '', instructions: '' });
+  const blank = (): Form => ({ id: '', name: '', match: '', baseBranch: '', stagingBranch: '', autonomy: '', permissionMode: '', runtime: '', models: {}, sensitivePaths: '', maxDiffLines: '', jobTokenBudget: '', testCommand: '', lintCommand: '', instructions: '', actions: [] });
   const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean);
   const opt = (s: string) => (s.trim() ? s.trim() : undefined);
   const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
@@ -48,6 +53,7 @@
       autonomy: p.autonomy ?? '', permissionMode: p.permissionMode ?? '', runtime: p.runtime ?? '', models: { ...(p.models ?? {}) },
       sensitivePaths: p.sensitivePaths ? p.sensitivePaths.join('\n') : '', maxDiffLines: p.maxDiffLines?.toString() ?? '',
       jobTokenBudget: p.jobTokenBudget?.toString() ?? '', testCommand: p.testCommand ?? '', lintCommand: p.lintCommand ?? '', instructions: p.instructions ?? '',
+      actions: (p.actions ?? []).map((a) => ({ ...a })),
     };
   }
   // An empty "sensitive paths" box means the global list; the checkbox below
@@ -55,8 +61,16 @@
   let noSensitive = $state(false);
   function edit(p: Profile | null) {
     form = p ? toForm(p) : blank();
+    // ModelInput's bindable value has a '' fallback: binding undefined throws props_invalid_value.
+    for (const r of modelRuntimes) form.models[r.name] ??= '';
     noSensitive = !!p && Array.isArray(p.sensitivePaths) && p.sensitivePaths.length === 0;
   }
+  // An id is a slug of a-z, 0-9 and -: made from the label when left empty.
+  const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/, '');
+  function addAction() {
+    if (form && form.actions.length < MAX_ACTIONS) form.actions.push({ id: '', label: '', description: '', run: '', cwd: '', kind: 'task', icon: '' });
+  }
+  const actionsReady = (f: Form) => f.actions.every((a) => a.label.trim() && a.run.trim() && (a.id.trim() || slug(a.label)));
   function body(f: Form) {
     return {
       name: f.name, match: lines(f.match),
@@ -69,6 +83,8 @@
       sensitivePaths: noSensitive ? [] : lines(f.sensitivePaths).length ? lines(f.sensitivePaths) : undefined,
       maxDiffLines: num(f.maxDiffLines), jobTokenBudget: num(f.jobTokenBudget),
       testCommand: opt(f.testCommand), lintCommand: opt(f.lintCommand), instructions: opt(f.instructions),
+      // The profile is replaced as a whole: always send the list, or saving would clear it.
+      actions: f.actions.map((a) => ({ ...a, id: a.id.trim() || slug(a.label) })),
     };
   }
 
@@ -233,9 +249,34 @@
           <textarea rows="6" bind:value={form.instructions} placeholder={'How to build: make build\nHow to lint: make lint, before every commit\nConventions, folders to avoid…'}></textarea>
           <span class="hint">Advice for the agent, added to its <span class="mono">instructions.md</span> at its next start. Unlike the checks above, xherd does not run these.</span></label>
       </div>
+      <div class="grp">
+        <header><h3>Actions</h3><span class="hint">Commands the user runs from a job: a dev server, a build, a test run.</span></header>
+        <p class="hint">Every new job gets a copy, already approved, so Run starts it without asking. The agent cannot change these; a job's own actions are separate. Up to {MAX_ACTIONS}.</p>
+        {#each form.actions as a, i (i)}
+          <div class="actrow">
+            <div class="row" style="flex-wrap:nowrap">
+              <label class="f grow">Label <input bind:value={a.label} maxlength="60" placeholder="Dev server" /></label>
+              <label class="f">Kind
+                <select bind:value={a.kind}><option value="task">task (runs, then ends)</option><option value="service">service (keeps running)</option></select></label>
+              <button class="btn ghost danger sm" aria-label="Remove action {a.label || i + 1}" onclick={() => form?.actions.splice(i, 1)}>Remove</button>
+            </div>
+            <label class="f">Command
+              <input class="mono" bind:value={a.run} maxlength="500" placeholder={'npm run dev -- --port $XHERD_PORT_BASE'} />
+              <span class="hint">One line, run with a shell in the worktree.</span></label>
+            <div class="row" style="flex-wrap:nowrap">
+              <label class="f grow">Folder <input class="mono" bind:value={a.cwd} placeholder="the worktree root" />
+                <span class="hint">Relative to the worktree.</span></label>
+              <label class="f grow">Id <input class="mono" bind:value={a.id} maxlength="32" placeholder={slug(a.label) || 'from the label'} /></label>
+            </div>
+            <label class="f">Description <input bind:value={a.description} maxlength="300" /></label>
+          </div>
+        {/each}
+        {#if !form.actions.length}<p class="empty">No actions. Jobs of this repository start with none.</p>{/if}
+        <div><button class="btn" disabled={form.actions.length >= MAX_ACTIONS} onclick={addAction}>Add action</button></div>
+      </div>
       {#snippet foot()}
         <button class="btn ghost" onclick={() => (form = null)}>Cancel</button>
-        <button class="btn primary" disabled={busy || !form?.name.trim() || !form?.match.trim()} onclick={save}>{busy ? 'Saving…' : 'Save profile'}</button>
+        <button class="btn primary" disabled={busy || !form?.name.trim() || !form?.match.trim() || !form || !actionsReady(form)} onclick={save}>{busy ? 'Saving…' : 'Save profile'}</button>
       {/snippet}
     </Panel>
   {/if}
@@ -253,5 +294,6 @@
 {/if}
 
 <style>
+  .actrow { display: grid; gap: 8px; padding: 10px 0; border-top: 1px solid var(--fence-soft); }
   .list > li.sel { background: var(--accent-wash); box-shadow: inset 3px 0 0 var(--accent); }
 </style>

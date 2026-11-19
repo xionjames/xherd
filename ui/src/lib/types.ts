@@ -230,7 +230,36 @@ export interface Job {
   pinned?: boolean;
   /** Values the repo profile lowered (R12a). */
   lowered?: Lowered[];
+  /** Commands the job registered or copied from the repo profile (job actions R1, R19). */
+  actions?: JobAction[];
+  /** The "save actions to the repo profile" card was dismissed (R23). */
+  actionsCardDismissed?: boolean;
+  /** First port of the job's block (`XHERD_PORT_BASE`). */
+  portBase?: number;
 }
+
+/** What an action is; `cwd` is relative to the worktree, `''` is the root. */
+export interface ActionDef {
+  id: string;
+  label: string;
+  description: string;
+  run: string;
+  cwd: string;
+  kind: 'service' | 'task';
+  icon: string;
+}
+export type ActionState = 'running' | 'exited' | 'stopped' | 'lost';
+export interface ActionRun { startedAt: number; endedAt?: number; state: ActionState; exit?: number }
+/** `approved` is set when the user allowed the current command; a changed `run` or `cwd` clears it. */
+export interface JobAction {
+  def: ActionDef;
+  source: 'job' | 'profile';
+  approved?: string;
+  last?: ActionRun;
+  succeeded: boolean;
+}
+/** `GET /jobs/{id}/actions`. */
+export interface ActionsView { actions: JobAction[]; portBase?: number; saveOffer: string[]; hasProfile: boolean }
 
 /** `label`: the pack's own name for the stage ("Fix"), when it sets one. */
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean; label?: string }

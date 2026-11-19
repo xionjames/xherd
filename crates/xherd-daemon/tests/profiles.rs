@@ -234,3 +234,156 @@ async fn without_a_match_the_global_settings_apply() {
     assert_eq!(a.profile, None);
     assert_eq!(a.base.as_deref(), Some("main"));
 }
+
+async fn add_action(t: &T, job: &xherd_core::Job, id: &str, run: &str) {
+    let call: xherd_core::xap::XapCall = serde_json::from_value(serde_json::json!({
+        "id": format!("add-{}-{id}-{run}", job.id), "jobId": job.id, "cmd": "action.add",
+        "args": {"id": id, "label": id, "run": run}, "at": 1
+    }))
+    .unwrap();
+    t.d.xap(call).await.unwrap();
+}
+
+async fn events(t: &T, job: &xherd_core::Job) -> Vec<String> {
+    t.d.store
+        .events(&job.id, 200)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect()
+}
+
+#[tokio::test]
+async fn saving_actions_writes_the_profile_and_approves_them() {
+    let t = setup().await;
+    let p =
+        t.d.create_profile(profile("Local", &[&real(&t)]))
+            .await
+            .unwrap();
+    let job = t.d.new_job(req(&t, "A-1")).await.unwrap();
+    add_action(&t, &job, "dev", "npm run dev").await;
+    add_action(&t, &job, "lint", "npm run lint").await;
+
+    let e = t.d.save_actions_to_profile("A-1", &[]).await.unwrap_err();
+    assert_eq!(e.code, "usage");
+    let e =
+        t.d.save_actions_to_profile("A-1", &["nope".into()])
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+
+    let j =
+        t.d.save_actions_to_profile("A-1", &["dev".into()])
+            .await
+            .unwrap();
+    let dev = j.actions.iter().find(|a| a.def.id == "dev").unwrap();
+    assert_eq!(
+        dev.approved,
+        Some(xherd_core::action::approval_hash(&dev.def))
+    );
+    assert!(
+        j.actions
+            .iter()
+            .find(|a| a.def.id == "lint")
+            .unwrap()
+            .approved
+            .is_none()
+    );
+    let saved = t.d.profiles().await.unwrap().remove(0);
+    assert_eq!(saved.id, p.id);
+    assert_eq!(saved.actions.len(), 1);
+    assert_eq!(saved.actions[0].run, "npm run dev");
+    assert!(events(&t, &j).await.contains(&"action-saved".to_string()));
+
+    // the same id replaces, never duplicates
+    add_action(&t, &job, "dev", "npm run start").await;
+    t.d.save_actions_to_profile("A-1", &["dev".into()])
+        .await
+        .unwrap();
+    let saved = t.d.profiles().await.unwrap().remove(0);
+    assert_eq!(saved.actions.len(), 1);
+    assert_eq!(saved.actions[0].run, "npm run start");
+}
+
+#[tokio::test]
+async fn saving_needs_a_profile_that_still_exists() {
+    let t = setup().await;
+    let job = t.d.new_job(req(&t, "B-1")).await.unwrap();
+    add_action(&t, &job, "dev", "npm run dev").await;
+    let e =
+        t.d.save_actions_to_profile("B-1", &["dev".into()])
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "no_profile");
+
+    let p =
+        t.d.create_profile(profile("Local", &[&real(&t)]))
+            .await
+            .unwrap();
+    let job = t.d.new_job(req(&t, "B-2")).await.unwrap();
+    add_action(&t, &job, "dev", "npm run dev").await;
+    t.d.delete_profile(&p.id).await.unwrap();
+    let e =
+        t.d.save_actions_to_profile("B-2", &["dev".into()])
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "no_profile");
+}
+
+#[tokio::test]
+async fn approve_checks_the_hash_remove_and_dismiss_record_events() {
+    let t = setup().await;
+    let job = t.d.new_job(req(&t, "C-1")).await.unwrap();
+    add_action(&t, &job, "dev", "npm run dev").await;
+    let approve = |hash: String| UserAction::ActionApprove {
+        id: "dev".into(),
+        hash,
+        profile: "Local".into(),
+    };
+    let e =
+        t.d.action("C-1", approve("stale".into()))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "action_changed");
+    let e =
+        t.d.action(
+            "C-1",
+            UserAction::ActionApprove {
+                id: "nope".into(),
+                hash: "x".into(),
+                profile: "Local".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+
+    let j =
+        t.d.action("C-1", UserAction::ActionsCardDismiss)
+            .await
+            .unwrap();
+    assert!(j.actions_card_dismissed);
+    t.d.action("C-1", UserAction::ActionsCardDismiss)
+        .await
+        .unwrap();
+
+    let j =
+        t.d.action("C-1", UserAction::ActionRemove { id: "dev".into() })
+            .await
+            .unwrap();
+    assert!(j.actions.is_empty());
+    let e =
+        t.d.action("C-1", UserAction::ActionRemove { id: "dev".into() })
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    let ev = events(&t, &j).await;
+    assert_eq!(
+        ev.iter()
+            .filter(|k| *k == "user.actions-card-dismiss")
+            .count(),
+        1
+    );
+    assert!(ev.contains(&"action-removed".to_string()));
+}

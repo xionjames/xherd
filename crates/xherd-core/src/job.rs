@@ -294,6 +294,17 @@ pub struct Job {
     /// agent JSON is what the UI reads.
     #[serde(default)]
     pub auto_approve_pending: bool,
+    /// The job's actions (R1): registered by the job or copied from the
+    /// repository profile (R19).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<crate::action::JobAction>,
+    /// The "save these actions to the profile" card was dismissed (R23).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub actions_card_dismissed: bool,
+    /// First port of the job's block (`XHERD_PORT_BASE`), kept so a running
+    /// action keeps its ports across a daemon restart (R12a).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_base: Option<u16>,
 }
 
 impl Job {
@@ -358,6 +369,9 @@ impl Job {
             ask_hold: None,
             worktree_removed_at: None,
             auto_approve_pending: false,
+            actions: Vec::new(),
+            actions_card_dismissed: false,
+            port_base: None,
             review_rounds: 0,
             pr_state: None,
             pr_comments_seen: Vec::new(),
@@ -473,6 +487,35 @@ impl Job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_job_without_actions_omits_them_and_reads_back() {
+        let j = Job::new("j", 1);
+        let v = serde_json::to_value(&j).unwrap();
+        for k in ["actions", "actionsCardDismissed", "portBase"] {
+            assert!(v.get(k).is_none(), "{k}");
+        }
+        let mut j2 = j.clone();
+        j2.port_base = Some(41010);
+        j2.actions_card_dismissed = true;
+        j2.actions.push(crate::action::JobAction {
+            def: crate::action::ActionDef {
+                id: "dev".into(),
+                run: "pnpm dev".into(),
+                ..Default::default()
+            },
+            source: Default::default(),
+            approved: None,
+            last: None,
+            succeeded: false,
+        });
+        let back: Job = serde_json::from_value(serde_json::to_value(&j2).unwrap()).unwrap();
+        assert_eq!(back.port_base, Some(41010));
+        assert!(back.actions_card_dismissed);
+        assert_eq!(back.actions[0].def.id, "dev");
+        let old: Job = serde_json::from_value(v).unwrap();
+        assert!(old.actions.is_empty() && old.port_base.is_none());
+    }
 
     #[test]
     fn a_job_stored_with_one_agent_reads_as_that_agent_for_every_stage() {

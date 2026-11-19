@@ -141,7 +141,8 @@ by theme; update it together with them.
 
 ## Later
 
-- [ ] Dynamic job actions: buttons on the job page and `xherd` calls declared by plugins, flow packs and repo profiles (for example run the app, open a preview, run a script), shown by the job's state and stage
+- [x] Job actions (#193, R-609…R-613): a job registers named commands (`xherd action add|rm|ls|log`), you approve and run them from the job page, `xherd run` or the API (own tmux session, `XHERD_PORT_BASE`, output kept), save them to the repo profile, and see running services on Herd cards and in ⌘K
+- [ ] Dynamic job actions, remaining: actions declared by plugins and flow packs (`runCommand`, R-1105), a Ports panel, and per-state or per-stage visibility. Job actions themselves (registered by the job, saved on repo profiles, run by you) are done, checked above
 - [ ] Mobile access (R-672, T7): bind xherd beyond loopback with HTTPS and device pairing (`xherd pair`, one-time codes, phones with steering rights only, token rotation revokes them), a layout checked on a phone, push notifications beyond the browser's
 - [ ] Windows: native binary and WSL2 guidance
 - [ ] ACP driver per runtime, selectable per job

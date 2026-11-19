@@ -60,6 +60,7 @@ impl Daemon {
     }
 
     pub async fn update_profile(&self, id: &str, mut p: Profile) -> Result<Profile, ActionError> {
+        let _w = self.profiles_write.lock().await;
         let all = self.profiles().await?;
         if !all.iter().any(|x| x.id == id) {
             return Err(err("not_found", format!("no profile {id}")));

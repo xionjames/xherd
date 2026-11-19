@@ -40,6 +40,13 @@ where a gate would be, telling the user what to review.
   notice go to `xherd issue add --title "Flaky retry in the client" --severity minor`.
 - One task, one commit, only after the user approved the proposal. Commit
   exactly the proposed files.
+- When you learn how to run, test or demo the project (a dev server, the test
+  suite, a demo script), check `xherd action ls`, then register what is
+  missing: `xherd action add dev-server --label "Dev server" --run 'pnpm dev --port $XHERD_PORT_BASE' --kind service`.
+  Use `$XHERD_PORT_BASE` (this job's first free port) instead of a fixed port,
+  in single quotes so it is read when the action runs, not when you register it.
+  You only register: the user approves and runs actions from xherd, and you
+  cannot run them yourself.
 - Every step runs in a new session with no memory of the last one. Start by
   reading `.xherd/spec/memory.md` and the approved documents. Its code map says
   where to look: open those files and the ones the task names, and explore

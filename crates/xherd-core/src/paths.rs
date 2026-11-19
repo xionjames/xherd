@@ -87,6 +87,14 @@ impl Paths {
     pub fn terminal_handler(&self) -> PathBuf {
         self.root.join("terminal-handler.json")
     }
+    /// The captured output of an action's last run (R13), written by the
+    /// daemon: `action-logs/<job id>/<action id>.log`.
+    pub fn action_log(&self, job_id: &str, action_id: &str) -> PathBuf {
+        self.root
+            .join("action-logs")
+            .join(job_id)
+            .join(format!("{action_id}.log"))
+    }
     pub fn plugin_config(&self, name: &str) -> PathBuf {
         self.root.join("plugin-config").join(name)
     }
@@ -142,6 +150,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn action_log_is_per_job_and_action() {
+        assert_eq!(
+            Paths::at("/x").action_log("j1", "dev"),
+            PathBuf::from("/x/action-logs/j1/dev.log")
+        );
+    }
 
     #[test]
     fn resolution_order() {

@@ -2,7 +2,8 @@
   // ⌘K / Ctrl+K: filter jobs by name or ticket, and saved agents by name.
   import Icon from './Icon.svelte';
   import { app } from '../lib/store.svelte';
-  import { go } from '../lib/router.svelte';
+  import { go, route } from '../lib/router.svelte';
+  import { tabId } from '../lib/actions';
 
   let q = $state('');
   let open = $state(false);
@@ -10,7 +11,7 @@
   let input: HTMLInputElement;
 
   // Jobs by name or ticket, then saved agents by name (#/agents/<name>).
-  type Hit = { id: string; name: string; note: string; path: string };
+  type Hit = { id: string; name: string; note: string; path: string; query?: Record<string, string> };
   const hits = $derived.by((): Hit[] => {
     if (!q) return [];
     const has = (s: string) => s.toLowerCase().includes(q.toLowerCase());
@@ -20,7 +21,13 @@
     const agents = (app.state?.agents ?? [])
       .filter((a) => has(a.name))
       .map((a) => ({ id: `agent:${a.id}`, name: a.name, note: 'agent', path: `/agents/${a.name}` }));
-    return [...jobs, ...agents].slice(0, 8);
+    // The job on screen: its actions open the action page (R27).
+    const name = /^\/jobs\/([^/]+)$/.exec(route.path)?.[1];
+    const cur = name ? (app.state?.jobs ?? []).find((a) => a.name === decodeURIComponent(name)) : undefined;
+    const acts = (cur?.actions ?? [])
+      .filter((x) => has(`${x.def.label ?? ''} ${x.def.id}`))
+      .map((x) => ({ id: `action:${x.def.id}`, name: x.def.label || x.def.id, note: 'action', path: `/jobs/${cur!.name}`, query: { s: tabId(x.def.id) } }));
+    return [...acts, ...jobs, ...agents].slice(0, 8);
   });
 
   function onGlobalKey(e: KeyboardEvent) {
@@ -37,7 +44,7 @@
     q = '';
     open = false;
     input.blur();
-    go(a.path);
+    go(a.path, a.query);
   }
 
   function onKey(e: KeyboardEvent) {
