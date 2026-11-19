@@ -62,6 +62,15 @@ pub struct Approval {
     pub reason: Option<String>,
 }
 
+/// One row of the `installs` table: what `xherd install` last wrote at
+/// `path` (hash `sha256`), and the pack version the user declined, if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallRow {
+    pub path: String,
+    pub sha256: String,
+    pub declined: Option<String>,
+}
+
 /// One row of the `plugins` table: a plugin installed from `source` (a git
 /// URL) at commit `sha`. `data` holds `{ref, path, digest, version, installedAt}`.
 #[derive(Debug, Clone, PartialEq)]
@@ -914,6 +923,7 @@ impl Store {
         .await
     }
 
+    /// Record what was written at `path`; clears any declined version.
     pub async fn put_install(
         &self,
         runtime: &str,
@@ -930,8 +940,69 @@ impl Store {
         self.write(move |c| {
             c.execute(
                 "INSERT INTO installs (runtime, pack, path, sha256) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(runtime, pack, path) DO UPDATE SET sha256 = excluded.sha256",
+                 ON CONFLICT(runtime, pack, path)
+                 DO UPDATE SET sha256 = excluded.sha256, declined = NULL",
                 params![r, p, f, h],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Every install record of `runtime` and `pack`, by path.
+    pub async fn installs(&self, runtime: &str, pack: &str) -> Result<Vec<InstallRow>> {
+        let (r, p) = (runtime.to_string(), pack.to_string());
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT path, sha256, declined FROM installs
+                 WHERE runtime = ?1 AND pack = ?2 ORDER BY path",
+            )?;
+            let rows = st
+                .query_map(params![r, p], |row| {
+                    Ok(InstallRow {
+                        path: row.get(0)?,
+                        sha256: row.get(1)?,
+                        declined: row.get(2)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .await
+    }
+
+    /// Remember that the user kept their own file instead of the pack
+    /// version with hash `declined`.
+    pub async fn decline_install(
+        &self,
+        runtime: &str,
+        pack: &str,
+        path: &str,
+        declined: &str,
+    ) -> Result<()> {
+        let (r, p, f, d) = (
+            runtime.to_string(),
+            pack.to_string(),
+            path.to_string(),
+            declined.to_string(),
+        );
+        self.write(move |c| {
+            c.execute(
+                "UPDATE installs SET declined = ?4 WHERE runtime = ?1 AND pack = ?2 AND path = ?3",
+                params![r, p, f, d],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Forget the record of `path` (the file was removed).
+    pub async fn delete_install(&self, runtime: &str, pack: &str, path: &str) -> Result<()> {
+        let (r, p, f) = (runtime.to_string(), pack.to_string(), path.to_string());
+        self.write(move |c| {
+            c.execute(
+                "DELETE FROM installs WHERE runtime = ?1 AND pack = ?2 AND path = ?3",
+                params![r, p, f],
             )?;
             Ok(())
         })
@@ -1220,6 +1291,59 @@ mod tests {
     #[test]
     fn migrations_are_valid() {
         migrations().validate().unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_records_are_listed_declined_cleared_and_deleted() {
+        let (_d, s) = open();
+        assert!(s.installs("claude-code", "xherd").await.unwrap().is_empty());
+        s.put_install("claude-code", "xherd", "b.md", "h2")
+            .await
+            .unwrap();
+        s.put_install("claude-code", "xherd", "a.md", "h1")
+            .await
+            .unwrap();
+        s.put_install("codex", "xherd", "a.md", "hx").await.unwrap();
+        let rows = s.installs("claude-code", "xherd").await.unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                InstallRow {
+                    path: "a.md".into(),
+                    sha256: "h1".into(),
+                    declined: None
+                },
+                InstallRow {
+                    path: "b.md".into(),
+                    sha256: "h2".into(),
+                    declined: None
+                },
+            ]
+        );
+        s.decline_install("claude-code", "xherd", "a.md", "new1")
+            .await
+            .unwrap();
+        let rows = s.installs("claude-code", "xherd").await.unwrap();
+        assert_eq!(rows[0].declined.as_deref(), Some("new1"));
+        assert_eq!(rows[1].declined, None);
+        // Writing the file again clears the declined version.
+        s.put_install("claude-code", "xherd", "a.md", "h3")
+            .await
+            .unwrap();
+        let rows = s.installs("claude-code", "xherd").await.unwrap();
+        assert_eq!(
+            (rows[0].sha256.as_str(), rows[0].declined.clone()),
+            ("h3", None)
+        );
+        s.delete_install("claude-code", "xherd", "a.md")
+            .await
+            .unwrap();
+        assert_eq!(s.installs("claude-code", "xherd").await.unwrap().len(), 1);
+        assert_eq!(
+            s.install_sha("claude-code", "xherd", "a.md").await.unwrap(),
+            None
+        );
+        assert_eq!(s.installs("codex", "xherd").await.unwrap().len(), 1);
     }
 
     #[tokio::test]

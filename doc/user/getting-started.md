@@ -102,18 +102,17 @@ You also need:
 - **`gh`** (GitHub) or **`glab`** (GitLab) for pull requests, logged in. Settings → Git access can also hold a token per host.
 - The toolchains your repositories need: natively xherd uses what is on your `PATH` and installs nothing.
 
-Start the daemon and install the xherd commands into Claude Code once:
+Start the daemon. It installs the xherd commands (`/xherd:*`) for each runtime that is on, at every start, so there is nothing else to run:
 
 ```sh
 xherd daemon            # keep it running (a terminal, tmux, or your own service)
-xherd install           # in another terminal: the xherd commands for each runtime that is on
 ```
 
 Open <http://127.0.0.1:4740/>.
 
 Data lives in `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd` (`config.json` there holds the port and the token the CLI uses). Worktrees go to `<workspace>/worktrees/<repo>/<job>`; the workspace is `config.workspace`, else `$XHERD_WORKSPACE`, else `~/xherd`.
 
-To update, install the newer package and restart `xherd daemon`.
+To update, install the newer package and restart `xherd daemon`. The restart brings the commands and the live jobs' hook files up to date; no `xherd install` is needed. If you edited a command file, xherd keeps your version and Setup asks what to do (see [Setup checks](guide.md#welcome-plugins-and-git-access)).
 
 ## First run
 

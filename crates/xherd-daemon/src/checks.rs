@@ -8,6 +8,7 @@ use serde::Serialize;
 use xherd_core::exec::{Cmd, run};
 use xherd_plugin::Kind;
 
+use crate::install::FileState;
 use crate::runtime_install::InstallState;
 use crate::{ActionError, Daemon};
 
@@ -26,6 +27,9 @@ pub enum Fix {
         explain: String,
         terminal: String,
     },
+    /// The user decides what happens to files in their command folders (the
+    /// UI opens its review dialog; `GET /install/review`, `POST /install/resolve`).
+    Review { label: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -47,6 +51,7 @@ pub struct Check {
 /// Lowest tmux supported (exact `=name` targets, `respawn-window -k` flags).
 const TMUX_MIN: (u32, u32) = (3, 3);
 pub const PACK_CHECK: &str = "pack";
+pub const PACK_FILES_CHECK: &str = "pack-files";
 
 /// `tmux 3.5a`, `tmux next-3.6` → (3, 5).
 pub fn tmux_version(out: &str) -> Option<(u32, u32)> {
@@ -225,6 +230,7 @@ impl Daemon {
         }
         for rt in self.pack_runtimes() {
             out.push(self.pack_check(&rt, rt == default_rt, env).await);
+            out.push(self.pack_files_check(&rt, rt == default_rt, env).await);
         }
         out
     }
@@ -249,16 +255,14 @@ impl Daemon {
         default: bool,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Check {
-        let missing = match self.packs.get(xherd_flow::BUILTIN) {
-            Some(p) => p
-                .plan_install(rt, xherd_flow::install::BUILTIN_FILES, env)
-                .map(|plan| plan.iter().filter(|f| !f.path.exists()).count()),
-            None => Err("the xherd pack is not loaded".into()),
-        };
+        let missing = self.pack_files(rt, env).await.map(|files| {
+            let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
+            (n(FileState::Missing), n(FileState::Outdated))
+        });
         let (ok, detail) = match missing {
-            Ok(0) => (true, "installed".to_string()),
-            Ok(n) => (false, format!("{n} command files missing")),
-            Err(e) => (false, e),
+            Ok((0, 0)) => (true, "installed".to_string()),
+            Ok((m, o)) => (false, format!("{m} command files missing, {o} out of date")),
+            Err(e) => (false, e.message),
         };
         Check {
             id: match default {
@@ -273,6 +277,42 @@ impl Daemon {
             installing: false,
             fix: (!ok).then(|| Fix::Action {
                 label: "Install commands".into(),
+            }),
+        }
+    }
+
+    /// Files the user must decide on (R5, R6): edited ones the pack has a new
+    /// text for, and files the pack no longer ships. Required for the default
+    /// runtime like the commands themselves (id `pack-files`, else
+    /// `pack-files:<runtime>`).
+    async fn pack_files_check(
+        &self,
+        rt: &str,
+        default: bool,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Check {
+        let pending = self.pack_files(rt, env).await.map(|files| {
+            let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
+            (n(FileState::Edited), n(FileState::Obsolete))
+        });
+        let (ok, detail) = match pending {
+            Ok((0, 0)) => (true, "nothing to decide".to_string()),
+            Ok((e, o)) => (false, format!("{e} edited files, {o} obsolete files")),
+            Err(e) => (false, e.message),
+        };
+        Check {
+            id: match default {
+                true => PACK_FILES_CHECK.into(),
+                false => format!("{PACK_FILES_CHECK}:{rt}"),
+            },
+            group: "runtime",
+            label: format!("xherd command files of {rt} reviewed"),
+            required: default,
+            ok,
+            detail,
+            installing: false,
+            fix: (!ok).then(|| Fix::Review {
+                label: "Review files".into(),
             }),
         }
     }
@@ -326,7 +366,7 @@ impl Daemon {
             _ => None,
         };
         match rt {
-            Some(rt) => self.install(Some(&rt), None, env).await.map(|_| ()),
+            Some(rt) => self.install(Some(&rt), None, env, false).await.map(|_| ()),
             None => Err(ActionError {
                 code: "not_fixable",
                 message: format!("check {id} has no automatic fix"),

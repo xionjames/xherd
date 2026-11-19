@@ -418,7 +418,26 @@ export interface Check {
   fix?:
     | { kind: 'command'; text: string }
     | { kind: 'action'; label: string }
+    | { kind: 'review'; label: string }
     | { kind: 'session'; label: string; explain: string; terminal: string };
+}
+
+/** A pack file waiting for a decision (`GET /install/review`): edited or obsolete. */
+export interface PackFile {
+  runtime: string;
+  path: string;
+  state: 'edited' | 'obsolete';
+  /** Obsolete only: on disk and different from what xherd recorded. */
+  edited: boolean;
+}
+
+export type PackChoiceValue = 'use-new' | 'keep-mine' | 'remove' | 'keep';
+
+/** One decision of `POST /install/resolve`. */
+export interface PackChoice {
+  runtime: string;
+  path: string;
+  choice: PackChoiceValue;
 }
 
 export interface ConfigView {

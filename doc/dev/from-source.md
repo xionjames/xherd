@@ -48,8 +48,9 @@ The release binary embeds the web UI at compile time, so build the UI first:
 (cd ui && pnpm install && pnpm build)          # ui/dist
 cargo build --release                          # target/release/xherd
 ./target/release/xherd daemon                  # JSON logs on stderr; XHERD_LOG=debug for more
-./target/release/xherd install                 # once: the xherd commands for each runtime that is on
 ```
+
+The daemon installs the xherd commands for each runtime that is on at every start, so a rebuilt binary refreshes them (and the hook files of live jobs) with a restart. `xherd install` is only for running it by hand, for example with `--remove-obsolete`.
 
 Put `target/release/xherd` on your `PATH` (the jobs' hooks call it by its absolute path, so do not move it while jobs exist). Open <http://127.0.0.1:4740/>.
 

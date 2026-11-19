@@ -316,6 +316,26 @@ async fn agent_actions() {
         (s, v["code"].clone()),
         (StatusCode::UNPROCESSABLE_ENTITY, json!("unknown_runtime"))
     );
+    // Pack files review: a choice for a file that is not pending changes nothing.
+    let (s, v) = call(
+        app.clone(),
+        get("/api/v1/install/review").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v["files"].is_array());
+    let (s, v) = call(
+        app.clone(),
+        post(
+            "/api/v1/install/resolve",
+            Some(json!({"choices": [{"runtime": "claude-code", "path": "/nope/x.md", "choice": "use-new"}]})),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("not_pending"))
+    );
     let (s, v) = call(
         app.clone(),
         get("/api/v1/jobs/SC-1").body(Body::empty()).unwrap(),
