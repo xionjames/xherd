@@ -81,9 +81,43 @@ pub struct Requirement {
     /// A missing optional tool is reported but never blocks.
     #[serde(default)]
     pub optional: bool,
+    /// Pinned version (`X.Y.Z`) `install` fetches; an older installed one is
+    /// replaced. Passed to `install` as `XHERD_INSTALL_VERSION`.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// SHA-256 (hex) of the artifact by CPU (`x86_64`, `aarch64`); passed to
+    /// `install` as `XHERD_INSTALL_SHA256`. Needs `version`.
+    #[serde(default)]
+    pub sha256: BTreeMap<String, String>,
+}
+
+/// CPUs a requirement's `sha256` may name.
+const ARCHES: [&str; 2] = ["x86_64", "aarch64"];
+
+static SEMVER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+\.\d+\.\d+").unwrap());
+
+/// The first `X.Y.Z` in a tool's `--version` output.
+pub fn version_in(out: &str) -> Option<&str> {
+    SEMVER.find(out).map(|m| m.as_str())
 }
 
 impl Requirement {
+    /// The environment an `install` argv gets: `XHERD_INSTALL_VERSION`,
+    /// `XHERD_INSTALL_ARCH` and `XHERD_INSTALL_SHA256` (the digest for `arch`).
+    pub fn install_env(&self, arch: &str) -> Vec<(String, String)> {
+        vec![
+            (
+                "XHERD_INSTALL_VERSION".into(),
+                self.version.clone().unwrap_or_default(),
+            ),
+            ("XHERD_INSTALL_ARCH".into(), arch.into()),
+            (
+                "XHERD_INSTALL_SHA256".into(),
+                self.sha256.get(arch).cloned().unwrap_or_default(),
+            ),
+        ]
+    }
+
     /// The check this requirement stands for.
     pub fn as_check(&self) -> Check {
         Check {
@@ -251,6 +285,25 @@ impl Manifest {
                     "requires {}: install must name a program on PATH",
                     r.name
                 ));
+            }
+            if let Some(v) = &r.version
+                && !SEMVER.find(v).is_some_and(|m| m.as_str() == v)
+            {
+                return Err(format!("requires {}: version {v:?} is not X.Y.Z", r.name));
+            }
+            if !r.sha256.is_empty() && r.version.is_none() {
+                return Err(format!("requires {}: sha256 needs a version", r.name));
+            }
+            for (arch, sum) in &r.sha256 {
+                if !ARCHES.contains(&arch.as_str()) {
+                    return Err(format!("requires {}: unknown arch {arch:?}", r.name));
+                }
+                if sum.len() != 64 || !sum.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+                    return Err(format!(
+                        "requires {}: sha256 for {arch} is not 64 lowercase hex digits",
+                        r.name
+                    ));
+                }
             }
             for t in r.instructions.values().chain(r.install.iter().flatten()) {
                 if t.chars().any(|c| c.is_control() && c != '\n') {
@@ -465,5 +518,64 @@ mod tests {
         let twice = r#"{"name": "p", "kind": "host", "version": "0.1.0",
             "requires": [{"name": "x"}, {"name": "x"}]}"#;
         assert!(Manifest::parse(twice).is_err());
+    }
+
+    fn with_requires(req: &str) -> Result<Manifest, String> {
+        Manifest::parse(&format!(
+            r#"{{"name": "p", "kind": "runtime", "version": "0.1.0", "requires": [{req}]}}"#
+        ))
+    }
+
+    #[test]
+    fn requirement_pins_are_validated() {
+        let sum = "ab".repeat(32);
+        let ok = format!(
+            r#"{{"name": "x", "version": "2.1.319", "sha256": {{"x86_64": "{sum}", "aarch64": "{sum}"}}}}"#
+        );
+        let m = with_requires(&ok).unwrap();
+        assert_eq!(m.requires[0].version.as_deref(), Some("2.1.319"));
+        assert!(with_requires(r#"{"name": "x"}"#).is_ok());
+        let err = |req: String| with_requires(&req).unwrap_err();
+        assert!(err(r#"{"name": "x", "version": "latest"}"#.into()).contains("X.Y.Z"));
+        assert!(err(r#"{"name": "x", "version": "1.2.3; rm"}"#.into()).contains("X.Y.Z"));
+        assert!(
+            err(format!(
+                r#"{{"name": "x", "sha256": {{"x86_64": "{sum}"}}}}"#
+            ))
+            .contains("needs a version")
+        );
+        assert!(
+            err(format!(
+                r#"{{"name": "x", "version": "1.0.0", "sha256": {{"riscv": "{sum}"}}}}"#
+            ))
+            .contains("unknown arch")
+        );
+        assert!(
+            err(r#"{"name": "x", "version": "1.0.0", "sha256": {"x86_64": "XYZ"}}"#.into())
+                .contains("64 lowercase hex")
+        );
+    }
+
+    #[test]
+    fn version_in_finds_the_first_triple() {
+        assert_eq!(version_in("2.1.319 (Claude Code)"), Some("2.1.319"));
+        assert_eq!(version_in("codex-cli 0.167.2"), Some("0.167.2"));
+        assert_eq!(version_in("1.19.0\n"), Some("1.19.0"));
+        assert_eq!(version_in("no version"), None);
+    }
+
+    #[test]
+    fn install_env_carries_version_arch_and_digest() {
+        let sum = "cd".repeat(32);
+        let m = with_requires(&format!(
+            r#"{{"name": "x", "version": "1.0.0", "sha256": {{"aarch64": "{sum}"}}}}"#
+        ))
+        .unwrap();
+        let env: BTreeMap<_, _> = m.requires[0].install_env("aarch64").into_iter().collect();
+        assert_eq!(env["XHERD_INSTALL_VERSION"], "1.0.0");
+        assert_eq!(env["XHERD_INSTALL_ARCH"], "aarch64");
+        assert_eq!(env["XHERD_INSTALL_SHA256"], sum);
+        let none: BTreeMap<_, _> = m.requires[0].install_env("x86_64").into_iter().collect();
+        assert_eq!(none["XHERD_INSTALL_SHA256"], "");
     }
 }
