@@ -446,6 +446,18 @@ export interface ConfigView {
   restartNeeded: boolean;
 }
 
+/** The three upload limits in `config.json` (live; bytes, bytes, count). */
+export interface UploadLimits {
+  uploadMaxBytes: number;
+  uploadMaxJobBytes: number;
+  uploadMaxFiles: number;
+}
+
+/** `POST /jobs/{id}/files`: the absolute paths the files were stored under. */
+export interface UploadResult {
+  paths: string[];
+}
+
 export type CheckFix = NonNullable<Check['fix']>;
 
 export interface GitHost {
