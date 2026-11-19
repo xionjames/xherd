@@ -65,6 +65,12 @@ enum Request {
         path: PathBuf,
         mode: u32,
     },
+    /// Remove a file (a missing one is not an error), then its empty parent
+    /// folders strictly below `until`.
+    Remove {
+        path: PathBuf,
+        until: PathBuf,
+    },
     /// The first file `depth` folders below `dir` whose name matches `name`
     /// (see [`find_in_subdirs_as_agent`]).
     Find {
@@ -343,6 +349,44 @@ pub async fn mkdir(path: &Path, mode: u32) -> std::io::Result<()> {
     }
 }
 
+/// Remove `path` and prune the folders it leaves empty, never `until` itself
+/// nor anything outside it.
+fn remove_in_place(path: &Path, until: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let mut dir = path.parent();
+    while let Some(d) = dir {
+        if d == until || !d.starts_with(until) || std::fs::remove_dir(d).is_err() {
+            break;
+        }
+        dir = d.parent();
+    }
+    Ok(())
+}
+
+/// Remove a file as the agent user and prune its empty parent folders
+/// strictly below `until`. A missing file is not an error. Without a runner
+/// it is done in place.
+pub async fn remove_file(path: &Path, until: &Path) -> std::io::Result<()> {
+    let Some(sock) = runner_socket() else {
+        return remove_in_place(path, until);
+    };
+    let req = Request::Remove {
+        path: path.into(),
+        until: until.into(),
+    };
+    match roundtrip(sock, &req, Duration::from_secs(30))
+        .await
+        .map_err(std::io::Error::other)?
+    {
+        Reply::Done => Ok(()),
+        other => Err(file_error(other)),
+    }
+}
+
 fn file_error(r: Reply) -> std::io::Error {
     match r {
         Reply::IoFailed { message } | Reply::Refused { message } => std::io::Error::other(message),
@@ -378,6 +422,12 @@ async fn handle(req: Request) -> Reply {
                 },
             }
         }
+        Request::Remove { path, until } => match remove_in_place(&path, &until) {
+            Ok(()) => Reply::Done,
+            Err(e) => Reply::IoFailed {
+                message: format!("{}: {e}", path.display()),
+            },
+        },
         Request::Find { dir, name, depth } => Reply::Found {
             path: find_in_subdirs(&dir, &name, depth),
         },
@@ -732,6 +782,31 @@ mod tests {
         assert_eq!(read_file(&f).await.unwrap().as_deref(), Some(&b"hi"[..]));
         mkdir(&dir.path().join("m/k"), 0o755).await.unwrap();
         assert!(dir.path().join("m/k").is_dir());
+    }
+
+    #[tokio::test]
+    async fn remove_prunes_empty_parents_only_below_until() {
+        let dir = tempfile::tempdir().unwrap();
+        let until = dir.path().join("skills");
+        let a = until.join("a/b/SKILL.md");
+        write_file(&a, b"x", None).await.unwrap();
+        let keep = until.join("a/other.md");
+        write_file(&keep, b"y", None).await.unwrap();
+        // a sibling keeps `a` alive, `b` goes
+        remove_file(&a, &until).await.unwrap();
+        assert!(!until.join("a/b").exists());
+        assert!(keep.exists());
+        // a missing file is fine
+        remove_file(&a, &until).await.unwrap();
+        // the last file empties `a`, but `until` stays
+        remove_file(&keep, &until).await.unwrap();
+        assert!(!until.join("a").exists());
+        assert!(until.is_dir());
+        // a file directly in `until` leaves `until` alone
+        let top = until.join("top.md");
+        write_file(&top, b"z", None).await.unwrap();
+        remove_file(&top, &until).await.unwrap();
+        assert!(until.is_dir());
     }
 
     #[tokio::test]
