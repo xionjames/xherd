@@ -83,7 +83,14 @@ pub struct Options {
     pub plugin_install: bool,
     /// Tests only: let a `file://` URL be a plugin source (no network).
     pub allow_local_plugin_sources: bool,
+    /// Resolves `${VAR}` and `HOME` for the pack's destinations. `Some`: every
+    /// start installs the pack for the runtimes switched on, then refreshes
+    /// the hook files of live jobs; `None` (tests): neither runs.
+    pub install_env: Option<InstallEnv>,
 }
+
+/// Environment lookup for pack destinations (see [`Options::install_env`]).
+pub type InstallEnv = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 impl Options {
     pub fn new(driver: Arc<dyn Driver>, clock: Arc<dyn Clock>) -> Options {
@@ -101,6 +108,7 @@ impl Options {
             pr_poll: None,
             plugin_install: true,
             allow_local_plugin_sources: false,
+            install_env: None,
         }
     }
 }
@@ -371,17 +379,34 @@ impl Daemon {
         if replayed > 0 {
             tracing::info!(replayed, "replayed queued reports");
         }
+        if let Some(env) = &opts.install_env {
+            // Commands and hook files follow the running binary at every
+            // start (user-edited files are kept), before any actor runs.
+            let (mut written, mut declined) = (0, 0);
+            match d.install(None, None, &**env, false).await {
+                Ok(files) => {
+                    use install::InstallAction::*;
+                    written = files.iter().filter(|f| f.action == Written).count();
+                    declined = files
+                        .iter()
+                        .filter(|f| matches!(f.action, Kept | Obsolete))
+                        .count();
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e.message, "installing the xherd commands failed")
+                }
+            }
+            let jobs = d.refresh_job_files().await;
+            tracing::info!(
+                written,
+                pending = declined,
+                jobs,
+                "refreshed the pack and the jobs' hook files"
+            );
+        }
         d.reconcile_with(true).await;
         if let Err(e) = d.write_gitconfig() {
             tracing::warn!(error = %e.message, "managed git config not written");
-        }
-        if d.sandbox {
-            // The container is set up without a shell: commands go where the
-            // agents find them at every start (user-edited files are kept).
-            let env = xherd_core::runner::agent_env;
-            if let Err(e) = d.install(None, None, &env, false).await {
-                tracing::warn!(error = %e.message, "installing the xherd commands failed");
-            }
         }
         notifier::spawn(d.clone());
         if let Some(iv) = opts.scheduler {

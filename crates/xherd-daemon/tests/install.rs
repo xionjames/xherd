@@ -315,3 +315,48 @@ async fn pack_checks_report_missing_outdated_and_review() {
         .unwrap();
     assert!(find(&d.checks(&env).await, "pack-files").ok);
 }
+
+#[tokio::test]
+async fn start_installs_and_upgrades_when_given_an_env() {
+    let home = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let opts = || {
+        let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+        let h = h.clone();
+        o.install_env = Some(Arc::new(move |k: &str| (k == "HOME").then(|| h.clone())));
+        o
+    };
+    let status = user.path().join(".claude/commands/xherd/status.md");
+
+    // Not sandboxed, yet the first start writes the commands.
+    let d = Daemon::start(Paths::at(home.path()), opts()).await.unwrap();
+    assert!(status.is_file());
+    let current = std::fs::read_to_string(&status).unwrap();
+
+    // An older text the daemon recorded is upgraded at the next start.
+    let old = "old status\n";
+    std::fs::write(&status, old).unwrap();
+    let path = status.to_string_lossy().into_owned();
+    d.store
+        .put_install(
+            "claude-code",
+            "xherd",
+            &path,
+            &content_sha256(old.as_bytes()),
+        )
+        .await
+        .unwrap();
+    drop(d);
+    let d = Daemon::start(Paths::at(home.path()), opts()).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&status).unwrap(), current);
+
+    // A third start writes nothing.
+    let before = std::fs::metadata(&status).unwrap().modified().unwrap();
+    drop(d);
+    Daemon::start(Paths::at(home.path()), opts()).await.unwrap();
+    assert_eq!(
+        std::fs::metadata(&status).unwrap().modified().unwrap(),
+        before
+    );
+}
