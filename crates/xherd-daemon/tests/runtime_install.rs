@@ -167,3 +167,19 @@ async fn a_failed_install_keeps_its_tail_and_is_not_retried() {
     quiet().await;
     assert_eq!(t.runs(), 0);
 }
+
+#[tokio::test]
+async fn switching_a_runtime_on_installs_it() {
+    let (t, d) = start(true, None, WRITE, &["claude-code"]).await;
+    quiet().await;
+    assert_eq!(t.runs(), 0);
+    // Another plugin switched off changes nothing for the runtime.
+    d.save_config(serde_json::from_value(json!({"disabledPlugins": ["claude-code"]})).unwrap())
+        .ok();
+    assert_eq!(t.runs(), 0);
+    d.save_config(serde_json::from_value(json!({"disabledPlugins": []})).unwrap())
+        .unwrap();
+    until_runs(&t, 1).await;
+    settle(&d).await;
+    assert_eq!(t.installed(), "1.2.3");
+}
