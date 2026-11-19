@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use xherd_core::hash::content_sha256;
 
 use crate::{ActionError, Daemon};
@@ -83,6 +83,28 @@ pub fn classify(
         Some(_) if declined == Some(new) => FileState::Declined,
         Some(_) => FileState::Edited,
     }
+}
+
+/// What the user decided for one file of the review (design §6.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Choice {
+    /// Edited file: replace it with the pack's text.
+    UseNew,
+    /// Edited file: keep it and stop offering this pack text.
+    KeepMine,
+    /// Obsolete file: delete it.
+    Remove,
+    /// Obsolete file: leave it and forget it.
+    Keep,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackChoice {
+    pub runtime: String,
+    pub path: String,
+    pub choice: Choice,
 }
 
 fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
@@ -164,6 +186,107 @@ impl Daemon {
             });
         }
         Ok(out)
+    }
+
+    /// The files that need the user: edited ones (kept, new text beside them)
+    /// and obsolete ones, for every runtime of the pack (R5, R6).
+    pub async fn pack_review(
+        &self,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Vec<PackFile>, ActionError> {
+        let mut out = Vec::new();
+        for rt in self.pack_runtimes() {
+            out.extend(
+                self.pack_files(&rt, env)
+                    .await?
+                    .into_iter()
+                    .filter(|f| matches!(f.state, FileState::Edited | FileState::Obsolete)),
+            );
+        }
+        Ok(out)
+    }
+
+    /// Apply the user's choices. Every choice is checked against
+    /// [`Daemon::pack_review`] first: a file not listed there, or a choice
+    /// that does not fit its state, refuses the whole request (`not_pending`)
+    /// and changes nothing. Paths come from the review, never from the request.
+    pub async fn resolve_pack_files(
+        &self,
+        choices: &[PackChoice],
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<(), ActionError> {
+        let name = xherd_flow::BUILTIN;
+        let review = self.pack_review(env).await?;
+        let mut picked = Vec::new();
+        for c in choices {
+            let f = review
+                .iter()
+                .find(|f| f.runtime == c.runtime && f.path == c.path)
+                .filter(|f| match f.state {
+                    FileState::Edited => matches!(c.choice, Choice::UseNew | Choice::KeepMine),
+                    _ => matches!(c.choice, Choice::Remove | Choice::Keep),
+                })
+                .ok_or_else(|| {
+                    refuse(
+                        "not_pending",
+                        format!("{}: not waiting for a choice", c.path),
+                    )
+                })?;
+            picked.push((f, c.choice));
+        }
+        let store = |e: xherd_store::StoreError| refuse("store", e.to_string());
+        for (f, choice) in picked {
+            let rt = f.runtime.as_str();
+            let root = self
+                .packs
+                .get(name)
+                .ok_or_else(|| refuse("unknown_pack", format!("no pack {name}")))?
+                .install_root(rt, env)
+                .map_err(|e| refuse("install", e))?;
+            let path = Path::new(&f.path);
+            let side = format!("{}.xherd-new", f.path);
+            let gone = |e: std::io::Error, p: &str| refuse("io", format!("{p}: {e}"));
+            match choice {
+                Choice::UseNew => {
+                    write(path, &f.text).await?;
+                    self.store
+                        .put_install(rt, name, &f.path, &f.new)
+                        .await
+                        .map_err(store)?;
+                    xherd_core::runner::remove_file(Path::new(&side), &root)
+                        .await
+                        .map_err(|e| gone(e, &side))?;
+                }
+                Choice::KeepMine => {
+                    xherd_core::runner::remove_file(Path::new(&side), &root)
+                        .await
+                        .map_err(|e| gone(e, &side))?;
+                    self.store
+                        .decline_install(rt, name, &f.path, &f.new)
+                        .await
+                        .map_err(store)?;
+                }
+                Choice::Remove => {
+                    xherd_core::runner::remove_file(path, &root)
+                        .await
+                        .map_err(|e| gone(e, &f.path))?;
+                    xherd_core::runner::remove_file(Path::new(&side), &root)
+                        .await
+                        .map_err(|e| gone(e, &side))?;
+                    self.store
+                        .delete_install(rt, name, &f.path)
+                        .await
+                        .map_err(store)?;
+                }
+                Choice::Keep => {
+                    self.store
+                        .delete_install(rt, name, &f.path)
+                        .await
+                        .map_err(store)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Install `pack` (default xherd) for `runtime` (default: every runtime
