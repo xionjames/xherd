@@ -371,10 +371,16 @@ async fn a_first_run_starts_with_the_plugins_off() {
             for r in &mut m.requires {
                 r.check = Some(vec![tool.into(), "--version".into()]);
             }
+            // Language managers declare theirs optional; that must not hide them.
+            if m.name == "nvm" {
+                m.requires[0].check = Some(vec!["git".into(), "--version".into()]);
+                m.requires[0].optional = true;
+            }
         }
         let d = Daemon::start(paths.clone(), o).await.unwrap();
         let on = |n: &str| d.plugin_enabled(n);
-        assert!(!on("opencode") && !on("nvm"), "sandbox {sandbox}");
+        assert!(!on("opencode"), "sandbox {sandbox}");
+        assert_eq!(on("nvm"), !sandbox, "sandbox {sandbox}");
         assert_eq!(on("claude-code"), !sandbox, "sandbox {sandbox}");
         let saved = xherd_core::config::Config::load(&paths.config()).unwrap().0;
         assert!(saved.disabled_plugins.contains(&"opencode".to_string()));

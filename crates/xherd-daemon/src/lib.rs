@@ -145,7 +145,7 @@ fn plugin_context(
 
 /// The plugins a first run starts switched off: all of them, so the user picks
 /// in Welcome. Natively, a plugin whose required tools are already on this
-/// computer (and has at least one) starts on; the container installs on
+/// computer (its first requirement, the main tool) starts on; the container installs on
 /// switch-on instead, so nothing there is detected.
 async fn first_run_disabled(
     plugins: &Registry,
@@ -157,15 +157,15 @@ async fn first_run_disabled(
 ) -> Vec<String> {
     let mut off = Vec::new();
     for p in plugins.all() {
-        let ctx = plugin_context(p, paths, config, secrets, xherd_bin);
-        let required: Vec<_> = p.manifest.requires.iter().filter(|r| !r.optional).collect();
-        let mut found = !sandbox && !required.is_empty();
-        for r in required {
-            if !found {
-                break;
+        // The first requirement is the plugin's main tool (`uv`, `claude`,
+        // `gh`). Optional or not: the language managers' are all optional.
+        let found = match p.manifest.requires.first() {
+            Some(r) if !sandbox => {
+                let ctx = plugin_context(p, paths, config, secrets, xherd_bin);
+                xherd_plugin::probe(p, &ctx, r).await.is_ok()
             }
-            found = xherd_plugin::probe(p, &ctx, r).await.is_ok();
-        }
+            _ => false,
+        };
         if !found {
             off.push(p.name().to_string());
         }
