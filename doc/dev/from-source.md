@@ -7,7 +7,7 @@ How to build and run xherd from a clone of this repository: the Docker image, or
 | | Docker build | Native build |
 |---|---|---|
 | Build | A container engine with Compose (Docker Desktop, OrbStack, Colima, Docker on Linux) | Rust (edition 2024, stable), Node and pnpm |
-| Run | Nothing else: everything is in the image | `git`, `tmux` ≥ 3.3, a runtime (Claude Code, opencode or Codex) logged in, `gh` / `glab` on `PATH` |
+| Run | Nothing else: the image has the tools, and the daemon downloads the agent CLIs at first start | `git`, `tmux` ≥ 3.3, a runtime (Claude Code, opencode or Codex) logged in, `gh` / `glab` on `PATH` |
 
 On macOS with Homebrew's keg-only rustup, put it on `PATH` first: `export PATH=/opt/homebrew/opt/rustup/bin:$PATH`.
 
@@ -28,7 +28,7 @@ Open <http://127.0.0.1:4740/>. `.env` is gitignored; `.env.example` lists the va
 - `XHERD_UID` / `XHERD_GID`: your ids; jobs write files as you.
 - `XHERD_PORT` (optional, default 4740): the port published on your machine's loopback.
 
-The Dockerfile is multi-stage: the UI (pnpm), the daemon (cargo), and the runtime on Debian trixie with `git`, `tmux`, `gh`, `glab`, `socat`, `tini`, Node with Claude Code, opencode and Codex, `uv`, Go, and seeds of SDKMAN, nvm and rustup. Version pins are `ARG`s at the top of the runtime stage.
+The Dockerfile is multi-stage: the UI (pnpm), the daemon (cargo), and the runtime on Debian trixie with `git`, `tmux`, `gh`, `glab`, `socat`, `tini`, `uv`, Go, and seeds of SDKMAN, nvm and rustup. Claude Code, opencode and Codex are not in the image: the daemon installs them into `xherd-home` at start (pins and sha256 in each runtime plugin's manifest). Version pins of the image's tools are `ARG`s at the top of the runtime stage.
 
 After a change, rebuild and recreate with the same command (pause the jobs first if you care about their running turns). `xherd docker doctor` and `xherd docker update` work only on the compose file in `~/.config/xherd` (`$XDG_CONFIG_HOME/xherd`), not on this one. The image has no `.git`, so the version it shows is `XHERD_VERSION`, which `compose.yaml` passes to the build as a build argument; without it the image shows `dev`.
 

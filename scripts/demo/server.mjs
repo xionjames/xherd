@@ -79,6 +79,27 @@ const JOBS = [
 ];
 const jobById = Object.fromEntries(JOBS.map((j) => [j.name, j]));
 
+// ---- actions: services and tasks a job runs next to the agent ----
+const act = (id, label, kind, run, o = {}) => ({ def: { id, label, description: o.description ?? '', run, cwd: o.cwd ?? '', kind, icon: '' }, source: o.source ?? 'job', ...(o.approved === false ? {} : { approved: 'a'.repeat(64) }), ...(o.last ? { last: o.last } : {}), succeeded: o.succeeded ?? false });
+const running = { startedAt: ago(20), state: 'running' };
+const okRun = { startedAt: ago(45), endedAt: ago(44), state: 'exited', exit: 0 };
+const ACTIONS = {
+  'search-filters': [
+    act('dev', 'Dev server', 'service', 'npm run dev -- --port $PORT_BASE', { description: 'Vite dev server for the search page', source: 'profile', last: running }),
+    act('storybook', 'Storybook', 'service', 'npm run storybook', { source: 'profile' }),
+    act('build', 'Build', 'task', 'npm run build', { last: okRun, succeeded: true }),
+    act('seed', 'Seed the database', 'task', 'node scripts/seed.js --reset', { approved: false }),
+  ],
+  'dark-mode': [
+    act('build', 'Build', 'task', 'npm run build', { last: okRun, succeeded: true }),
+    act('e2e', 'End-to-end tests', 'task', 'npx playwright test', { last: { startedAt: ago(60), endedAt: ago(52), state: 'exited', exit: 0 }, succeeded: true, source: 'profile' }),
+    act('preview', 'Preview', 'service', 'npm run preview', { last: { startedAt: ago(70), endedAt: ago(65), state: 'stopped' } }),
+  ],
+};
+for (const [n, a] of Object.entries(ACTIONS)) jobById[n].actions = a;
+jobById['search-filters'].portBase = 4400;
+const actionsView = (n) => { const a = ACTIONS[n] ?? []; return { actions: a, portBase: n === 'search-filters' ? 4400 : undefined, saveOffer: a.filter((x) => x.succeeded && x.source === 'job').map((x) => x.def.id), hasProfile: true }; };
+
 const plugins = [
   { name: 'claude-code', kind: 'runtime', version: '1.0.0', builtin: true, settings: [], enabled: true, login: true },
   { name: 'opencode', kind: 'runtime', version: '1.0.0', builtin: true, settings: [], enabled: true, login: false },
@@ -114,8 +135,9 @@ const events = [['stage.enter', { stage: 'implement' }], ['task.start', { task: 
 
 let packResolved = false;
 const packFiles = [{ runtime: 'claude-code', path: '~/.claude/commands/xherd/design.md', state: 'edited', edited: true }, { runtime: 'claude-code', path: '~/.claude/commands/xherd/old-notes.md', state: 'obsolete', edited: true }];
-const packChecks = () => ({ checks: packResolved ? [] : [{ id: 'pack-files:claude-code', group: 'runtime', label: 'Pack files (claude-code)', required: true, ok: false, detail: '2 files need a decision', fix: { kind: 'review', label: 'Review files' } }] });
-const routes = { '/state': state, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/todos': { todos }, '/reviews': { reviews }, '/agents': { agents: AG }, '/skills': { skills }, '/healthz': { ok: true }, '/worklog': { days: [], tickets: [] } };
+const installingCheck = { id: 'plugin:opencode:requires:opencode', group: 'plugins', label: 'opencode · requires:opencode', required: false, ok: false, detail: 'Installing opencode 1.19.0…', installing: true };
+const packChecks = () => ({ checks: [installingCheck, ...(packResolved ? [] : [{ id: 'pack-files:claude-code', group: 'runtime', label: 'Pack files (claude-code)', required: true, ok: false, detail: '2 files need a decision', fix: { kind: 'review', label: 'Review files' } }])] });
+const routes = { '/state': state, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/todos': { todos }, '/reviews': { reviews }, '/agents': { agents: AG }, '/skills': { skills }, '/healthz': { ok: true }, '/worklog': { days: [], tickets: [] } };
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.json': 'application/json' };
 const json = (r, o) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify(o)); };
 
@@ -137,6 +159,9 @@ const srv = http.createServer((q, r) => {
     if ((m = k.match(/^\/jobs\/([^/]+)\/docs$/))) return json(r, { docs: docsOf(jobById[m[1]] ?? {}) });
     if ((m = k.match(/^\/jobs\/([^/]+)\/file$/))) { const p = url.searchParams.get('path') ?? ''; const t = textOf(p); return json(r, { path: p, text: t, sha256: sha(t), reviewed: null }); }
     if ((m = k.match(/^\/jobs\/([^/]+)\/diff$/))) { const j = jobById[m[1]]; const g = j?.gate; const files = g?.kind === 'commit' ? g.files : []; return json(r, { job: m[1], head: 'a1b2c3d', commit: g?.kind === 'commit' ? g : undefined, view: 'commit', files, others: [], diff: C.diff }); }
+    if ((m = k.match(/^\/jobs\/([^/]+)\/actions$/))) return json(r, actionsView(m[1]));
+    if ((m = k.match(/^\/jobs\/([^/]+)\/actions\/([^/]+)\/log$/))) return json(r, { log: C.actionLog, last: (ACTIONS[m[1]] ?? []).find((x) => x.def.id === m[2])?.last ?? null });
+    if ((m = k.match(/^\/jobs\/([^/]+)\/actions\//)) && q.method !== 'GET') return json(r, { job: { ...(jobById[m[1]] ?? {}), events } });
     if ((m = k.match(/^\/jobs\/([^/]+)$/))) return json(r, { ...(jobById[m[1]] ?? {}), events });
     if (/^\/jobs\/[^/]+\/(viewed|open-targets|findings|memory|agent-memory|ticket|ticket-status)$/.test(k)) return json(r, { viewed: {}, targets: [], findings: [], current: '', proposed: null, text: '' });
     return json(r, {});

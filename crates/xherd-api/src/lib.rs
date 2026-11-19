@@ -82,6 +82,31 @@ pub fn router(d: Daemon) -> Router {
             get(get_viewed).post(post_viewed),
         )
         .route("/api/v1/jobs/{id}/open-targets", get(open_targets))
+        // Job actions (R28). Static paths before the catch-all below.
+        .route("/api/v1/jobs/{id}/actions", get(actions_get))
+        .route(
+            "/api/v1/jobs/{id}/actions/save-to-profile",
+            post(actions_save),
+        )
+        .route(
+            "/api/v1/jobs/{id}/actions/card-dismiss",
+            post(actions_card_dismiss),
+        )
+        .route(
+            "/api/v1/jobs/{id}/actions/{action}",
+            axum::routing::delete(action_remove),
+        )
+        .route("/api/v1/jobs/{id}/actions/{action}/run", post(action_run))
+        .route("/api/v1/jobs/{id}/actions/{action}/stop", post(action_stop))
+        .route(
+            "/api/v1/jobs/{id}/actions/{action}/restart",
+            post(action_restart),
+        )
+        .route("/api/v1/jobs/{id}/actions/{action}/log", get(action_log))
+        .route(
+            "/api/v1/jobs/{id}/actions/{action}/save-to-profile",
+            post(action_save),
+        )
         .route("/api/v1/jobs/{id}/{action}", post(agent_action))
         .route("/api/v1/open-in", get(open_in_view))
         .route(
@@ -250,7 +275,7 @@ impl From<ActionError> for ApiError {
             | "bad_model" | "model_unavailable" | "bad_agent" | "unknown_stage" | "bad_skill"
             | "bad_memory" | "unknown_skill" | "bad_fallback" | "bad_assignment"
             | "mixed_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
-            "unknown_agent" | "no_such_skill" => StatusCode::NOT_FOUND,
+            "unknown_agent" | "no_such_skill" | "action_unknown" => StatusCode::NOT_FOUND,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "plugin_install_off" => StatusCode::FORBIDDEN,
             "unknown_plugin" => StatusCode::NOT_FOUND,
@@ -1582,6 +1607,151 @@ struct ActionBody {
     /// Cancel: also remove the worktree (R12).
     #[serde(rename = "removeWorktree")]
     remove_worktree: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RunBody {
+    /// The user allows the action's exact command (R14).
+    approve: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveActionsBody {
+    ids: Vec<String>,
+}
+
+/// `GET /jobs/:id/actions` (R28): the job's actions, its port block's first
+/// port and what the "Save actions to repo profile" card offers (R23).
+async fn actions_get(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let job = d.action(&id, UserAction::Get).await?;
+    let profile = d.profile_of(&job).await;
+    let offer =
+        xherd_core::action::save_offer(&job, profile.as_ref().map(|p| p.actions.as_slice()));
+    Ok(Json(json!({
+        "actions": job.actions,
+        "portBase": job.port_base,
+        "saveOffer": offer,
+        "hasProfile": profile.is_some(),
+    })))
+}
+
+/// `POST /jobs/:id/actions/:action/run {approve?}` (R14).
+async fn action_run(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, action)): Path<(String, String)>,
+    body: Option<Json<RunBody>>,
+) -> ApiResult<Json<Value>> {
+    let approve = body.and_then(|Json(b)| b.approve).unwrap_or(false);
+    let a = UserAction::ActionRun {
+        id: action,
+        approve,
+        port_base: None,
+    };
+    Ok(Json(json!({"job": d.action(&id, a).await?})))
+}
+
+/// `POST /jobs/:id/actions/:action/stop` (R11).
+async fn action_stop(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, action)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let a = UserAction::ActionStop { id: action };
+    Ok(Json(json!({"job": d.action(&id, a).await?})))
+}
+
+/// `POST /jobs/:id/actions/:action/restart {approve?}` (R11).
+async fn action_restart(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, action)): Path<(String, String)>,
+    body: Option<Json<RunBody>>,
+) -> ApiResult<Json<Value>> {
+    let approve = body.and_then(|Json(b)| b.approve).unwrap_or(false);
+    let a = UserAction::ActionRestart {
+        id: action,
+        approve,
+    };
+    Ok(Json(json!({"job": d.action(&id, a).await?})))
+}
+
+/// `DELETE /jobs/:id/actions/:action` (R17).
+async fn action_remove(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, action)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let a = UserAction::ActionRemove { id: action };
+    Ok(Json(json!({"job": d.action(&id, a).await?})))
+}
+
+/// `GET /jobs/:id/actions/:action/log` (R13): the saved output of the last
+/// run (`log` is null when it never ran), with the run's record.
+async fn action_log(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, action)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let job = d.action(&id, UserAction::Get).await?;
+    let a = job
+        .actions
+        .iter()
+        .find(|a| a.def.id == action)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "action_unknown",
+                format!("no action `{action}`"),
+            )
+        })?;
+    let log = xherd_daemon::actions::read_log(
+        &d.paths,
+        &job.id,
+        &action,
+        xherd_daemon::actions::MAX_LOG_BYTES,
+    );
+    Ok(Json(json!({"log": log, "last": a.last})))
+}
+
+/// `POST /jobs/:id/actions/:action/save-to-profile` (R22).
+async fn action_save(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, action)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        json!({"job": d.save_actions_to_profile(&id, &[action]).await?}),
+    ))
+}
+
+/// `POST /jobs/:id/actions/save-to-profile {ids}`: the card (R23).
+async fn actions_save(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Json(b): Json<SaveActionsBody>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        json!({"job": d.save_actions_to_profile(&id, &b.ids).await?}),
+    ))
+}
+
+/// `POST /jobs/:id/actions/card-dismiss` (R23).
+async fn actions_card_dismiss(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    Ok(Json(
+        json!({"job": d.action(&id, UserAction::ActionsCardDismiss).await?}),
+    ))
 }
 
 /// `410 moved` for a route that now lives elsewhere (R3, issue #141).

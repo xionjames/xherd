@@ -21,6 +21,8 @@ pub struct Size {
     cols: u16,
     #[serde(default = "rows")]
     rows: u16,
+    /// `act-<action id>`: an action's session instead of the agent's (R25).
+    session: Option<String>,
 }
 fn cols() -> u16 {
     120
@@ -46,7 +48,25 @@ pub async fn terminal(
         Ok(a) => a,
         Err(e) => return ApiError::from(e).into_response(),
     };
-    attach(&d, &agent.name, size, ws).await
+    let session = match size.session.as_deref() {
+        None => agent.name.clone(),
+        // Only the job's own actions, never an arbitrary session name.
+        Some(s) => match s
+            .strip_prefix("act-")
+            .filter(|aid| agent.actions.iter().any(|a| a.def.id == *aid))
+        {
+            Some(aid) => xherd_core::action::session_name(&agent.name, aid),
+            None => {
+                return ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "action_unknown",
+                    format!("{} has no session {s}", agent.name),
+                )
+                .into_response();
+            }
+        },
+    };
+    attach(&d, &session, size, ws).await
 }
 
 pub async fn setup_terminal(

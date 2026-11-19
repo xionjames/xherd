@@ -1,6 +1,7 @@
 // One global store: loaded from `GET /state`, kept live by `GET /ws`, fully
 // reloaded on every (re)connect (design §13.1).
 import { get } from './api';
+import { loadChecks } from './setup.svelte';
 import { setLinkRules } from './links';
 import type { Job, AppState, AgentView } from './types';
 import { addNotice, settle } from './notices.svelte';
@@ -35,7 +36,7 @@ export function jobByName(idOrName: string): Job | undefined {
   return app.state?.jobs.find((a) => a.id === idOrName || a.name === idOrName);
 }
 
-type WsMsg = { type: 'job'; job: Job } | { type: 'agents' } | { type: 'notify'; jobId: string; kind: string; text: string };
+type WsMsg = { type: 'job'; job: Job } | { type: 'agents' } | { type: 'checks' } | { type: 'notify'; jobId: string; kind: string; text: string };
 
 let retry = 500;
 let opened = false;
@@ -62,6 +63,7 @@ function connect() {
     const m = JSON.parse(ev.data) as WsMsg;
     if (m.type === 'job') upsertJob(m.job);
     else if (m.type === 'agents') reloadAgents();
+    else if (m.type === 'checks') loadChecks().catch((e) => console.error('checks', e));
     else if (m.type === 'notify') addNotice(m.jobId, m.kind, m.text);
   };
   ws.onclose = () => {

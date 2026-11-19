@@ -133,7 +133,7 @@ pub fn open(client: &Client, who: &str, app: Option<String>) -> i32 {
 
 /// Attach to the agent's session (native tmux, or inside the container).
 /// Replaces this process: it owns the terminal.
-pub fn attach(client: &Client, who: &str, shell: bool) -> i32 {
+pub fn attach(client: &Client, who: &str, shell: bool, action: Option<&str>) -> i32 {
     let a = match agent(client, who) {
         Ok(a) => a,
         Err(e) => {
@@ -141,8 +141,25 @@ pub fn attach(client: &Client, who: &str, shell: bool) -> i32 {
             return 2;
         }
     };
-    let name = a["name"].as_str().unwrap_or(who).to_string();
+    let mut name = a["name"].as_str().unwrap_or(who).to_string();
     let dir = a["workdir"].as_str().unwrap_or(".").to_string();
+    if let Some(id) = action {
+        // Only an action the job lists, and only while it runs (R29).
+        let listed = a["actions"]
+            .as_array()
+            .and_then(|l| l.iter().find(|x| x["def"]["id"].as_str() == Some(id)));
+        match listed {
+            None => {
+                eprintln!("{name} has no action {id}");
+                return 2;
+            }
+            Some(x) if x["last"]["state"].as_str() != Some("running") => {
+                eprintln!("action {id} is not running; its last output: xherd action log {id}");
+                return 2;
+            }
+            Some(_) => name = xherd_core::action::session_name(&name, id),
+        }
+    }
     let target = format!("={name}");
     let err = match (docker_uid(), shell) {
         (Some(uid), false) => std::process::Command::new("docker")

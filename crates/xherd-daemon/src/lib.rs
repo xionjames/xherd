@@ -14,6 +14,7 @@ use xherd_flow::Pack;
 use xherd_plugin::Registry;
 use xherd_store::Store;
 
+pub mod actions;
 pub mod actor;
 pub mod agents;
 pub mod backup;
@@ -29,6 +30,7 @@ pub mod plugin_install;
 pub mod pr_round;
 pub mod profiles;
 pub mod repos;
+pub mod runtime_install;
 pub mod scheduler;
 pub mod security;
 pub mod settings;
@@ -71,6 +73,9 @@ pub struct Options {
     /// Running in the xherd container (`XHERD_SANDBOX=1`): toolchains are
     /// installed, not only resolved (R-653).
     pub sandbox: bool,
+    /// Runtime CLIs are installed and updated by the daemon (R3); the CLI
+    /// sets it with `sandbox`, tests set it alone (they never set `sandbox`).
+    pub runtime_install: bool,
     /// Peer addresses treated like loopback: the container's gateway, through
     /// which the port published on the host's 127.0.0.1 arrives.
     pub local_peers: Vec<std::net::IpAddr>,
@@ -103,6 +108,7 @@ impl Options {
             delivery_ack: std::time::Duration::from_secs(10),
             screen_rules: None,
             sandbox: false,
+            runtime_install: false,
             local_peers: Vec::new(),
             verify_timeout: actor::VERIFY_TIMEOUT,
             pr_poll: None,
@@ -182,6 +188,10 @@ pub struct Daemon {
     pub xherd_bin: String,
     /// Running in the xherd container (`XHERD_SANDBOX=1`).
     pub sandbox: bool,
+    /// See `Options::runtime_install`.
+    pub runtime_install: bool,
+    /// Automatic runtime installs by `"<plugin>:<tool>"`; no entry = idle.
+    pub installs: Arc<std::sync::Mutex<BTreeMap<String, runtime_install::InstallState>>>,
     /// See `Options::local_peers`.
     pub local_peers: Arc<Vec<std::net::IpAddr>>,
     /// When the work log last booked agent time (ms; 0 = not yet).
@@ -193,6 +203,9 @@ pub struct Daemon {
     pub config_write: Arc<std::sync::Mutex<()>>,
     /// Held while saved agents are changed (create, edit, archive, delete, import).
     pub agents_write: Arc<tokio::sync::Mutex<()>>,
+    /// Held while a profile is read, changed and saved (an edit, or actions
+    /// saved from a job), so two writers never drop each other's change.
+    pub profiles_write: Arc<tokio::sync::Mutex<()>>,
     /// Held while plugins are installed, updated or removed.
     pub plugins_write: Arc<tokio::sync::Mutex<()>>,
     /// See `Options::plugin_install`.
@@ -336,6 +349,7 @@ impl Daemon {
             toolchains: Arc::new(toolchains),
             runtimes,
             skills: paths.skills(),
+            paths: paths.clone(),
         };
         let agents = store.list_jobs().await?;
         let limits = store
@@ -361,11 +375,14 @@ impl Daemon {
             clock: opts.clock,
             xherd_bin: opts.xherd_bin,
             sandbox: opts.sandbox,
+            runtime_install: opts.runtime_install,
+            installs: Arc::default(),
             local_peers: Arc::new(opts.local_peers),
             worklog_flushed: Arc::default(),
             secrets_write: Arc::default(),
             config_write: Arc::default(),
             agents_write: Arc::default(),
+            profiles_write: Arc::default(),
             plugins_write: Arc::default(),
             plugin_install: opts.plugin_install,
             allow_local_plugin_sources: opts.allow_local_plugin_sources,
@@ -408,6 +425,7 @@ impl Daemon {
         if let Err(e) = d.write_gitconfig() {
             tracing::warn!(error = %e.message, "managed git config not written");
         }
+        d.ensure_runtimes();
         notifier::spawn(d.clone());
         if let Some(iv) = opts.scheduler {
             scheduler::spawn(d.clone(), iv);

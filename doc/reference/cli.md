@@ -48,7 +48,11 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `xherd autonomy <job> <ask\|important>` | Change what xherd may approve by itself (rewrites the job's instructions and tries an auto-approval at once) |
 | `xherd mode <job> <ask\|edits\|auto\|all>` | Change the job's tool permissions; the running session keeps its mode, the next session start uses the new one. `all` only in the container |
 | `xherd model <job> <model>` | Change the job's model (`""` = the runtime's default); like `mode`, it applies from the next session start |
+| `xherd actions <job>` | The job's actions, one line each: id, kind, state and whether the command is approved |
+| `xherd run <job> <action> [--approve]` | Start an action in its own tmux session. A new or changed command is refused (`action_not_approved`) until you approve it: `--approve` approves the command as it stands now |
+| `xherd stop <job> <action>` | Stop a running action: Ctrl-C, then a kill after 5 seconds |
 | `xherd attach <job>` | Attach this terminal to the job's tmux session (in the container when using Docker) |
+| `xherd attach <job> --action <id>` | Attach to a running action's session instead of the job's (refused when the action is not running) |
 | `xherd shell <job>` | A shell in the job's worktree |
 | `xherd open <job> [--app A]` | Open the worktree in an app on this computer: apps from `~/.config/xherd/open.json`, else editors found on `PATH` |
 | `xherd terminal-handler install\|uninstall` | Register (or remove) the `xherd-term://` link behind Open in → Terminal, for the user running it: the handler `xherd-open-terminal` opens your own terminal app in a job's worktree, and accepts nothing but a job worktree under this daemon's worktrees folder. Linux: `~/.local/bin/xherd-open-terminal` and `xherd-term.desktop` (`xdg-mime`); macOS: a small app in `~/Library/Application Support/xherd/` (not checked on a Mac yet). Then it tells the daemon, which shows the Terminal entry; with the daemon down it warns and still installs. Native installs only: in Docker run the `curl … \| sh` command from Settings → Open in on your computer (refused inside the container). Settings → Open in → Install does the same |
@@ -108,7 +112,7 @@ These are not for daily use; they are what Claude Code and the jobs call.
 |---|---|
 | `xherd hook <event>` | Runtime hook; reads the hook JSON on stdin. Silent, always exits 0 |
 | `xherd report …` | Push status for jobs or wrappers without hooks |
-| `xherd stage enter`, `gate open`, `ask`, `tasks sync`, `task start\|done\|block`, `commit propose\|done\|drop`, `pr opened`, `handoff written`, `issue add`, `memory propose`, `agent memory propose`, `agent propose` | The agent protocol, XAP. See the [XAP reference](xap.md) |
+| `xherd stage enter`, `gate open`, `ask`, `tasks sync`, `task start\|done\|block`, `commit propose\|done\|drop`, `pr opened`, `handoff written`, `issue add`, `action add\|rm\|ls\|log`, `memory propose`, `agent memory propose`, `agent propose` | The agent protocol, XAP. See the [XAP reference](xap.md) |
 | `xherd toolchain exec -- <argv>` | Provide the tools `.xherd/toolchain.json` lists, then run the command with them on `PATH`. The daemon starts jobs this way |
 | `xherd guard pre-push --branch B` | The check behind the worktree's `pre-push` hook: only branch `B` may be pushed |
 

@@ -31,6 +31,11 @@ xherd runs coding agents that can read, write and execute. This page says what i
 - Automatic approvals are recorded with `auto` and listed under *Inbox → Updates*. A gate that xherd inferred (the job stopped without declaring it) always waits for a human, and so do gates in `critical`/`human-only` classes and the pull-request review stage.
 - Jobs cannot approve. Their tokens carry only the `hooks`, `xap` and `credential` scopes.
 
+## Runtime binaries
+
+- In the container the coding-agent CLIs (Claude Code, opencode, Codex) are downloaded by the daemon, not baked into the image. Each plugin pins a version and a sha256 per architecture; a download whose digest differs is refused.
+- The binaries live in the agents' home (`xherd-home`), which the agents' user can write, like the toolchains. A job could replace its runtime binary for every later job; the same user already runs every job's commands, so this adds no new reach, but treat the volume as the agents' own.
+
 ## Network and access
 
 - The daemon binds `127.0.0.1` natively. In the container it binds `0.0.0.0` inside, and compose publishes the port on the host's `127.0.0.1` only; `xherd docker doctor` checks that.

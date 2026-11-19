@@ -237,6 +237,10 @@ pub fn apply(
             | XapCmd::MemoryPropose { .. }
             | XapCmd::AgentMemoryPropose { .. }
             | XapCmd::AgentPropose { .. }
+            | XapCmd::ActionAdd { .. }
+            | XapCmd::ActionRm { .. }
+            | XapCmd::ActionLs { .. }
+            | XapCmd::ActionLog { .. }
     ) {
         flow_of(a, pack)?;
     }
@@ -809,6 +813,16 @@ pub fn apply(
             });
             Ok(true)
         }
+
+        // The actor handles actions before the flow checks (R7); reaching
+        // here means it did not.
+        XapCmd::ActionAdd { .. }
+        | XapCmd::ActionRm { .. }
+        | XapCmd::ActionLs { .. }
+        | XapCmd::ActionLog { .. } => Err(refuse(
+            "internal",
+            format!("{}: not a flow call", cmd.name()),
+        )),
     }
 }
 

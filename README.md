@@ -83,7 +83,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 
 ### Setup and operation
 
-- Docker-first: jobs, toolchains (Java, Node, Go, Rust, Python) and the agent CLIs live in one container; only your workspace is shared. Open the worktree in your IDE or your own terminal.
+- Docker-first: jobs, toolchains (Java, Node, Go, Rust, Python) live in one container, which downloads the agent CLIs it needs at first start; only your workspace is shared. Open the worktree in your IDE or your own terminal.
 - Git access from the UI (HTTPS tokens, SSH keys, commit identity per repository owner) with a doctor that says what is wrong.
 - Repo profiles: base branch, autonomy, tripwires, test and lint commands, instructions and defaults per repository.
 - Backups of jobs and their work (`xherd backup create|verify|restore`), taken before every `xherd docker update`.

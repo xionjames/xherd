@@ -11,6 +11,7 @@
   import { agentLane, agentLaneOrder, jobAgent } from '../lib/agents';
   import { ago, repoName } from '../lib/format';
   import { stageNow } from '../lib/flow';
+  import { groups, running } from '../lib/actions';
   import { GROUPS, GROUP_LABEL, jobGroup, initials, avatarBg, filterJobs, sortJobs, isFilter, type JobGroup, type JobFilter } from '../lib/jobs';
   import type { Job, FlowInfo } from '../lib/types';
 
@@ -43,7 +44,9 @@
   const team = $derived((app.state?.agents ?? []).filter((a) => a.status !== 'archived'));
   // The live job an agent is on now, and its stage.
   const jobOf = (id: string) => agents.find((j) => j.currentAgent === id && ['running', 'waiting-input', 'blocked', 'idle'].includes(j.status));
-  const nowOf = (j: Job) => stageNow(j, flows)?.name ?? '';
+  // Running services of a job (R26).
+  const svc = (j: Job) => groups(j.actions).service.filter(running).length;
+  const nowOf =(j: Job) => stageNow(j, flows)?.name ?? '';
 </script>
 
 <div class="stack">
@@ -69,7 +72,7 @@
             <div class="jrow" class:need={jobGroup(a) === 'needs'} onclick={() => open(a)}>
               <div class="jname">
                 <a href={href(`/jobs/${a.name}`)} onclick={(e) => e.stopPropagation()}>{a.name}</a>
-                <span class="hint">{#if a.ticket}<TicketPill ticket={a.ticket} />{' · '}{/if}{repoName(a)}{' · '}{a.flow ?? 'no workflow'}</span>
+                <span class="hint">{#if a.ticket}<TicketPill ticket={a.ticket} />{' · '}{/if}{repoName(a)}{' · '}{a.flow ?? 'no workflow'}{#if svc(a) > 0}{' · '}<span class="num" title="{svc(a)} running service{svc(a) === 1 ? '' : 's'}">▶ {svc(a)}</span>{/if}</span>
               </div>
               <StageTrack job={a} {flows} />
               <div class="jnow">

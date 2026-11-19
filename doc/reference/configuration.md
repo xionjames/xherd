@@ -26,6 +26,8 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `ntfyServer` / `ntfyTopic` | unset | Also send every notification to this ntfy topic (both needed; messages carry job names and reasons, in plain text). Applies at once; Settings → Notifications |
 | `maxSessionMinutes` | `0` | End a session and pause the job after this many minutes; `0` = off (after the coding agent writes a handoff note, like Pause) |
 | `prPollMinutes` | `5` | How often a watched pull request is polled; `0` = off |
+| `jobActions` | `true` | Job actions: `false` turns `xherd action …` off (refused with `actions_off`) and refuses running actions. Applies at once |
+| `maxActionsPerJob` | `12` | Actions one job may register (`action_limit`) |
 | `maxReviewLoops` | `3` | Review → fix rounds before the review gate is held for a human; `0` = no limit |
 | `autonomy` | `ask` | Default for new jobs: `ask` or `important`. `never` is not available yet |
 | `openIn` | `{}` | Settings → Open in: `hidden` (entry ids left out of the menu: `vscode`, `cursor`, `zed`, `devcontainer`, `terminal`, `link:<id>`), `terminal` (the app Open in → Terminal starts: `terminal`, `iterm`, `ghostty`, `konsole`, `gnome-terminal`, `kitty`, `alacritty`, `wezterm`, `xfce4-terminal`, `foot`, `xterm`, `xdg-terminal-exec`, `x-terminal-emulator`; unset, or one not installed or not for that computer's OS = its default; Settings lists the ones the terminal handler found), `links` (your own links, `[{"id", "label", "url"}]`, shown as `link:<id>`; `{dir}` and `{job}` in the URL are replaced percent-encoded; for local apps only: the URL must start with a scheme such as `idea://`, and `http`, `https`, `ws`, `wss`, `ftp`, `javascript`, `data`, `vbscript`, `blob`, `file`, `about` and `xherd-term` are refused) and `droppedCommands` (labels of the `commands` of older versions, removed when the file was upgraded; Settings names them until you dismiss the notice, and it can only shrink) |
@@ -65,6 +67,7 @@ Settings → Repo profiles (stored in the database, not `config.json`; `GET/POST
 | `testCommand` | One shell command (one line) run in the worktree at each commit proposal; if it fails or times out, the commit is held for a human (only the exit status is shown) |
 | `lintCommand` | Like `testCommand`, run before it (a linter or formatter check); leave both empty to run nothing |
 | `instructions` | Added to the job's `instructions.md` |
+| `actions` | Up to 20 saved [actions](../user/guide.md#actions) (`id`, `label`, `kind`, `run`, `cwd`, `description`). A new job copies them as already approved and lists them in `instructions.md`. The profile form's *Actions* group edits them; saving replaces the whole list. Export and import carry them |
 | `stagingBranch` | Stored; no flow uses it yet |
 
 Changes apply to running jobs at once, except `instructions`, which is written at a job's creation and when its autonomy changes. Deleting a profile sends its jobs back to the global settings.

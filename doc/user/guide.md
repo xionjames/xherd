@@ -26,7 +26,7 @@ The Jobs list can be grouped by status, agent or flow (*Group*, `?group=agent|fl
 
 The **Welcome** screen opens by itself the first time, in six steps: Welcome, Plugins, Commit identity, Git access, Connect & check, Ready. Everything it sets is in Settings later.
 
-**Plugins** (Welcome step 2 and Settings → Plugins show the same view) has two views, *Enabled* (the plugins that are on) and *Available* (installed but off), each with a count. A kind filter (coding agents, Git providers, issue trackers, languages…) and a search box by name, description or kind narrow both; with all kinds shown, cards are grouped by kind. Each card has a switch, its state (Off, Ready, Not ready with the first failing check, Not logged in), *Log in* when the plugin has a login, and *Options*, which opens the plugin's settings, checks, login terminal and, for a language, its versions in a dialog; the cards do not move. In Settings the open dialog is in the URL (`#/settings?tab=plugins&plugin=github`). One coding agent and one language must stay on; Git providers and issue trackers may all be off. In Welcome an enabled plugin that is not logged in (Claude Code, GitHub) holds the step until you log in or switch it off. When a login ends, the checks run again.
+**Plugins** (Welcome step 2 and Settings → Plugins show the same view) has two views, *Enabled* (the plugins that are on) and *Available* (installed but off), each with a count. A kind filter (coding agents, Git providers, issue trackers, languages…) and a search box by name, description or kind narrow both; with all kinds shown, cards are grouped by kind. Each card has a switch, its state (Off, Ready, Not ready with the first failing check, Not logged in), *Log in* when the plugin has a login, and *Options*, which opens the plugin's settings, checks, login terminal and, for a language, its versions in a dialog; the cards do not move. In Settings the open dialog is in the URL (`#/settings?tab=plugins&plugin=github`). One coding agent and one language must stay on; Git providers and issue trackers may all be off. In Welcome an enabled plugin that is not logged in (Claude Code, GitHub) holds the step until you log in or switch it off. When a login ends, the checks run again. In the container a coding agent's CLI is installed (and updated to the version xherd was checked against) by xherd itself, at start and when you switch the plugin on: its card says *Installing…* meanwhile, its check has no fix button, and a failed install shows the last lines of its output with *Session* to retry in a terminal. A job for a runtime that is still missing is refused (`runtime_missing`) with where to install it. See [Docker](docker.md#runtime-installs).
 
 **Add plugin** (Settings → Plugins, hidden when installs are off) installs an external plugin from a git URL: enter the URL and optionally a branch, tag or commit, *Preview* it (name, version, `url@sha`, what it will run, a warning), then *Install*. A repository with several plugins asks which one. Installed plugins say *from url@sha*; one copied in by hand says *installed by hand, not pinned*. A plugin's *Options* dialog has *Update* (shows the new version and the manifest diff before applying) and *Remove* (with a box to forget its settings). Plugins load when the daemon starts, so after any of these Settings shows **Restart xherd**; running jobs keep their sessions. The same is `xherd plugin …` and `xherd daemon restart` ([CLI](../reference/cli.md)); read [Security](security.md#plugins) first.
 
@@ -110,6 +110,15 @@ If the coding agent asks a question (`xherd ask`), the band shows it with an ans
 | Pull request | State, checks (with links to the runs), conflicts, reviewers, and the PR comment round |
 | Shared memory | A proposed update of the repository's `AGENTS.md` (below) |
 | Activity | The job's event log |
+
+## Actions
+
+An action is a named command you run from the job page: a dev server, a Storybook, the test suite, a demo script. The coding agent registers them (`xherd action add`) as it discovers what the repository needs, and may read their output (`xherd action log`); it can never run, stop or approve one. The job menu lists them under **Services** (long-running) and **Actions** (they end), with a mark for the state that never relies on colour alone.
+
+- **Allow and run.** A command the job registered runs only after you approved it, and the page shows the whole command first. Changing the command or its folder drops the approval. Autonomy never approves or runs an action.
+- **Running.** Each action has its own terminal session next to the job's, with `$XHERD_PORT_BASE` set to the first port of the job's block (a dev server should listen on it) and none of the job's tokens. One instance per action: Run, Stop (Ctrl-C, then a kill after 5 seconds) and Restart. Services keep running while a job is parked or watching its PR, and survive a daemon restart; pausing, cancelling or finishing the job, or removing its worktree, stops them. The last 1 MiB of output is kept and shown after the action ends.
+- **Save to repo profile.** From an action's page, or from the card a finished job shows for the actions that succeeded, you can write an action to the repository's [profile](#repo-profiles). New jobs for that repository then start with it already approved.
+- **Elsewhere.** Herd cards show `▶ n` for n running services, ⌘K lists the current job's actions, and the CLI has `xherd actions`, `run`, `stop` and `attach --action`. `jobActions` and `maxActionsPerJob` in [Configuration](../reference/configuration.md) switch it off or cap it.
 
 ## Job states
 
@@ -202,7 +211,7 @@ An **agent** is a named, versioned persona that jobs start from: runtime and mod
 
 ## Repo profiles
 
-Settings → Repo profiles holds per-repository settings, matched by the `origin` URL (`github.com/acme/*`) or by folder: the base branch, autonomy, tool permissions, runtime, a model per runtime, tripwires (`sensitivePaths`, `maxDiffLines`), a per-job token budget, a **lint command** and a **test command** run at every commit proposal (a failure holds the commit for you), and instructions added to every job's `instructions.md`. Profiles can be exported and imported as JSON. Field by field: [Configuration](../reference/configuration.md#repo-profiles).
+Settings → Repo profiles holds per-repository settings, matched by the `origin` URL (`github.com/acme/*`) or by folder: the base branch, autonomy, tool permissions, runtime, a model per runtime, tripwires (`sensitivePaths`, `maxDiffLines`), a per-job token budget, a **lint command** and a **test command** run at every commit proposal (a failure holds the commit for you), instructions added to every job's `instructions.md`, and saved [actions](#actions). Profiles can be exported and imported as JSON. Field by field: [Configuration](../reference/configuration.md#repo-profiles).
 
 ## Limits and budgets
 
@@ -250,6 +259,7 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | `xherd approve <job>` / `xherd changes <job> "<comment>"` | Approve, or ask for revisions |
 | `xherd send <job> "<text>"` | Type into the job's session (also answers a question) |
 | `xherd pause\|resume\|cancel <job>` | Lifecycle; `xherd pause --all` stops every job at once; `cancel --remove-worktree` also deletes the worktree |
+| `xherd actions <job>`, `xherd run <job> <action> [--approve]`, `xherd stop <job> <action>` | List, run and stop a job's actions |
 | `xherd talk <job> "<text>"` / `xherd finish <job>` | Ask a stopped job something, and end that session |
 | `xherd remove-worktree <job>` | Delete a done or cancelled job's worktree (the branch stays) |
 | `xherd autonomy <job> <level>`, `xherd mode <job> <mode>`, `xherd model <job> <model>` | Autonomy, tool permissions and model |
