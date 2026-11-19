@@ -61,6 +61,8 @@
   let noSensitive = $state(false);
   function edit(p: Profile | null) {
     form = p ? toForm(p) : blank();
+    // ModelInput's bindable value has a '' fallback: binding undefined throws props_invalid_value.
+    for (const r of modelRuntimes) form.models[r.name] ??= '';
     noSensitive = !!p && Array.isArray(p.sensitivePaths) && p.sensitivePaths.length === 0;
   }
   // An id is a slug of a-z, 0-9 and -: made from the label when left empty.
@@ -274,7 +276,7 @@
       </div>
       {#snippet foot()}
         <button class="btn ghost" onclick={() => (form = null)}>Cancel</button>
-        <button class="btn primary" disabled={busy || !form?.name.trim() || !form?.match.trim() || !actionsReady(form)} onclick={save}>{busy ? 'Saving…' : 'Save profile'}</button>
+        <button class="btn primary" disabled={busy || !form?.name.trim() || !form?.match.trim() || !form || !actionsReady(form)} onclick={save}>{busy ? 'Saving…' : 'Save profile'}</button>
       {/snippet}
     </Panel>
   {/if}
