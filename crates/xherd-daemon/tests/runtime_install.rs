@@ -183,3 +183,73 @@ async fn switching_a_runtime_on_installs_it() {
     settle(&d).await;
     assert_eq!(t.installed(), "1.2.3");
 }
+
+const FAKE_CHECK: &str = "plugin:claude-code:requires:fake";
+
+async fn fake_check(d: &Daemon) -> xherd_daemon::checks::Check {
+    let env = |_: &str| None;
+    d.checks(&env)
+        .await
+        .into_iter()
+        .find(|c| c.id == FAKE_CHECK)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_slow_install_shows_installing_and_tells_the_hub() {
+    let slow = format!("sleep 2; {WRITE}");
+    let (t, d) = start(true, None, &slow, &[]).await;
+    let mut rx = d.hub.subscribe();
+    for _ in 0..100 {
+        if d.install_state("claude-code", "fake").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let c = fake_check(&d).await;
+    assert!(c.installing && !c.ok && c.fix.is_none(), "{c:?}");
+    assert!(
+        c.detail.starts_with("Installing fake 1.2.3"),
+        "{}",
+        c.detail
+    );
+    // `fix_check` while it runs is refused.
+    let env = |_: &str| None;
+    let e = d.fix_check(FAKE_CHECK, &env).await.unwrap_err();
+    assert_eq!(e.code, "install_running");
+    // A subscriber is told when it ends.
+    let mut seen = false;
+    while let Ok(Ok(m)) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+        if matches!(m, Change::Checks) && d.install_state("claude-code", "fake").is_none() {
+            seen = true;
+            break;
+        }
+    }
+    assert!(seen);
+    until_runs(&t, 1).await;
+    let c = fake_check(&d).await;
+    assert!(c.ok && !c.installing);
+}
+
+#[tokio::test]
+async fn a_failed_install_leaves_its_tail_in_the_check() {
+    let (t, d) = start(true, None, "echo boom >&2; exit 1", &[]).await;
+    for _ in 0..100 {
+        if matches!(
+            d.install_state("claude-code", "fake"),
+            Some(InstallState::Failed { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let c = fake_check(&d).await;
+    assert!(!c.ok && !c.installing, "{c:?}");
+    assert!(c.detail.contains("boom"), "{}", c.detail);
+    quiet().await;
+    assert_eq!(t.runs(), 0);
+    // Checking again does not install again.
+    fake_check(&d).await;
+    quiet().await;
+    assert_eq!(t.runs(), 0);
+}

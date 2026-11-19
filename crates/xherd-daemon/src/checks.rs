@@ -8,6 +8,7 @@ use serde::Serialize;
 use xherd_core::exec::{Cmd, run};
 use xherd_plugin::Kind;
 
+use crate::runtime_install::InstallState;
 use crate::{ActionError, Daemon};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -36,6 +37,9 @@ pub struct Check {
     pub required: bool,
     pub ok: bool,
     pub detail: String,
+    /// A runtime CLI is being installed or updated (R4, R5).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub installing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<Fix>,
 }
@@ -88,6 +92,7 @@ impl Daemon {
             required: true,
             ok: git.is_ok(),
             detail: git.unwrap_or_else(|e| format!("git not found: {e}")),
+            installing: false,
             fix: None,
         });
 
@@ -112,6 +117,7 @@ impl Daemon {
             required: true,
             ok,
             detail,
+            installing: false,
             fix: (!ok).then(|| Fix::Command {
                 text: "brew install tmux   # or your package manager".into(),
             }),
@@ -134,14 +140,41 @@ impl Daemon {
             let Ok((p, results)) = joined else { continue };
             for r in results {
                 let runtime = p.manifest.kind == Kind::Runtime && r.plugin == default_rt;
-                let fix = (!r.ok).then(|| self.plugin_fix(&p, &r.name)).flatten();
+                let mut ok = r.ok;
+                let mut detail = if r.ok { "passes".into() } else { r.message };
+                let mut installing = false;
+                let mut fix = (!r.ok).then(|| self.plugin_fix(&p, &r.name)).flatten();
+                let state = r
+                    .name
+                    .strip_prefix(xherd_plugin::manifest::REQUIRES_PREFIX)
+                    .and_then(|tool| {
+                        let req = p.manifest.requires.iter().find(|q| q.name == tool)?;
+                        Some((req, self.install_state(&r.plugin, tool)?))
+                    });
+                match state {
+                    Some((req, InstallState::Running { version, update })) => {
+                        installing = true;
+                        fix = None;
+                        let verb = if update { "Updating" } else { "Installing" };
+                        detail = match version {
+                            Some(v) => format!("{verb} {} {v}…", req.name),
+                            None => format!("{verb} {}…", req.name),
+                        };
+                    }
+                    Some((_, InstallState::Failed { tail })) if !r.ok => {
+                        ok = false;
+                        detail = format!("{detail}\n{tail}");
+                    }
+                    _ => {}
+                }
                 plugin_checks.push(Check {
                     id: format!("plugin:{}:{}", r.plugin, r.name),
                     group: "plugins",
                     label: format!("{} · {}", r.plugin, r.name),
                     required: runtime && !r.optional,
-                    ok: r.ok,
-                    detail: if r.ok { "passes".into() } else { r.message },
+                    ok,
+                    detail,
+                    installing,
                     fix,
                 });
             }
@@ -171,6 +204,7 @@ impl Daemon {
                                 sock.display()
                             )
                         },
+                        installing: false,
                         fix: None,
                     }
                 }
@@ -184,6 +218,7 @@ impl Daemon {
                              so an agent can read xherd's config.json and secrets.json. \
                              Keep plugin secrets you would not hand to an agent out of xherd."
                         .into(),
+                    installing: false,
                     fix: None,
                 },
             });
@@ -235,6 +270,7 @@ impl Daemon {
             required: default,
             ok,
             detail,
+            installing: false,
             fix: (!ok).then(|| Fix::Action {
                 label: "Install commands".into(),
             }),
@@ -252,7 +288,7 @@ impl Daemon {
                     label: format!("Install {name}"),
                     explain: format!(
                         "Runs `{}` in a terminal, into the agents' home.",
-                        r.install.as_ref()?.join(" ")
+                        r.install.as_ref()?.join(" ").lines().next().unwrap_or("")
                     ),
                     terminal: crate::git_access::PLUGIN_LOGIN_ID.into(),
                 });
