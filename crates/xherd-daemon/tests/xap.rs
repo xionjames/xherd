@@ -3490,6 +3490,41 @@ async fn an_ask_goes_through_the_packs_ask_command() {
     );
 }
 
+/// Without a pack, or with one that has no `ask` command, Ask sends the
+/// trimmed text as it is (F03).
+#[tokio::test]
+async fn an_ask_without_an_ask_command_sends_the_bare_text() {
+    for pack in [None, Some("no-such-pack")] {
+        let t = setup_tweaked(json!({"freshSessions": true}), None, None, "feature", |j| {
+            j.pack = pack.map(String::from);
+        })
+        .await;
+        session_start(&t, 1).await;
+        stop(&t, 2).await;
+        // No pack command for the handoff: the pause does not wait for a note.
+        act(&t, UserAction::Pause).await.unwrap();
+        until(&t, |a| a.status == Status::Paused).await;
+
+        let a = act(
+            &t,
+            UserAction::Ask {
+                text: "  Why the retry?  ".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.next_prompt.as_deref(), Some("Why the retry?"), "{pack:?}");
+        until(&t, |a| a.status == Status::Running).await;
+        session_start(&t, 3).await;
+        let sent = sends(&t);
+        assert!(
+            sent.iter().any(|s| s.contains("Why the retry?")),
+            "{sent:?}"
+        );
+        assert!(!sent.iter().any(|s| s.contains("/xherd:ask")), "{sent:?}");
+    }
+}
+
 /// A commit the agent makes with git, outside any proposal, is listed at the
 /// next stop as a held `X01` row, once.
 #[tokio::test]
