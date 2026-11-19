@@ -683,10 +683,20 @@ impl Daemon {
             PathBuf::from(xherd_core::runner::agent_env("HOME").unwrap_or_else(|| "/".into()));
         // The daemon's PATH is system folders only: a runtime installed under
         // the agents' home (`~/.local/bin/claude`) is found through theirs.
-        let env: Vec<(String, String)> = ["HOME", "PATH"]
+        // tmux takes a session's PATH from the client that creates it and
+        // ignores `-e PATH=`, so the command runs through `env`, which sets it
+        // before looking the program up. HOME does go through the session.
+        let env: Vec<(String, String)> = xherd_core::runner::agent_env("HOME")
+            .map(|v| ("HOME".to_string(), v))
             .into_iter()
-            .filter_map(|k| xherd_core::runner::agent_env(k).map(|v| (k.to_string(), v)))
             .collect();
+        let argv = match xherd_core::runner::agent_env("PATH") {
+            Some(path) => ["env".to_string(), format!("PATH={path}")]
+                .into_iter()
+                .chain(argv)
+                .collect(),
+            None => argv,
+        };
         tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &env, &argv)
             .await
             .map_err(|e| fail("driver", e.to_string()))
