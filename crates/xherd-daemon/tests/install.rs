@@ -246,3 +246,72 @@ async fn review_and_resolve_pack_files() {
     assert!(dir.is_dir());
     assert!(d.pack_review(&env).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn pack_checks_report_missing_outdated_and_review() {
+    let home = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let dir = user.path().join(".claude/commands/xherd");
+    let find = |cs: &[xherd_daemon::checks::Check], id: &str| {
+        cs.iter().find(|c| c.id == id).cloned().unwrap()
+    };
+
+    // Nothing installed: the commands are missing, nothing to review.
+    let cs = d.checks(&env).await;
+    let pack = find(&cs, "pack");
+    assert!(!pack.ok && pack.required);
+    assert!(
+        pack.detail.contains("command files missing"),
+        "{}",
+        pack.detail
+    );
+    assert!(find(&cs, "pack-files").ok);
+
+    d.install(Some("claude-code"), None, &env, false)
+        .await
+        .unwrap();
+    let cs = d.checks(&env).await;
+    assert!(find(&cs, "pack").ok && find(&cs, "pack-files").ok);
+
+    // An old pack text nobody edited: out of date, fixed by install.
+    let next = dir.join("next.md");
+    std::fs::write(&next, "old pack text\n").unwrap();
+    d.store
+        .put_install(
+            "claude-code",
+            "xherd",
+            &next.to_string_lossy(),
+            &content_sha256(b"old pack text\n"),
+        )
+        .await
+        .unwrap();
+    let pack = find(&d.checks(&env).await, "pack");
+    assert!(!pack.ok);
+    assert!(pack.detail.contains("1 out of date"), "{}", pack.detail);
+
+    // An edited file: the pack check passes, the review check fails.
+    std::fs::write(&next, "my next\n").unwrap();
+    let cs = d.checks(&env).await;
+    assert!(find(&cs, "pack").ok);
+    let files = find(&cs, "pack-files");
+    assert!(!files.ok && files.required);
+    assert!(matches!(
+        files.fix,
+        Some(xherd_daemon::checks::Fix::Review { .. })
+    ));
+    let e = d.fix_check("pack-files", &env).await.unwrap_err();
+    assert_eq!(e.code, "not_fixable");
+
+    // Declined: nothing left to decide.
+    d.install(Some("claude-code"), None, &env, false)
+        .await
+        .unwrap();
+    d.resolve_pack_files(&[choice(&next, Choice::KeepMine)], &env)
+        .await
+        .unwrap();
+    assert!(find(&d.checks(&env).await, "pack-files").ok);
+}
