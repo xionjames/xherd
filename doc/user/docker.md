@@ -1,6 +1,6 @@
 # Docker
 
-Docker is the recommended way to run xherd. The daemon, the web UI, tmux, Claude Code, opencode, Codex, `git`, `gh`, `glab` and the toolchain managers all live in one container. Only your workspace folder is shared with the host, so jobs cannot reach the rest of your files.
+Docker is the recommended way to run xherd. The daemon, the web UI, tmux, `git`, `gh`, `glab` and the toolchain managers all live in one container. The coding agents (Claude Code, opencode, Codex) are not in the image: the daemon installs each enabled one into the `xherd-home` volume (see [Runtime installs](#runtime-installs)). Only your workspace folder is shared with the host, so jobs cannot reach the rest of your files.
 
 ## Topology
 
@@ -54,9 +54,16 @@ A job therefore cannot read your tokens or edit the daemon's configuration. Othe
 
 Native installs have a single user; `xherd security check` says so.
 
+
+## Runtime installs
+
+The image has no Node and none of the agent CLIs, so it stays small and a new Claude Code, opencode or Codex does not need a new image. Each runtime plugin pins a version and a sha256 per architecture (amd64, arm64) for its vendor's standalone binary. When the daemon starts, for every enabled runtime it probes the CLI as the agents' user and, when it is missing or older than the pin, downloads, verifies and installs it into the agents' home in `xherd-home` (one install per tool at a time, 15 minutes at most, no retry loop). Switching a runtime on in Settings → Plugins installs it the same way. The first start therefore needs network access and takes a minute or two; later starts find the binaries in the volume. Natively nothing is installed: you bring the CLI.
+
+While an install runs, the runtime's plugin card says *Installing…* and its Setup check shows *Installing…* with no fix button; a failed install leaves the last lines of its output in the check, with the usual *Session* button to run the install again in a terminal. A job that needs a runtime whose CLI is missing is refused with `runtime_missing` and a message saying where to install it. Updating a pin ships with xherd: after an upgrade the daemon reinstalls a runtime that is older than the new pin.
+
 ## Setup
 
-See [Getting started](getting-started.md#run-with-docker) for the first start with a published image, and [Running from source](../dev/from-source.md#docker-built-from-the-repository) to build it from this repository (`deploy/compose/compose.yaml`). The image is built from `deploy/docker/Dockerfile` (multi-stage: UI, daemon, runtime on Debian trixie). Version pins are `ARG`s at the top of the runtime stage.
+See [Getting started](getting-started.md#run-with-docker) for the first start with a published image, and [Running from source](../dev/from-source.md#docker-built-from-the-repository) to build it from this repository (`deploy/compose/compose.yaml`). The image is built from `deploy/docker/Dockerfile` (multi-stage: UI, daemon, runtime on Debian trixie). Version pins of the image's tools are `ARG`s at the top of the runtime stage; the agents' versions are pinned in their plugins' manifests.
 
 `xherd docker init` writes an equivalent `compose.yaml` and `.env` to `~/.config/xherd/` for a published image, detecting the container engine (`--workspace`, `--image`, `--port`, `--extra-path`, `--force` to rewrite). `xherd docker doctor` and `xherd docker update` work on that file. This needs the `xherd` binary on the host; with only the downloaded `compose.yaml`, use the `docker compose` commands of [Getting started](getting-started.md#everyday-operation).
 
