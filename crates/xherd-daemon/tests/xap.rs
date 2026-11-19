@@ -3577,10 +3577,26 @@ async fn a_commit_made_outside_xherd_is_listed_and_held() {
         "{said:?}"
     );
 
-    // A second stop lists nothing new.
+    // A second stop lists nothing new. A second outside commit and a third
+    // stop then wait for `X02` itself, so no sleep stands in for the check.
     stop(&t, 2).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(outside(&get(&t).await).len(), 1);
+    std::fs::write(wt.join("helper2.rs"), "fn read_state() {}\n").unwrap();
+    git(wt, &["add", "helper2.rs"]);
+    git(wt, &["commit", "-q", "-m", "Rename the state reader"]);
+    let second = git(wt, &["rev-parse", "HEAD"]);
+    stop(&t, 3).await;
+    let a = until(&t, |a| a.commits.iter().any(|c| c.id == "X02")).await;
+    let listed: Vec<_> = outside(&a)
+        .iter()
+        .map(|c| (c.id.clone(), c.sha.clone()))
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            ("X01".to_string(), Some(sha.clone())),
+            ("X02".to_string(), Some(second))
+        ]
+    );
 }
 
 /// The stop that moves the job to watching also ends its session (a new
