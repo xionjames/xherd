@@ -44,7 +44,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `gitHosts` | `[]` | Git access per host (Settings → Git access): `host`, `protocols`, `provider` (a host plugin: `github`, `gitlab`, `bitbucket` or an external one; unset = the first whose host patterns claim the name), `credential` (where git gets the HTTPS token: `provider` = the provider's CLI helper such as `gh auth git-credential`, `xherd` = the token kept in `secrets.json`, `none` = git's own configuration), `username`, `caFile`, `preferHttps` / `preferSsh` (rewrite remotes) |
 | `toolchainDefaults` | `{}` | Tool → version used when a worktree has no version file for it (`{"java": "21.0.5-tem"}`); set from Settings → Plugins → a toolchain. Version files always win |
 | `pluginSettings` | `{}` | Non-secret settings by plugin name (for example `github.gh`, the `gh` binary). Removing a plugin with *forget* drops its entry |
-| `disabledPlugins` | `[]` | Plugins switched off. At least one of each kind stays on |
+| `disabledPlugins` | `[]` | Plugins switched off. At least one of each kind stays on. A first run (no `config.json`) writes every plugin here, so Welcome starts with all of them off; a native run leaves out the plugins whose required tools it finds on the computer |
 | `updateCheck` | `true` | Check for new versions |
 | `welcomed` | `false` | The first-run Welcome screen was completed or skipped |
 | `userToken` | generated | Token of the local user (the CLI and local browsers). Do not share it |

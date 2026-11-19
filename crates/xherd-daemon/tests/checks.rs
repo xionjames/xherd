@@ -348,3 +348,35 @@ async fn tracker_links_use_the_base_url_and_trackers_may_all_be_off() {
     d.save_config(patch).unwrap();
     assert!(d.tracker_links().is_empty());
 }
+
+/// A first run (no config.json) starts with every plugin off; a native run
+/// switches on the ones whose required tools it finds.
+#[tokio::test]
+async fn a_first_run_starts_with_the_plugins_off() {
+    for sandbox in [true, false] {
+        let home = tempfile::tempdir().unwrap();
+        let paths = Paths::at(home.path().join("data"));
+        let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+        o.scheduler = None;
+        o.sandbox = sandbox;
+        o.builtin_plugins
+            .retain(|m| ["claude-code", "opencode", "nvm"].contains(&m.name.as_str()));
+        for m in &mut o.builtin_plugins {
+            // `git` stands for a tool that is there, `no-such-tool` for one that is not.
+            let tool = if m.name == "claude-code" {
+                "git"
+            } else {
+                "no-such-tool"
+            };
+            for r in &mut m.requires {
+                r.check = Some(vec![tool.into(), "--version".into()]);
+            }
+        }
+        let d = Daemon::start(paths.clone(), o).await.unwrap();
+        let on = |n: &str| d.plugin_enabled(n);
+        assert!(!on("opencode") && !on("nvm"), "sandbox {sandbox}");
+        assert_eq!(on("claude-code"), !sandbox, "sandbox {sandbox}");
+        let saved = xherd_core::config::Config::load(&paths.config()).unwrap().0;
+        assert!(saved.disabled_plugins.contains(&"opencode".to_string()));
+    }
+}
