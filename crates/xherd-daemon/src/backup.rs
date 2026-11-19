@@ -46,6 +46,7 @@ const XHERD_SKIP: &[&str] = &[
     "toolchain.env",
     "backup.bundle",
     "backup.patch",
+    "uploads",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
