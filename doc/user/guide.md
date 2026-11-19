@@ -32,6 +32,10 @@ The **Welcome** screen opens by itself the first time, in six steps: Welcome, Pl
 
 **Git** has two parts. *Commit identity* and *Git access* are how git commits, fetches and pushes, for any host. A **Git provider** plugin (GitHub through `gh`, GitLab through `glab`) is the optional, host-specific part: pull requests, comments, logins. A provider that is on and logged in also gives git access for its own host with nothing more to set: GitHub, logged in, covers `github.com` through `gh`. Git access shows such a row marked *From the GitHub plugin*, with its check result; it is never saved, *Edit* turns it into an ordinary row you change, and a row you save for the same host replaces it. Switching the provider off removes it. When xherd runs natively, such a row is not written to xherd's gitconfig, so your own git setup for that host is left alone; save it as a row (*Edit*) if you want xherd to set its credential helper. With no provider on and no hosts, configure access by hand (an SSH key or a token per host) or switch a provider on.
 
+**Setup checks** include two for the xherd command files of each coding agent. *xherd commands installed* fails while files are missing or out of date; *Install commands* fixes it (the daemon also does it at every start). *xherd command files reviewed* fails when you have edited a command file the pack now has a new text for, or the pack no longer ships a file you have: *Review files* opens a dialog with one row per file. For an edited file choose *Keep mine* (the default; xherd stops offering that version) or *Use xherd's version* (replaces your edits); for an obsolete file choose *Remove* (default) or *Keep*. The dialog warns when a choice replaces your edits, and one button applies all rows. Nothing you edited is overwritten or deleted without that choice.
+
+After an upgrade xherd also rewrites the hook file and push guard of jobs that are still live, so they call the new binary; your own hook entries are kept.
+
 **Connect & check** runs the setup checks again each time you enter it, so a login done in an earlier step shows at once.
 
 ## Creating a job

@@ -33,7 +33,9 @@ All paths are under `/api/v1`. `{id}` is a job id or name.
 | `GET /state` | Everything the UI starts from: jobs, saved agents (`agents`), flows (each pack flow's stages), plugins (with `enabled`, and `view: {entry}` for a view plugin), tracker links, `buildVersion` |
 | `GET /ws` (WebSocket) | The change feed: one JSON message per change, tagged `type` (kebab-case). The UI reloads `/state` when it reconnects. A client that falls behind is disconnected |
 | `GET /checks`, `POST /checks/{id}/fix` | Setup checks, and running a check's fix |
-| `POST /install` | Install the pack's commands for the runtimes (`xherd install`) |
+| `POST /install` | Body `{runtime?, pack?, removeObsolete?}`. Install the pack's commands for the runtimes (`xherd install`); `removeObsolete` deletes the files the pack no longer ships |
+| `GET /install/review` | `{files: [{runtime, path, state, edited}]}`: the files waiting for a decision, `state` `edited` (you changed a file the pack has a new text for) or `obsolete` (the pack no longer ships it; `edited` says you changed it) |
+| `POST /install/resolve` | Body `{choices: [{runtime, path, choice}]}`, `choice` one of `use-new`, `keep-mine` (edited files) or `remove`, `keep` (obsolete files). Answers `{checks}`. 409 `not_pending` when a choice does not match the review; nothing changes then |
 | `GET /security` | The `xherd security check` findings |
 | `GET /config`, `PUT /config` | The saved and running configuration (`restartNeeded`), and a partial update with range checks; unknown keys are refused. See [Configuration](configuration.md) |
 
