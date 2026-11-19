@@ -29,6 +29,7 @@ pub mod plugin_install;
 pub mod pr_round;
 pub mod profiles;
 pub mod repos;
+pub mod runtime_install;
 pub mod scheduler;
 pub mod security;
 pub mod settings;
@@ -71,6 +72,9 @@ pub struct Options {
     /// Running in the xherd container (`XHERD_SANDBOX=1`): toolchains are
     /// installed, not only resolved (R-653).
     pub sandbox: bool,
+    /// Runtime CLIs are installed and updated by the daemon (R3); the CLI
+    /// sets it with `sandbox`, tests set it alone (they never set `sandbox`).
+    pub runtime_install: bool,
     /// Peer addresses treated like loopback: the container's gateway, through
     /// which the port published on the host's 127.0.0.1 arrives.
     pub local_peers: Vec<std::net::IpAddr>,
@@ -96,6 +100,7 @@ impl Options {
             delivery_ack: std::time::Duration::from_secs(10),
             screen_rules: None,
             sandbox: false,
+            runtime_install: false,
             local_peers: Vec::new(),
             verify_timeout: actor::VERIFY_TIMEOUT,
             pr_poll: None,
@@ -174,6 +179,10 @@ pub struct Daemon {
     pub xherd_bin: String,
     /// Running in the xherd container (`XHERD_SANDBOX=1`).
     pub sandbox: bool,
+    /// See `Options::runtime_install`.
+    pub runtime_install: bool,
+    /// Automatic runtime installs by `"<plugin>:<tool>"`; no entry = idle.
+    pub installs: Arc<std::sync::Mutex<BTreeMap<String, runtime_install::InstallState>>>,
     /// See `Options::local_peers`.
     pub local_peers: Arc<Vec<std::net::IpAddr>>,
     /// When the work log last booked agent time (ms; 0 = not yet).
@@ -353,6 +362,8 @@ impl Daemon {
             clock: opts.clock,
             xherd_bin: opts.xherd_bin,
             sandbox: opts.sandbox,
+            runtime_install: opts.runtime_install,
+            installs: Arc::default(),
             local_peers: Arc::new(opts.local_peers),
             worklog_flushed: Arc::default(),
             secrets_write: Arc::default(),
@@ -383,6 +394,7 @@ impl Daemon {
                 tracing::warn!(error = %e.message, "installing the xherd commands failed");
             }
         }
+        d.ensure_runtimes();
         notifier::spawn(d.clone());
         if let Some(iv) = opts.scheduler {
             scheduler::spawn(d.clone(), iv);
