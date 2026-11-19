@@ -604,7 +604,11 @@ impl Actor {
                 }
                 Msg::Tick(t) => self.on_tick(t).await,
                 Msg::WorkDone { generation, result } => {
-                    if generation != self.job.generation {
+                    // The branch check is idempotent (re-filtered against the
+                    // current commits), and the stop that starts it often
+                    // ends the session: keep it across generations (R4).
+                    let keep = matches!(result, WorkResult::BranchCommits(_));
+                    if generation != self.job.generation && !keep {
                         tracing::debug!(agent = %self.job.name, "dropping stale async result");
                         continue;
                     }

@@ -3541,6 +3541,27 @@ async fn a_commit_made_outside_xherd_is_listed_and_held() {
     assert_eq!(outside(&get(&t).await).len(), 1);
 }
 
+/// The stop that moves the job to watching also ends its session (a new
+/// generation): the check started by that stop still lists the commit.
+#[tokio::test]
+async fn a_commit_made_outside_xherd_before_watching_is_listed() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    git(wt, &["checkout", "-q", "-b", "SC-1"]);
+    std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
+    std::fs::write(wt.join("helper.rs"), "fn write_state() {}\n").unwrap();
+    git(wt, &["add", "helper.rs"]);
+    git(wt, &["commit", "-q", "-m", "Rename the retry helper"]);
+    let sha = git(wt, &["rev-parse", "HEAD"]);
+    watching(&t).await;
+    let a = until(&t, |a| a.commits.iter().any(|c| c.id == "X01")).await;
+    let x = a.commits.iter().find(|c| c.id == "X01").unwrap();
+    assert_eq!(
+        (x.sha.as_deref(), a.status),
+        (Some(sha.as_str()), Status::Watching)
+    );
+}
+
 #[tokio::test]
 async fn ask_then_finish_returns_to_watching() {
     let t = setup().await;
