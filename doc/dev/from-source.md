@@ -1,6 +1,6 @@
 # Running from source
 
-How to build and run xherd from a clone of this repository: the Docker image, or a native binary. Use it to try a branch that is not released, to run on macOS natively (no macOS binaries are published yet), or as the first step before [changing xherd](development.md). To install a published release instead, see [Getting started](../user/getting-started.md).
+How to build and run xherd from a clone of this repository: the Docker image, or a native binary. Use it to try a branch that is not released, or as the first step before [changing xherd](development.md). To install a published release instead, see [Getting started](../user/getting-started.md).
 
 ## Prerequisites
 

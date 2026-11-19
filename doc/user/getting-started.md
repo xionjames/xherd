@@ -6,14 +6,14 @@ To build xherd yourself (an unreleased branch, or to change it), see [Running fr
 
 ## Choose how to run it
 
-| | Docker (recommended) | Native (Linux) |
+| | Docker (recommended) | Native (macOS, Linux) |
 |---|---|---|
 | What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code (or opencode, or Codex) and `gh` / `glab` |
 | Coding-agent CLI and tools | Installed by xherd into its volume at first start (Claude Code, opencode, Codex); the image has `git`, `gh`, `glab`, toolchain managers | Yours, on `PATH` |
 | Isolation | Jobs see only the workspace folder | None: jobs run as you |
 | Platforms | macOS and Linux (amd64, arm64) | macOS and Linux (arm64, x86_64) |
 
-On a Mac: `brew install xionjames/tap/xherd` (installs git and tmux too), or use Docker. The binaries are not signed or notarized; Homebrew and `curl` downloads are not quarantined, a browser download is.
+On a Mac, either works: Docker, or `brew install xionjames/tap/xherd` (see [Run natively](#run-natively)).
 
 xherd is a single-user tool: one person, one daemon, one workspace folder.
 
@@ -28,7 +28,7 @@ Coding agents run commands on your machine, install toolchains and write files. 
 
 ## Versions
 
-Releases are listed at <https://github.com/xionjames/xherd/releases>. Each one publishes the image `ghcr.io/xionjames/xherd` (amd64 and arm64, tagged `latest`, `X.Y` and `X.Y.Z`) and the Linux binaries (`.tar.gz`, `.deb`, `.rpm`, each with a `.sha256` file).
+Releases are listed at <https://github.com/xionjames/xherd/releases>. Each one publishes the image `ghcr.io/xionjames/xherd` (amd64 and arm64, tagged `latest`, `X.Y` and `X.Y.Z`), the Linux binaries (`.tar.gz`, `.deb`, `.rpm`) and the macOS binaries (`.tar.gz`, Apple silicon and Intel), each with a `.sha256` file. Stable releases are also in the Homebrew tap `xionjames/tap`.
 
 ## Run with Docker
 
@@ -83,7 +83,25 @@ docker compose pull && docker compose up -d
 
 and resume them. Your configuration, logins, toolchains and jobs live in the volumes and the workspace, so they survive the new container. Take a backup first if you care about the jobs' state: Settings → Backups.
 
-## Run natively on Linux
+## Run natively
+
+### macOS
+
+```sh
+brew install xionjames/tap/xherd      # also installs git and tmux
+```
+
+Or download `xherd-<version>-aarch64-apple-darwin.tar.gz` (Apple silicon) or `xherd-<version>-x86_64-apple-darwin.tar.gz` (Intel) from the [releases page](https://github.com/xionjames/xherd/releases), check it (`shasum -a 256 -c <file>.sha256`) and install the binary:
+
+```sh
+tar -xzf xherd-<version>-aarch64-apple-darwin.tar.gz \
+  && sudo install xherd-<version>-aarch64-apple-darwin/xherd /usr/local/bin/
+brew install git tmux                 # tmux ≥ 3.3
+```
+
+The binaries are not signed or notarized. Homebrew and `curl` downloads are not quarantined; a browser download is, so macOS refuses to open it until you run `xattr -d com.apple.quarantine /usr/local/bin/xherd`.
+
+### Linux
 
 Download the package for your machine from the [releases page](https://github.com/xionjames/xherd/releases) and check it against its `.sha256` file (`sha256sum -c <file>.sha256`), then install one of:
 
@@ -112,7 +130,7 @@ Open <http://127.0.0.1:4740/>.
 
 Data lives in `XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd` (`config.json` there holds the port and the token the CLI uses). Worktrees go to `<workspace>/worktrees/<repo>/<job>`; the workspace is `config.workspace`, else `$XHERD_WORKSPACE`, else `~/xherd`.
 
-To update, install the newer package and restart `xherd daemon`. The restart brings the commands and the live jobs' hook files up to date; no `xherd install` is needed. If you edited a command file, xherd keeps your version and Setup asks what to do (see [Setup checks](guide.md#welcome-plugins-and-git-access)).
+To update, install the newer package (macOS with Homebrew: `brew upgrade xherd`) and restart `xherd daemon`. The restart brings the commands and the live jobs' hook files up to date; no `xherd install` is needed. If you edited a command file, xherd keeps your version and Setup asks what to do (see [Setup checks](guide.md#welcome-plugins-and-git-access)).
 
 ## First run
 
