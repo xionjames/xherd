@@ -345,6 +345,31 @@ pub fn relative_path_ok(p: &str) -> bool {
 }
 
 impl Pack {
+    /// The folder `runtime`'s command files are installed under: the `to`
+    /// template up to the last `/` before `{name}` (`~/.claude/commands/xherd`,
+    /// `~/.codex/skills`). Removing a file prunes empty folders only below it.
+    pub fn install_root(
+        &self,
+        runtime: &str,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<std::path::PathBuf, String> {
+        let inst = self
+            .install
+            .get(runtime)
+            .ok_or_else(|| format!("pack {} does not support runtime {runtime}", self.name))?;
+        let set = inst
+            .commands
+            .as_ref()
+            .or(inst.agents.as_ref())
+            .ok_or_else(|| format!("install.{runtime}: no commands to install"))?;
+        let at = set
+            .to
+            .find("{name}")
+            .ok_or_else(|| format!("install.{runtime}: `to` has no {{name}}"))?;
+        let dir = set.to[..at].rsplit_once('/').map_or("", |(dir, _)| dir);
+        Ok(crate::install::expand(dir, env)?.into())
+    }
+
     pub fn parse(yaml: &str) -> Result<Pack, PackError> {
         let p: Pack = yaml_serde::from_str(yaml).map_err(|e| PackError {
             pack: "xherd-flow.yaml".into(),
@@ -666,6 +691,28 @@ mod tests {
             next.text
                 .contains("/home/u/.config/opencode/command/xherd/rules.md")
         );
+    }
+
+    #[test]
+    fn install_root_is_the_folder_before_name() {
+        let p = crate::builtin();
+        let env = |k: &str| (k == "HOME").then(|| "/home/u".to_string());
+        let root = |rt: &str| p.install_root(rt, &env).unwrap();
+        assert_eq!(
+            root("claude-code"),
+            std::path::Path::new("/home/u/.claude/commands/xherd")
+        );
+        assert_eq!(
+            root("opencode"),
+            std::path::Path::new("/home/u/.config/opencode/command/xherd")
+        );
+        assert_eq!(root("codex"), std::path::Path::new("/home/u/.codex/skills"));
+        let env = |k: &str| (k == "CODEX_HOME").then(|| "/c".to_string());
+        assert_eq!(
+            p.install_root("codex", &env).unwrap(),
+            std::path::Path::new("/c/skills")
+        );
+        assert!(p.install_root("aider", &env).is_err());
     }
 
     #[test]
