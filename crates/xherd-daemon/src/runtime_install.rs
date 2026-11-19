@@ -9,7 +9,8 @@ use xherd_core::exec::{self, Cmd};
 use xherd_plugin::manifest::{Requirement, parse_version, version_in};
 use xherd_plugin::{Kind, Plugin};
 
-use crate::{Change, Daemon};
+use crate::create::refuse;
+use crate::{ActionError, Change, Daemon};
 
 /// An install that takes longer is killed (R3).
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -88,6 +89,39 @@ impl Daemon {
             let (d, p, r) = (self.clone(), p.clone(), r.clone());
             tokio::spawn(async move { d.auto_install(&p, &r).await });
         }
+    }
+
+    /// A job needs the runtime's CLI (R8): refuse while it installs or when
+    /// it is missing. Only with `runtime_install` (the container, R9).
+    pub(crate) async fn runtime_ready(&self, name: &str) -> Result<(), ActionError> {
+        if !self.runtime_install {
+            return Ok(());
+        }
+        let Some(p) = self.plugins.get(name) else {
+            return Ok(());
+        };
+        let ctx = self.plugin_context(p);
+        for r in p.manifest.requires.iter().filter(|r| r.install.is_some()) {
+            if matches!(
+                self.install_state(name, &r.name),
+                Some(InstallState::Running { .. })
+            ) {
+                return Err(refuse(
+                    "runtime_missing",
+                    format!("{} is being installed: try again in a few minutes", r.name),
+                ));
+            }
+            if let Err(e) = xherd_plugin::probe(p, &ctx, r).await {
+                return Err(refuse(
+                    "runtime_missing",
+                    format!(
+                        "{} is not installed ({e}): install it from Settings, Setup checks",
+                        r.name
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
 
     async fn auto_install(&self, p: &Plugin, r: &Requirement) {

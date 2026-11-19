@@ -253,3 +253,71 @@ async fn a_failed_install_leaves_its_tail_in_the_check() {
     quiet().await;
     assert_eq!(t.runs(), 0);
 }
+
+/// A git repo with one commit, and a request for a job in it.
+fn job_in(t: &T) -> xherd_core::new::NewJob {
+    let repo = t.home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["commit", "-q", "--allow-empty", "-m", "base"],
+    ] {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+    }
+    serde_json::from_value(json!({
+        "name": "login",
+        "repo": repo.to_string_lossy(),
+        "prompt": "add login",
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_job_is_refused_while_its_runtime_installs_or_when_it_is_missing() {
+    // Installing: refused with "being installed".
+    let slow = format!("sleep 2; {WRITE}");
+    let (t, d) = start(true, None, &slow, &[]).await;
+    for _ in 0..100 {
+        if d.install_state("claude-code", "fake").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let e = d.new_job(job_in(&t)).await.unwrap_err();
+    assert_eq!(e.code, "runtime_missing");
+    assert!(e.message.contains("being installed"), "{}", e.message);
+    until_runs(&t, 1).await;
+    settle(&d).await;
+    // Installed: the job is created.
+    d.new_job(job_in(&t)).await.unwrap();
+
+    // Missing after a failed install: refused, telling where to install.
+    let (t, d) = start(true, None, "exit 1", &[]).await;
+    for _ in 0..100 {
+        if matches!(
+            d.install_state("claude-code", "fake"),
+            Some(InstallState::Failed { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let e = d.new_job(job_in(&t)).await.unwrap_err();
+    assert_eq!(e.code, "runtime_missing");
+    assert!(e.message.contains("not installed"), "{}", e.message);
+}
+
+#[tokio::test]
+async fn native_mode_does_not_refuse_a_missing_runtime() {
+    let (t, d) = start(false, None, WRITE, &[]).await;
+    d.new_job(job_in(&t)).await.unwrap();
+}
