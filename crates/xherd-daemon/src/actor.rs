@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use xherd_core::config::Config;
-use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
+use xherd_core::domain::{Commit, CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
 use xherd_core::xap::{Refusal, XapCall, XapCmd, refuse as refusal};
@@ -168,6 +168,9 @@ pub enum WorkResult {
         session: String,
         tokens: u64,
     },
+    /// The branch's commits since the base, oldest first, as
+    /// `(sha, subject, files)` (R4).
+    BranchCommits(Vec<(String, String, Vec<String>)>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -938,6 +941,7 @@ impl Actor {
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
                 Effect::AfterStop => {
                     self.measure_usage();
+                    self.check_branch_commits();
                     // A pause waits for the handoff note; the stop after it
                     // ends the session. Earlier stops (the turn that was
                     // running) change nothing, and no approval happens now.
@@ -1018,6 +1022,90 @@ impl Actor {
                 result: WorkResult::Usage { session, tokens },
             });
         });
+    }
+
+    /// List the branch's commits since the job's base (slow: spawned, back
+    /// as `WorkResult::BranchCommits`); with the files of those no recorded
+    /// commit matches, so `on_branch_commits` can list them (R4). No base, no
+    /// workdir or a git error: nothing is checked.
+    fn check_branch_commits(&self) {
+        let base = self
+            .job
+            .base
+            .clone()
+            .filter(|b| !b.is_empty() && !b.starts_with('-') && !b.contains(".."));
+        let (Some(base), Ok(wd)) = (base, self.workdir()) else {
+            return;
+        };
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
+        let (git, recorded) = (self.env.git.clone(), self.job.commits.clone());
+        tokio::spawn(async move {
+            let branch = match git.branch_commits(&wd, &base).await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::debug!(error = %e, "branch commits not listed");
+                    return;
+                }
+            };
+            let mut found = Vec::new();
+            for c in xherd_core::domain::outside_commits(&recorded, &branch) {
+                let sha = c.sha.unwrap_or_default();
+                match git.commit_files(&wd, &sha).await {
+                    Ok(files) => found.push((sha, c.subject, files)),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "files of a branch commit not read");
+                        return;
+                    }
+                }
+            }
+            if found.is_empty() {
+                return;
+            }
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::BranchCommits(found),
+            });
+        });
+    }
+
+    /// Record the branch's commits that xherd did not make or hear of as
+    /// held `Xnn` rows, with one `outside-commit` event each and one
+    /// notification (count and short shas only) (R4, R5).
+    async fn on_branch_commits(&mut self, found: Vec<(String, String, Vec<String>)>) {
+        let branch: Vec<(String, String)> = found
+            .iter()
+            .map(|(sha, subject, _)| (sha.clone(), subject.clone()))
+            .collect();
+        let new = xherd_core::domain::outside_commits(&self.job.commits, &branch);
+        if new.is_empty() {
+            return;
+        }
+        let mut shas = Vec::new();
+        for mut c in new {
+            let sha = c.sha.clone().unwrap_or_default();
+            if let Some((_, _, files)) = found.iter().find(|(s, _, _)| *s == sha) {
+                c.files = files.clone();
+            }
+            self.log(
+                None,
+                "outside-commit",
+                Some(json!({"id": c.id, "sha": sha})),
+            )
+            .await;
+            shas.push(sha.chars().take(7).collect::<String>());
+            self.job.commits.push(c);
+        }
+        let n = shas.len();
+        let (s, was) = if n == 1 { ("", "was") } else { ("s", "were") };
+        self.notify(
+            "gate",
+            format!(
+                "{}: {n} commit{s} {was} made outside xherd ({})",
+                self.job.name,
+                shas.join(", ")
+            ),
+        );
+        self.commit(self.job.status).await;
     }
 
     /// Poll the pull request of a watching agent through the host plugin when
@@ -3341,6 +3429,25 @@ impl Actor {
             )
         })?;
         self.job.memory_proposal = None;
+        // R6: xherd's own commit is listed (`Mnn`), so it is never taken for
+        // one made outside xherd.
+        let n = self
+            .job
+            .commits
+            .iter()
+            .filter_map(|c| c.id.strip_prefix('M')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        self.job.commits.push(Commit {
+            id: format!("M{:02}", n + 1),
+            subject: "Update AGENTS.md (shared memory)".into(),
+            message: Some(message.clone()),
+            files: files.clone(),
+            status: CommitStatus::Done,
+            tasks: vec![],
+            sha: Some(sha.clone()),
+            needs_human: None,
+        });
         self.log(
             None,
             "memory-accepted",
@@ -3980,6 +4087,7 @@ impl Actor {
                 self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
+            WorkResult::BranchCommits(found) => self.on_branch_commits(found).await,
             WorkResult::PrLookup(Ok(None)) => self.git_access_ok().await,
             WorkResult::PrLookup(Ok(Some(url))) => {
                 self.git_access_ok().await;

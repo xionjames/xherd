@@ -101,7 +101,7 @@ If the coding agent asks a question (`xherd ask`), the band shows it with an ans
 |---|---|
 | Terminal | The live session. Type into it. Selecting text needs Shift+drag (Option+drag on a Mac) because the runtime takes the mouse. With no session, *Ask* (below) |
 | Tasks | Tasks with status, evidence and dependencies; tasks from a review or PR round are tagged. Long file lists and evidence are cut to two lines, with *Show all* to open them in place |
-| Commits | Proposed and made commits, with message and files |
+| Commits | Proposed and made commits, with message and files. The shared-memory commit shows as `M01`, `M02`…; a commit made on the branch outside xherd (a direct `git commit`, by the agent or by hand) is found when the agent stops and shows as `X01`, `X02`…, marked held (no proposal or approval), with one notification |
 | Ticket | The ticket and its comments, read from the tracker, and posting a summary (below) |
 | Pull request | State, checks (with links to the runs), conflicts, reviewers, and the PR comment round |
 | Shared memory | A proposed update of the repository's `AGENTS.md` (below) |
