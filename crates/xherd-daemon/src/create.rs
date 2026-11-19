@@ -506,19 +506,87 @@ impl Daemon {
         }
         let repo_instructions = self.profile_of(a).await.and_then(|p| p.instructions);
         prepare_xherd_dir(&git, &workdir, a, repo_instructions.as_deref()).await?;
-        git.install_push_guard(
-            &workdir,
-            &workdir.join(".xherd/hooks"),
-            &self.xherd_bin,
-            &a.branch,
-        )
-        .await
-        .map_err(|e| refuse("push_guard", e.to_string()))?;
+        self.write_hook_files(&git, a, &workdir, &rt, pack, rt_name)
+            .await?;
+        Ok(())
+    }
+
+    /// The pre-push guard and the runtime's hook file, written only when
+    /// their text differs. True when anything was written.
+    async fn write_hook_files(
+        &self,
+        git: &Git,
+        a: &Job,
+        workdir: &Path,
+        rt: &Terminal,
+        pack: Option<&xherd_flow::Pack>,
+        rt_name: &str,
+    ) -> Result<bool, ActionError> {
+        let mut wrote = git
+            .install_push_guard(
+                workdir,
+                &workdir.join(".xherd/hooks"),
+                &self.xherd_bin,
+                &a.branch,
+            )
+            .await
+            .map_err(|e| refuse("push_guard", e.to_string()))?;
         if let Some(h) = &rt.hooks {
             let allow = permission_rules(pack, rt_name);
-            install_hooks(&git, &workdir, h, &self.xherd_bin, &allow).await?;
+            wrote |= install_hooks(git, workdir, h, &self.xherd_bin, &allow).await?;
         }
-        Ok(())
+        Ok(wrote)
+    }
+
+    /// Point the hook file and the push guard of every live job at this
+    /// daemon's `xherd` binary (R-008, R-009), as an upgrade or a moved binary
+    /// leaves them naming the old one. Skips finished jobs, missing worktrees
+    /// and unusable runtimes (a warning each). Returns the jobs changed.
+    pub async fn refresh_job_files(&self) -> usize {
+        let Ok(jobs) = self.store.list_jobs().await else {
+            return 0;
+        };
+        let git = Git::new("git");
+        let mut changed = 0;
+        for a in jobs {
+            if matches!(a.status, Status::Done | Status::Cancelled) {
+                continue;
+            }
+            let Some(w) = a.workdir.as_deref().map(PathBuf::from) else {
+                continue;
+            };
+            if !w.is_dir() {
+                tracing::warn!(job = %a.name, "worktree missing, hook files not refreshed");
+                continue;
+            }
+            let rt_name = a
+                .runtime
+                .as_deref()
+                .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+            let rt = match self.runtime_terminal(rt_name) {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::warn!(job = %a.name, error = %e.message, "hook files not refreshed");
+                    continue;
+                }
+            };
+            let pack = a
+                .pack
+                .is_some()
+                .then(|| self.packs.get(xherd_flow::BUILTIN))
+                .flatten();
+            match self
+                .write_hook_files(&git, &a, &w, &rt, pack, rt_name)
+                .await
+            {
+                Ok(true) => changed += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(job = %a.name, error = %e.message, "hook files not refreshed")
+                }
+            }
+        }
+        changed
     }
 
     /// Copy the skills an agent lists into the worktree, where the job's
@@ -942,7 +1010,7 @@ async fn install_hooks(
     h: &runtime::HookFile,
     xherd_bin: &str,
     allow: &runtime::Allow,
-) -> Result<(), ActionError> {
+) -> Result<bool, ActionError> {
     let f = workdir.join(&h.file);
     let existing = xherd_core::runner::read_file(&f)
         .await
@@ -951,12 +1019,16 @@ async fn install_hooks(
         .map(|b| String::from_utf8_lossy(&b).into_owned());
     let text = runtime::hook_file_text(existing.as_deref(), h, xherd_bin, allow)
         .map_err(|e| refuse("runtime_hooks", e))?;
-    xherd_core::runner::write_file(&f, text.as_bytes(), None)
-        .await
-        .map_err(|e| refuse("io", format!("{}: {e}", f.display())))?;
+    let changed = existing.as_deref() != Some(text.as_str());
+    if changed {
+        xherd_core::runner::write_file(&f, text.as_bytes(), None)
+            .await
+            .map_err(|e| refuse("io", format!("{}: {e}", f.display())))?;
+    }
     git.add_excludes(workdir, &[&h.file])
         .await
-        .map_err(|e| refuse("git", e.to_string()))
+        .map_err(|e| refuse("git", e.to_string()))?;
+    Ok(changed)
 }
 
 #[cfg(test)]
