@@ -17,6 +17,12 @@ pub enum InstallAction {
     Unchanged,
     /// Edited by the user: kept, new version in `<path>.xherd-new`.
     Kept,
+    /// The user chose to keep their file over this pack text: left alone.
+    Declined,
+    /// Recorded by an earlier install, no longer in the pack: left alone.
+    Obsolete,
+    /// Obsolete and deleted (with its emptied folders).
+    Removed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -162,11 +168,14 @@ impl Daemon {
 
     /// Install `pack` (default xherd) for `runtime` (default: every runtime
     /// the pack supports). `env` resolves `${VAR}` and `HOME` in destinations.
+    /// Files the pack no longer ships are listed as obsolete and deleted only
+    /// with `remove_obsolete`.
     pub async fn install(
         &self,
         runtime: Option<&str>,
         pack: Option<&str>,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
+        remove_obsolete: bool,
     ) -> Result<Vec<Installed>, ActionError> {
         let name = pack.unwrap_or(xherd_flow::BUILTIN);
         let (Some(p), true) = (self.packs.get(name), name == xherd_flow::BUILTIN) else {
@@ -190,44 +199,47 @@ impl Daemon {
         };
         let mut out = Vec::new();
         for rt in runtimes {
-            let plan = p
-                .plan_install(rt, xherd_flow::install::BUILTIN_FILES, env)
-                .map_err(|e| refuse("install", e))?;
-            for f in plan {
-                let key = f.path.to_string_lossy().into_owned();
-                let new = content_sha256(f.text.as_bytes());
-                let current = xherd_core::runner::read_file(&f.path)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|b| content_sha256(&b));
-                let recorded = self
-                    .store
-                    .install_sha(rt, name, &key)
-                    .await
-                    .map_err(|e| refuse("store", e.to_string()))?;
-                let action = match current {
-                    Some(c) if c == new => InstallAction::Unchanged,
-                    Some(c) if recorded.as_deref() != Some(c.as_str()) => {
-                        let mut side = f.path.clone().into_os_string();
-                        side.push(".xherd-new");
-                        write(Path::new(&side), &f.text).await?;
+            let root = p.install_root(rt, env).map_err(|e| refuse("install", e))?;
+            for f in self.pack_files(rt, env).await? {
+                let action = match f.state {
+                    FileState::Current => InstallAction::Unchanged,
+                    FileState::Declined => InstallAction::Declined,
+                    FileState::Edited => {
+                        write(Path::new(&format!("{}.xherd-new", f.path)), &f.text).await?;
                         InstallAction::Kept
                     }
-                    _ => {
-                        write(&f.path, &f.text).await?;
+                    FileState::Missing | FileState::Outdated => {
+                        write(Path::new(&f.path), &f.text).await?;
                         InstallAction::Written
                     }
+                    FileState::Obsolete if remove_obsolete => {
+                        xherd_core::runner::remove_file(Path::new(&f.path), &root)
+                            .await
+                            .map_err(|e| refuse("io", format!("{}: {e}", f.path)))?;
+                        self.store
+                            .delete_install(rt, name, &f.path)
+                            .await
+                            .map_err(|e| refuse("store", e.to_string()))?;
+                        InstallAction::Removed
+                    }
+                    FileState::Obsolete => InstallAction::Obsolete,
                 };
-                if action != InstallAction::Kept && recorded.as_deref() != Some(new.as_str()) {
-                    self.store
-                        .put_install(rt, name, &key, &new)
+                if matches!(action, InstallAction::Written | InstallAction::Unchanged) {
+                    let recorded = self
+                        .store
+                        .install_sha(rt, name, &f.path)
                         .await
                         .map_err(|e| refuse("store", e.to_string()))?;
+                    if recorded.as_deref() != Some(f.new.as_str()) {
+                        self.store
+                            .put_install(rt, name, &f.path, &f.new)
+                            .await
+                            .map_err(|e| refuse("store", e.to_string()))?;
+                    }
                 }
                 out.push(Installed {
                     runtime: rt.into(),
-                    path: key,
+                    path: f.path,
                     action,
                 });
             }

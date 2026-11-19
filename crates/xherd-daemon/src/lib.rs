@@ -379,7 +379,7 @@ impl Daemon {
             // The container is set up without a shell: commands go where the
             // agents find them at every start (user-edited files are kept).
             let env = xherd_core::runner::agent_env;
-            if let Err(e) = d.install(None, None, &env).await {
+            if let Err(e) = d.install(None, None, &env, false).await {
                 tracing::warn!(error = %e.message, "installing the xherd commands failed");
             }
         }

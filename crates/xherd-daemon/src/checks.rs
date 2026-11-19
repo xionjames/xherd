@@ -290,7 +290,7 @@ impl Daemon {
             _ => None,
         };
         match rt {
-            Some(rt) => self.install(Some(&rt), None, env).await.map(|_| ()),
+            Some(rt) => self.install(Some(&rt), None, env, false).await.map(|_| ()),
             None => Err(ActionError {
                 code: "not_fixable",
                 message: format!("check {id} has no automatic fix"),

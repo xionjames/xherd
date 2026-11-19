@@ -600,7 +600,7 @@ async fn install(
 ) -> ApiResult<Json<Value>> {
     let env = xherd_core::runner::agent_env;
     let installed = d
-        .install(req.runtime.as_deref(), req.pack.as_deref(), &env)
+        .install(req.runtime.as_deref(), req.pack.as_deref(), &env, false)
         .await?;
     Ok(Json(json!({"installed": installed})))
 }
