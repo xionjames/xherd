@@ -27,6 +27,7 @@ pub mod ticket;
 pub mod todo;
 pub mod tripwire;
 pub mod untrusted;
+pub mod upload;
 pub mod usage;
 pub mod xap;
 
