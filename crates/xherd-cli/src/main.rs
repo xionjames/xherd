@@ -119,6 +119,9 @@ enum Cmd {
         runtime: Option<String>,
         #[arg(long)]
         pack: Option<String>,
+        /// Delete the command files the pack no longer ships.
+        #[arg(long)]
+        remove_obsolete: bool,
     },
     /// Change what xherd may approve by itself: ask or important.
     Autonomy {
@@ -418,7 +421,11 @@ fn main() -> ExitCode {
         Cmd::Agent(c) => agent::run(c, json),
         Cmd::Flow(c) => flow::run(c, json),
         Cmd::Plugin(c) => plugin::run(c, json),
-        Cmd::Install { runtime, pack } => install(runtime, pack),
+        Cmd::Install {
+            runtime,
+            pack,
+            remove_obsolete,
+        } => install(runtime, pack, remove_obsolete),
         Cmd::New {
             name,
             ticket,
@@ -1014,19 +1021,14 @@ fn gate_summary(g: &Value) -> String {
     }
 }
 
-fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
-    let body = serde_json::json!({"runtime": runtime, "pack": pack});
+fn install(runtime: Option<String>, pack: Option<String>, remove_obsolete: bool) -> i32 {
+    let body = serde_json::json!({
+        "runtime": runtime, "pack": pack, "removeObsolete": remove_obsolete,
+    });
     match Client::new().and_then(|c| c.call("POST", "/install", Some(body))) {
         Ok(v) => {
-            for f in v["installed"].as_array().into_iter().flatten() {
-                let path = f["path"].as_str().unwrap_or("?");
-                match f["action"].as_str() {
-                    Some("kept") => {
-                        println!("kept     {path} (edited; new version in {path}.xherd-new)")
-                    }
-                    Some(a) => println!("{a:<8} {path}"),
-                    None => {}
-                }
+            for l in install_lines(&v) {
+                println!("{l}");
             }
             0
         }
@@ -1035,6 +1037,35 @@ fn install(runtime: Option<String>, pack: Option<String>) -> i32 {
             2
         }
     }
+}
+
+/// The lines `xherd install` prints for the daemon's answer (R7).
+fn install_lines(v: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let (mut pending, mut obsolete) = (false, false);
+    for f in v["installed"].as_array().into_iter().flatten() {
+        let path = f["path"].as_str().unwrap_or("?");
+        match f["action"].as_str() {
+            Some("kept") => {
+                pending = true;
+                out.push(format!(
+                    "kept     {path} (edited; new version in {path}.xherd-new)"
+                ));
+            }
+            Some("declined") => out.push(format!("declined {path} (you kept your version)")),
+            Some("obsolete") => {
+                obsolete = true;
+                out.push(format!("obsolete {path} (the pack no longer ships it)"));
+            }
+            Some("removed") => out.push(format!("removed  {path}")),
+            Some(a) => out.push(format!("{a:<8} {path}")),
+            None => {}
+        }
+    }
+    if obsolete || pending {
+        out.push("Edited and obsolete files stay as they are: decide in Setup, or run `xherd install --remove-obsolete` to delete the obsolete ones.".into());
+    }
+    out
 }
 
 /// Is `dir` inside a git repository (an ancestor has a `.git` file or folder)? No process runs.
@@ -1170,6 +1201,24 @@ fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn install_lines_report_obsolete_and_hint() {
+        let v = serde_json::json!({"installed": [
+            {"path": "a.md", "action": "written"},
+            {"path": "b.md", "action": "obsolete"},
+            {"path": "c.md", "action": "removed"},
+            {"path": "d.md", "action": "declined"},
+        ]});
+        let l = super::install_lines(&v);
+        assert_eq!(l[0], "written  a.md");
+        assert!(l[1].starts_with("obsolete b.md"));
+        assert_eq!(l[2], "removed  c.md");
+        assert!(l[3].starts_with("declined d.md"));
+        assert!(l[4].contains("--remove-obsolete"));
+        let ok = serde_json::json!({"installed": [{"path": "a.md", "action": "unchanged"}]});
+        assert_eq!(super::install_lines(&ok), vec!["unchanged a.md"]);
+    }
+
     use super::*;
 
     #[test]
