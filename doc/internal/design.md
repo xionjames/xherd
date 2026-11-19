@@ -238,6 +238,14 @@ With the container runner, tmux still runs in the daemon's container and the pan
 - **UI.** `lib/actions.ts` holds the pure helpers (groups, default open state, header marks, save card; vitest); `Job.svelte` renders the Services/Actions groups, `panels/Action.svelte` the action page, `components/SaveActions.svelte` the end-of-job card, an Actions group in the profile form, `▶ n` in `HerdList`, entries in `JumpBox`. The demo server mocks it all.
 - **Alternatives dropped.** Windows in the job's session (an action would share the agent's lifetime and respawns); `pipe-pane` for logs (permissions); a global service limit; an agent-side `run` call (the agent would run commands outside its permission mode).
 
+### 5.2 File uploads (#192, spec R-708)
+
+- **Naming.** `xherd_core::upload::clean_name` (pure: basename, `[A-Za-z0-9._-]`, no leading `.`, `file` when empty, at most 100 bytes keeping the extension) and `numbered(name, n)` (`shot-2.png`).
+- **Ownership.** `xherd_core::runner::create_file` and `Request::CreateFile` create the file as the agents' user: `create_unique` opens with `create_new` (O_EXCL, so an existing name or a planted symlink is skipped), tries `numbered(name, 1..=999)`, sets the mode, `sync_all`s and removes a half-written file. Without a runner it runs in place as the daemon's user, same code. The frame is hex, so `uploadMaxBytes` stays at or under 30 MiB (the 64 MiB runner frame).
+- **Daemon.** `Daemon::begin_upload` (`uploads.rs`) holds the `Daemon.uploads` lock for the request, checks the workdir and that `.xherd/uploads` is a real folder, reads the folder's size and count once, and returns an `Upload`: `add(name, bytes)` checks the limits (taken from the live settings when the request begins), `finish` returns the paths, `abort` removes the request's files, so a refusal keeps nothing. One file is in memory at a time. `download_path` canonicalizes and checks the workdir prefix and that the target is a regular file; the route then opens it by path (`unsafe_code` is forbidden and there is no `O_NOFOLLOW`), a small race noted in `doc/user/security.md`.
+- **API.** `/jobs/{id}/files` (GET, POST with `DefaultBodyLimit::disable()`; axum `multipart`, `tokio-util` for the download stream) sits before the `/jobs/{id}/{action}` catch-all; both are `User`-only. The backup skips `uploads` (`XHERD_SKIP`).
+- **UI.** `lib/upload.ts` (`shellQuote`, `pastePaths`), `lib/termLinks.ts` (`pathUnder`, `findPaths`, `pathLinks`, shared by `urlLinks`), `api.ts` (`uploadFiles`, `downloadUrl`). `TermView.svelte` takes an optional `files` prop, set only by `panels/Terminal.svelte`, so action and setup terminals never get drop, paste or path links. Paste handles `clipboardData.files` only in the capture phase, so text pastes are untouched.
+
 ## 6. Pluggable SDD
 
 ### 6.1 Layers
@@ -372,7 +380,7 @@ As a **pack** (level 2): a `parse` command reads its per-spec task index JSON in
 |---|---|
 | Health and state | `GET /healthz` (no auth), `GET /state` (config, platform, client kind, version, jobs, profiles, plugins, todos), `GET /checks`, `POST /checks/:id/fix` |
 | Job actions | `GET /jobs/:id/actions`, `POST /jobs/:id/actions/:a/{run,stop,restart,save-to-profile}`, `POST /jobs/:id/actions/{save-to-profile,card-dismiss}`, `DELETE /jobs/:id/actions/:a`, `GET /jobs/:id/actions/:a/log`; terminal `GET /ws/term/:id?session=act-<a>` (user only, §5.1) |
-| Jobs | `GET/POST /jobs`, `GET/DELETE /jobs/:id`, `POST /jobs/:id/{pause,resume,cancel,approve,request-changes,send,answer,ask,finish,resolve-conflicts,mode,model,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,notes,my-time,reviewed,viewed}`, `GET /jobs/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `POST /jobs/pause-all` |
+| Jobs | `GET/POST /jobs`, `GET/DELETE /jobs/:id`, `POST /jobs/:id/{pause,resume,cancel,approve,request-changes,send,answer,ask,finish,resolve-conflicts,mode,model,autonomy,driver,remove-worktree,task-done,seen,run,stop-command,pr-decisions,pr-replies,pr-check,pr,notes,my-time,reviewed,viewed}`, `GET /jobs/:id/{flow,view,diff,docs,file,ledger,memory,open-targets}`, `GET/POST /jobs/:id/files` (download, upload; §5.2), `POST /jobs/pause-all` |
 | Reports and XAP | `POST /hooks`, `POST /xap` (job tokens) |
 | TODOs | `GET/POST /todos`, `PUT/DELETE /todos/:id`, `POST /todos/:id/{complete,reschedule,check}` |
 | Settings | `GET/PUT /config`, `GET/POST/PUT/DELETE /profiles…`, `GET /profiles/export`, `POST /profiles/import` |

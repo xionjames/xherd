@@ -746,6 +746,12 @@ Memory has three levels: `memory.md` (one job, carried between its steps), the s
 
 `memory.md` is one job's memory and goes with it; the repository's `AGENTS.md` is the memory shared by every future job there (#65). The review step, once all tasks are done, may propose an update of `AGENTS.md` (the whole proposed text plus a one-line reason; a starter `AGENTS.md` when none exists): short facts a future job needs (commands, conventions, traps), no task history. `CLAUDE.md` only imports it (`@AGENTS.md`), so every runtime reads the same text. The job page's Shared memory tab shows the diff (and the `CLAUDE.md` change, if any); the user accepts, optionally editing first, and xherd commits `AGENTS.md` (and `CLAUDE.md` when the import is missing) on the job's branch as one commit, so it ships with the PR; or dismisses it (dismissing a starter file is remembered per repo, and jobs stop proposing one there). Accepting is refused only while the job works. Once its PR is open, the accept still commits on the branch; xherd never pushes, so the user pushes it to update the PR. Pending proposals do not block the PR.
 
+### 16.7 File drop and paste (#192)
+
+| ID | Requirement |
+|---|---|
+| R-708 | Files reach a job's agent terminal and come back. `POST /api/v1/jobs/{id}/files` (user only) stores each uploaded file in `<workdir>/.xherd/uploads/` and answers the absolute paths in upload order; names are cleaned to `[A-Za-z0-9._-]` (no folders, no leading `.`, at most 100 bytes), a taken name is numbered, a file is never overwritten and a symlink at the name never followed. `uploadMaxBytes` (25 MiB, at most 30 MiB), `uploadMaxJobBytes` (250 MiB) and `uploadMaxFiles` (200) are live config keys (Settings → General); a request over a limit is refused with `too_large` and keeps nothing. With a runner (R-1203) the files are written as the agents' user. A job without a worktree is refused (`no_workspace`, `worktree_removed`; a folder job uses its folder). `GET /api/v1/jobs/{id}/files?path=` downloads a regular file under the workdir (`bad_path`, `no_such_file` otherwise). In the agent terminal only, dropping or pasting files or an image uploads them with a progress chip and types their shell-quoted paths without Enter, and an absolute path under the workdir is a link that downloads it. `xherd upload` and `xherd download` do the same from the CLI; backups skip `.xherd/uploads/`. |
+
 ## 17. User interface
 
 ### 17.1 Principles

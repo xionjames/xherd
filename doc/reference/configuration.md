@@ -2,7 +2,7 @@
 
 xherd keeps its settings in `config.json` in the data root (`XHERD_HOME`, else `$XDG_DATA_HOME/xherd`, else `~/.local/share/xherd`; in the container, `/var/lib/xherd-daemon/data`). Secrets (git tokens, plugin secrets) are in `secrets.json`, mode `0600`, never in `config.json`.
 
-Most settings are edited in the web UI (Settings) and saved to the file. A change saved through the UI or `PUT /api/v1/config` **applies at once** for every setting except `port`, `bind`, `maxConcurrentAgents`, `workspace`, `tmuxSocket` and `pluginSettings`, which are read at daemon start (the UI says "restart needed" when those differ). Live: the timeouts and limits (`idleAlertMinutes`, `gateParkMinutes`, `pauseTimeoutSec`, `freshSessions`, `maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, `maxAutoApprovalsInRow`, the budgets, `maxDiffLines`, `sensitivePaths`), `autonomy`, `permissionMode`, `defaultRuntime`, `runtimeModels`, `openIn`, `toolchainDefaults`, `eventRetentionDays`, `ntfyServer`/`ntfyTopic`, `mutedNotifications`, `desktopNotifications`, `suggestAgents`, `welcomed`, `disabledPlugins` (the host, trust writer and toolchain plugins skip a disabled plugin), the commit identity and git access. A hand edit of `config.json` still needs a restart.
+Most settings are edited in the web UI (Settings) and saved to the file. A change saved through the UI or `PUT /api/v1/config` **applies at once** for every setting except `port`, `bind`, `maxConcurrentAgents`, `workspace`, `tmuxSocket` and `pluginSettings`, which are read at daemon start (the UI says "restart needed" when those differ). Live: the timeouts and limits (`idleAlertMinutes`, `gateParkMinutes`, `pauseTimeoutSec`, `freshSessions`, `maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, `maxAutoApprovalsInRow`, the budgets, `maxDiffLines`, `sensitivePaths`, `uploadMaxBytes`, `uploadMaxJobBytes`, `uploadMaxFiles`), `autonomy`, `permissionMode`, `defaultRuntime`, `runtimeModels`, `openIn`, `toolchainDefaults`, `eventRetentionDays`, `ntfyServer`/`ntfyTopic`, `mutedNotifications`, `desktopNotifications`, `suggestAgents`, `welcomed`, `disabledPlugins` (the host, trust writer and toolchain plugins skip a disabled plugin), the commit identity and git access. A hand edit of `config.json` still needs a restart.
 
 Files are written atomically. Keys this version does not know are kept when saving. A `config.json` newer than the running xherd is refused with a message to update.
 
@@ -28,6 +28,9 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `prPollMinutes` | `5` | How often a watched pull request is polled; `0` = off |
 | `jobActions` | `true` | Job actions: `false` turns `xherd action …` off (refused with `actions_off`) and refuses running actions. Applies at once |
 | `maxActionsPerJob` | `12` | Actions one job may register (`action_limit`) |
+| `uploadMaxBytes` | `26214400` (25 MiB) | Largest single file accepted by an upload to a job (1 to 30 MiB, and not above `uploadMaxJobBytes`; the 30 MiB ceiling comes from the frame the Docker runner uses). `too_large` otherwise. Applies at once; Settings → General → Uploads (shown in MiB) |
+| `uploadMaxJobBytes` | `262144000` (250 MiB) | Total size of one job's `.xherd/uploads/`; an upload that would pass it is refused whole (`too_large`). Applies at once |
+| `uploadMaxFiles` | `200` | Files in one job's `.xherd/uploads/` (≥ 1). Applies at once |
 | `maxReviewLoops` | `3` | Review → fix rounds before the review gate is held for a human; `0` = no limit |
 | `autonomy` | `ask` | Default for new jobs: `ask` or `important`. `never` is not available yet |
 | `openIn` | `{}` | Settings → Open in: `hidden` (entry ids left out of the menu: `vscode`, `cursor`, `zed`, `devcontainer`, `terminal`, `link:<id>`), `terminal` (the app Open in → Terminal starts: `terminal`, `iterm`, `ghostty`, `konsole`, `gnome-terminal`, `kitty`, `alacritty`, `wezterm`, `xfce4-terminal`, `foot`, `xterm`, `xdg-terminal-exec`, `x-terminal-emulator`; unset, or one not installed or not for that computer's OS = its default; Settings lists the ones the terminal handler found), `links` (your own links, `[{"id", "label", "url"}]`, shown as `link:<id>`; `{dir}` and `{job}` in the URL are replaced percent-encoded; for local apps only: the URL must start with a scheme such as `idea://`, and `http`, `https`, `ws`, `wss`, `ftp`, `javascript`, `data`, `vbscript`, `blob`, `file`, `about` and `xherd-term` are refused) and `droppedCommands` (labels of the `commands` of older versions, removed when the file was upgraded; Settings names them until you dismiss the notice, and it can only shrink) |
@@ -76,7 +79,7 @@ Changes apply to running jobs at once, except `instructions`, which is written a
 
 | Settings tab | Keys |
 |---|---|
-| General | `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays` |
+| General | `maxConcurrentAgents`, `pauseTimeoutSec`, `workspace`, `eventRetentionDays`, `uploadMaxBytes`, `uploadMaxJobBytes`, `uploadMaxFiles` |
 | Gates & autonomy | `idleAlertMinutes`, `gateParkMinutes`, `freshSessions`, `autonomy`, `maxAutoApprovalsInRow`, `defaultRuntime`, `permissionMode`, `suggestAgents` |
 | Notifications | `mutedNotifications`, `desktopNotifications`, `ntfyServer`, `ntfyTopic` |
 | Open in | `openIn` |
