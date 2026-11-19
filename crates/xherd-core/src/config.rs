@@ -144,6 +144,11 @@ pub struct Config {
     pub job_actions: bool,
     /// Most actions one job holds, profile actions included (R6, R30). Live.
     pub max_actions_per_job: usize,
+    /// Terminal file drop and paste (#192, R3a): largest file, most bytes and
+    /// most files one job keeps under `.xherd/uploads/`. Live.
+    pub upload_max_bytes: u64,
+    pub upload_max_job_bytes: u64,
+    pub upload_max_files: usize,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -182,6 +187,9 @@ impl Default for Config {
             suggest_agents: true,
             job_actions: true,
             max_actions_per_job: 12,
+            upload_max_bytes: 25 * 1024 * 1024,
+            upload_max_job_bytes: 250 * 1024 * 1024,
+            upload_max_files: 200,
             max_session_minutes: 0,
             pr_poll_minutes: 5,
             max_review_loops: 3,
@@ -422,6 +430,9 @@ impl Config {
         self.suggest_agents = s.suggest_agents;
         self.job_actions = s.job_actions;
         self.max_actions_per_job = s.max_actions_per_job;
+        self.upload_max_bytes = s.upload_max_bytes;
+        self.upload_max_job_bytes = s.upload_max_job_bytes;
+        self.upload_max_files = s.upload_max_files;
         self.git_hosts = s.git_hosts;
         self.user_token = s.user_token;
     }
@@ -664,6 +675,31 @@ mod tests {
         c.save(&f).unwrap();
         let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
         assert!(v.get("maxConcurrentAgents").is_none() && v.get("agentTokenBudget").is_none());
+    }
+
+    /// #192 R3a: missing keys give the defaults; the keys are live.
+    #[test]
+    fn upload_limits_default_and_are_live() {
+        let c: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(c.upload_max_bytes, 25 * 1024 * 1024);
+        assert_eq!(c.upload_max_job_bytes, 250 * 1024 * 1024);
+        assert_eq!(c.upload_max_files, 200);
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["uploadMaxBytes"], 25 * 1024 * 1024);
+        let saved: Config = serde_json::from_str(
+            r#"{"uploadMaxBytes": 1, "uploadMaxJobBytes": 2, "uploadMaxFiles": 3}"#,
+        )
+        .unwrap();
+        let mut running = Config::default();
+        running.apply_live_from(&saved);
+        assert_eq!(
+            (
+                running.upload_max_bytes,
+                running.upload_max_job_bytes,
+                running.upload_max_files
+            ),
+            (1, 2, 3)
+        );
     }
 
     /// R30: defaults, camelCase keys, and both keys are live.
