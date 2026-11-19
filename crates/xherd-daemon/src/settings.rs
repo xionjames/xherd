@@ -412,9 +412,12 @@ impl Daemon {
         }))
     }
 
-    /// Names must exist, and every kind that has plugins keeps one on, except
-    /// the optional ones (trackers, Git providers, Herd views).
-    fn check_disabled(&self, off: &[String]) -> Result<(), ActionError> {
+    /// Names must exist, and the last plugin of a kind that has one on cannot be
+    /// switched off, except for the optional kinds (trackers, Git providers,
+    /// Herd views). A kind with none on, as after a first run (everything
+    /// starts off), stays that way until the user picks: `before` is the list
+    /// saved so far.
+    fn check_disabled(&self, off: &[String], before: &[String]) -> Result<(), ActionError> {
         if let Some(n) = off.iter().find(|n| self.plugins.get(n).is_none()) {
             return Err(bad(format!("no plugin named {n}")));
         }
@@ -430,12 +433,13 @@ impl Daemon {
             if k == "Tracker" || k == "Host" || k == "View" {
                 continue;
             }
-            let any_on = self
-                .plugins
-                .all()
-                .filter(|p| format!("{:?}", p.manifest.kind) == k)
-                .any(|p| !off.iter().any(|n| n == p.name()));
-            if !any_on {
+            let on_in = |list: &[String]| {
+                self.plugins
+                    .all()
+                    .filter(|p| format!("{:?}", p.manifest.kind) == k)
+                    .any(|p| !list.iter().any(|n| n == p.name()))
+            };
+            if on_in(before) && !on_in(off) {
                 return Err(bad(format!(
                     "at least one {} plugin must stay on",
                     k.to_lowercase()
@@ -474,10 +478,25 @@ impl Daemon {
         let write = self.config_write.lock().unwrap_or_else(|e| e.into_inner());
         let mut c = self.saved_config()?;
         let was_disabled = c.disabled_plugins.clone();
+        let sets_default = patch.default_runtime.is_some();
         apply(&mut c, patch)?;
-        self.check_disabled(&c.disabled_plugins)?;
-        self.check_runtime(&c.default_runtime, &c.disabled_plugins)
-            .map_err(|e| bad(format!("defaultRuntime: {e}")))?;
+        self.check_disabled(&c.disabled_plugins, &was_disabled)?;
+        // A first run has every plugin off, the default runtime included:
+        // when the default is off and the patch did not choose one, take the
+        // first runtime that is on, and keep it while none is.
+        let on = |p: &&xherd_plugin::Plugin| !c.disabled_plugins.iter().any(|n| n == p.name());
+        let first_on = self
+            .plugins
+            .of_kind(xherd_plugin::Kind::Runtime)
+            .find(on)
+            .map(|p| p.name().to_string());
+        if let Some(name) = &first_on {
+            if !sets_default && c.disabled_plugins.contains(&c.default_runtime) {
+                c.default_runtime = name.clone();
+            }
+            self.check_runtime(&c.default_runtime, &c.disabled_plugins)
+                .map_err(|e| bad(format!("defaultRuntime: {e}")))?;
+        }
         for rt in c.runtime_models.keys() {
             self.check_model_runtime(rt)
                 .map_err(|e| bad(format!("runtimeModels: {e}")))?;

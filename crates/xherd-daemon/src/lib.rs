@@ -143,6 +143,37 @@ fn plugin_context(
     }
 }
 
+/// The plugins a first run starts switched off: all of them, so the user picks
+/// in Welcome. Natively, a plugin whose required tools are already on this
+/// computer (its first requirement, the main tool) starts on; the container installs on
+/// switch-on instead, so nothing there is detected.
+async fn first_run_disabled(
+    plugins: &Registry,
+    paths: &Paths,
+    config: &Config,
+    secrets: &Secrets,
+    xherd_bin: &str,
+    sandbox: bool,
+) -> Vec<String> {
+    let mut off = Vec::new();
+    for p in plugins.all() {
+        // The first requirement is the plugin's main tool (`uv`, `claude`,
+        // `gh`). Optional or not: the language managers' are all optional.
+        let found = match p.manifest.requires.first() {
+            Some(r) if !sandbox => {
+                let ctx = plugin_context(p, paths, config, secrets, xherd_bin);
+                xherd_plugin::probe(p, &ctx, r).await.is_ok()
+            }
+            _ => false,
+        };
+        if !found {
+            off.push(p.name().to_string());
+        }
+    }
+    off.sort();
+    off
+}
+
 /// Every host plugin (D24): built-in `github` and `gitlab` handle pull
 /// requests, `bitbucket` only git access (its PR commands say so), and external
 /// host plugins answer through the protocol. An external plugin of the same
@@ -255,6 +286,8 @@ impl Daemon {
             }
         }
         paths.ensure()?;
+        // Before the load: a missing config.json is a first run.
+        let first_run = !paths.config().exists();
         let (mut config, migrated) = Config::load(&paths.config())?;
         let new_token = config.user_token.is_none();
         if new_token {
@@ -285,6 +318,18 @@ impl Daemon {
         let plugins = Registry::load(opts.builtin_plugins, &external).with_broken(not_copied);
         for b in plugins.broken() {
             tracing::warn!(plugin = %b.name, error = %b.error, "broken plugin");
+        }
+        if first_run {
+            config.disabled_plugins = first_run_disabled(
+                &plugins,
+                &paths,
+                &config,
+                &secrets,
+                &opts.xherd_bin,
+                opts.sandbox,
+            )
+            .await;
+            config.save(&paths.config())?;
         }
         let recorded: BTreeMap<String, Option<String>> = store
             .plugin_records()

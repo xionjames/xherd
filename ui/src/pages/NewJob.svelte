@@ -329,7 +329,7 @@
           <option value="">{repo.data?.profile?.runtime ? `${repo.data.profile.runtime} (profile)` : 'Default (Settings)'}</option>
           {#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}
         </select>
-        <span class="hint">The coding agent that runs in the terminal. Set the default in Settings → Gates &amp; autonomy.</span></label>
+        <span class="hint">The agent runtime that runs in the terminal. Set the default in Settings → Gates &amp; autonomy.</span></label>
       {#if canModel}
         <label class="f">Model (optional) {#if from('model')}<span class="frm">from agent</span>{/if}
           <ModelInput {runtime} bind:value={f.model} onchange={() => edited('model')} placeholder={profileModel ? `${profileModel} (profile)` : 'Default (Settings, else the runtime’s)'} />

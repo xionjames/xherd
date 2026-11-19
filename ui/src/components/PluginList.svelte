@@ -2,7 +2,7 @@
   // The plugin view of Welcome step 2 and Settings → Plugins (R1): search, broken
   // plugins, then an Enabled / Available switch and a kind filter, cards grouped by kind. A card switches its
   // plugin on or off; Options (and Log in) open PluginDetail in a dialog.
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { app, reload } from '../lib/store.svelte';
   import { get, put, pluginsList } from '../lib/api';
   import { setup, loadChecks, loadConfig } from '../lib/setup.svelte';
@@ -13,7 +13,7 @@
   import PluginAdd from './PluginAdd.svelte';
   import type { PluginInfo, PluginsList } from '../lib/types';
 
-  let { selected, onselect }: { selected: string | null; onselect: (name: string | null) => void } = $props();
+  let { selected, onselect, start = 'enabled' }: { selected: string | null; onselect: (name: string | null) => void; start?: 'enabled' | 'available' } = $props();
 
   const plugins = $derived(app.state?.plugins ?? []);
   const broken = $derived(app.state?.brokenPlugins ?? []);
@@ -21,7 +21,7 @@
   const shown = $derived(plugins.filter((p) => matches(p, query)));
   const kinds = $derived([...KIND_ORDER, ...new Set(plugins.map((p) => p.kind).filter((k) => !KIND_ORDER.includes(k)))]);
   // Enabled and Available (installed but switched off) are two views; the kind filter narrows both.
-  let view = $state<'enabled' | 'available'>('enabled');
+  let view = $state<'enabled' | 'available'>(untrack(() => start));
   let kind = $state('all');
   const byKind = $derived(shown.filter((p) => kind === 'all' || p.kind === kind));
   const enabledList = $derived(byKind.filter((p) => p.enabled));
@@ -36,7 +36,7 @@
   // The plugin whose dialog was opened by its card's Log in: the dialog starts the login.
   let autologin = $state<string | null>(null);
 
-  // Versions found installed per tool, for the language cards (local commands, native or container).
+  // Versions found installed per tool, for the toolchain cards (local commands, native or container).
   let installed = $state<Record<string, string[]>>({});
   let toolsByPlugin = $state<Record<string, string[]>>({});
   // Installing from a git URL: off with XHERD_PLUGIN_INSTALL=off; a change needs a restart.
@@ -75,7 +75,7 @@
     const saved = ((setup.config?.config.pluginSettings ?? {}) as Record<string, Record<string, unknown>>)[p.name] ?? {};
     const missing = p.settings.find((s) => s.required && !s.secret && !saved[s.key]);
     if (missing) return { tone: 'bad', text: `Needs ${missing.label || missing.key}` };
-    // A language manager with no versions yet is the normal state: they install on first use.
+    // A toolchain with no versions yet is the normal state: they install on first use.
     if (p.kind === 'toolchain') {
       const found = foundText(p);
       if (found) return { tone: 'ok', text: `Ready · ${found} installed` };

@@ -48,6 +48,8 @@
   // An enabled plugin that needs a login and is not logged in holds the step (R3b).
   const waiting = $derived(needLogin(plugins, setup.checks));
   const toolsBlocked = $derived(waiting.length > 0);
+  // Everything starts off: an agent runtime has to be picked before going on.
+  const noRuntime = $derived(!plugins.some((p) => p.kind === 'runtime' && p.enabled));
   // The plugin whose options dialog is open.
   let opened = $state<string | null>(null);
 
@@ -98,8 +100,9 @@
       </Panel>
     {:else if step === 2}
       <h1>Plugins</h1>
-      <p class="muted">Switch on what you use. Coding agents and languages keep at least one on; Git providers and issue trackers are optional. A card says whether the plugin is ready; open Options to set it up.</p>
-      <PluginList selected={opened} onselect={(n) => (opened = n)} />
+      <p class="muted">Everything starts off. Switch on what you use. Pick at least one agent runtime; once an agent runtime or a toolchain is on, the last one cannot be switched off. Git providers and issue trackers are optional. A card says whether the plugin is ready; open Options to set it up.</p>
+      <PluginList start="available" selected={opened} onselect={(n) => (opened = n)} />
+      {#if noRuntime}<p class="hint">To continue, switch on an agent runtime.</p>{/if}
       {#if toolsBlocked}<p class="hint">To continue, log in to {waiting.map((p) => p.label || p.name).join(' and ')} or switch {waiting.length > 1 ? 'them' : 'it'} off.</p>{/if}
     {:else if step === 3}
       <h1>Commit identity</h1>
@@ -126,7 +129,7 @@
     <div class="row end wnav">
       {#if step > 1}<button class="btn ghost lg" onclick={() => to(step - 1)}>Back</button>{/if}
       {#if step < STEPS.length}
-        <button class="btn primary lg" disabled={moving || (step === 2 && toolsBlocked) || (step === 3 && !idReady)} onclick={next}>
+        <button class="btn primary lg" disabled={moving || (step === 2 && (toolsBlocked || noRuntime)) || (step === 3 && !idReady)} onclick={next}>
           {moving ? 'Saving…' : unsaved ? 'Save and continue' : `Next: ${STEPS[step].toLowerCase()}`}</button>
       {:else if blocked}
         <button class="btn primary lg" onclick={() => finish('/setup')}>Open setup checks</button>

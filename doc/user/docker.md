@@ -1,6 +1,6 @@
 # Docker
 
-Docker is the recommended way to run xherd. The daemon, the web UI, tmux, `git`, `gh`, `glab` and the toolchain managers all live in one container. The coding agents (Claude Code, opencode, Codex) are not in the image: the daemon installs each enabled one into the `xherd-home` volume (see [Runtime installs](#runtime-installs)). Only your workspace folder is shared with the host, so jobs cannot reach the rest of your files.
+Docker is the recommended way to run xherd. The daemon, the web UI, tmux, `git`, `gh`, `glab` and the toolchain managers all live in one container. The agent runtimes (Claude Code, opencode, Codex) are not in the image: the daemon installs each enabled one into the `xherd-home` volume (see [Runtime installs](#runtime-installs)). Only your workspace folder is shared with the host, so jobs cannot reach the rest of your files.
 
 ## Topology
 

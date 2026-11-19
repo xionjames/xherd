@@ -7,12 +7,23 @@ use xherd_core::paths::Paths;
 use xherd_daemon::install::{Choice, InstallAction, PackChoice};
 use xherd_daemon::*;
 
+/// A first run (no config.json) starts with every plugin off; these tests want
+/// the runtimes on, as a configured install has them.
+fn home_with_config(home: &tempfile::TempDir) -> Paths {
+    let paths = Paths::at(home.path());
+    paths.ensure().unwrap();
+    xherd_core::config::Config::default()
+        .save(&paths.config())
+        .unwrap();
+    paths
+}
+
 #[tokio::test]
 async fn installs_keeps_edits_and_upgrades() {
     let home = tempfile::tempdir().unwrap();
     let user = tempfile::tempdir().unwrap();
     let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
-    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let d = Daemon::start(home_with_config(&home), o).await.unwrap();
     let h = user.path().to_string_lossy().into_owned();
     let env = move |k: &str| (k == "HOME").then(|| h.clone());
     let dir = user.path().join(".claude/commands/xherd");
@@ -126,7 +137,7 @@ async fn review_and_resolve_pack_files() {
     let home = tempfile::tempdir().unwrap();
     let user = tempfile::tempdir().unwrap();
     let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
-    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let d = Daemon::start(home_with_config(&home), o).await.unwrap();
     let h = user.path().to_string_lossy().into_owned();
     let env = move |k: &str| (k == "HOME").then(|| h.clone());
     let dir = user.path().join(".claude/commands/xherd");
@@ -252,7 +263,7 @@ async fn pack_checks_report_missing_outdated_and_review() {
     let home = tempfile::tempdir().unwrap();
     let user = tempfile::tempdir().unwrap();
     let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
-    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let d = Daemon::start(home_with_config(&home), o).await.unwrap();
     let h = user.path().to_string_lossy().into_owned();
     let env = move |k: &str| (k == "HOME").then(|| h.clone());
     let dir = user.path().join(".claude/commands/xherd");
@@ -330,7 +341,9 @@ async fn start_installs_and_upgrades_when_given_an_env() {
     let status = user.path().join(".claude/commands/xherd/status.md");
 
     // Not sandboxed, yet the first start writes the commands.
-    let d = Daemon::start(Paths::at(home.path()), opts()).await.unwrap();
+    let d = Daemon::start(home_with_config(&home), opts())
+        .await
+        .unwrap();
     assert!(status.is_file());
     let current = std::fs::read_to_string(&status).unwrap();
 
@@ -348,13 +361,17 @@ async fn start_installs_and_upgrades_when_given_an_env() {
         .await
         .unwrap();
     drop(d);
-    let d = Daemon::start(Paths::at(home.path()), opts()).await.unwrap();
+    let d = Daemon::start(home_with_config(&home), opts())
+        .await
+        .unwrap();
     assert_eq!(std::fs::read_to_string(&status).unwrap(), current);
 
     // A third start writes nothing.
     let before = std::fs::metadata(&status).unwrap().modified().unwrap();
     drop(d);
-    Daemon::start(Paths::at(home.path()), opts()).await.unwrap();
+    Daemon::start(home_with_config(&home), opts())
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::metadata(&status).unwrap().modified().unwrap(),
         before
