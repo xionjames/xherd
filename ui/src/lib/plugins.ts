@@ -3,19 +3,19 @@ import type { Check, PluginInfo } from './types';
 
 /** Group headings, by plugin kind. The kind `host` is a "Git provider" in the UI. */
 export const KIND_LABEL: Record<string, string> = {
-  runtime: 'Coding agents',
+  runtime: 'Agent runtimes',
   host: 'Git providers',
   tracker: 'Issue trackers',
-  toolchain: 'Languages',
+  toolchain: 'Toolchains',
   view: 'Herd views',
 };
 
 /** One plugin of the kind. */
 export const KIND_ONE: Record<string, string> = {
-  runtime: 'Coding agent',
+  runtime: 'Agent runtime',
   host: 'Git provider',
   tracker: 'Issue tracker',
-  toolchain: 'Language',
+  toolchain: 'Toolchain',
   view: 'Herd view',
 };
 

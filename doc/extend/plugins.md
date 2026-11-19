@@ -1,6 +1,6 @@
 # Plugins
 
-xherd has two extension points. A **plugin** teaches xherd about a tool: a runtime, a git host, an issue tracker, a language toolchain. A **[flow pack](flow-packs.md)** defines the steps jobs follow and the prompts that drive them. Both are data plus, where needed, commands in any language. Running your own spec-driven method under xherd, with or without a pack, is planned: see [Add xherd support to your SDD](integrate-your-sdd.md).
+xherd has two extension points. A **plugin** teaches xherd about a tool: an agent runtime, a git host, an issue tracker, a toolchain. A **[flow pack](flow-packs.md)** defines the steps jobs follow and the prompts that drive them. Both are data plus, where needed, commands in any language. Running your own spec-driven method under xherd, with or without a pack, is planned: see [Add xherd support to your SDD](integrate-your-sdd.md).
 
 A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in plugins first, then every `<data root>/plugins/*/xherd-plugin.json`; an external plugin overrides a built-in with the same name. A manifest that fails to parse is listed as *broken* in Settings → Plugins with its error, and does not stop xherd.
 

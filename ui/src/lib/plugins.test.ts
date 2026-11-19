@@ -34,7 +34,7 @@ describe('plugin search', () => {
   });
 
   it('matches the kind and its label', () => {
-    expect(names('languages')).toEqual(['uv']);
+    expect(names('toolchains')).toEqual(['uv']);
     expect(names('toolchain')).toEqual(['uv']);
     expect(names('git provider')).toEqual(['github', 'gitlab', 'bitbucket']);
     expect(matches(plugin('herd-tiles', 'view'), 'herd view')).toBe(true);

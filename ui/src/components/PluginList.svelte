@@ -36,7 +36,7 @@
   // The plugin whose dialog was opened by its card's Log in: the dialog starts the login.
   let autologin = $state<string | null>(null);
 
-  // Versions found installed per tool, for the language cards (local commands, native or container).
+  // Versions found installed per tool, for the toolchain cards (local commands, native or container).
   let installed = $state<Record<string, string[]>>({});
   let toolsByPlugin = $state<Record<string, string[]>>({});
   // Installing from a git URL: off with XHERD_PLUGIN_INSTALL=off; a change needs a restart.
@@ -75,7 +75,7 @@
     const saved = ((setup.config?.config.pluginSettings ?? {}) as Record<string, Record<string, unknown>>)[p.name] ?? {};
     const missing = p.settings.find((s) => s.required && !s.secret && !saved[s.key]);
     if (missing) return { tone: 'bad', text: `Needs ${missing.label || missing.key}` };
-    // A language manager with no versions yet is the normal state: they install on first use.
+    // A toolchain with no versions yet is the normal state: they install on first use.
     if (p.kind === 'toolchain') {
       const found = foundText(p);
       if (found) return { tone: 'ok', text: `Ready · ${found} installed` };

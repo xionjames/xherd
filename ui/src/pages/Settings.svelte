@@ -168,7 +168,7 @@
           <span class="unit"><input type="number" min="0" bind:value={form.maxAutoApprovalsInRow} /><span>in a row</span></span>
           <span class="hint">The next gate waits for you. 0 = no limit.</span></label>
       </Panel>
-      <Panel title="Runtime" hint="The coding agent that runs in each agent's terminal.">
+      <Panel title="Agent runtime" hint="The agent runtime that runs in each agent's terminal.">
         <label class="f">Runtime of new agents
           <select bind:value={form.defaultRuntime}>{#each runtimes(app.state?.plugins) as r (r.name)}<option value={r.name}>{runtimeLabel(r)}</option>{/each}</select>
           <span class="hint">Also runs TODO condition checks. A repo profile or the New agent form can choose another; an agent keeps the runtime it was created with. Switch runtimes on or off in Plugins.</span></label>

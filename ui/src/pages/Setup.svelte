@@ -13,7 +13,7 @@
   const optionalFailing = $derived(checks.filter((c) => !c.required && !c.ok).length);
   const GROUPS: [string, string, string][] = [
     ['system', 'This computer', 'needed by every agent'],
-    ['runtime', 'Coding agent', 'how agents start'],
+    ['runtime', 'Agent runtime', 'how agents start'],
     ['plugins', 'Plugins', 'their own checks'],
     ['security', 'Security', 'limits you should know about'],
   ];
