@@ -681,7 +681,13 @@ impl Daemon {
         }
         let home =
             PathBuf::from(xherd_core::runner::agent_env("HOME").unwrap_or_else(|| "/".into()));
-        tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &[], &argv)
+        // The daemon's PATH is system folders only: a runtime installed under
+        // the agents' home (`~/.local/bin/claude`) is found through theirs.
+        let env: Vec<(String, String)> = ["HOME", "PATH"]
+            .into_iter()
+            .filter_map(|k| xherd_core::runner::agent_env(k).map(|v| (k.to_string(), v)))
+            .collect();
+        tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &env, &argv)
             .await
             .map_err(|e| fail("driver", e.to_string()))
     }
