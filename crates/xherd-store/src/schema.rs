@@ -58,4 +58,9 @@ CREATE TABLE flow_assignments (pack TEXT NOT NULL, flow TEXT NOT NULL, stage TEX
                                human INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pack, flow, stage));
 CREATE INDEX flow_assignments_agent ON flow_assignments(agent_id);
 "#,
+    // 6: the hash of the pack file version the user declined ("Keep mine"),
+    // so an edited file is not offered again until the pack changes it.
+    r#"
+ALTER TABLE installs ADD COLUMN declined TEXT;
+"#,
 ];
