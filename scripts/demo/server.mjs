@@ -112,7 +112,10 @@ const textOf = (p) => (p.endsWith('design.md') ? C.design : p.endsWith('spec.md'
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
 const events = [['stage.enter', { stage: 'implement' }], ['task.start', { task: 'T03' }], ['commit.propose', { id: 'C02' }], ['gate.open', { stage: 'design' }], ['approval', { gate: 'spec', actor: 'user' }], ['stage.enter', { stage: 'spec' }]].map(([kind, payload], i) => ({ id: i + 1, kind, payload, at: ago(5 + i * 9) }));
 
-const routes = { '/state': state, '/checks': { checks: [] }, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/todos': { todos }, '/reviews': { reviews }, '/agents': { agents: AG }, '/skills': { skills }, '/healthz': { ok: true }, '/worklog': { days: [], tickets: [] } };
+let packResolved = false;
+const packFiles = [{ runtime: 'claude-code', path: '~/.claude/commands/xherd/design.md', state: 'edited', edited: true }, { runtime: 'claude-code', path: '~/.claude/commands/xherd/old-notes.md', state: 'obsolete', edited: true }];
+const packChecks = () => ({ checks: packResolved ? [] : [{ id: 'pack-files:claude-code', group: 'runtime', label: 'Pack files (claude-code)', required: true, ok: false, detail: '2 files need a decision', fix: { kind: 'review', label: 'Review files' } }] });
+const routes = { '/state': state, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/todos': { todos }, '/reviews': { reviews }, '/agents': { agents: AG }, '/skills': { skills }, '/healthz': { ok: true }, '/worklog': { days: [], tickets: [] } };
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.json': 'application/json' };
 const json = (r, o) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify(o)); };
 
@@ -120,6 +123,9 @@ const srv = http.createServer((q, r) => {
   const url = new URL(q.url, 'http://x'); const u = url.pathname;
   if (u.startsWith('/api/v1/')) {
     const k = u.slice(7); let m;
+    if (k === '/checks') return json(r, packChecks());
+    if (k === '/install/review') return json(r, { files: packResolved ? [] : packFiles });
+    if (k === '/install/resolve') { packResolved = true; return json(r, packChecks()); }
     if (routes[k]) return json(r, routes[k]);
     if (k === '/plugins') return json(r, pluginsList());
     if (k === '/plugins/preview') return json(r, pluginPreview('https://github.com/acme/xherd-forgejo'));
