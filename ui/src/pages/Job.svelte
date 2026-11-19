@@ -16,7 +16,7 @@
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
   import { flowOf, prGate } from '../lib/flow';
-  import { agoText, needsYou, repoName, shortBase, waitsAtGate } from '../lib/format';
+  import { agentRunning, agoText, needsYou, repoName, shortBase, waitsAtGate } from '../lib/format';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
   import { MODE_HINT, modes } from '../lib/modes';
@@ -274,7 +274,7 @@
       {@const b = badge(t.id)}
       <a class="vtb" class:on={t.id === tab?.id} aria-current={t.id === tab?.id ? 'page' : undefined}
         href={href(`/jobs/${agent.name}`, { s: t.id })}>
-        <Icon name={t.icon} />{t.label}{#if b?.n === '✋'}<span class="tc mark {b.tone}" title="Needs you"><Icon name="handSolid" size={16} solid /></span>{:else if b}<span class="tc {b.tone}">{b.n}</span>{/if}
+        <Icon name={t.icon} />{t.label}{#if t.id === 'terminal' && agentRunning(agent.status)}<span class="tdot" title="Agent running"></span><span class="sr">Agent running</span>{/if}{#if b?.n === '✋'}<span class="tc mark {b.tone}" title="Needs you"><Icon name="handSolid" size={16} solid /></span>{:else if b}<span class="tc {b.tone}">{b.n}</span>{/if}
       </a>
     {/each}
     {#each KINDS as k (k)}
