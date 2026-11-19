@@ -59,7 +59,16 @@ Each file in `commands/` becomes a runtime command (`/xherd:design`, …). Conve
 
 ## Installing
 
-`xherd install` renders the pack's commands for each runtime (`{{prefix}}`, `{{args}}`, `{{dir}}`, `{{path:NAME}}` = where command NAME is installed for that runtime, `{{xap}}`, `{{format}}`) and writes them where the runtime reads commands. Format `command` writes each file as it is; `skill` (Codex) writes `<folder>/SKILL.md` with only `name` (the folder) and `description` in its frontmatter, plus `agents/openai.yaml` that keeps the skill from being used unless it is called by name. Hashes of what was written are kept, so a file you edited is left alone and the new version is written beside it with a `.xherd-new` suffix. In the container this runs at every daemon start. After an update, look for `.xherd-new` files next to commands you edited: until you merge them, your jobs keep running your old prompt (for example, an edited `ship.md` from before the ticket summary existed still tells the job to update the ticket itself, which xherd now offers from the job page instead).
+`xherd install` renders the pack's commands for each runtime (`{{prefix}}`, `{{args}}`, `{{dir}}`, `{{path:NAME}}` = where command NAME is installed for that runtime, `{{xap}}`, `{{format}}`) and writes them where the runtime reads commands. Format `command` writes each file as it is; `skill` (Codex) writes `<folder>/SKILL.md` with only `name` (the folder) and `description` in its frontmatter, plus `agents/openai.yaml` that keeps the skill from being used unless it is called by name. Hashes of what was written are kept, so a file you edited is left alone and the new version is written beside it with a `.xherd-new` suffix.
+
+The daemon runs the same install at every start, natively and in the container, for every runtime that is switched on, so an upgrade needs no manual `xherd install`. It compares content (what this version renders, what is on disk, what xherd recorded): an outdated file you did not edit is replaced, and when everything is current nothing is written. A failure is a warning in the log, never a start failure. The same start also rewrites the hook file and the pre-push guard of every job that is not finished when they differ from what this version writes (a moved binary, new events or allowed calls); your own entries in a shared hook file are kept.
+
+Two kinds of file need you, and Setup checks list them in a `pack-files` check (required for the default runtime):
+
+- **Edited files.** The new version waits in `<file>.xherd-new`; until you decide, your jobs keep running your old prompt (for example, an edited `ship.md` from before the ticket summary existed still tells the job to update the ticket itself, which xherd now offers from the job page instead). The dialog offers *Use xherd's version* (replaces the file, your edits are lost) or *Keep mine* (deletes the `.xherd-new` and remembers that version, so later starts do not write it again; a different version in a later release writes a new `.xherd-new`).
+- **Obsolete files.** A file xherd recorded that the pack no longer ships (a removed or renamed command). It is never deleted on its own: the dialog offers *Remove* (also removes a skill folder left empty) or *Keep* (xherd forgets the file and leaves it). `xherd install --remove-obsolete` removes them from the CLI. A file xherd never recorded is never touched.
+
+The `pack` check also fails when a planned file is missing or out of date, not only when it is missing.
 
 ## Limits today
 
