@@ -3,12 +3,20 @@
   import { fixCheck, loadChecks, setup } from '../lib/setup.svelte';
   import { showError } from '../lib/errors.svelte';
   import TermView from './TermView.svelte';
+  import PackFilesDialog from './PackFilesDialog.svelte';
   let { check, first = false }: { check: Check; first?: boolean } = $props();
   const st = $derived(check.ok ? 'ok' : check.required ? 'bad' : 'opt');
   // A session fix runs in a terminal here.
   let session = $state(false);
 
+  // The review fix opens the pack files dialog.
+  let reviewing = $state(false);
+
   async function fix() {
+    if (check.fix?.kind === 'review') {
+      reviewing = true;
+      return;
+    }
     try {
       await fixCheck(check.id);
       if (check.fix?.kind === 'session') session = true;
@@ -42,6 +50,7 @@
     <button class="btn primary sm" disabled={setup.running} onclick={fix}>{check.fix.label}</button>
   {:else}<span></span>{/if}
 </div>
+{#if reviewing}<PackFilesDialog onclose={() => (reviewing = false)} />{/if}
 {#if session}
   <div style="padding:0 var(--pad) var(--pad)">
     <TermView path={`/ws/setup/${check.fix?.kind === 'session' ? check.fix.terminal : check.id}`} title={check.label} height="420px" onclose={ended}
