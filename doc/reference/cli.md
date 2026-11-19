@@ -67,7 +67,7 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `--base` | Base branch (default: the repository's default). `origin` is fetched first; a plain local branch is fast-forwarded to `origin/<branch>` when that is possible, otherwise used as it is |
 | `--autonomy` | `ask` (default) or `important` |
 | `--mode` | Tool permissions: `ask`, `edits`, `auto` or `all` (container only); default: the repo profile's, else the `permissionMode` setting |
-| `--runtime` | Runtime plugin: `claude-code`, `opencode` or `codex`; default: the repo profile's, else the `defaultRuntime` setting |
+| `--runtime` | Runtime plugin: `claude-code`, `opencode`, `codex` or `pi`; default: the repo profile's, else the `defaultRuntime` setting |
 | `--model` | Model for the runtime (`opus`, `sonnet`, `opencode/…`); default: the repo profile's `models` entry for the runtime, else the `runtimeModels` setting, else the runtime's own |
 | `--agent` | Start from a saved agent (id or name, see below), for every stage no [assignment](#workflows-and-agents) covers: its settings are the defaults for the flags above, and a flag you give wins. The agent has no repository: `--repo`, the ticket or the repo profile give it |
 | `--stage-agent STAGE=AGENT` | Repeat to give one stage of this job to another agent than the workflow does (`--stage-agent design=architect`). Refusals `unknown_stage`, `unknown_agent`, `agent_archived`, `mixed_runtime` |

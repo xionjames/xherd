@@ -130,6 +130,7 @@ by theme; update it together with them.
 
 - [x] opencode runtime (branch `runtime-opencode`): choice per job, profile and setting
 - [x] Codex runtime (branch `runtime-codex`): skills as commands, hooks, sandbox modes; not yet run end to end with a model
+- [x] Pi runtime: prompt templates as commands, a JavaScript extension for hooks and the permission modes (Pi has no sandbox), pinned standalone release; not yet run end to end with a model
 - [x] A model per job (#112): `modelArgs` in runtime manifests, defaults per runtime in Settings (`runtimeModels`) and in repo profiles (`models`), changed per job for its next session
 - [ ] A model per step (R-522: per role, plus tier and effort)
 - [x] To review and Work log views (per-ticket cycle time, review loops and rework)

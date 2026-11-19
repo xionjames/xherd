@@ -1,0 +1,122 @@
+{
+  "name": "pi",
+  "kind": "runtime",
+  "version": "0.1.0",
+  "label": "Pi",
+  "description": "The Pi coding agent in a tmux session (terminal driver).",
+  "data": {
+    "terminal": {
+      "launch": [
+        "pi",
+        "--approve"
+      ],
+      "permissionModes": {
+        "ask": {
+          "env": {
+            "XHERD_PI_MODE": "ask"
+          }
+        },
+        "edits": {
+          "env": {
+            "XHERD_PI_MODE": "edits"
+          }
+        },
+        "auto": {
+          "env": {
+            "XHERD_PI_MODE": "auto"
+          }
+        },
+        "all": {
+          "env": {
+            "XHERD_PI_MODE": "all"
+          }
+        }
+      },
+      "skills": {
+        "dir": ".pi/skills",
+        "format": "skill"
+      },
+      "modelArgs": [
+        "--model",
+        "{model}"
+      ],
+      "models": {
+        "command": "pi --list-models | awk 'NR > 1 && NF >= 6 { print $1 \"/\" $2 }'"
+      },
+      "hooks": {
+        "file": ".pi/extensions/xherd.js",
+        "format": "pi-extension",
+        "events": {
+          "session_start": "session-start",
+          "input": "user-prompt-submit",
+          "before_agent_start": "user-prompt-submit",
+          "tool_execution_end": "post-tool-use",
+          "ui_prompt_start": "notification",
+          "agent_settled": "stop"
+        }
+      },
+      "promptArgs": [
+        "{prompt}"
+      ],
+      "resume": {
+        "args": [
+          "--session",
+          "{session}"
+        ],
+        "promptArgs": [
+          "{prompt}"
+        ],
+        "transcripts": "${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions",
+        "file": "*_{session}.jsonl"
+      },
+      "check": {
+        "argv": [
+          "pi",
+          "--print",
+          "--no-session",
+          "--tools",
+          "read,grep,find,ls",
+          "{system}\n\n{prompt}"
+        ],
+        "modelArgs": [
+          "--model",
+          "{model}"
+        ]
+      },
+      "usage": {
+        "records": "/message/usage",
+        "fields": {
+          "input": "input",
+          "output": "output",
+          "cacheWrite": "cacheWrite",
+          "cacheRead": "cacheRead"
+        }
+      }
+    }
+  },
+  "login": [
+    "pi"
+  ],
+  "requires": [
+    {
+      "name": "pi",
+      "check": [
+        "pi",
+        "--version"
+      ],
+      "version": "1.5.2",
+      "sha256": {
+        "x86_64": "811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5",
+        "aarch64": "42805cd5615952fcbbfc9c56b04f8feb84395134952e169a6cdc8d7676975666"
+      },
+      "install": [
+        "sh",
+        "-c",
+        "set -eu\nd=$(mkdir -p \"$HOME/.cache\" && mktemp -d \"$HOME/.cache/xherd-install.XXXXXX\")\ntrap 'rm -rf \"$d\"' EXIT\ncase \"$XHERD_INSTALL_ARCH\" in x86_64) a=x64;; aarch64) a=arm64;; *) echo \"unsupported: $XHERD_INSTALL_ARCH\" >&2; exit 1;; esac\ncurl -fsSL --retry 3 -o \"$d/pkg\" \"https://github.com/earendil-works/pi/releases/download/v$XHERD_INSTALL_VERSION/pi-linux-$a.tar.gz\"\necho \"$XHERD_INSTALL_SHA256  $d/pkg\" | sha256sum -c -\ntar -xzf \"$d/pkg\" -C \"$d\"\nrm -rf \"$HOME/.local/lib/pi\"\nmkdir -p \"$HOME/.local/lib\" \"$HOME/.local/bin\"\nmv \"$d/pi\" \"$HOME/.local/lib/pi\"\nprintf '#!/bin/sh\\nexec \"%s/.local/lib/pi/pi\" \"$@\"\\n' \"$HOME\" > \"$HOME/.local/bin/pi\"\nchmod 0755 \"$HOME/.local/bin/pi\"\n"
+      ],
+      "instructions": {
+        "any": "npm install -g @earendil-works/pi-coding-agent   # or see https://pi.dev"
+      }
+    }
+  ]
+}

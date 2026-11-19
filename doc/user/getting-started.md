@@ -9,7 +9,7 @@ To build xherd yourself (an unreleased branch, or to change it), see [Running fr
 | | Docker (recommended) | Native (macOS, Linux) |
 |---|---|---|
 | What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code (or opencode, or Codex) and `gh` / `glab` |
-| Coding-agent CLI and tools | Installed by xherd into its volume at first start (Claude Code, opencode, Codex); the image has `git`, `gh`, `glab`, toolchain managers | Yours, on `PATH` |
+| Coding-agent CLI and tools | Installed by xherd into its volume at first start (Claude Code, opencode, Codex, Pi); the image has `git`, `gh`, `glab`, toolchain managers | Yours, on `PATH` |
 | Isolation | Jobs see only the workspace folder | None: jobs run as you |
 | Platforms | macOS and Linux (amd64, arm64) | macOS and Linux (arm64, x86_64) |
 
@@ -116,7 +116,7 @@ tar -xzf xherd-<version>-x86_64-unknown-linux-musl.tar.gz \
 
 You also need:
 
-- A runtime: **Claude Code** logged in (`claude`, then `/login`, once), or opencode, or Codex (`codex login`).
+- A runtime: **Claude Code** logged in (`claude`, then `/login`, once), or opencode, or Codex (`codex login`), or Pi (`pi`, then `/login`).
 - **`gh`** (GitHub) or **`glab`** (GitLab) for pull requests, logged in. Settings → Git access can also hold a token per host.
 - The toolchains your repositories need: natively xherd uses what is on your `PATH` and installs nothing.
 

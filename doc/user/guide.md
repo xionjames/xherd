@@ -4,7 +4,7 @@ How to work with xherd once it runs. Installing it is in [Getting started](getti
 
 ## The idea
 
-You give xherd a ticket. It creates an **job**: a git worktree and a branch for that ticket, a coding runtime (Claude Code, opencode or Codex) in a tmux session, and a `.xherd/` folder with the job's documents. The job follows a **flow** of stages and stops at **gates**, where you read what it proposes and approve it or ask for changes. Many jobs run in parallel, and the UI shows which ones need you.
+You give xherd a ticket. It creates an **job**: a git worktree and a branch for that ticket, a coding runtime (Claude Code, opencode, Codex or Pi) in a tmux session, and a `.xherd/` folder with the job's documents. The job follows a **flow** of stages and stops at **gates**, where you read what it proposes and approve it or ask for changes. Many jobs run in parallel, and the UI shows which ones need you.
 
 ## Screens
 

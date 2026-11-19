@@ -16,7 +16,7 @@ For people changing xherd itself. Read [Architecture](architecture.md) first; [R
 | `crates/` | The Rust workspace (see [Architecture](architecture.md#crates)) |
 | `ui/` | Web UI: Svelte 5, Vite, TypeScript, pnpm |
 | `packs/xherd/` | The built-in flow pack: `xherd-flow.yaml`, `FORMAT.md` (document formats), `commands/*.md` (job prompts) |
-| `plugins/` | Built-in plugin manifests: runtimes `claude-code`, `opencode`, `codex`; hosts `github`, `gitlab`, `bitbucket`; trackers `jira`, `github-issues`, `gitlab-issues`; toolchains `sdkman`, `nvm`, `uv`, `go`, `rustup` |
+| `plugins/` | Built-in plugin manifests: runtimes `claude-code`, `opencode`, `codex`, `pi`; hosts `github`, `gitlab`, `bitbucket`; trackers `jira`, `github-issues`, `gitlab-issues`; toolchains `sdkman`, `nvm`, `uv`, `go`, `rustup` |
 | `deploy/docker`, `deploy/compose`, `deploy/nfpm` | Dockerfile, the compose files (build from source, and the release one), `.deb`/`.rpm` packaging |
 | `scripts/` | `demo/server.mjs` (mock API for screenshots and videos); `demo.sh` and its seed data (older, needs updating) |
 | `doc/` | This documentation ([index](../README.md)) |

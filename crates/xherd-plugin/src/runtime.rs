@@ -673,6 +673,10 @@ pub enum HookFormat {
     /// the user's entries kept, but no `permissions` (Codex has its own
     /// sandbox and approval policy, set by the permission mode).
     CodexHooks,
+    /// A JavaScript extension file owned by xherd (Pi loads `.pi/extensions/*.js`);
+    /// events are the triggers in `PI_TRIGGERS`. It also asks before tools run,
+    /// by the permission mode in `XHERD_PI_MODE`.
+    PiExtension,
 }
 
 /// What the opencode plugin can report: its own start, then opencode hooks
@@ -684,6 +688,16 @@ pub const OPENCODE_TRIGGERS: &[&str] = &[
     "permission.asked",
     "question.asked",
     "session.idle",
+];
+
+/// What the Pi extension can report: Pi events, in its own names.
+pub const PI_TRIGGERS: &[&str] = &[
+    "session_start",
+    "input",
+    "before_agent_start",
+    "tool_execution_end",
+    "ui_prompt_start",
+    "agent_settled",
 ];
 
 /// What xherd's commands need without asking: shell commands (patterns with
@@ -744,6 +758,16 @@ impl Terminal {
                 "runtime {}: the opencode plugin cannot report {e:?} (it reports: {})",
                 m.name,
                 OPENCODE_TRIGGERS.join(", ")
+            ));
+        }
+        if let Some(h) = &t.hooks
+            && h.format == HookFormat::PiExtension
+            && let Some(e) = h.events.keys().find(|e| !PI_TRIGGERS.contains(&e.as_str()))
+        {
+            return Err(format!(
+                "runtime {}: the Pi extension cannot report {e:?} (it reports: {})",
+                m.name,
+                PI_TRIGGERS.join(", ")
             ));
         }
         if let Some(r) = &t.resume {
@@ -858,23 +882,27 @@ pub fn hook_file_text(
 ) -> Result<String, String> {
     match h.format {
         HookFormat::ClaudeSettings => merge_hooks(existing, h, xherd_bin, allow),
-        HookFormat::OpencodePlugin => opencode_plugin(existing, h, xherd_bin, allow),
+        HookFormat::OpencodePlugin => owned_js(existing, h, xherd_bin, allow, OPENCODE_PLUGIN),
+        HookFormat::PiExtension => owned_js(existing, h, xherd_bin, allow, PI_EXTENSION),
         HookFormat::CodexHooks => merge_hooks(existing, h, xherd_bin, &Allow::default()),
     }
 }
 
 const OPENCODE_PLUGIN: &str = include_str!("opencode-plugin.js");
+const PI_EXTENSION: &str = include_str!("pi-extension.js");
 
-/// The opencode plugin file: xherd's own, so it is replaced whole. A file of
-/// that name that xherd did not write is refused, never overwritten.
-fn opencode_plugin(
+/// A JavaScript hook file (opencode's plugin, Pi's extension): xherd's own, so
+/// it is replaced whole. A file of that name that xherd did not write is
+/// refused, never overwritten.
+fn owned_js(
     existing: Option<&str>,
     h: &HookFile,
     xherd_bin: &str,
     allow: &Allow,
+    template: &str,
 ) -> Result<String, String> {
     const MARK: &str = "// Written by xherd";
-    debug_assert!(OPENCODE_PLUGIN.starts_with(MARK));
+    debug_assert!(template.starts_with(MARK));
     if let Some(old) = existing.filter(|t| !t.trim().is_empty())
         && !old.starts_with(MARK)
     {
@@ -887,7 +915,7 @@ fn opencode_plugin(
         .iter()
         .map(|d| d.trim_end_matches('/'))
         .collect();
-    Ok(OPENCODE_PLUGIN
+    Ok(template
         .replace("__XHERD__", &js(json!(xherd_bin)))
         .replace("__EVENTS__", &js(json!(h.events)))
         .replace("__COMMANDS__", &js(json!(allow.commands)))
@@ -1197,6 +1225,73 @@ not json
 }
 
 #[cfg(test)]
+mod pi_tests {
+    use super::*;
+
+    fn pi() -> Terminal {
+        let m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "pi")
+            .unwrap();
+        Terminal::of(&m).unwrap()
+    }
+
+    #[test]
+    fn every_mode_sets_the_variable_the_extension_reads() {
+        let t = pi();
+        for mode in PERMISSION_MODES {
+            let argv = t.argv(mode).unwrap();
+            assert_eq!(
+                argv,
+                ["env", &format!("XHERD_PI_MODE={mode}"), "pi", "--approve"]
+            );
+        }
+    }
+
+    #[test]
+    fn the_extension_file_is_ours_and_filled_in() {
+        let h = pi().hooks.unwrap();
+        assert_eq!(h.format, HookFormat::PiExtension);
+        let allow = Allow {
+            commands: vec!["xherd task *".into()],
+            read_dirs: vec!["/home/u/.pi/agent/prompts/".into()],
+        };
+        let js = hook_file_text(None, &h, "/opt/xherd", &allow).unwrap();
+        assert!(js.contains(r#"const XHERD = "/opt/xherd";"#), "{js}");
+        assert!(js.contains(r#""agent_settled":"stop""#));
+        assert!(js.contains(r#"const COMMANDS = ["xherd task *"];"#));
+        assert!(js.contains(r#"const READ_DIRS = ["/home/u/.pi/agent/prompts"];"#));
+        assert!(!js.contains("__"), "every placeholder filled");
+        assert_eq!(
+            hook_file_text(Some(&js), &h, "/opt/xherd", &allow).unwrap(),
+            js
+        );
+        let e = hook_file_text(Some("export default () => {}"), &h, "xherd", &allow).unwrap_err();
+        assert!(e.contains("not written by xherd"), "{e}");
+    }
+
+    #[test]
+    fn extension_events_are_checked() {
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "pi")
+            .unwrap();
+        m.data.get_mut("terminal").unwrap()["hooks"]["events"]["Stop"] = json!("stop");
+        let e = Terminal::of(&m).unwrap_err();
+        assert!(e.contains("cannot report"), "{e}");
+    }
+
+    #[test]
+    fn a_session_is_found_by_its_id_and_its_tokens_counted() {
+        let t = pi();
+        let r = t.resume.unwrap();
+        assert_eq!(r.file.as_deref(), Some("*_{session}.jsonl"));
+        let u = t.usage.unwrap();
+        assert_eq!(u.records, "/message/usage");
+    }
+}
+
+#[cfg(test)]
 mod opencode_tests {
     use super::*;
 
@@ -1210,7 +1305,7 @@ mod opencode_tests {
 
     #[test]
     fn skill_targets_are_checked_and_declared_by_the_built_ins() {
-        let dirs: Vec<_> = ["claude-code", "opencode", "codex"]
+        let dirs: Vec<_> = ["claude-code", "opencode", "codex", "pi"]
             .iter()
             .map(|n| {
                 let m = crate::builtins()
@@ -1226,7 +1321,12 @@ mod opencode_tests {
             .collect();
         assert_eq!(
             dirs,
-            [".claude/skills", ".opencode/skills", ".agents/skills"]
+            [
+                ".claude/skills",
+                ".opencode/skills",
+                ".agents/skills",
+                ".pi/skills"
+            ]
         );
 
         let mut m = crate::builtins()

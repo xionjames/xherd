@@ -707,6 +707,10 @@ mod tests {
             std::path::Path::new("/home/u/.config/opencode/command/xherd")
         );
         assert_eq!(root("codex"), std::path::Path::new("/home/u/.codex/skills"));
+        assert_eq!(
+            root("pi"),
+            std::path::Path::new("/home/u/.pi/agent/prompts")
+        );
         let env = |k: &str| (k == "CODEX_HOME").then(|| "/c".to_string());
         assert_eq!(
             p.install_root("codex", &env).unwrap(),
