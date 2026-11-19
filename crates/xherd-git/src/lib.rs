@@ -618,6 +618,31 @@ impl Git {
         Ok(nul_names(&out))
     }
 
+    /// The branch's own commits since `base`, oldest first, as `(sha, subject)`.
+    /// First parent only: a merge of the base counts as one commit and the
+    /// base's commits are not listed.
+    pub async fn branch_commits(&self, dir: &Path, base: &str) -> Result<Vec<(String, String)>> {
+        let range = format!("{base}..HEAD");
+        let out = self
+            .run(
+                dir,
+                &[
+                    "log",
+                    "--first-parent",
+                    "--reverse",
+                    "--format=%H%x00%s",
+                    &range,
+                    "--",
+                ],
+            )
+            .await?;
+        Ok(out
+            .lines()
+            .filter_map(|l| l.split_once('\0'))
+            .map(|(sha, s)| (sha.to_string(), s.to_string()))
+            .collect())
+    }
+
     pub async fn is_ancestor(&self, dir: &Path, ancestor: &str, of: &str) -> bool {
         self.run(dir, &["merge-base", "--is-ancestor", ancestor, of])
             .await

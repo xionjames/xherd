@@ -20,7 +20,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `idleAlertMinutes` | `15` | Notify when a job has been idle this long; `0` = off |
 | `gateParkMinutes` | `30` | A gate waiting this long parks the job (frees its slot, stays in *Needs you*); `0` = never |
 | `freshSessions` | `true` | Each approved gate starts a new runtime session; `memory.md` carries over |
-| `mutedNotifications` | `[]` | Notification kinds (`gate`, `blocked`, `idle`, `delivery`, `error`, `recovery`, `budget`, `limit`, `pr`, `pr-comments`, `todo`, `suggestion`) that are not sent anywhere. Applies at once |
+| `mutedNotifications` | `[]` | Notification kinds (`gate`, `blocked`, `idle`, `delivery`, `error`, `recovery`, `budget`, `limit`, `pr`, `pr-comments`, `todo`, `suggestion`, `outside-commit`) that are not sent anywhere. Applies at once |
 | `desktopNotifications` | `false` | The daemon also shows system notifications (`osascript` on macOS, `notify-send` on Linux); not in the Docker image. Applies at once |
 | `suggestAgents` | `true` | Offer to save a job's setup as an agent (a band on the job page and one `suggestion` notification) when a job with no agent is done or marked done, or when you start the same setup a third time (same repository, runtime, model, workflow, autonomy and tool permissions within 30 days). Never after a cancel or a failure. Applies at once; Settings → Gates & autonomy |
 | `ntfyServer` / `ntfyTopic` | unset | Also send every notification to this ntfy topic (both needed; messages carry job names and reasons, in plain text). Applies at once; Settings → Notifications |

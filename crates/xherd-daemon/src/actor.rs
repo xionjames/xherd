@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 use xherd_core::config::Config;
-use xherd_core::domain::{CommitStatus, Gate, TaskStatus};
+use xherd_core::domain::{Commit, CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
 use xherd_core::status::next_status;
 use xherd_core::xap::{Refusal, XapCall, XapCmd, refuse as refusal};
@@ -204,6 +204,12 @@ pub enum WorkResult {
         session: String,
         tokens: u64,
     },
+    /// Every sha on the branch since the base, and the commits among them
+    /// no recorded commit matched, oldest first, with their files (R4).
+    BranchCommits {
+        on_branch: Vec<String>,
+        found: Vec<xherd_core::domain::BranchCommit>,
+    },
     /// The pane of a running action is dead: its exit status (`None` when a
     /// signal killed it) and what it printed (R11, R13).
     /// `stopped`: the user (or the job's end) stopped it; `restart` carries
@@ -226,14 +232,16 @@ pub enum WorkResult {
 }
 
 impl WorkResult {
-    /// Results about actions stay valid when the agent's generation moved on
-    /// (hand-on, resume): an action outlives the session.
+    /// Results that stay valid when the agent's generation moved on: results
+    /// about actions (hand-on, resume), since an action outlives the session,
+    /// and the branch check (R4), which the stop that starts it often ends.
     fn about_action(&self) -> bool {
         matches!(
             self,
             WorkResult::ActionEnded { .. }
                 | WorkResult::ActionAlive { .. }
                 | WorkResult::ActionGone { .. }
+                | WorkResult::BranchCommits { .. }
         )
     }
 }
@@ -1111,6 +1119,7 @@ impl Actor {
                 Effect::UserPrompted => self.log(None, "user-prompted", None).await,
                 Effect::AfterStop => {
                     self.measure_usage();
+                    self.check_branch_commits();
                     // A pause waits for the handoff note; the stop after it
                     // ends the session. Earlier stops (the turn that was
                     // running) change nothing, and no approval happens now.
@@ -1191,6 +1200,121 @@ impl Actor {
                 result: WorkResult::Usage { session, tokens },
             });
         });
+    }
+
+    /// List the branch's commits since the job's base (slow: spawned, back
+    /// as `WorkResult::BranchCommits`); with the files of those no recorded
+    /// commit matches, so `on_branch_commits` can list them (R4). No base, no
+    /// workdir or a git error: nothing is checked.
+    fn check_branch_commits(&self) {
+        let base = self
+            .job
+            .base
+            .clone()
+            .filter(|b| !b.is_empty() && !b.starts_with('-') && !b.contains(".."));
+        let (Some(base), Ok(wd)) = (base, self.workdir()) else {
+            return;
+        };
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
+        let (git, recorded) = (self.env.git.clone(), self.job.commits.clone());
+        tokio::spawn(async move {
+            let branch = match git.branch_commits(&wd, &base).await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::debug!(error = %e, "branch commits not listed");
+                    return;
+                }
+            };
+            let mut found = Vec::new();
+            for (sha, subject) in xherd_core::domain::unrecorded_commits(&recorded, &branch) {
+                match git.commit_files(&wd, &sha).await {
+                    Ok(files) => found.push(xherd_core::domain::BranchCommit {
+                        sha,
+                        subject,
+                        files,
+                    }),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "files of a branch commit not read");
+                        return;
+                    }
+                }
+            }
+            if found.is_empty() {
+                return;
+            }
+            let on_branch = branch.into_iter().map(|(sha, _)| sha).collect();
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::BranchCommits { on_branch, found },
+            });
+        });
+    }
+
+    /// Record the branch's commits that xherd did not make or hear of
+    /// (`domain::settle_branch_commits`): xherd's own shared-memory commits
+    /// from before `Mnn` rows (found by their `memory-accepted` events) as
+    /// `Mnn`, rebased or amended ones under their row with one
+    /// `commit-rewritten` event each, the rest as held `Xnn` rows with one
+    /// `outside-commit` event each and one notification (count and short
+    /// shas only) (R4, R5, R6).
+    async fn on_branch_commits(
+        &mut self,
+        on_branch: Vec<String>,
+        found: Vec<xherd_core::domain::BranchCommit>,
+    ) {
+        use xherd_core::domain::Settled;
+        let memory: Vec<String> = match self.env.store.events_of_kind("memory-accepted").await {
+            Ok(events) => events
+                .into_iter()
+                .filter(|e| e.job_id == self.job.id)
+                .filter_map(|e| Some(e.payload?["sha"].as_str()?.to_string()))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(agent = %self.job.name, error = %e, "memory commits not read");
+                vec![]
+            }
+        };
+        let settled = xherd_core::domain::settle_branch_commits(
+            &mut self.job.commits,
+            &on_branch,
+            &found,
+            &memory,
+        );
+        if settled.is_empty() {
+            return;
+        }
+        let mut shas = Vec::new();
+        for s in settled {
+            match s {
+                Settled::Outside { id, sha } => {
+                    self.log(None, "outside-commit", Some(json!({"id": id, "sha": sha})))
+                        .await;
+                    shas.push(sha.chars().take(7).collect::<String>());
+                }
+                Settled::Rewritten { id, from, sha } => {
+                    self.log(
+                        None,
+                        "commit-rewritten",
+                        Some(json!({"id": id, "from": from, "sha": sha})),
+                    )
+                    .await;
+                }
+                Settled::Memory { .. } => {}
+            }
+        }
+        let n = shas.len();
+        if n > 0 {
+            let (s, was) = if n == 1 { ("", "was") } else { ("s", "were") };
+            self.notify(
+                "outside-commit",
+                format!(
+                    "{}: {n} commit{s} {was} made outside xherd ({})",
+                    self.job.name,
+                    shas.join(", ")
+                ),
+            );
+        }
+        self.commit(self.job.status).await;
     }
 
     /// Poll the pull request of a watching agent through the host plugin when
@@ -2717,7 +2841,7 @@ impl Actor {
     }
 
     /// Ask (#121, R5–R7): resume an agent that has no session with the
-    /// user's text as its first prompt, continuing the last conversation, and
+    /// user's text (through the pack's `ask` command) as its first prompt, continuing the last conversation, and
     /// hold the session open (no auto-approval, no move to watching) until the
     /// agent does flow work, the user decides a gate, or finishes it.
     async fn ask(&mut self, text: &str) -> Result<(), ActionError> {
@@ -2752,8 +2876,14 @@ impl Actor {
                 format!("{} has a command waiting: resume it first", self.job.name),
             ));
         }
+        // R1–R3 (missing commits): through the pack's `ask` command, which
+        // turns a requested change into tasks and commit proposals; the bare
+        // text when the job has no pack or its pack has no such command.
+        let prompt = self
+            .pack_command_with("ask", &[("prompt", text)])
+            .unwrap_or_else(|| text.to_string());
         let now = self.now();
-        self.job.next_prompt = Some(text.to_string());
+        self.job.next_prompt = Some(prompt);
         self.job.fire(Trigger::Resume, now);
         self.prepare_resume(false).await;
         self.job.ask_hold = Some(xherd_core::job::AskHold {
@@ -3914,7 +4044,11 @@ impl Actor {
                 .map_err(|e| refuse("internal", format!("{f}: {e}")))?;
             files.push(f.to_string());
         }
-        let message = format!("Update AGENTS.md (shared memory)\n\n{}", p.reason);
+        let message = format!(
+            "{}\n\n{}",
+            xherd_core::domain::MEMORY_COMMIT_SUBJECT,
+            p.reason
+        );
         let git = self.env.git.clone().with_timeout(Duration::from_secs(300));
         let sha = git.commit_paths(&wd, &files, &message).await.map_err(|e| {
             refuse(
@@ -3923,6 +4057,25 @@ impl Actor {
             )
         })?;
         self.job.memory_proposal = None;
+        // R6: xherd's own commit is listed (`Mnn`), so it is never taken for
+        // one made outside xherd.
+        let n = self
+            .job
+            .commits
+            .iter()
+            .filter_map(|c| c.id.strip_prefix('M')?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        self.job.commits.push(Commit {
+            id: format!("M{:02}", n + 1),
+            subject: xherd_core::domain::MEMORY_COMMIT_SUBJECT.into(),
+            message: Some(message.clone()),
+            files: files.clone(),
+            status: CommitStatus::Done,
+            tasks: vec![],
+            sha: Some(sha.clone()),
+            needs_human: None,
+        });
         self.log(
             None,
             "memory-accepted",
@@ -4590,6 +4743,9 @@ impl Actor {
                 self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
+            WorkResult::BranchCommits { on_branch, found } => {
+                self.on_branch_commits(on_branch, found).await
+            }
             WorkResult::PrLookup(Ok(None)) => self.git_access_ok().await,
             WorkResult::PrLookup(Ok(Some(url))) => {
                 self.git_access_ok().await;

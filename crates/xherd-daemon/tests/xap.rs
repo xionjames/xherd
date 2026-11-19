@@ -3355,6 +3355,18 @@ async fn memory_accept_after_the_pr_is_open_commits_on_the_branch() {
     );
     let subject = git(wt, &["show", "--format=%s", "-s", "HEAD"]);
     assert_eq!(subject, "Update AGENTS.md (shared memory)");
+    // xherd's own commit is in the job's list, so it is never flagged as
+    // made outside xherd.
+    let sha = git(wt, &["rev-parse", "HEAD"]);
+    let m = a.commits.iter().find(|c| c.id == "M01");
+    assert!(
+        m.is_some_and(|c| c.status == CommitStatus::Done
+            && c.sha.as_deref() == Some(sha.as_str())
+            && c.files.contains(&"AGENTS.md".to_string())
+            && c.tasks.is_empty()),
+        "M01 with {sha}: {:?}",
+        a.commits
+    );
 }
 
 #[tokio::test]
@@ -3423,7 +3435,7 @@ async fn ask_holds_the_session_until_the_agent_does_flow_work() {
     .unwrap();
     assert_eq!(
         (a.status, a.next_prompt.as_deref()),
-        (Status::Queued, Some("Why the retry?"))
+        (Status::Queued, Some("/xherd:ask Why the retry?"))
     );
     assert!(a.ask_hold.as_ref().is_some_and(|h| h.was_watching));
     until(&t, |a| a.status == Status::Running).await;
@@ -3449,6 +3461,213 @@ async fn ask_holds_the_session_until_the_agent_does_flow_work() {
     assert_eq!(ask.payload.as_ref().unwrap()["chars"], 14);
     stop(&t, 4).await;
     assert_eq!(get(&t).await.status, Status::Watching);
+}
+
+/// An Ask on a flow job goes through the pack's `ask` command, which teaches
+/// tasks and commit proposals, never the bare text.
+#[tokio::test]
+async fn an_ask_goes_through_the_packs_ask_command() {
+    let t = setup().await;
+    watching(&t).await;
+    let a = act(
+        &t,
+        UserAction::Ask {
+            text: "Rename the retry helper".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        a.next_prompt.as_deref(),
+        Some("/xherd:ask Rename the retry helper")
+    );
+    until(&t, |a| a.status == Status::Running).await;
+    session_start(&t, 2).await;
+    let sent = sends(&t);
+    assert!(
+        sent.contains(&r#"send SC-1 "/xherd:ask Rename the retry helper" 1"#.to_string()),
+        "{sent:?}"
+    );
+}
+
+/// Without a pack, or with one that has no `ask` command, Ask sends the
+/// trimmed text as it is (F03).
+#[tokio::test]
+async fn an_ask_without_an_ask_command_sends_the_bare_text() {
+    for pack in [None, Some("no-such-pack")] {
+        let t = setup_tweaked(json!({"freshSessions": true}), None, None, "feature", |j| {
+            j.pack = pack.map(String::from);
+        })
+        .await;
+        session_start(&t, 1).await;
+        stop(&t, 2).await;
+        // No pack command for the handoff: the pause does not wait for a note.
+        act(&t, UserAction::Pause).await.unwrap();
+        until(&t, |a| a.status == Status::Paused).await;
+
+        let a = act(
+            &t,
+            UserAction::Ask {
+                text: "  Why the retry?  ".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(a.next_prompt.as_deref(), Some("Why the retry?"), "{pack:?}");
+        until(&t, |a| a.status == Status::Running).await;
+        session_start(&t, 3).await;
+        let sent = sends(&t);
+        assert!(
+            sent.iter().any(|s| s.contains("Why the retry?")),
+            "{sent:?}"
+        );
+        assert!(!sent.iter().any(|s| s.contains("/xherd:ask")), "{sent:?}");
+    }
+}
+
+/// A commit the agent makes with git, outside any proposal, is listed at the
+/// next stop as a held `X01` row, once.
+#[tokio::test]
+async fn a_commit_made_outside_xherd_is_listed_and_held() {
+    let t = setup().await;
+    let mut rx = t.d.hub.subscribe();
+    let wt = t.wt.path();
+    git(wt, &["checkout", "-q", "-b", "SC-1"]);
+    std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
+    std::fs::write(wt.join("helper.rs"), "fn write_state() {}\n").unwrap();
+    git(wt, &["add", "helper.rs"]);
+    git(wt, &["commit", "-q", "-m", "Rename the retry helper"]);
+    let sha = git(wt, &["rev-parse", "HEAD"]);
+    stop(&t, 1).await;
+    let outside = |a: &Job| {
+        a.commits
+            .iter()
+            .filter(|c| c.id.starts_with('X'))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let a = until(&t, |a| !outside(a).is_empty()).await;
+    let x = outside(&a);
+    assert_eq!(x.len(), 1, "{:?}", a.commits);
+    let c = &x[0];
+    assert_eq!(
+        (
+            c.id.as_str(),
+            c.sha.as_deref(),
+            c.status,
+            c.files.clone(),
+            c.tasks.is_empty(),
+            c.needs_human.is_some()
+        ),
+        (
+            "X01",
+            Some(sha.as_str()),
+            CommitStatus::Done,
+            vec!["helper.rs".to_string()],
+            true,
+            true
+        )
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "outside-commit"));
+    let said = notices(&mut rx, "outside-commit");
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(
+        said[0].contains(&sha[..7]) && !said[0].contains("Rename the retry helper"),
+        "{said:?}"
+    );
+
+    // A second stop lists nothing new. A second outside commit and a third
+    // stop then wait for `X02` itself, so no sleep stands in for the check.
+    stop(&t, 2).await;
+    std::fs::write(wt.join("helper2.rs"), "fn read_state() {}\n").unwrap();
+    git(wt, &["add", "helper2.rs"]);
+    git(wt, &["commit", "-q", "-m", "Rename the state reader"]);
+    let second = git(wt, &["rev-parse", "HEAD"]);
+    stop(&t, 3).await;
+    let a = until(&t, |a| a.commits.iter().any(|c| c.id == "X02")).await;
+    let listed: Vec<_> = outside(&a)
+        .iter()
+        .map(|c| (c.id.clone(), c.sha.clone()))
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            ("X01".to_string(), Some(sha.clone())),
+            ("X02".to_string(), Some(second))
+        ]
+    );
+}
+
+/// The stop that moves the job to watching also ends its session (a new
+/// generation): the check started by that stop still lists the commit.
+#[tokio::test]
+async fn a_commit_made_outside_xherd_before_watching_is_listed() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    git(wt, &["checkout", "-q", "-b", "SC-1"]);
+    std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
+    std::fs::write(wt.join("helper.rs"), "fn write_state() {}\n").unwrap();
+    git(wt, &["add", "helper.rs"]);
+    git(wt, &["commit", "-q", "-m", "Rename the retry helper"]);
+    let sha = git(wt, &["rev-parse", "HEAD"]);
+    watching(&t).await;
+    let a = until(&t, |a| a.commits.iter().any(|c| c.id == "X01")).await;
+    let x = a.commits.iter().find(|c| c.id == "X01").unwrap();
+    assert_eq!(
+        (x.sha.as_deref(), a.status),
+        (Some(sha.as_str()), Status::Watching)
+    );
+}
+
+/// A commit xherd made, then amended (or rebased) with the same subject and
+/// files, keeps its row with the new sha instead of showing as `X01`.
+#[tokio::test]
+async fn a_rewritten_commit_is_not_listed_as_outside_xherd() {
+    let t = setup().await;
+    let wt = t.wt.path();
+    git(wt, &["checkout", "-q", "-b", "SC-1"]);
+    std::fs::write(wt.join(".git/info/exclude"), ".xherd/\n").unwrap();
+    commit_gate(&t).await;
+    act(&t, approve(None)).await.unwrap();
+    let first = git(wt, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        get(&t).await.commits[0].sha.as_deref(),
+        Some(first.as_str())
+    );
+    git(
+        wt,
+        &[
+            "commit",
+            "-q",
+            "--amend",
+            "--no-edit",
+            "--date=2001-01-01T00:00:00",
+        ],
+    );
+    let amended = git(wt, &["rev-parse", "HEAD"]);
+    assert_ne!(first, amended);
+    until(&t, |a| a.status == Status::Running).await;
+    stop(&t, 2).await;
+    let a = until(&t, |a| {
+        a.commits[0].sha.as_deref() == Some(amended.as_str())
+    })
+    .await;
+    assert!(
+        a.commits.iter().all(|c| !c.id.starts_with('X')),
+        "{:?}",
+        a.commits
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    let e = events
+        .iter()
+        .find(|e| e.kind == "commit-rewritten")
+        .unwrap();
+    assert_eq!(
+        e.payload.as_ref().unwrap()["from"].as_str(),
+        Some(first.as_str())
+    );
+    assert!(events.iter().all(|e| e.kind != "outside-commit"));
 }
 
 #[tokio::test]

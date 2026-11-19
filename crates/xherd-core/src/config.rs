@@ -382,6 +382,7 @@ pub const NOTIFY_KINDS: &[&str] = &[
     "pr-comments",
     "todo",
     "suggestion",
+    "outside-commit",
 ];
 
 impl Config {

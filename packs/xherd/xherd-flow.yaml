@@ -31,7 +31,7 @@ install:
     commands: { from: commands/*.md, to: "${CODEX_HOME:-~/.codex}/skills/xherd-{name}/SKILL.md", format: skill }
     args: "the text after the skill name in the message"
 
-commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review", conflicts: "{prefix}conflicts {base}" }
+commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review", conflicts: "{prefix}conflicts {base}", ask: "{prefix}ask {prompt}" }
 
 flows:
   feature:
