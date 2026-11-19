@@ -30,6 +30,13 @@ install:
     slashEnters: 2
     commands: { from: commands/*.md, to: "${CODEX_HOME:-~/.codex}/skills/xherd-{name}/SKILL.md", format: skill }
     args: "the text after the skill name in the message"
+  # Pi has prompt templates: one file each in its prompts folder (direct
+  # children only), called as /xherd-next. Enter on a slash command both
+  # picks it from the list and submits it, so one Enter is enough.
+  pi:
+    prefix: "/xherd-"
+    commands: { from: commands/*.md, to: "${PI_CODING_AGENT_DIR:-~/.pi/agent}/prompts/xherd-{name}.md", format: command }
+    args: "$ARGUMENTS"
 
 commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", prReview: "{prefix}pr-review", conflicts: "{prefix}conflicts {base}", ask: "{prefix}ask {prompt}" }
 

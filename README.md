@@ -24,7 +24,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 - **One ticket, one sandbox.** Each task gets its own git worktree and tmux session, so jobs never step on each other or on your checkout.
 - **One screen for the herd.** The browser shows what every job is doing and which ones are waiting for you.
 - **You approve the important steps.** Jobs follow a spec-driven flow (spec, design, tasks, commits, pull request) and stop at gates. You read what they propose, then approve or ask for changes.
-- **Bring your own job and process.** Claude Code, opencode or Codex; the runtime, the flow and the integrations are plugins.
+- **Bring your own job and process.** Claude Code, opencode, Codex or Pi; the runtime, the flow and the integrations are plugins.
 - **Docker or native.** Docker keeps jobs and toolchains in a container and shares only your workspace; you can still open the code in your IDE.
 
 ![Jobs: counters that filter, every job with a pill per stage of its workflow and the initials of the agent that runs it, and who in the team is busy](doc/assets/herd.jpg)
@@ -36,7 +36,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 ### Jobs
 
 - Many jobs in parallel, each in its own git worktree, branch and tmux session, with a concurrency cap.
-- Claude Code, opencode or Codex, chosen per job, with a model per job and a tool-permission mode (ask, edits, auto, all).
+- Claude Code, opencode, Codex or Pi, chosen per job, with a model per job and a tool-permission mode (ask, edits, auto, all).
 - Named jobs with an optional ticket (an issue URL or key) that prefixes the branch; repositories by path or cloned by URL.
 - A live terminal per job in the browser. **Ask** gives a stopped job a quick session with your question, held until you finish it.
 - Pause with a handoff note, resume where the conversation left off, and "Pause all" as a kill switch.

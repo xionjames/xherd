@@ -33,7 +33,7 @@ xherd runs coding agents that can read, write and execute. This page says what i
 
 ## Runtime binaries
 
-- In the container the coding-agent CLIs (Claude Code, opencode, Codex) are downloaded by the daemon, not baked into the image. Each plugin pins a version and a sha256 per architecture; a download whose digest differs is refused.
+- In the container the coding-agent CLIs (Claude Code, opencode, Codex, Pi) are downloaded by the daemon, not baked into the image. Each plugin pins a version and a sha256 per architecture; a download whose digest differs is refused.
 - The binaries live in the agents' home (`xherd-home`), which the agents' user can write, like the toolchains. A job could replace its runtime binary for every later job; the same user already runs every job's commands, so this adds no new reach, but treat the volume as the agents' own.
 
 ## Network and access

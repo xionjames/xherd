@@ -1052,7 +1052,7 @@ mod tests {
         let none = permission_rules(None, "claude-code");
         assert_eq!((none.commands, none.read_dirs.len()), (xap.clone(), 0));
         let pack = xherd_flow::builtin();
-        for rt in ["claude-code", "opencode", "codex"] {
+        for rt in ["claude-code", "opencode", "codex", "pi"] {
             let rules = permission_rules(Some(&pack), rt);
             assert_eq!(rules.commands, xap);
             assert_eq!(rules.read_dirs, command_dirs(&pack, rt));

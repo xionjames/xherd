@@ -69,7 +69,7 @@ flowchart TD
 | `xherd-core` | Domain types and pure logic: `Status` and its lifecycle table, `Job`, reports, gates, tasks, commits, autonomy policy, secret tripwire, pre-push guard rules, config, content hashing, the only way to run external commands (`exec::run`). No I/O of its own; heavily tested, including property tests. |
 | `xherd-store` | SQLite (WAL, one writer thread, read-only pool), forward-only migrations. |
 | `xherd-flow` | Flow packs (`xherd-flow.yaml`), template rendering, `tasks.md` and `review.md` parsers, the pure XAP validation (`xap::apply`), pack installation. The built-in pack is embedded from `packs/xherd/`. |
-| `xherd-plugin` | Plugin manifests and registry, the command protocol, and the Rust side of the built-in plugins: runtimes (Claude Code, opencode, Codex), hosts (`gh` for GitHub, `glab api` for GitLab), trackers (issue reading and posting, Jira's document format), git providers, toolchains. |
+| `xherd-plugin` | Plugin manifests and registry, the command protocol, and the Rust side of the built-in plugins: runtimes (Claude Code, opencode, Codex, Pi), hosts (`gh` for GitHub, `glab api` for GitLab), trackers (issue reading and posting, Jira's document format), git providers, toolchains. |
 | `xherd-term` | tmux wrapper and the PTY bridge behind the browser terminal. |
 | `xherd-git` | Worktrees, diffs of proposed files, commits, bundles, the push guard. |
 | `xherd-api` | axum routes under `/api/v1`, `/ws` change feed, terminal websockets, authentication, the embedded UI. |

@@ -27,7 +27,7 @@ Top-level fields:
 | `name`, `version`, `protocol` | The pack, its version, and the XAP major version it speaks |
 | `specDir` | Where the documents live (`private`: `.xherd/spec/` in the worktree, out of git) |
 | `private` | Files of the spec folder that are xherd's working files, not documents |
-| `install.<runtime>` | Per runtime: `prefix` (how a command is called: `/xherd:` for Claude Code, `/xherd/` for opencode, `$xherd-` for Codex), `commands` (`from` glob, `to` destination with `{name}`, `format` `command` or `skill`), `args` (how the runtime passes arguments), `slashEnters` (Enters needed to run a command from the completion list). A job can use a runtime only if the pack has an entry for it |
+| `install.<runtime>` | Per runtime: `prefix` (how a command is called: `/xherd:` for Claude Code, `/xherd/` for opencode, `$xherd-` for Codex, `/xherd-` for Pi), `commands` (`from` glob, `to` destination with `{name}`, `format` `command` or `skill`), `args` (how the runtime passes arguments), `slashEnters` (Enters needed to run a command from the completion list). A job can use a runtime only if the pack has an entry for it |
 | `commands` | Named commands xherd sends itself: `resume`, `handoff`, `status`, `prReview`, `conflicts` (sent by *Resolve conflicts*; `{base}` is the PR's base branch as `origin/<base>`; without it the action is refused), `ask` (sent by *Ask* with the user's text as `{prompt}`; without it the bare text is sent) |
 | `flows` | Flows by name; each has `start` (the first command, with `{key}` and `{prompt}`) and `stages` |
 

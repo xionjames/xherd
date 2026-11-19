@@ -1,6 +1,6 @@
 # Docker
 
-Docker is the recommended way to run xherd. The daemon, the web UI, tmux, `git`, `gh`, `glab` and the toolchain managers all live in one container. The agent runtimes (Claude Code, opencode, Codex) are not in the image: the daemon installs each enabled one into the `xherd-home` volume (see [Runtime installs](#runtime-installs)). Only your workspace folder is shared with the host, so jobs cannot reach the rest of your files.
+Docker is the recommended way to run xherd. The daemon, the web UI, tmux, `git`, `gh`, `glab` and the toolchain managers all live in one container. The agent runtimes (Claude Code, opencode, Codex, Pi) are not in the image: the daemon installs each enabled one into the `xherd-home` volume (see [Runtime installs](#runtime-installs)). Only your workspace folder is shared with the host, so jobs cannot reach the rest of your files.
 
 ## Topology
 
@@ -15,7 +15,7 @@ flowchart LR
         Port[":4740"] --> D["daemon<br/>(user xherd-daemon)"]
         D <-->|unix socket| R["runner<br/>(host-mapped user)"]
         R --> TM[tmux server]
-        TM --> AG[job sessions<br/>Claude Code, opencode or Codex]
+        TM --> AG[job sessions<br/>Claude Code, opencode, Codex or Pi]
         WS2[("~/xherd (same path)")]
         H[(xherd-home volume<br/>logins, toolchains, caches)]
         DD[(xherd-data volume<br/>config, secrets, database)]
@@ -43,7 +43,7 @@ Repositories outside the workspace are refused, with a message telling you to cl
 
 `xherd init` (the entrypoint, the only root process) creates two unprivileged users and starts everything under `tini`:
 
-- **Jobs' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files jobs write are yours. Runs Claude Code, opencode or Codex, git, plugin commands and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
+- **Jobs' user**: the same ids as your host user (`XHERD_UID`/`XHERD_GID`), so files jobs write are yours. Runs Claude Code, opencode, Codex or Pi, git, plugin commands and your toolchains. A small `xherd runner` process, running as this user, also keeps the tmux server.
 - **Daemon's user** (`xherd-daemon`): runs the daemon with a system-only `PATH`. It owns the configuration, secrets and database in a volume the jobs cannot read, and asks the runner to do anything that must happen as the agents' user (git commands, `verify:` commands, plugin commands and checks).
 
 A job therefore cannot read your tokens or edit the daemon's configuration. Other consequences:
@@ -57,7 +57,7 @@ Native installs have a single user; `xherd security check` says so.
 
 ## Runtime installs
 
-The image has no Node and none of the agent CLIs, so it stays small and a new Claude Code, opencode or Codex does not need a new image. Each runtime plugin pins a version and a sha256 per architecture (amd64, arm64) for its vendor's standalone binary. When the daemon starts, for every enabled runtime it probes the CLI as the agents' user and, when it is missing or older than the pin, downloads, verifies and installs it into the agents' home in `xherd-home` (one install per tool at a time, 15 minutes at most, no retry loop). Switching a runtime on in Settings → Plugins installs it the same way. The first start therefore needs network access and takes a minute or two; later starts find the binaries in the volume. Natively nothing is installed: you bring the CLI.
+The image has no Node and none of the agent CLIs, so it stays small and a new Claude Code, opencode, Codex or Pi does not need a new image. Each runtime plugin pins a version and a sha256 per architecture (amd64, arm64) for its vendor's standalone binary. When the daemon starts, for every enabled runtime it probes the CLI as the agents' user and, when it is missing or older than the pin, downloads, verifies and installs it into the agents' home in `xherd-home` (one install per tool at a time, 15 minutes at most, no retry loop). Switching a runtime on in Settings → Plugins installs it the same way. The first start therefore needs network access and takes a minute or two; later starts find the binaries in the volume. Natively nothing is installed: you bring the CLI.
 
 While an install runs, the runtime's plugin card says *Installing…* and its Setup check shows *Installing…* with no fix button; a failed install leaves the last lines of its output in the check, with the usual *Session* button to run the install again in a terminal. A job that needs a runtime whose CLI is missing is refused with `runtime_missing` and a message saying where to install it. Updating a pin ships with xherd: after an upgrade the daemon reinstalls a runtime that is older than the new pin.
 
