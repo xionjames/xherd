@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { needsExpand, needsYou, waitsAtGate } from './format';
-import type { Job } from './types';
+import { agentRunning, needsExpand, needsYou, waitsAtGate } from './format';
+import type { Job, Status } from './types';
 
 const a = (over: Partial<Job>): Job => ({ id: 'x', name: 'x', branch: 'x', status: 'running', createdAt: 0, statusSince: 0, lastActivity: 0, ...over });
 const docs = { kind: 'docs', stage: 'design', role: 'design', files: [{ path: 'design.md' }] } as unknown as Job['gate'];
@@ -29,6 +29,17 @@ describe('waitsAtGate and needsYou (R4)', () => {
     expect(needsYou(a({}))).toBe(false);
     expect(needsYou(a({ status: 'blocked', gate: docs, autoApprovePending: true }))).toBe(true);
     expect(needsYou(a({ status: 'waiting-input' }))).toBe(true);
+  });
+});
+
+describe('agentRunning', () => {
+  it('is true only while running', () => {
+    expect(agentRunning('running')).toBe(true);
+    const others: Status[] = [
+      'queued', 'waiting-input', 'blocked', 'idle', 'parked',
+      'paused', 'watching', 'done', 'cancelled', 'error',
+    ];
+    for (const s of others) expect(agentRunning(s)).toBe(false);
   });
 });
 

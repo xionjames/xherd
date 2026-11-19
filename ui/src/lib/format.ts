@@ -36,6 +36,11 @@ export function hollow(s: Status): boolean {
   return ['queued', 'paused', 'watching', 'parked', 'cancelled'].includes(s);
 }
 
+/** The agent is working now: same rule as the green dot of `StatusPill`. */
+export function agentRunning(s: Status): boolean {
+  return s === 'running';
+}
+
 /**
  * An open gate for the user: not one autonomy will approve at the next stop (R4),
  * and only once the agent has stopped there. While the job is `running` the daemon
