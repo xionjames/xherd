@@ -27,6 +27,58 @@ pub struct Installed {
     pub action: InstallAction,
 }
 
+/// What a pack file is like, from its hashes (see [`classify`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileState {
+    /// Not on disk: install writes it.
+    Missing,
+    /// On disk with the pack's current text.
+    Current,
+    /// An older pack text the user never touched: install upgrades it.
+    Outdated,
+    /// The user chose to keep their own file over this pack text.
+    Declined,
+    /// Changed by the user since install: kept, the pack text goes next to it.
+    Edited,
+    /// Recorded by an earlier install, no longer in the pack.
+    Obsolete,
+}
+
+/// One file of a pack for one runtime. `text` and `new` (its sha256) are the
+/// pack's version, empty for an obsolete file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackFile {
+    pub runtime: String,
+    pub path: String,
+    pub state: FileState,
+    /// Obsolete only: the file is on disk and differs from what was recorded.
+    pub edited: bool,
+    #[serde(skip)]
+    pub text: String,
+    #[serde(skip)]
+    pub new: String,
+}
+
+/// The state of a file the pack still ships, from the sha256 of the pack text
+/// (`new`), of the file on disk (`cur`), of what the last install recorded
+/// and of the version the user declined.
+pub fn classify(
+    new: &str,
+    cur: Option<&str>,
+    recorded: Option<&str>,
+    declined: Option<&str>,
+) -> FileState {
+    match cur {
+        None => FileState::Missing,
+        Some(c) if c == new => FileState::Current,
+        Some(c) if recorded == Some(c) => FileState::Outdated,
+        Some(_) if declined == Some(new) => FileState::Declined,
+        Some(_) => FileState::Edited,
+    }
+}
+
 fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
     ActionError {
         code,
@@ -43,6 +95,71 @@ async fn write(path: &Path, text: &str) -> Result<(), ActionError> {
 }
 
 impl Daemon {
+    /// Every file of the built-in pack for `runtime`, classified, then the
+    /// obsolete ones (recorded, no longer in the pack), by path.
+    pub async fn pack_files(
+        &self,
+        runtime: &str,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Vec<PackFile>, ActionError> {
+        let name = xherd_flow::BUILTIN;
+        let p = self
+            .packs
+            .get(name)
+            .ok_or_else(|| refuse("unknown_pack", format!("no pack {name}")))?;
+        let plan = p
+            .plan_install(runtime, xherd_flow::install::BUILTIN_FILES, env)
+            .map_err(|e| refuse("install", e))?;
+        let records = self
+            .store
+            .installs(runtime, name)
+            .await
+            .map_err(|e| refuse("store", e.to_string()))?;
+        let disk = |path: std::path::PathBuf| async move {
+            xherd_core::runner::read_file(&path)
+                .await
+                .ok()
+                .flatten()
+                .map(|b| content_sha256(&b))
+        };
+        let mut out = Vec::new();
+        for f in plan {
+            let path = f.path.to_string_lossy().into_owned();
+            let new = content_sha256(f.text.as_bytes());
+            let cur = disk(f.path).await;
+            let rec = records.iter().find(|r| r.path == path);
+            let state = classify(
+                &new,
+                cur.as_deref(),
+                rec.map(|r| r.sha256.as_str()),
+                rec.and_then(|r| r.declined.as_deref()),
+            );
+            out.push(PackFile {
+                runtime: runtime.into(),
+                path,
+                state,
+                edited: false,
+                text: f.text,
+                new,
+            });
+        }
+        for r in records {
+            if out.iter().any(|f| f.path == r.path) {
+                continue;
+            }
+            let cur = disk(r.path.clone().into()).await;
+            out.push(PackFile {
+                runtime: runtime.into(),
+                edited: cur.is_some_and(|c| c != r.sha256),
+                path: r.path,
+                state: FileState::Obsolete,
+                text: String::new(),
+                new: String::new(),
+            });
+        }
+        Ok(out)
+    }
+
     /// Install `pack` (default xherd) for `runtime` (default: every runtime
     /// the pack supports). `env` resolves `${VAR}` and `HOME` in destinations.
     pub async fn install(
@@ -116,5 +233,27 @@ impl Daemon {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_every_row_of_the_table() {
+        use FileState::*;
+        // (new, cur, recorded, declined)
+        assert_eq!(classify("n", None, Some("n"), None), Missing);
+        assert_eq!(classify("n", Some("n"), None, None), Current);
+        assert_eq!(classify("n", Some("n"), Some("o"), Some("x")), Current);
+        assert_eq!(classify("n", Some("o"), Some("o"), None), Outdated);
+        assert_eq!(classify("n", Some("o"), Some("o"), Some("n")), Outdated);
+        assert_eq!(classify("n", Some("m"), Some("o"), Some("n")), Declined);
+        assert_eq!(classify("n", Some("m"), Some("o"), None), Edited);
+        // A different pack text than the declined one asks again.
+        assert_eq!(classify("n2", Some("m"), Some("o"), Some("n")), Edited);
+        // Never recorded, but present and different: the user's own file.
+        assert_eq!(classify("n", Some("m"), None, None), Edited);
     }
 }
