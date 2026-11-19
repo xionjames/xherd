@@ -100,6 +100,8 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/repos/resolve", post(resolve_repo))
         .route("/api/v1/tickets/resolve", post(resolve_ticket))
         .route("/api/v1/install", post(install))
+        .route("/api/v1/install/review", get(install_review))
+        .route("/api/v1/install/resolve", post(install_resolve))
         .route("/api/v1/config", get(get_config).put(put_config))
         .route("/api/v1/checks", get(checks))
         .route("/api/v1/security", get(security))
@@ -589,6 +591,9 @@ struct InstallReq {
     runtime: Option<String>,
     #[serde(default)]
     pack: Option<String>,
+    /// Delete the files the pack no longer ships (R7).
+    #[serde(default)]
+    remove_obsolete: bool,
 }
 
 /// `xherd install`: the pack's commands for the runtimes, written where the
@@ -600,9 +605,38 @@ async fn install(
 ) -> ApiResult<Json<Value>> {
     let env = xherd_core::runner::agent_env;
     let installed = d
-        .install(req.runtime.as_deref(), req.pack.as_deref(), &env, false)
+        .install(
+            req.runtime.as_deref(),
+            req.pack.as_deref(),
+            &env,
+            req.remove_obsolete,
+        )
         .await?;
     Ok(Json(json!({"installed": installed})))
+}
+
+/// The pack files waiting for a decision: edited and obsolete (R5).
+async fn install_review(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
+    let env = xherd_core::runner::agent_env;
+    Ok(Json(json!({"files": d.pack_review(&env).await?})))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PackResolveReq {
+    choices: Vec<xherd_daemon::install::PackChoice>,
+}
+
+/// Apply the user's choices for the review's files (R6); a choice that does
+/// not fit the review is refused (`not_pending`) and nothing changes.
+async fn install_resolve(
+    _: User,
+    State(d): State<Daemon>,
+    Json(req): Json<PackResolveReq>,
+) -> ApiResult<Json<Value>> {
+    let env = xherd_core::runner::agent_env;
+    d.resolve_pack_files(&req.choices, &env).await?;
+    Ok(Json(json!({"checks": d.checks(&env).await})))
 }
 
 async fn get_config(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
