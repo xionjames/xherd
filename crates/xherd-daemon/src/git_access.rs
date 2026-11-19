@@ -753,13 +753,22 @@ impl Daemon {
     /// terminal (`/ws/setup/plugin-login`), container only: a native run
     /// never installs on the host (R-653).
     pub async fn start_plugin_install(&self, plugin: &str, tool: &str) -> Result<(), ActionError> {
+        if matches!(
+            self.install_state(plugin, tool),
+            Some(crate::runtime_install::InstallState::Running { .. })
+        ) {
+            return Err(fail(
+                "install_running",
+                format!("{tool} is already being installed"),
+            ));
+        }
         if !self.sandbox {
             return Err(fail(
                 "not_fixable",
                 "xherd runs natively and does not install tools on this computer; follow the instructions shown",
             ));
         }
-        let argv = self
+        let req = self
             .plugins
             .get(plugin)
             .ok_or_else(|| fail("no_plugin", format!("no plugin named {plugin}")))?
@@ -767,8 +776,15 @@ impl Daemon {
             .requires
             .iter()
             .find(|r| r.name == tool)
-            .and_then(|r| r.install.clone())
+            .filter(|r| r.install.is_some())
+            .cloned()
             .ok_or_else(|| fail("not_fixable", format!("{plugin} has no install for {tool}")))?;
+        self.installs
+            .lock()
+            .unwrap()
+            .remove(&format!("{plugin}:{tool}"));
+        let env = req.install_env(std::env::consts::ARCH);
+        let argv = req.install.clone().unwrap_or_default();
         let tmux = xherd_term::Tmux::new(self.config.tmux_server());
         if tmux.has_session(PLUGIN_LOGIN_SESSION).await {
             let _ = tmux.kill_session(PLUGIN_LOGIN_SESSION).await;
@@ -779,7 +795,7 @@ impl Daemon {
         let script = "\"$@\" || { echo; echo 'Install failed. Press Enter to close.'; read _; }";
         let mut wrapped = vec!["sh".to_string(), "-c".into(), script.into(), "_".into()];
         wrapped.extend(argv);
-        tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &[], &wrapped)
+        tmux.new_session(PLUGIN_LOGIN_SESSION, &home, &env, &wrapped)
             .await
             .map_err(|e| fail("driver", e.to_string()))
     }

@@ -34,6 +34,17 @@ pub struct Tmux {
     socket: Option<String>,
 }
 
+/// The window of a [`Tmux::start_held`] session that runs the command.
+const HELD_WINDOW: &str = "run";
+
+/// Pane state of a held session: `exit` is the exit code once `dead`
+/// (`None` when it was killed by a signal).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneStatus {
+    pub dead: bool,
+    pub exit: Option<i32>,
+}
+
 /// Exact session target (`=name`), so `SC-1` never matches `SC-10`.
 fn session(name: &str) -> String {
     format!("={name}")
@@ -202,6 +213,126 @@ impl Tmux {
         let mut args = vec!["respawn-window", "-k", "-t", &t, "-c", &c];
         args.extend(argv.iter().map(String::as_str));
         self.run(&args).await.map(drop)
+    }
+
+    /// Start a detached one-window session that keeps its pane when `argv`
+    /// exits (`remain-on-exit`), with `history` lines of scrollback (R9, R13).
+    /// A placeholder window holds the session while the options are set, so
+    /// even a command that exits at once leaves its pane and exit status.
+    pub async fn start_held(
+        &self,
+        name: &str,
+        cwd: &Path,
+        env: &[(String, String)],
+        argv: &[String],
+        history: u32,
+    ) -> Result<()> {
+        let c = cwd.to_string_lossy().into_owned();
+        let target = session(name);
+        let run_win = window(name, Some(HELD_WINDOW));
+        let hold_win = window(name, Some("hold"));
+        let mut args: Vec<String> = ["new-session", "-d", "-s", name, "-n", "hold", "-c", &c]
+            .map(String::from)
+            .into();
+        args.extend(["-x".into(), "200".into(), "-y".into(), "50".into()]);
+        for (k, v) in env {
+            args.extend(["-e".into(), format!("{k}={v}")]);
+        }
+        args.extend(["sleep".into(), "60".into()]);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.run(&refs).await?;
+        let started = async {
+            self.run(&[
+                "set-option",
+                "-t",
+                &hold_win,
+                "history-limit",
+                &history.to_string(),
+            ])
+            .await?;
+            self.run(&[
+                "new-window",
+                "-d",
+                "-t",
+                &target,
+                "-n",
+                HELD_WINDOW,
+                "-c",
+                &c,
+                "sleep",
+                "60",
+            ])
+            .await?;
+            self.run(&["set-option", "-w", "-t", &run_win, "remain-on-exit", "on"])
+                .await?;
+            self.run(&["kill-window", "-t", &hold_win]).await?;
+            let mut respawn = vec!["respawn-pane", "-k", "-t", &run_win, "-c", &c];
+            respawn.extend(argv.iter().map(String::as_str));
+            self.run(&respawn).await
+        }
+        .await;
+        if started.is_err() {
+            let _ = self.kill_session(name).await;
+        }
+        started.map(drop)
+    }
+
+    /// State of the pane of a [`Tmux::start_held`] session; `None` when the
+    /// session does not exist.
+    pub async fn pane_status(&self, name: &str) -> Result<Option<PaneStatus>> {
+        match self
+            .run(&[
+                "list-panes",
+                "-t",
+                &window(name, Some(HELD_WINDOW)),
+                "-F",
+                "#{pane_dead} #{pane_dead_status}",
+            ])
+            .await
+        {
+            Ok(out) => {
+                let mut f = out.split_whitespace();
+                let dead = f.next() == Some("1");
+                Ok(Some(PaneStatus {
+                    dead,
+                    exit: f.next().and_then(|s| s.parse().ok()).filter(|_| dead),
+                }))
+            }
+            Err(TermError::Failed { stderr, .. })
+                if stderr.contains("can't find")
+                    || stderr.contains("no server running")
+                    || stderr.contains("error connecting") =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The whole scrollback of a [`Tmux::start_held`] session's pane, cut to
+    /// its last `max_bytes` bytes (R13).
+    pub async fn history(&self, name: &str, max_bytes: usize) -> Result<String> {
+        let out = self
+            .run(&[
+                "capture-pane",
+                "-p",
+                "-J",
+                "-t",
+                &window(name, Some(HELD_WINDOW)),
+                "-S",
+                "-",
+                "-E",
+                "-",
+            ])
+            .await?;
+        if out.len() <= max_bytes {
+            return Ok(out);
+        }
+        let mut from = out.len() - max_bytes;
+        while !out.is_char_boundary(from) {
+            from += 1;
+        }
+        Ok(out[from..].to_string())
     }
 
     pub async fn set_environment(&self, name: &str, key: &str, value: &str) -> Result<()> {

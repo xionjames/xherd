@@ -59,6 +59,8 @@ pub enum Change {
     },
     /// A saved agent was created, changed, archived or deleted; the UI refetches `/agents`.
     Agents,
+    /// An automatic runtime install started or ended; the UI reloads `/checks`.
+    Checks,
 }
 
 pub type Hub = broadcast::Sender<Change>;

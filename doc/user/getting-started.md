@@ -9,7 +9,7 @@ To build xherd yourself (an unreleased branch, or to change it), see [Running fr
 | | Docker (recommended) | Native (Linux) |
 |---|---|---|
 | What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code (or opencode, or Codex) and `gh` / `glab` |
-| Coding-agent CLI and tools | In the image (Claude Code, `git`, `gh`, `glab`, toolchain managers) | Yours, on `PATH` |
+| Coding-agent CLI and tools | Installed by xherd into its volume at first start (Claude Code, opencode, Codex); the image has `git`, `gh`, `glab`, toolchain managers | Yours, on `PATH` |
 | Isolation | Jobs see only the workspace folder | None: jobs run as you |
 | Platforms | macOS and Linux (amd64, arm64) | macOS and Linux (arm64, x86_64) |
 
@@ -22,7 +22,7 @@ xherd is a single-user tool: one person, one daemon, one workspace folder.
 Coding agents run commands on your machine, install toolchains and write files. In a container that has limits:
 
 - **Containment.** Jobs see only the workspace folder you share, not your home directory, keys or other projects. A confused or misled job has a small blast radius.
-- **Nothing to install.** `git`, `tmux`, `gh`, `glab`, Claude Code and the Java/Node/Go/Rust/Python toolchain managers come in the image, at tested versions. Setup is the same on every machine.
+- **Nothing to install.** `git`, `tmux`, `gh`, `glab` and the Java/Node/Go/Rust/Python toolchain managers come in the image, and the first start downloads the coding-agent CLIs (Claude Code, opencode, Codex) at tested, checksum-verified versions, so give it a minute and network access. Setup is the same on every machine.
 - **Safe to throw away.** Updating is pulling a new image; a broken toolchain is a rebuilt container, not a repaired laptop.
 - **Your IDE still works.** The workspace is mounted at the same path inside and outside, so worktrees open directly in your editor.
 

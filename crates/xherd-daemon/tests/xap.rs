@@ -4646,3 +4646,563 @@ async fn the_profiles_ceiling_still_lowers_the_arriving_agents_autonomy() {
     assert_eq!(a.lowered[0].field, "autonomy");
     assert_eq!(a.lowered[0].to, "ask");
 }
+
+// ---- job actions (R1–R7, R17) ----------------------------------------------
+
+fn add_args(id: &str, run: &str) -> Value {
+    json!({"id": id, "label": "Dev server", "run": run, "kind": "service"})
+}
+
+#[tokio::test]
+async fn action_add_replace_ls_rm_and_events() {
+    let t = setup().await;
+    let r = xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], true);
+    // The same call again changes nothing; the approval is kept only while
+    // run and cwd stay (R2).
+    let r = xap(&t, "a2", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    let r = xap(&t, "a3", "action.add", add_args("dev", "npm start"))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], true);
+    let j = get(&t).await;
+    assert_eq!(j.actions.len(), 1);
+    assert_eq!(j.actions[0].def.run, "npm start");
+    let r = xap(&t, "a4", "action.ls", json!({})).await.unwrap();
+    let text = r["text"].as_str().unwrap();
+    assert!(
+        text.contains("dev [service] Dev server | run: npm start"),
+        "{text}"
+    );
+    xap(&t, "a5", "action.rm", json!({"id": "dev"}))
+        .await
+        .unwrap();
+    assert!(get(&t).await.actions.is_empty());
+    let e = xap(&t, "a6", "action.rm", json!({"id": "dev"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    let kinds: Vec<String> =
+        t.d.store
+            .events(&t.a.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+    assert_eq!(kinds.iter().filter(|k| *k == "xap.action.add").count(), 2);
+    assert!(kinds.contains(&"xap.action.rm".to_string()));
+}
+
+#[tokio::test]
+async fn action_calls_check_their_arguments_and_the_folder() {
+    let t = setup().await;
+    for (args, code) in [
+        (add_args("Bad Id", "x"), "usage"),
+        (add_args("a", ""), "usage"),
+        (add_args("a", "one\ntwo"), "usage"),
+        (
+            json!({"id": "a", "label": "A", "run": "x", "cwd": "../x"}),
+            "path_outside_workspace",
+        ),
+        (
+            json!({"id": "a", "label": "A", "run": "x", "cwd": "/etc"}),
+            "path_outside_workspace",
+        ),
+    ] {
+        let e = xap(&t, "c", "action.add", args).await.unwrap_err();
+        assert_eq!(e.code, code);
+    }
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), t.wt.path().join("link")).unwrap();
+    let e = xap(
+        &t,
+        "c2",
+        "action.add",
+        json!({"id": "a", "label": "A", "run": "x", "cwd": "link/sub"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, "path_outside_workspace");
+    std::fs::create_dir_all(t.wt.path().join("web")).unwrap();
+    xap(
+        &t,
+        "c3",
+        "action.add",
+        json!({"id": "a", "label": "A", "run": "x", "cwd": "./web/"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(get(&t).await.actions[0].def.cwd, "web");
+}
+
+#[tokio::test]
+async fn action_limit_off_switch_and_no_worktree() {
+    let t = setup_config(json!({"maxActionsPerJob": 1})).await;
+    xap(&t, "c1", "action.add", add_args("a", "x"))
+        .await
+        .unwrap();
+    let e = xap(&t, "c2", "action.add", add_args("b", "x"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "action_limit");
+    // Replacing is not adding.
+    xap(&t, "c3", "action.add", add_args("a", "y"))
+        .await
+        .unwrap();
+
+    let t = setup_config(json!({"jobActions": false})).await;
+    let e = xap(&t, "c1", "action.ls", json!({})).await.unwrap_err();
+    assert_eq!(e.code, "actions_off");
+
+    // A job on flow none works, but one without a worktree is refused (R3, R7).
+    let t = setup_flow("none").await;
+    xap(&t, "c1", "action.add", add_args("a", "x"))
+        .await
+        .unwrap();
+    let mut b = Job::new("SC-2", 2);
+    b.launch = Some(vec!["rt".into()]);
+    let b = t.d.create_job(b).await.unwrap();
+    for _ in 0..200 {
+        if t.d.action("SC-2", UserAction::Get).await.unwrap().status == Status::Running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let e =
+        t.d.xap(call(&b, "n1", "action.add", add_args("a", "x")))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "no_workspace");
+}
+
+#[tokio::test]
+async fn action_ls_lists_profile_actions_and_rm_stops_a_running_one() {
+    use xherd_core::action::{ActionDef, ActionRun, ActionState, from_profile};
+    let t = setup_tweaked(json!({}), None, None, "feature", |j| {
+        let def = ActionDef {
+            id: "test".into(),
+            label: "Tests".into(),
+            run: "cargo test".into(),
+            ..Default::default()
+        };
+        let mut a = from_profile(&def);
+        a.last = Some(ActionRun {
+            started_at: 1,
+            ended_at: None,
+            state: ActionState::Running,
+            exit: None,
+        });
+        j.actions.push(a);
+    })
+    .await;
+    let r = xap(&t, "c1", "action.ls", json!({})).await.unwrap();
+    assert!(
+        r["text"]
+            .as_str()
+            .unwrap()
+            .contains("source: profile | running")
+    );
+    xap(&t, "c2", "action.rm", json!({"id": "test"}))
+        .await
+        .unwrap();
+    assert!(
+        t.drv
+            .calls()
+            .iter()
+            .any(|c| c.starts_with("stop-session ") && c.ends_with("-act-test"))
+    );
+}
+
+#[tokio::test]
+async fn action_log_is_wrapped_capped_and_read_only() {
+    let t = setup().await;
+    let e = xap(&t, "c1", "action.log", json!({"id": "dev"}))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    xap(&t, "c2", "action.add", add_args("dev", "x"))
+        .await
+        .unwrap();
+    let r = xap(&t, "c3", "action.log", json!({"id": "dev"}))
+        .await
+        .unwrap();
+    assert!(r["text"].as_str().unwrap().starts_with("dev: never run"));
+    let big = "y".repeat(200_000) + "THE END";
+    xherd_daemon::actions::write_log(&t.d.paths, &t.a.id, "dev", &big).unwrap();
+    let r = xap(&t, "c4", "action.log", json!({"id": "dev"}))
+        .await
+        .unwrap();
+    let text = r["text"].as_str().unwrap();
+    assert!(text.contains("THE END") && text.to_lowercase().contains("untrusted"));
+    assert!(text.len() < 70_000, "{}", text.len());
+    // Reading does not log an event nor change the job.
+    assert_eq!(r["changed"], false);
+}
+
+fn run_action(id: &str, approve: bool) -> UserAction {
+    UserAction::ActionRun {
+        id: id.into(),
+        approve,
+        port_base: None,
+    }
+}
+
+fn session_of(t: &T, id: &str) -> String {
+    xherd_core::action::session_name(&t.a.name, id)
+}
+
+/// Make the fake pane of an action's session end with `exit` and `text`.
+fn end_pane(t: &T, id: &str, exit: i32, text: &str) {
+    let s = session_of(t, id);
+    t.drv.held.lock().unwrap().insert(
+        s,
+        (
+            xherd_term::PaneStatus {
+                dead: true,
+                exit: Some(exit),
+            },
+            text.to_string(),
+        ),
+    );
+}
+
+async fn wait_action(t: &T, id: &str, state: xherd_core::action::ActionState) -> Job {
+    for _ in 0..1000 {
+        t.d.sup.tick(TickKind::ScreenScan);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let j = get(t).await;
+        if j.actions
+            .iter()
+            .any(|a| a.def.id == id && a.last.as_ref().is_some_and(|r| r.state == state))
+        {
+            return j;
+        }
+    }
+    panic!(
+        "action {id} never reached {state:?}: {:?}",
+        get(t).await.actions
+    );
+}
+
+#[tokio::test]
+async fn action_run_needs_approval_then_runs_without_the_token() {
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    let e = act(&t, run_action("dev", false)).await.unwrap_err();
+    assert_eq!(e.code, "action_not_approved");
+    assert!(!t.drv.calls().iter().any(|c| c.starts_with("start-action")));
+
+    let j = act(&t, run_action("dev", true)).await.unwrap();
+    let a = &j.actions[0];
+    assert!(a.approved.is_some());
+    assert_eq!(
+        a.last.as_ref().unwrap().state,
+        xherd_core::action::ActionState::Running
+    );
+    let call = t
+        .drv
+        .calls()
+        .into_iter()
+        .find(|c| c.starts_with("start-action"))
+        .unwrap();
+    assert!(call.contains(&session_of(&t, "dev")), "{call}");
+    assert!(call.ends_with("sh -lc npm run dev"), "{call}");
+    let kinds: Vec<String> =
+        t.d.store
+            .events(&t.a.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+    assert!(kinds.contains(&"action-approved".to_string()), "{kinds:?}");
+    assert!(kinds.contains(&"action-run".to_string()), "{kinds:?}");
+
+    // At most one instance (R11).
+    let e = act(&t, run_action("dev", true)).await.unwrap_err();
+    assert_eq!(e.code, "action_running");
+}
+
+#[tokio::test]
+async fn action_exit_is_recorded_with_its_log_and_runs_again_unasked() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "make"))
+        .await
+        .unwrap();
+    act(&t, run_action("dev", true)).await.unwrap();
+    end_pane(&t, "dev", 3, "building…\nfailed\n");
+    let j = wait_action(&t, "dev", ActionState::Exited).await;
+    let r = j.actions[0].last.as_ref().unwrap();
+    assert_eq!(r.exit, Some(3));
+    assert!(r.ended_at.is_some());
+    assert!(!j.actions[0].succeeded);
+    let log = xherd_daemon::actions::read_log(&t.d.paths, &t.a.id, "dev", 1000).unwrap();
+    assert_eq!(log, "building…\nfailed\n");
+    // The dead session was freed.
+    let s = session_of(&t, "dev");
+    assert!(
+        t.drv
+            .calls()
+            .iter()
+            .any(|c| *c == format!("stop-session {s}"))
+    );
+    let events = t.d.store.events(&t.a.id, 50).await.unwrap();
+    let ex = events.iter().find(|e| e.kind == "action-exited").unwrap();
+    assert_eq!(ex.payload.as_ref().unwrap()["code"], 3);
+
+    // The same command runs again with no new approval (R14).
+    act(&t, run_action("dev", false)).await.unwrap();
+    // A changed command asks again (after it ended).
+    end_pane(&t, "dev", 0, "ok");
+    wait_action(&t, "dev", ActionState::Exited).await;
+    xap(&t, "a2", "action.add", add_args("dev", "make all"))
+        .await
+        .unwrap();
+    let e = act(&t, run_action("dev", false)).await.unwrap_err();
+    assert_eq!(e.code, "action_not_approved");
+}
+
+#[tokio::test]
+async fn action_task_exit_zero_succeeds_and_autonomy_never_approves() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    act(
+        &t,
+        UserAction::SetAutonomy {
+            level: xherd_core::autonomy::Autonomy::Important,
+        },
+    )
+    .await
+    .unwrap();
+    let mut args = add_args("t", "true");
+    args["kind"] = json!("task");
+    xap(&t, "a1", "action.add", args).await.unwrap();
+    let e = act(&t, run_action("t", false)).await.unwrap_err();
+    assert_eq!(e.code, "action_not_approved");
+    act(&t, run_action("t", true)).await.unwrap();
+    end_pane(&t, "t", 0, "");
+    let j = wait_action(&t, "t", ActionState::Exited).await;
+    assert!(j.actions[0].succeeded);
+}
+
+#[tokio::test]
+async fn action_run_refusals() {
+    let t = setup().await;
+    let e = act(&t, run_action("nope", true)).await.unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    let mut args = add_args("dev", "x");
+    args["cwd"] = json!("missing");
+    xap(&t, "a1", "action.add", args).await.unwrap();
+    let e = act(&t, run_action("dev", true)).await.unwrap_err();
+    assert_eq!(e.code, "cwd_missing");
+    assert!(!t.drv.calls().iter().any(|c| c.starts_with("start-action")));
+}
+
+fn stop_action(id: &str) -> UserAction {
+    UserAction::ActionStop { id: id.into() }
+}
+
+#[tokio::test]
+async fn action_stop_interrupts_keeps_the_output_and_frees_the_session() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    let e = act(&t, stop_action("dev")).await.unwrap_err();
+    assert_eq!(e.code, "action_unknown");
+    xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    let e = act(&t, stop_action("dev")).await.unwrap_err();
+    assert_eq!(e.code, "action_not_running");
+    act(&t, run_action("dev", true)).await.unwrap();
+    let s = session_of(&t, "dev");
+    t.drv.held.lock().unwrap().get_mut(&s).unwrap().1 = "listening\n".into();
+
+    act(&t, stop_action("dev")).await.unwrap();
+    let j = wait_action(&t, "dev", ActionState::Stopped).await;
+    assert_eq!(j.actions[0].last.as_ref().unwrap().exit, Some(130));
+    let log = xherd_daemon::actions::read_log(&t.d.paths, &t.a.id, "dev", 1000).unwrap();
+    assert_eq!(log, "listening\n");
+    let calls = t.drv.calls();
+    assert!(
+        calls.contains(&format!("interrupt-session {s}")),
+        "{calls:?}"
+    );
+    assert!(calls.contains(&format!("stop-session {s}")), "{calls:?}");
+    let kinds: Vec<String> =
+        t.d.store
+            .events(&t.a.id, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.kind)
+            .collect();
+    assert!(kinds.contains(&"action-stop".to_string()), "{kinds:?}");
+    assert!(kinds.contains(&"action-exited".to_string()), "{kinds:?}");
+    // Stopped, so it can run again without a new approval.
+    act(&t, run_action("dev", false)).await.unwrap();
+}
+
+#[tokio::test]
+async fn action_stop_kills_what_ignores_ctrl_c_after_the_grace_period() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "sleep 999"))
+        .await
+        .unwrap();
+    act(&t, run_action("dev", true)).await.unwrap();
+    t.drv
+        .stubborn
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    act(&t, stop_action("dev")).await.unwrap();
+    // A second Stop while one is under way changes nothing.
+    act(&t, stop_action("dev")).await.unwrap();
+    let e = act(
+        &t,
+        UserAction::ActionRestart {
+            id: "dev".into(),
+            approve: false,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, "action_stopping");
+    let started = std::time::Instant::now();
+    let j = wait_action(&t, "dev", ActionState::Stopped).await;
+    assert!(started.elapsed() >= Duration::from_secs(4));
+    assert_eq!(j.actions[0].last.as_ref().unwrap().exit, None);
+    let s = session_of(&t, "dev");
+    let calls = t.drv.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| **c == format!("interrupt-session {s}"))
+            .count(),
+        1
+    );
+    assert!(calls.contains(&format!("stop-session {s}")), "{calls:?}");
+}
+
+#[tokio::test]
+async fn action_restart_stops_then_runs_again() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    act(&t, run_action("dev", true)).await.unwrap();
+    act(
+        &t,
+        UserAction::ActionRestart {
+            id: "dev".into(),
+            approve: false,
+        },
+    )
+    .await
+    .unwrap();
+    for _ in 0..400 {
+        let starts = t
+            .drv
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("start-action"))
+            .count();
+        if starts == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let j = get(&t).await;
+    let r = j.actions[0].last.as_ref().unwrap();
+    assert_eq!(r.state, ActionState::Running);
+    let calls = t.drv.calls();
+    let s = session_of(&t, "dev");
+    let stop = calls
+        .iter()
+        .position(|c| *c == format!("stop-session {s}"))
+        .unwrap();
+    let second = calls
+        .iter()
+        .rposition(|c| c.starts_with("start-action"))
+        .unwrap();
+    assert!(stop < second, "{calls:?}");
+}
+
+#[tokio::test]
+async fn a_cancelled_or_paused_job_stops_its_running_actions() {
+    use xherd_core::action::ActionState;
+    for cancel in [true, false] {
+        let t = setup().await;
+        xap(&t, "a1", "action.add", add_args("dev", "npm run dev"))
+            .await
+            .unwrap();
+        act(&t, run_action("dev", true)).await.unwrap();
+        if cancel {
+            act(
+                &t,
+                UserAction::Cancel {
+                    remove_worktree: false,
+                },
+            )
+            .await
+            .unwrap();
+        } else {
+            act(&t, UserAction::PauseNow).await.unwrap();
+        }
+        let j = wait_action(&t, "dev", ActionState::Stopped).await;
+        assert!(!xherd_core::action::running(&j), "cancel={cancel}");
+        let s = session_of(&t, "dev");
+        assert!(
+            t.drv.calls().contains(&format!("interrupt-session {s}")),
+            "cancel={cancel}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reconcile_at_start_loses_and_adopts_action_sessions_and_kills_unknown_ones() {
+    use xherd_core::action::ActionState;
+    let t = setup().await;
+    for id in ["gone", "ended", "alive"] {
+        xap(&t, id, "action.add", add_args(id, "x")).await.unwrap();
+        act(&t, run_action(id, true)).await.unwrap();
+    }
+    // The terminal server restarted: one session is missing, one pane ended
+    // while xherd was down, one still runs. An unknown action session lingers.
+    t.drv.held.lock().unwrap().remove(&session_of(&t, "gone"));
+    end_pane(&t, "ended", 3, "bye");
+    let ghost = xherd_core::action::session_name(&t.a.name, "ghost");
+    t.drv.alive.lock().unwrap().insert(ghost.clone());
+
+    let before = t.drv.calls().len();
+    t.d.reconcile_with(true).await;
+    wait_action(&t, "gone", ActionState::Lost).await;
+    let j = wait_action(&t, "ended", ActionState::Exited).await;
+    let st = |id: &str| {
+        j.actions
+            .iter()
+            .find(|a| a.def.id == id)
+            .unwrap()
+            .last
+            .clone()
+    };
+    assert_eq!(st("ended").unwrap().exit, Some(3));
+    assert_eq!(st("alive").unwrap().state, ActionState::Running);
+    let calls = t.drv.calls().split_off(before);
+    assert!(
+        calls.contains(&format!("stop-session {ghost}")),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&format!("stop-session {}", session_of(&t, "alive"))),
+        "{calls:?}"
+    );
+}

@@ -139,6 +139,11 @@ pub struct Config {
     /// Offer to save a job's setup as an agent (R30); "Don't suggest" turns
     /// it off. Live.
     pub suggest_agents: bool,
+    /// Agents may register job actions (`xherd action add`, R30); off refuses
+    /// `action.add` with `actions_off`. Live.
+    pub job_actions: bool,
+    /// Most actions one job holds, profile actions included (R6, R30). Live.
+    pub max_actions_per_job: usize,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -175,6 +180,8 @@ impl Default for Config {
             muted_notifications: Vec::new(),
             desktop_notifications: false,
             suggest_agents: true,
+            job_actions: true,
+            max_actions_per_job: 12,
             max_session_minutes: 0,
             pr_poll_minutes: 5,
             max_review_loops: 3,
@@ -413,6 +420,8 @@ impl Config {
         self.muted_notifications = s.muted_notifications;
         self.desktop_notifications = s.desktop_notifications;
         self.suggest_agents = s.suggest_agents;
+        self.job_actions = s.job_actions;
+        self.max_actions_per_job = s.max_actions_per_job;
         self.git_hosts = s.git_hosts;
         self.user_token = s.user_token;
     }
@@ -655,6 +664,23 @@ mod tests {
         c.save(&f).unwrap();
         let v: Value = serde_json::from_slice(&std::fs::read(&f).unwrap()).unwrap();
         assert!(v.get("maxConcurrentAgents").is_none() && v.get("agentTokenBudget").is_none());
+    }
+
+    /// R30: defaults, camelCase keys, and both keys are live.
+    #[test]
+    fn action_keys_default_and_are_live() {
+        let c = Config::default();
+        assert!(c.job_actions);
+        assert_eq!(c.max_actions_per_job, 12);
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["jobActions"], true);
+        assert_eq!(v["maxActionsPerJob"], 12);
+        let saved: Config =
+            serde_json::from_str(r#"{"jobActions": false, "maxActionsPerJob": 3}"#).unwrap();
+        let mut running = Config::default();
+        running.apply_live_from(&saved);
+        assert!(!running.job_actions);
+        assert_eq!(running.max_actions_per_job, 3);
     }
 
     #[test]

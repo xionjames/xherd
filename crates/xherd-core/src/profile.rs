@@ -7,8 +7,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::action::ActionDef;
 use crate::autonomy::Autonomy;
 
+/// Most actions a profile holds (R18).
+pub const MAX_ACTIONS: usize = 20;
 pub const MAX_NAME: usize = 60;
 pub const MAX_MATCHES: usize = 20;
 pub const MAX_INSTRUCTIONS: usize = 4000;
@@ -72,6 +75,10 @@ pub struct Profile {
     /// Added to the agent's `instructions.md` (spec §16.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+    /// Actions copied into new jobs, each approved by the user when saved
+    /// (R18, R19).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ActionDef>,
 }
 
 /// A remote URL as `host/owner/repo`: no scheme, user, `.git` or trailing
@@ -282,6 +289,16 @@ pub fn check(p: &mut Profile, others: &[&str]) -> Result<(), String> {
     {
         return Err(format!("instructions: up to {MAX_INSTRUCTIONS} characters"));
     }
+    if p.actions.len() > MAX_ACTIONS {
+        return Err(format!("actions: up to {MAX_ACTIONS} entries"));
+    }
+    for i in 0..p.actions.len() {
+        crate::action::check_def(&mut p.actions[i])
+            .map_err(|e| format!("actions: {}", e.message))?;
+        if p.actions[..i].iter().any(|a| a.id == p.actions[i].id) {
+            return Err(format!("actions: id {:?} is used twice", p.actions[i].id));
+        }
+    }
     Ok(())
 }
 
@@ -389,6 +406,45 @@ mod tests {
         assert!(bad(|p| p.sensitive_paths = Some(vec!["/etc".into()])));
         assert!(bad(|p| p.test_command = Some("a\nb".into())));
         assert!(bad(|p| p.lint_command = Some("a\nb".into())));
+    }
+
+    #[test]
+    fn actions_are_checked_cleaned_and_round_trip() {
+        let def = |id: &str, cwd: &str| ActionDef {
+            id: id.into(),
+            label: " Dev server ".into(),
+            run: " npm run dev ".into(),
+            cwd: cwd.into(),
+            ..ActionDef::default()
+        };
+        let mut p = prof("A", &["github.com/acme/*"]);
+        p.actions = vec![def("dev", "./web//app/")];
+        assert_eq!(check(&mut p, &[]), Ok(()));
+        assert_eq!(p.actions[0].label, "Dev server");
+        assert_eq!(p.actions[0].run, "npm run dev");
+        assert_eq!(p.actions[0].cwd, "web/app");
+        let back: Profile = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back.actions, p.actions);
+        // none: the key is not written, and old profiles load
+        let none = serde_json::to_string(&prof("B", &["/w"])).unwrap();
+        assert!(!none.contains("actions"), "{none}");
+
+        let bad = |actions: Vec<ActionDef>| {
+            let mut p = prof("A", &["github.com/acme/*"]);
+            p.actions = actions;
+            check(&mut p, &[]).is_err()
+        };
+        assert!(bad(vec![def("Bad Id", "")]));
+        assert!(bad(vec![def("dev", "../x")]));
+        assert!(bad(vec![def("dev", "/abs")]));
+        assert!(bad(vec![def("dev", ""), def("dev", "web")]));
+        assert!(bad(vec![ActionDef {
+            run: "a\nb".into(),
+            ..def("dev", "")
+        }]));
+        assert!(bad((0..=MAX_ACTIONS)
+            .map(|i| def(&format!("a{i}"), ""))
+            .collect()));
     }
 
     #[test]

@@ -114,10 +114,15 @@
         "opencode",
         "--version"
       ],
+      "version": "1.19.0",
+      "sha256": {
+        "x86_64": "7bb9e61ad6feacf2e89c10a6a2c1840e3de4220bb50ba1fc7110f31806076aec",
+        "aarch64": "e9841d43d3e1a8f36ed2691592d3b8b4fb097e606c8b559a277a1b845840e26b"
+      },
       "install": [
         "sh",
         "-c",
-        "npm install -g --prefix \"$HOME/.local\" opencode-ai@1.19.0"
+        "set -eu\nd=$(mkdir -p \"$HOME/.cache\" && mktemp -d \"$HOME/.cache/xherd-install.XXXXXX\")\ntrap 'rm -rf \"$d\"' EXIT\ncase \"$XHERD_INSTALL_ARCH\" in x86_64) a=x64;; aarch64) a=arm64;; *) echo \"unsupported: $XHERD_INSTALL_ARCH\" >&2; exit 1;; esac\ncurl -fsSL --retry 3 -o \"$d/pkg\" \"https://github.com/sst/opencode/releases/download/v$XHERD_INSTALL_VERSION/opencode-linux-$a.tar.gz\"\necho \"$XHERD_INSTALL_SHA256  $d/pkg\" | sha256sum -c -\ntar -xzf \"$d/pkg\" -C \"$d\" opencode\nmkdir -p \"$HOME/.opencode/bin\" \"$HOME/.local/bin\"\ninstall -m 0755 \"$d/opencode\" \"$HOME/.opencode/bin/opencode\"\nln -sf \"$HOME/.opencode/bin/opencode\" \"$HOME/.local/bin/opencode\"\n"
       ],
       "instructions": {
         "any": "npm install -g opencode-ai   # or see https://opencode.ai/docs/"

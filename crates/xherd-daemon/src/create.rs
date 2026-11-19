@@ -309,6 +309,7 @@ impl Daemon {
         }
         let rt_name = eff.runtime.as_str();
         let rt = self.runtime_terminal(rt_name)?;
+        self.runtime_ready(rt_name).await?;
         if let Some(p) = pack
             && !p.install.contains_key(rt_name)
         {
@@ -384,6 +385,15 @@ impl Daemon {
         a.permission_mode = Some(mode);
         a.model = model;
         a.profile = profile.as_ref().map(|p| p.id.clone());
+        // R19: a snapshot of the profile's actions, approved; later edits of
+        // the profile do not change this job.
+        if let Some(p) = profile.as_ref() {
+            a.actions = p
+                .actions
+                .iter()
+                .map(xherd_core::action::from_profile)
+                .collect();
+        }
         a.workdir = Some(workdir.to_string_lossy().into_owned());
         a.repo = Some(repo.to_string_lossy().into_owned());
         a.base = Some(base);
@@ -904,6 +914,7 @@ const XAP_ALLOW: &[&str] = &[
     "xherd memory *",
     "xherd agent memory *",
     "xherd agent propose *",
+    "xherd action *",
 ];
 
 /// What the runtime allows without asking in a new worktree: reading the

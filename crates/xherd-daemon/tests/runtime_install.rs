@@ -1,0 +1,323 @@
+//! Runtime CLIs install themselves (R3, R6, R7, R9). A fake runtime whose
+//! tool is a version file in a temp folder; never the real HOME or CLIs.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::json;
+use xherd_core::paths::Paths;
+use xherd_daemon::runtime_install::InstallState;
+use xherd_daemon::*;
+
+struct T {
+    home: tempfile::TempDir,
+    ver: PathBuf,
+}
+
+impl T {
+    fn runs(&self) -> usize {
+        std::fs::read_to_string(self.home.path().join("runs"))
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    }
+    fn installed(&self) -> String {
+        std::fs::read_to_string(&self.ver)
+            .unwrap_or_default()
+            .trim()
+            .into()
+    }
+}
+
+/// `claude-code` only, requiring `fake` (version 1.2.3): its check prints the
+/// version file, its install writes the pinned version and counts its runs.
+async fn start(
+    runtime_install: bool,
+    have: Option<&str>,
+    install: &str,
+    disabled: &[&str],
+) -> (T, Daemon) {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        disabled_plugins: disabled.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    let t = T {
+        ver: home.path().join("ver"),
+        home,
+    };
+    if let Some(v) = have {
+        std::fs::write(&t.ver, v).unwrap();
+    }
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.runtime_install = runtime_install;
+    o.builtin_plugins.retain(|m| m.name == "claude-code");
+    let rt = &mut o.builtin_plugins[0];
+    let trust = t.home.path().join("claude.json");
+    std::fs::write(&trust, "{}").unwrap();
+    rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    let runs = t.home.path().join("runs");
+    rt.requires = serde_json::from_value(json!([{
+        "name": "fake",
+        "check": ["sh", "-c", "cat \"$1\"", "_", t.ver],
+        "version": "1.2.3",
+        "install": ["sh", "-c", format!("{install}; echo run >> \"$2\""), "_", t.ver, runs],
+    }]))
+    .unwrap();
+    let d = Daemon::start(paths, o).await.unwrap();
+    (t, d)
+}
+
+const WRITE: &str = r#"echo "$XHERD_INSTALL_VERSION" > "$1""#;
+
+async fn settle(d: &Daemon) {
+    for _ in 0..100 {
+        if d.install_state("claude-code", "fake").is_none() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("install still running");
+}
+
+async fn until_runs(t: &T, n: usize) {
+    for _ in 0..200 {
+        if t.runs() >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("install did not run");
+}
+
+async fn quiet() {
+    tokio::time::sleep(Duration::from_millis(700)).await;
+}
+
+#[tokio::test]
+async fn a_missing_runtime_is_installed_at_start() {
+    let (t, d) = start(true, None, WRITE, &[]).await;
+    until_runs(&t, 1).await;
+    settle(&d).await;
+    assert_eq!((t.installed().as_str(), t.runs()), ("1.2.3", 1));
+    // The check passes now.
+    let env = |_: &str| None;
+    let cs = d.checks(&env).await;
+    assert!(
+        cs.iter()
+            .any(|c| c.id == "plugin:claude-code:requires:fake" && c.ok)
+    );
+}
+
+#[tokio::test]
+async fn a_disabled_runtime_never_installs() {
+    let (t, d) = start(true, None, WRITE, &["claude-code"]).await;
+    quiet().await;
+    assert_eq!(
+        (t.runs(), d.install_state("claude-code", "fake")),
+        (0, None)
+    );
+}
+
+#[tokio::test]
+async fn an_older_version_is_replaced_and_an_equal_or_newer_one_is_not() {
+    let (t, d) = start(true, Some("1.0.0"), WRITE, &[]).await;
+    until_runs(&t, 1).await;
+    settle(&d).await;
+    assert_eq!(t.installed(), "1.2.3");
+    for have in ["1.2.3", "2.0.0", "odd output"] {
+        let (t, _d) = start(true, Some(have), WRITE, &[]).await;
+        quiet().await;
+        assert_eq!(t.runs(), 0, "{have}");
+        assert_eq!(t.installed(), have);
+    }
+}
+
+#[tokio::test]
+async fn without_runtime_install_nothing_runs() {
+    let (t, d) = start(false, None, WRITE, &[]).await;
+    quiet().await;
+    assert_eq!(
+        (t.runs(), d.install_state("claude-code", "fake")),
+        (0, None)
+    );
+}
+
+#[tokio::test]
+async fn a_failed_install_keeps_its_tail_and_is_not_retried() {
+    let (t, d) = start(true, None, "echo boom >&2; exit 1", &[]).await;
+    for _ in 0..100 {
+        if matches!(
+            d.install_state("claude-code", "fake"),
+            Some(InstallState::Failed { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let Some(InstallState::Failed { tail }) = d.install_state("claude-code", "fake") else {
+        panic!("not failed");
+    };
+    assert!(tail.contains("boom"), "{tail}");
+    quiet().await;
+    assert_eq!(t.runs(), 0);
+}
+
+#[tokio::test]
+async fn switching_a_runtime_on_installs_it() {
+    let (t, d) = start(true, None, WRITE, &["claude-code"]).await;
+    quiet().await;
+    assert_eq!(t.runs(), 0);
+    // Another plugin switched off changes nothing for the runtime.
+    d.save_config(serde_json::from_value(json!({"disabledPlugins": ["claude-code"]})).unwrap())
+        .ok();
+    assert_eq!(t.runs(), 0);
+    d.save_config(serde_json::from_value(json!({"disabledPlugins": []})).unwrap())
+        .unwrap();
+    until_runs(&t, 1).await;
+    settle(&d).await;
+    assert_eq!(t.installed(), "1.2.3");
+}
+
+const FAKE_CHECK: &str = "plugin:claude-code:requires:fake";
+
+async fn fake_check(d: &Daemon) -> xherd_daemon::checks::Check {
+    let env = |_: &str| None;
+    d.checks(&env)
+        .await
+        .into_iter()
+        .find(|c| c.id == FAKE_CHECK)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_slow_install_shows_installing_and_tells_the_hub() {
+    let slow = format!("sleep 2; {WRITE}");
+    let (t, d) = start(true, None, &slow, &[]).await;
+    let mut rx = d.hub.subscribe();
+    for _ in 0..100 {
+        if d.install_state("claude-code", "fake").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let c = fake_check(&d).await;
+    assert!(c.installing && !c.ok && c.fix.is_none(), "{c:?}");
+    assert!(
+        c.detail.starts_with("Installing fake 1.2.3"),
+        "{}",
+        c.detail
+    );
+    // `fix_check` while it runs is refused.
+    let env = |_: &str| None;
+    let e = d.fix_check(FAKE_CHECK, &env).await.unwrap_err();
+    assert_eq!(e.code, "install_running");
+    // A subscriber is told when it ends.
+    let mut seen = false;
+    while let Ok(Ok(m)) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+        if matches!(m, Change::Checks) && d.install_state("claude-code", "fake").is_none() {
+            seen = true;
+            break;
+        }
+    }
+    assert!(seen);
+    until_runs(&t, 1).await;
+    let c = fake_check(&d).await;
+    assert!(c.ok && !c.installing);
+}
+
+#[tokio::test]
+async fn a_failed_install_leaves_its_tail_in_the_check() {
+    let (t, d) = start(true, None, "echo boom >&2; exit 1", &[]).await;
+    for _ in 0..100 {
+        if matches!(
+            d.install_state("claude-code", "fake"),
+            Some(InstallState::Failed { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let c = fake_check(&d).await;
+    assert!(!c.ok && !c.installing, "{c:?}");
+    assert!(c.detail.contains("boom"), "{}", c.detail);
+    quiet().await;
+    assert_eq!(t.runs(), 0);
+    // Checking again does not install again.
+    fake_check(&d).await;
+    quiet().await;
+    assert_eq!(t.runs(), 0);
+}
+
+/// A git repo with one commit, and a request for a job in it.
+fn job_in(t: &T) -> xherd_core::new::NewJob {
+    let repo = t.home.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["commit", "-q", "--allow-empty", "-m", "base"],
+    ] {
+        let o = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(o.status.success());
+    }
+    serde_json::from_value(json!({
+        "name": "login",
+        "repo": repo.to_string_lossy(),
+        "prompt": "add login",
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_job_is_refused_while_its_runtime_installs_or_when_it_is_missing() {
+    // Installing: refused with "being installed".
+    let slow = format!("sleep 2; {WRITE}");
+    let (t, d) = start(true, None, &slow, &[]).await;
+    for _ in 0..100 {
+        if d.install_state("claude-code", "fake").is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let e = d.new_job(job_in(&t)).await.unwrap_err();
+    assert_eq!(e.code, "runtime_missing");
+    assert!(e.message.contains("being installed"), "{}", e.message);
+    until_runs(&t, 1).await;
+    settle(&d).await;
+    // Installed: the job is created.
+    d.new_job(job_in(&t)).await.unwrap();
+
+    // Missing after a failed install: refused, telling where to install.
+    let (t, d) = start(true, None, "exit 1", &[]).await;
+    for _ in 0..100 {
+        if matches!(
+            d.install_state("claude-code", "fake"),
+            Some(InstallState::Failed { .. })
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let e = d.new_job(job_in(&t)).await.unwrap_err();
+    assert_eq!(e.code, "runtime_missing");
+    assert!(e.message.contains("not installed"), "{}", e.message);
+}
+
+#[tokio::test]
+async fn native_mode_does_not_refuse_a_missing_runtime() {
+    let (t, d) = start(false, None, WRITE, &[]).await;
+    d.new_job(job_in(&t)).await.unwrap();
+}

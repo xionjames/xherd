@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::action::ActionKind;
 use crate::domain::Role;
 use crate::job::Millis;
 
@@ -125,6 +126,31 @@ pub enum XapCmd {
         #[serde(default)]
         instructions_file: Option<String>,
     },
+    /// Register or replace an action of the job (R1); checked by
+    /// `action::check_def`, handled by the actor before the flow checks (R7).
+    #[serde(rename = "action.add")]
+    ActionAdd {
+        id: String,
+        label: String,
+        run: String,
+        #[serde(default)]
+        kind: Option<ActionKind>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+    },
+    /// Remove an action of the job (R4).
+    #[serde(rename = "action.rm")]
+    ActionRm { id: String },
+    /// List the job's actions (R5).
+    #[serde(rename = "action.ls")]
+    ActionLs {},
+    /// Read the tail of an action's last output (R5a).
+    #[serde(rename = "action.log")]
+    ActionLog { id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +181,10 @@ impl XapCmd {
             XapCmd::MemoryPropose { .. } => "memory.propose",
             XapCmd::AgentMemoryPropose { .. } => "agent.memory.propose",
             XapCmd::AgentPropose { .. } => "agent.propose",
+            XapCmd::ActionAdd { .. } => "action.add",
+            XapCmd::ActionRm { .. } => "action.rm",
+            XapCmd::ActionLs { .. } => "action.ls",
+            XapCmd::ActionLog { .. } => "action.log",
         }
     }
 
@@ -190,7 +220,11 @@ impl XapCmd {
             | XapCmd::IssueAdd { .. }
             | XapCmd::MemoryPropose { .. }
             | XapCmd::AgentMemoryPropose { .. }
-            | XapCmd::AgentPropose { .. } => false,
+            | XapCmd::AgentPropose { .. }
+            | XapCmd::ActionAdd { .. }
+            | XapCmd::ActionRm { .. }
+            | XapCmd::ActionLs { .. }
+            | XapCmd::ActionLog { .. } => false,
         }
     }
 }
@@ -266,9 +300,55 @@ mod tests {
             json!({"cmd": "handoff.written", "args": {}}),
             json!({"cmd": "issue.add", "args": {"title": "x", "severity": "minor"}}),
             json!({"cmd": "memory.propose", "args": {"reason": "r"}}),
+            json!({"cmd": "action.add", "args": {"id": "dev", "label": "Dev", "run": "npm run dev"}}),
+            json!({"cmd": "action.rm", "args": {"id": "dev"}}),
+            json!({"cmd": "action.ls", "args": {}}),
+            json!({"cmd": "action.log", "args": {"id": "dev"}}),
         ] {
             assert!(!cmd(c.clone()).is_flow_work(), "{c}");
         }
+    }
+
+    #[test]
+    fn action_wire_format() {
+        let c: XapCall = serde_json::from_value(json!({
+            "id": "1", "agentId": "a", "cmd": "action.add",
+            "args": {"id": "dev", "label": "Dev server", "run": "npm run dev",
+                     "kind": "service", "cwd": "web"},
+            "at": 0
+        }))
+        .unwrap();
+        assert_eq!(c.cmd.name(), "action.add");
+        assert!(!c.cmd.is_report_only());
+        let XapCmd::ActionAdd {
+            kind, cwd, icon, ..
+        } = &c.cmd
+        else {
+            panic!()
+        };
+        assert_eq!(*kind, Some(ActionKind::Service));
+        assert_eq!(cwd.as_deref(), Some("web"));
+        assert_eq!(*icon, None);
+        for (cmd, name) in [
+            (
+                json!({"cmd": "action.rm", "args": {"id": "dev"}}),
+                "action.rm",
+            ),
+            (json!({"cmd": "action.ls", "args": {}}), "action.ls"),
+            (
+                json!({"cmd": "action.log", "args": {"id": "dev"}}),
+                "action.log",
+            ),
+        ] {
+            let c: XapCmd = serde_json::from_value(cmd).unwrap();
+            assert_eq!(c.name(), name);
+            assert!(!c.is_report_only());
+            let back = serde_json::to_value(&c).unwrap();
+            assert_eq!(back["cmd"], name);
+        }
+        let bad = json!({"id": "1", "agentId": "a", "cmd": "action.rm",
+                         "args": {"id": "dev", "x": 1}, "at": 0});
+        assert!(serde_json::from_value::<XapCall>(bad).is_err());
     }
 
     #[test]

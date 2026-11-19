@@ -411,33 +411,39 @@ pub struct CheckResult {
 
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Run one check argv with the 10 s limit: `Ok(output)` on exit 0, else the
+/// one-line reason.
+async fn check_cmd(p: &Plugin, argv: &[String], ctx: &Context) -> Result<String, String> {
+    if p.builtin() && argv[0].starts_with("./") {
+        return Err("built-in plugin cannot run a ./ check".to_string());
+    }
+    let mut cmd = if p.builtin() {
+        Cmd::new(argv.to_vec()).timeout(CHECK_TIMEOUT).as_agent()
+    } else {
+        build_cmd(p, argv, ctx, &Value::Null, CHECK_TIMEOUT)
+    };
+    cmd.stdin = None;
+    match run(cmd).await {
+        Ok(o) if o.success() => Ok(format!("{}{}", o.stdout_str(), o.stderr)),
+        Ok(o) if o.timed_out => Err("timed out after 10s".into()),
+        Ok(o) => Err(o
+            .stderr
+            .lines()
+            .last()
+            .unwrap_or("failed")
+            .trim()
+            .to_string()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Run a plugin's checks: pass = exit 0 within 10 s (R-502).
 pub async fn run_checks(p: &Plugin, ctx: &Context) -> Vec<CheckResult> {
     let mut out = Vec::new();
     for c in &p.manifest.all_checks() {
-        let (ok, message) = if p.builtin() && c.argv[0].starts_with("./") {
-            (false, "built-in plugin cannot run a ./ check".to_string())
-        } else {
-            let mut cmd = if p.builtin() {
-                Cmd::new(c.argv.clone()).timeout(CHECK_TIMEOUT).as_agent()
-            } else {
-                build_cmd(p, &c.argv, ctx, &Value::Null, CHECK_TIMEOUT)
-            };
-            cmd.stdin = None;
-            match run(cmd).await {
-                Ok(o) if o.success() => (true, String::new()),
-                Ok(o) if o.timed_out => (false, "timed out after 10s".into()),
-                Ok(o) => (
-                    false,
-                    o.stderr
-                        .lines()
-                        .last()
-                        .unwrap_or("failed")
-                        .trim()
-                        .to_string(),
-                ),
-                Err(e) => (false, e.to_string()),
-            }
+        let (ok, message) = match check_cmd(p, &c.argv, ctx).await {
+            Ok(_) => (true, String::new()),
+            Err(m) => (false, m),
         };
         out.push(CheckResult {
             plugin: p.name().into(),
@@ -449,4 +455,10 @@ pub async fn run_checks(p: &Plugin, ctx: &Context) -> Vec<CheckResult> {
         });
     }
     out
+}
+
+/// Run a requirement's check and return what it printed (stdout then stderr),
+/// e.g. to read the installed version; `Err` is the last stderr line (R-603).
+pub async fn probe(p: &Plugin, ctx: &Context, r: &manifest::Requirement) -> Result<String, String> {
+    check_cmd(p, &r.as_check().argv, ctx).await
 }

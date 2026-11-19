@@ -242,38 +242,224 @@ fn builtin_toolchains_parse_and_match_the_plugins_folder() {
     );
 }
 
-/// The runtime plugins' container installs name the versions the image is
-/// built with (and xherd was checked against): the Dockerfile's `ARG`s.
+/// The CLI each built-in runtime installs: (plugin, tool).
+const RUNTIMES: [(&str, &str); 3] = [
+    ("claude-code", "claude"),
+    ("opencode", "opencode"),
+    ("codex", "codex"),
+];
+
+fn runtime_requirement(plugin: &str, tool: &str) -> xherd_plugin::manifest::Requirement {
+    xherd_plugin::builtins()
+        .into_iter()
+        .find(|m| m.name == plugin)
+        .unwrap()
+        .requires
+        .into_iter()
+        .find(|r| r.name == tool)
+        .unwrap()
+}
+
+/// The runtime plugins pin their CLI in the manifest: a version, a digest for
+/// each CPU, and an install that reads them from the environment (R2, R10).
 #[test]
-fn runtime_installs_use_the_image_versions() {
-    let dockerfile = include_str!("../../../deploy/docker/Dockerfile");
-    let arg = |name: &str| {
-        dockerfile
-            .lines()
-            .find_map(|l| l.strip_prefix(&format!("ARG {name}=")))
-            .unwrap_or_else(|| panic!("no ARG {name}"))
-            .trim()
-            .to_string()
-    };
-    for (plugin, tool, package, arg_name) in [
-        (
-            "claude-code",
-            "claude",
-            "@anthropic-ai/claude-code",
-            "CLAUDE_CODE_VERSION",
-        ),
-        ("opencode", "opencode", "opencode-ai", "OPENCODE_VERSION"),
-        ("codex", "codex", "@openai/codex", "CODEX_VERSION"),
-    ] {
-        let m = xherd_plugin::builtins()
-            .into_iter()
-            .find(|m| m.name == plugin)
-            .unwrap();
-        let r = m.requires.iter().find(|r| r.name == tool).unwrap();
-        let install = r.install.as_ref().unwrap().join(" ");
+fn runtime_installs_are_pinned_per_arch() {
+    for (plugin, tool) in RUNTIMES {
+        let r = runtime_requirement(plugin, tool);
+        let version = r
+            .version
+            .clone()
+            .unwrap_or_else(|| panic!("{plugin}: no version"));
         assert!(
-            install.ends_with(&format!("{package}@{}", arg(arg_name))),
-            "{plugin}: {install}"
+            xherd_plugin::manifest::version_in(&version) == Some(version.as_str()),
+            "{plugin}: {version}"
+        );
+        for arch in ["x86_64", "aarch64"] {
+            let sum = r
+                .sha256
+                .get(arch)
+                .unwrap_or_else(|| panic!("{plugin}: no {arch}"));
+            assert!(sum.len() == 64 && sum.bytes().all(|b| b.is_ascii_hexdigit()));
+        }
+        let argv = r
+            .install
+            .as_ref()
+            .unwrap_or_else(|| panic!("{plugin}: no install"));
+        assert_eq!(&argv[..2], ["sh", "-c"], "{plugin}");
+        let script = &argv[2];
+        assert_eq!(argv.len(), 3, "{plugin}");
+        for var in [
+            "XHERD_INSTALL_VERSION",
+            "XHERD_INSTALL_ARCH",
+            "XHERD_INSTALL_SHA256",
+        ] {
+            assert!(script.contains(var), "{plugin}: {var}");
+        }
+        assert!(!script.contains("npm"), "{plugin}: {script}");
+        assert!(
+            !script.contains(&version),
+            "{plugin}: literal version in the script"
+        );
+        assert!(
+            script.contains("sha256sum -c"),
+            "{plugin}: digest not checked"
         );
     }
+}
+
+/// Runs a runtime's install script with a temporary `HOME` and `TMPDIR`, a
+/// fake `curl` that serves `artifact`, and returns (exit ok, urls asked,
+/// stray files left in the working directory or `TMPDIR`).
+#[cfg(target_os = "linux")]
+fn run_install(
+    plugin: &str,
+    tool: &str,
+    home: &Path,
+    artifact: &Path,
+    sha256: &str,
+) -> (bool, String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+    let r = runtime_requirement(plugin, tool);
+    let argv = r.install.clone().unwrap();
+    let fake = tempfile::tempdir().unwrap();
+    let urls = fake.path().join("urls");
+    let curl = fake.path().join("curl");
+    std::fs::write(
+        &curl,
+        format!(
+            "#!/bin/sh\nout=\nfor a in \"$@\"; do [ \"$prev\" = -o ] && out=$a; prev=$a; done\n\
+             echo \"$a\" >> '{}'\ncp '{}' \"$out\"\n",
+            urls.display(),
+            artifact.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let arch = std::env::consts::ARCH;
+    let mut env = r.install_env(arch);
+    env.retain(|(k, _)| k != "XHERD_INSTALL_SHA256");
+    env.push(("XHERD_INSTALL_SHA256".into(), sha256.into()));
+    let out = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .env_clear()
+        .env("PATH", format!("{}:/usr/bin:/bin", fake.path().display()))
+        .env("HOME", home)
+        .env("TMPDIR", tmp.path())
+        .envs(env)
+        .current_dir(cwd.path())
+        .output()
+        .unwrap();
+    let stray = |d: &Path| -> Vec<String> {
+        std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect()
+    };
+    let mut stray_files = stray(cwd.path());
+    stray_files.extend(stray(tmp.path()));
+    (
+        out.status.success(),
+        std::fs::read_to_string(&urls).unwrap_or_default(),
+        stray_files,
+    )
+}
+
+/// The install writes only under `$HOME`, leaves no download behind, uses the
+/// version and CPU it is given, and refuses an artifact with the wrong digest.
+#[cfg(target_os = "linux")]
+#[test]
+fn runtime_installs_write_only_under_home() {
+    let arch = std::env::consts::ARCH;
+    let fixtures = tempfile::tempdir().unwrap();
+    // Claude Code: the download is the binary; `claude install <version>` places it
+    // (the fake checks it is asked for the pinned version).
+    let claude = fixtures.path().join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\n[ \"$1\" = install ] && [ \"$2\" = \"$XHERD_INSTALL_VERSION\" ] || exit 9\n\
+         mkdir -p \"$HOME/.local/bin\" && echo placed > \"$HOME/.local/bin/claude\"\n",
+    )
+    .unwrap();
+    // opencode and codex: a tarball with the binary inside.
+    let tarball = |name: &str, inner: &str| {
+        let dir = fixtures.path().join(format!("{name}.d"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(inner), "#!/bin/sh\necho fake\n").unwrap();
+        let tgz = fixtures.path().join(format!("{name}.tar.gz"));
+        let st = std::process::Command::new("tar")
+            .arg("czf")
+            .arg(&tgz)
+            .arg("-C")
+            .arg(&dir)
+            .arg(inner)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        tgz
+    };
+    let opencode = tarball("opencode", "opencode");
+    let codex = tarball("codex", &format!("codex-{arch}-unknown-linux-musl"));
+
+    for (plugin, tool, artifact, placed) in [
+        ("claude-code", "claude", &claude, ".local/bin/claude"),
+        ("opencode", "opencode", &opencode, ".opencode/bin/opencode"),
+        ("codex", "codex", &codex, ".local/bin/codex"),
+    ] {
+        let sum = xherd_core::hash::content_sha256(&std::fs::read(artifact).unwrap());
+        let version = runtime_requirement(plugin, tool).version.unwrap();
+
+        let home = tempfile::tempdir().unwrap();
+        // A leftover npm shim at ~/.local/bin/<cli> must be replaced.
+        std::fs::create_dir_all(home.path().join(".local/bin")).unwrap();
+        std::fs::write(home.path().join(".local/bin").join(tool), "shim").unwrap();
+        let (ok, urls, stray) = run_install(plugin, tool, home.path(), artifact, &sum);
+        assert!(ok, "{plugin} install failed");
+        assert!(urls.contains(&version), "{plugin}: {urls}");
+        assert!(stray.is_empty(), "{plugin}: left {stray:?}");
+        assert!(home.path().join(placed).is_file(), "{plugin}: {placed}");
+        let cli = std::fs::read_to_string(home.path().join(".local/bin").join(tool)).unwrap();
+        assert_ne!(cli, "shim", "{plugin}: shim not replaced");
+        let cache = home.path().join(".cache");
+        let left: Vec<_> = std::fs::read_dir(&cache)
+            .map(|d| d.map(|e| e.unwrap().file_name()).collect())
+            .unwrap_or_default();
+        assert!(
+            left.is_empty(),
+            "{plugin}: download left in .cache: {left:?}"
+        );
+
+        // Wrong digest: refused, nothing placed.
+        let home = tempfile::tempdir().unwrap();
+        let (ok, _, _) = run_install(plugin, tool, home.path(), artifact, &"00".repeat(32));
+        assert!(!ok, "{plugin}: wrong digest accepted");
+        assert!(
+            !home.path().join(placed).exists(),
+            "{plugin}: placed anyway"
+        );
+        // No digest for this CPU: refused too.
+        let (ok, _, _) = run_install(plugin, tool, home.path(), artifact, "");
+        assert!(!ok, "{plugin}: empty digest accepted");
+    }
+}
+
+#[tokio::test]
+async fn probe_returns_the_requirement_output() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = manifest("p");
+    m["requires"] = json!([
+        {"name": "ver", "check": ["./run", "ver"]},
+        {"name": "gone", "check": ["./run", "fail"]}
+    ]);
+    let script = format!("{SCRIPT}\n");
+    let script = script.replace("  junk)", "  ver) echo \"tool 1.2.3\" ;;\n  junk)");
+    write_plugin(d.path(), "p", m, &script);
+    let r = Registry::load(vec![], d.path());
+    let p = r.get("p").unwrap();
+    let c = ctx();
+    let reqs = &p.manifest.requires;
+    assert_eq!(probe(p, &c, &reqs[0]).await.unwrap().trim(), "tool 1.2.3");
+    let e = probe(p, &c, &reqs[1]).await.unwrap_err();
+    assert!(e.starts_with("bad token") && !e.contains("s3cr3t"), "{e}");
 }

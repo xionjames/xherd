@@ -69,6 +69,7 @@
   // What a card says without being opened: off, ready, or not ready and why.
   function pstate(p: PluginInfo): { tone: 'off' | 'ok' | 'bad' | 'opt'; text: string } {
     if (!p.enabled) return { tone: 'off', text: 'Off' };
+    if ((setup.checks ?? []).some((c) => c.id.startsWith(`plugin:${p.name}:`) && c.installing)) return { tone: 'opt', text: 'Installing…' };
     const bad = (setup.checks ?? []).find((c) => c.id.startsWith(`plugin:${p.name}:`) && !c.ok);
     if (bad) return { tone: bad.required ? 'bad' : 'opt', text: bad.id.endsWith(':login') ? 'Not logged in' : bad.detail.split('\n')[0] };
     const saved = ((setup.config?.config.pluginSettings ?? {}) as Record<string, Record<string, unknown>>)[p.name] ?? {};
