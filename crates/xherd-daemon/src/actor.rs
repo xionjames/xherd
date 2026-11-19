@@ -2374,7 +2374,7 @@ impl Actor {
     }
 
     /// Ask (#121, R5–R7): resume an agent that has no session with the
-    /// user's text as its first prompt, continuing the last conversation, and
+    /// user's text (through the pack's `ask` command) as its first prompt, continuing the last conversation, and
     /// hold the session open (no auto-approval, no move to watching) until the
     /// agent does flow work, the user decides a gate, or finishes it.
     async fn ask(&mut self, text: &str) -> Result<(), ActionError> {
@@ -2409,8 +2409,14 @@ impl Actor {
                 format!("{} has a command waiting: resume it first", self.job.name),
             ));
         }
+        // R1–R3 (missing commits): through the pack's `ask` command, which
+        // turns a requested change into tasks and commit proposals; the bare
+        // text when the job has no pack or its pack has no such command.
+        let prompt = self
+            .pack_command_with("ask", &[("prompt", text)])
+            .unwrap_or_else(|| text.to_string());
         let now = self.now();
-        self.job.next_prompt = Some(text.to_string());
+        self.job.next_prompt = Some(prompt);
         self.job.fire(Trigger::Resume, now);
         self.prepare_resume(false).await;
         self.job.ask_hold = Some(xherd_core::job::AskHold {
