@@ -3,6 +3,7 @@
 //! to the agents' user), within three live limits, and read back by path.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::{ActionError, Daemon, UserAction, workdir_of};
 
@@ -21,16 +22,28 @@ fn mib(n: u64) -> String {
     format!("{} MiB", n / (1024 * 1024))
 }
 
-/// One upload request: holds the daemon-wide upload lock, the limits read when
-/// it began, and the files it made so far (removed again by `abort`).
+/// Bytes and files the job's uploads folder holds now (only regular files).
+fn usage(dir: &Path) -> Result<(u64, usize), ActionError> {
+    let (mut bytes, mut files) = (0u64, 0usize);
+    for e in std::fs::read_dir(dir).map_err(io)? {
+        let m = e.map_err(io)?.metadata().map_err(io)?;
+        if m.is_file() {
+            bytes += m.len();
+            files += 1;
+        }
+    }
+    Ok((bytes, files))
+}
+
+/// One upload request: the limits read when it began, and the files it made so
+/// far (removed again by `abort`). The daemon-wide upload lock is held only
+/// while a file is checked and stored, never while the request's body arrives.
 pub struct Upload {
-    _lock: tokio::sync::OwnedMutexGuard<()>,
+    lock: Arc<tokio::sync::Mutex<()>>,
     dir: PathBuf,
     max_bytes: u64,
     max_job_bytes: u64,
     max_files: usize,
-    bytes: u64,
-    files: usize,
     created: Vec<PathBuf>,
 }
 
@@ -55,13 +68,17 @@ impl Upload {
                 format!("a file is larger than {}", mib(self.max_bytes)),
             ));
         }
-        if self.files + 1 > self.max_files {
+        // Held from the count to the write, so concurrent uploads to the same
+        // job cannot both pass the limits.
+        let _guard = self.lock.lock().await;
+        let (held_bytes, held_files) = usage(&self.dir)?;
+        if held_files + 1 > self.max_files {
             return Err(fail(
                 "too_large",
                 format!("a job takes at most {} uploaded files", self.max_files),
             ));
         }
-        if self.bytes + len > self.max_job_bytes {
+        if held_bytes + len > self.max_job_bytes {
             return Err(fail(
                 "too_large",
                 format!(
@@ -75,8 +92,6 @@ impl Upload {
             .await
             .map_err(io)?;
         self.created.push(path.clone());
-        self.bytes += len;
-        self.files += 1;
         Ok(path)
     }
 
@@ -96,40 +111,32 @@ impl Upload {
 }
 
 impl Daemon {
-    /// Start an upload for job `who`: the job must have a worktree (R5), the
-    /// limits are read now (R3a) and the existing uploads are counted.
+    /// Start an upload for job `who`: the job must have a worktree (R5) and the
+    /// limits are read now (R3a). Creates `.xherd/uploads/` under the upload lock.
     pub async fn begin_upload(&self, who: &str) -> Result<Upload, ActionError> {
         let a = self.action(who, UserAction::Get).await?;
         let wd = workdir_of(&a)?.to_path_buf();
-        let lock = self.uploads.clone().lock_owned().await;
         let c = self.live_config();
         let dir = wd.join(".xherd").join("uploads");
-        match std::fs::symlink_metadata(&dir) {
-            Ok(m) if m.file_type().is_symlink() || !m.is_dir() => {
-                return Err(fail("bad_path", ".xherd/uploads is not a folder"));
-            }
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                xherd_core::runner::mkdir(&dir, 0o2775).await.map_err(io)?;
-            }
-            Err(e) => return Err(io(e)),
-        }
-        let (mut bytes, mut files) = (0u64, 0usize);
-        for e in std::fs::read_dir(&dir).map_err(io)? {
-            let m = e.map_err(io)?.metadata().map_err(io)?;
-            if m.is_file() {
-                bytes += m.len();
-                files += 1;
+        {
+            let _guard = self.uploads.lock().await;
+            match std::fs::symlink_metadata(&dir) {
+                Ok(m) if m.file_type().is_symlink() || !m.is_dir() => {
+                    return Err(fail("bad_path", ".xherd/uploads is not a folder"));
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    xherd_core::runner::mkdir(&dir, 0o2775).await.map_err(io)?;
+                }
+                Err(e) => return Err(io(e)),
             }
         }
         Ok(Upload {
-            _lock: lock,
+            lock: self.uploads.clone(),
             dir,
             max_bytes: c.upload_max_bytes,
             max_job_bytes: c.upload_max_job_bytes,
             max_files: c.upload_max_files,
-            bytes,
-            files,
             created: Vec::new(),
         })
     }

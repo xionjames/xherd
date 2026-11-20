@@ -271,6 +271,46 @@ async fn a_job_without_a_workdir_is_no_workspace() {
 }
 
 #[tokio::test]
+async fn a_stalled_upload_does_not_block_another() {
+    let t = setup().await;
+    // Begun, then the client stops before sending any file.
+    let _stalled = t.d.begin_upload("up").await.unwrap();
+    let other = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut u = t.d.begin_upload("up").await.unwrap();
+        u.add("a.txt", b"x").await.unwrap();
+        u
+    })
+    .await
+    .expect("a second upload waited for the first one's body");
+    other.finish();
+    assert_eq!(t.names(), ["a.txt"]);
+}
+
+#[tokio::test]
+async fn uploads_to_one_job_share_the_limits() {
+    let t = setup().await;
+    limits(&t, 10, 250 * 1024 * 1024, 3);
+    let mut a = t.d.begin_upload("up").await.unwrap();
+    let mut b = t.d.begin_upload("up").await.unwrap();
+    b.add("b1", b"1").await.unwrap();
+    b.add("b2", b"1").await.unwrap();
+    a.add("a1", b"1").await.unwrap();
+    // The file count includes the other request's files.
+    assert_eq!(a.add("a2", b"1").await.unwrap_err().code, "too_large");
+    b.finish();
+    a.abort().await;
+    assert_eq!(t.names(), ["b1", "b2"]);
+
+    // The byte limit is shared the same way.
+    limits(&t, 2, 3, 200);
+    let mut c = t.d.begin_upload("up").await.unwrap();
+    assert_eq!(c.add("c", b"12").await.unwrap_err().code, "too_large");
+    c.add("c", b"1").await.unwrap();
+    c.finish();
+    assert_eq!(t.names(), ["b1", "b2", "c"]);
+}
+
+#[tokio::test]
 async fn download_path_resolves_inside_the_workdir_only() {
     let t = setup().await;
     let root = t.wd.canonicalize().unwrap();
