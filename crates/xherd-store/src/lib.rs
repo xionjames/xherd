@@ -740,14 +740,32 @@ impl Store {
         .await
     }
 
-    /// Replace a flow's assignments in one transaction.
+    /// The stages of one flow that have the fresh-context check on, in name order.
+    pub async fn flow_fresh_checks(&self, pack: &str, flow: &str) -> Result<Vec<String>> {
+        let (pack, flow) = (pack.to_string(), flow.to_string());
+        self.read(move |c| {
+            let mut st = c.prepare(
+                "SELECT stage FROM flow_fresh_checks
+                 WHERE pack = ?1 AND flow = ?2 ORDER BY stage",
+            )?;
+            let rows = st.query_map([pack, flow], |r| r.get(0))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+        .await
+    }
+
+    /// Replace a flow's assignments in one transaction. With `fresh` set, the
+    /// flow's fresh-check stages are replaced in the same transaction; `None`
+    /// keeps them.
     pub async fn set_flow_assignments(
         &self,
         pack: &str,
         flow: &str,
         rows: &[xherd_core::resolve::Assignment],
+        fresh: Option<&[String]>,
     ) -> Result<()> {
         let (pack, flow, rows) = (pack.to_string(), flow.to_string(), rows.to_vec());
+        let fresh = fresh.map(<[String]>::to_vec);
         self.write(move |c| {
             let tx = c.transaction()?;
             tx.execute(
@@ -760,6 +778,19 @@ impl Store {
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![pack, flow, a.stage, a.agent_id, a.human as i64],
                 )?;
+            }
+            if let Some(stages) = &fresh {
+                tx.execute(
+                    "DELETE FROM flow_fresh_checks WHERE pack = ?1 AND flow = ?2",
+                    [&pack, &flow],
+                )?;
+                for stage in stages {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO flow_fresh_checks (pack, flow, stage)
+                         VALUES (?1, ?2, ?3)",
+                        params![pack, flow, stage],
+                    )?;
+                }
             }
             tx.commit()?;
             Ok(())
@@ -1488,10 +1519,11 @@ mod tests {
             "xherd",
             "feature",
             &[row("tasks", "a1", false), row("design", "a1", true)],
+            None,
         )
         .await
         .unwrap();
-        s.set_flow_assignments("xherd", "bugfix", &[row("review", "a2", false)])
+        s.set_flow_assignments("xherd", "bugfix", &[row("review", "a2", false)], None)
             .await
             .unwrap();
         let feature = s.flow_assignments("xherd", "feature").await.unwrap();
@@ -1500,7 +1532,7 @@ mod tests {
             [row("design", "a1", true), row("tasks", "a1", false)]
         );
         assert_eq!(s.all_flow_assignments().await.unwrap().len(), 3);
-        s.set_flow_assignments("xherd", "feature", &[row("ship", "a1", false)])
+        s.set_flow_assignments("xherd", "feature", &[row("ship", "a1", false)], None)
             .await
             .unwrap();
         assert_eq!(
@@ -1517,6 +1549,56 @@ mod tests {
         assert_eq!(
             s.flow_assignments("xherd", "bugfix").await.unwrap().len(),
             1
+        );
+    }
+
+    /// Migration 7: the fresh-check set is empty by default, replaced with the
+    /// assignments when given, kept on `None`, cleared by an empty set, and
+    /// kept per flow.
+    #[tokio::test]
+    async fn fresh_checks_are_set_with_the_assignments() {
+        let (_d, s) = open();
+        assert!(
+            s.flow_fresh_checks("xherd", "feature")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let set = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        s.set_flow_assignments(
+            "xherd",
+            "feature",
+            &[],
+            Some(&set(&["spec", "design", "spec"])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            s.flow_fresh_checks("xherd", "feature").await.unwrap(),
+            ["design", "spec"]
+        );
+        s.set_flow_assignments("xherd", "bugfix", &[], Some(&set(&["analysis"])))
+            .await
+            .unwrap();
+        s.set_flow_assignments("xherd", "feature", &[], None)
+            .await
+            .unwrap();
+        assert_eq!(
+            s.flow_fresh_checks("xherd", "feature").await.unwrap(),
+            ["design", "spec"]
+        );
+        s.set_flow_assignments("xherd", "feature", &[], Some(&[]))
+            .await
+            .unwrap();
+        assert!(
+            s.flow_fresh_checks("xherd", "feature")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            s.flow_fresh_checks("xherd", "bugfix").await.unwrap(),
+            ["analysis"]
         );
     }
 

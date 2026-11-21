@@ -809,7 +809,7 @@ impl Daemon {
         }
         out.sort_by(|a, b| a.stage.cmp(&b.stage));
         self.store
-            .set_flow_assignments(pack, flow, &out)
+            .set_flow_assignments(pack, flow, &out, None)
             .await
             .map_err(store)?;
         self.agents_changed();

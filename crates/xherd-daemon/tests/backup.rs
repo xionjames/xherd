@@ -111,6 +111,7 @@ async fn backup_and_restore_on_another_machine() {
                 agent_id: "ad1".into(),
                 human: true,
             }],
+            None,
         )
         .await
         .unwrap();
