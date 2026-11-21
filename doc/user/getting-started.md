@@ -13,6 +13,8 @@ Docker and native are equal options; pick by what your jobs need.
 
 On a Mac, either works: Docker, or `brew install xionjames/tap/xherd` (see [Run natively](#run-natively)). xherd is a single-user tool: one person, one daemon, one workspace folder.
 
+There is no native Windows build. On Windows, run xherd under WSL2 or Docker. We have not tried WSL2 yet.
+
 ### Docker
 
 Pros:
