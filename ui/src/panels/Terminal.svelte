@@ -12,7 +12,7 @@
   const id = $derived(agent.id);
   // Drop, paste and path links need a worktree to store into and read from.
   const files = $derived(agent.workdir ? { jobId: id, workdir: agent.workdir } : undefined);
-  const live =$derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
+  const live = $derived(['running', 'waiting-input', 'blocked', 'idle'].includes(agent.status));
   // Ask (R5): an agent without a session that can be resumed takes a question.
   const askable = $derived(['paused', 'parked', 'watching', 'error'].includes(agent.status) && !agent.worktreeRemovedAt);
 
