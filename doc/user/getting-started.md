@@ -1,30 +1,46 @@
 # Getting started
 
-How to install xherd from a published release, start it, and run a first job. We recommend **Docker**: jobs, toolchains and Claude Code stay in a container and only your workspace folder is shared with the host. See [Docker](docker.md) for details and troubleshooting.
+How to install xherd from a published release, start it, and run a first job. xherd runs in Docker or natively, and neither is the default: see [Choose how to run it](#choose-how-to-run-it). See [Docker](docker.md) for details and troubleshooting.
 
 To build xherd yourself (an unreleased branch, or to change it), see [Running from source](../dev/from-source.md).
 
 ## Choose how to run it
 
-| | Docker (recommended) | Native (macOS, Linux) |
-|---|---|---|
-| What you install | A container engine with Compose: Docker Desktop, OrbStack, Colima or Docker on Linux | The `xherd` package, plus `git`, `tmux` ≥ 3.3, Claude Code (or opencode, or Codex) and `gh` / `glab` |
-| Coding-agent CLI and tools | Installed by xherd into its volume at first start (Claude Code, opencode, Codex, Pi); the image has `git`, `gh`, `glab`, toolchain managers | Yours, on `PATH` |
-| Isolation | Jobs see only the workspace folder | None: jobs run as you |
-| Platforms | macOS and Linux (amd64, arm64) | macOS and Linux (arm64, x86_64) |
+Docker and native are equal options; pick by what your jobs need.
 
-On a Mac, either works: Docker, or `brew install xionjames/tap/xherd` (see [Run natively](#run-natively)).
+- **Pick Docker if** you want jobs kept away from your home directory, keys and other projects, and your repositories build on Linux.
+- **Pick native if** you build iOS/macOS apps, need an emulator or simulator, run Docker from your repositories, or want your own tools and shell setup.
 
-xherd is a single-user tool: one person, one daemon, one workspace folder.
+On a Mac, either works: Docker, or `brew install xionjames/tap/xherd` (see [Run natively](#run-natively)). xherd is a single-user tool: one person, one daemon, one workspace folder.
 
-### Why Docker first?
+There is no native Windows build. On Windows, run xherd under WSL2 or Docker. We have not tried WSL2 yet.
 
-Coding agents run commands on your machine, install toolchains and write files. In a container that has limits:
+### Docker
 
-- **Containment.** Jobs see only the workspace folder you share, not your home directory, keys or other projects. A confused or misled job has a small blast radius.
-- **Nothing to install.** `git`, `tmux`, `gh`, `glab` and the Java/Node/Go/Rust/Python toolchain managers come in the image, and the first start downloads the coding-agent CLIs (Claude Code, opencode, Codex) at tested, checksum-verified versions, so give it a minute and network access. Setup is the same on every machine.
-- **Safe to throw away.** Updating is pulling a new image; a broken toolchain is a rebuilt container, not a repaired laptop.
-- **Your IDE still works.** The workspace is mounted at the same path inside and outside, so worktrees open directly in your editor.
+Pros:
+
+- **Isolation.** Jobs see only the workspace folder you share, and the daemon's secrets live under a separate user.
+- **Nothing to install** but a container engine with Compose (Docker Desktop, OrbStack, Colima or Docker on Linux). `git`, `tmux`, `gh`, `glab` and the toolchain managers come in the image; the first start downloads the coding-agent CLIs at checksum-verified versions, so give it a minute and network access.
+- **Same setup on every machine**, easy to update (pull a new image) or throw away (rebuild the container).
+- **The `all` permission mode**, which needs this isolation. Your IDE still works: the workspace is mounted at the same path inside and outside.
+
+Cons:
+
+- Linux only inside: no Xcode (so no iOS, macOS or watchOS builds, no Apple simulators), no Android or other emulators, no GPU-dependent work.
+- No Docker-in-Docker: repositories that run containers (Testcontainers, `docker compose`) do not work.
+- Toolchains only through the bundled managers (Java, Node, Go, Rust, Python).
+- On macOS, file access on the shared workspace can be slower, so large builds and installs may take longer.
+- No desktop notifications; SSH agent forwarding does not work on Colima.
+
+### Native (macOS, Linux)
+
+Pros: every tool of your machine (Xcode, simulators, emulators, Docker, GPU, your shell and credentials), native file speed, no container engine.
+
+Cons:
+
+- No isolation: jobs run as you and can read your home, keys and other projects. xherd's secrets are a guardrail, not a boundary.
+- You install and update the coding-agent CLI, `git`, `tmux` ≥ 3.3, `gh` / `glab` and toolchains yourself.
+- The `all` permission mode is not available.
 
 ## Versions
 

@@ -25,7 +25,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 - **One screen for the herd.** The browser shows what every job is doing and which ones are waiting for you.
 - **You approve the important steps.** Jobs follow a spec-driven flow (spec, design, tasks, commits, pull request) and stop at gates. You read what they propose, then approve or ask for changes.
 - **Bring your own job and process.** Claude Code, opencode, Codex or Pi; the runtime, the flow and the integrations are plugins.
-- **Docker or native.** Docker keeps jobs and toolchains in a container and shares only your workspace; you can still open the code in your IDE.
+- **Docker or native.** Docker keeps jobs and toolchains in a container and shares only your workspace; native runs on your own machine with your own tools. [Choose how to run it](doc/user/getting-started.md#choose-how-to-run-it).
 
 ![Jobs: counters that filter, every job with a pill per stage of its workflow and the initials of the agent that runs it, and who in the team is busy](doc/assets/herd.jpg)
 
@@ -83,7 +83,7 @@ You hand xherd your tickets. It gives each one to a coding agent in its own sand
 
 ### Setup and operation
 
-- Docker-first: jobs, toolchains (Java, Node, Go, Rust, Python) live in one container, which downloads the agent CLIs it needs at first start; only your workspace is shared. Open the worktree in your IDE or your own terminal.
+- In Docker: jobs, toolchains (Java, Node, Go, Rust, Python) live in one container, which downloads the agent CLIs it needs at first start; only your workspace is shared. Open the worktree in your IDE or your own terminal.
 - Git access from the UI (HTTPS tokens, SSH keys, commit identity per repository owner) with a doctor that says what is wrong.
 - Repo profiles: base branch, autonomy, tripwires, test and lint commands, instructions and defaults per repository.
 - Backups of jobs and their work (`xherd backup create|verify|restore`), taken before every `xherd docker update`.
