@@ -2,15 +2,22 @@
 //! the `## Open questions` heading. The document is the only source; the UI
 //! answers each item with an inline comment on it.
 
-/// The questions in `md`, in document order. A lone "None." (any case, period
-/// optional) or an empty or missing section means none. An item's indented
-/// continuation lines are joined to it with a space; nested lists are left out.
+/// The questions in `md`, in document order. A section whose first content (a
+/// paragraph line or top-level item) is a None statement ("None", any case,
+/// then end, `.` or `:`; text may follow) has none, whatever follows it: the
+/// items below were answered. An empty or missing section means none too. An
+/// item's indented continuation lines are joined to it with a space; nested
+/// lists are left out. `ui/src/lib/notes.ts` `questionBlocks` applies the same rule.
 pub fn parse(md: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut inside = false;
     let mut fence = false;
     // The item being read accepts continuation lines.
     let mut open = false;
+    // Where the section's questions start, and whether its first content is a None statement.
+    let mut start = 0;
+    let mut first = true;
+    let mut none_first = false;
     for line in md.lines() {
         let t = line.trim_start();
         if t.starts_with("```") || t.starts_with("~~~") {
@@ -22,12 +29,20 @@ pub fn parse(md: &str) -> Vec<String> {
             continue;
         }
         if let Some(h) = heading(line) {
+            if none_first {
+                out.truncate(start);
+            }
             inside = h.eq_ignore_ascii_case("open questions");
+            (start, first, none_first) = (out.len(), true, false);
             open = false;
             continue;
         }
         if !inside {
             continue;
+        }
+        if first && !t.is_empty() {
+            first = false;
+            none_first = is_none(item(t).unwrap_or(t));
         }
         let indented = line.starts_with(' ') || line.starts_with('\t');
         if let (false, Some(text)) = (indented, item(line)) {
@@ -44,10 +59,10 @@ pub fn parse(md: &str) -> Vec<String> {
             open = false;
         }
     }
-    out.retain(|q| !q.is_empty());
-    if out.len() == 1 && is_none(&out[0]) {
-        out.clear();
+    if none_first {
+        out.truncate(start);
     }
+    out.retain(|q| !q.is_empty());
     out
 }
 
@@ -78,8 +93,10 @@ fn item(line: &str) -> Option<&str> {
     (rest.is_empty() || rest.starts_with([' ', '\t'])).then(|| rest.trim())
 }
 
+/// A None statement: "None" then end, `.` or `:` (so "None of these" is not one).
 fn is_none(q: &str) -> bool {
-    q.trim_end_matches('.').eq_ignore_ascii_case("none")
+    q.get(..4).is_some_and(|w| w.eq_ignore_ascii_case("none")) && q[4..].starts_with(['.', ':'])
+        || q.eq_ignore_ascii_case("none")
 }
 
 #[cfg(test)]

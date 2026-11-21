@@ -60,6 +60,11 @@ What this change does not do.
 - …
 ```
 
+Once a question is answered, take it out of `## Open questions` and record
+the answer in the requirements or `## Assumptions`; when none are left, the
+section reads "None." (a section that starts with "None" has no questions,
+whatever follows it).
+
 Design may be skipped (`design: skip`) only when the change is small and
 local, changes no data model, API, configuration or dependency, touches
 nothing security- or concurrency-sensitive, and has one obvious approach.

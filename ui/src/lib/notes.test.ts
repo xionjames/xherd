@@ -22,4 +22,12 @@ describe('questionBlocks', () => {
     expect(q('## Approach', '- a')).toEqual([]);
     expect(q('## Open questions', '- a?', '- None.')).toEqual(['- a?', '- None.']);
   });
+  // #177: a section that opens with a None statement has no questions.
+  it('none then answered items is no question', () => {
+    expect(q('## Open questions', 'None. Answered at the first review:', '- Q1: restart (R7).', '- Q2: refused (R5a).', '## Assumptions', '- a')).toEqual([]);
+    expect(q('## Open questions', '- None.', '- Q1: answered.', '- Q2: answered.')).toEqual([]);
+  });
+  it('none of the options is a question', () => {
+    expect(q('## Open questions', '- None of these fit, which one?')).toEqual(['- None of these fit, which one?']);
+  });
 });
