@@ -11,7 +11,7 @@
 {#if segs.length}
   <div class="trk" role="img" aria-label={cur ? segTitle(cur) : 'stages'}>
     {#each segs as s (s.stage)}
-      <span class="stc {s.state}" title={segTitle(s)}><span class="stp {s.state}">{s.label}</span><i>{s.initials}</i></span>
+      <span class="stc {s.state}" title={segTitle(s)}><span class="stp {s.state}">{s.label}</span><i>{s.initials}{#if s.fresh} · check{/if}</i></span>
     {/each}
   </div>
 {:else}

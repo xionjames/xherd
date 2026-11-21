@@ -267,6 +267,12 @@ impl StageDef {
         self.gate.as_ref().map_or(&[], |g| &g.docs)
     }
 
+    /// Whether the fresh-context check may be switched on for this stage: a
+    /// spec or design stage whose gate is a document gate.
+    pub fn fresh_check_eligible(&self) -> bool {
+        matches!(self.role, Role::Spec | Role::Design) && !self.docs().is_empty()
+    }
+
     /// The gate documents that are the task list: every document of a
     /// `tasks`-role stage, else those named `tasks.md` (the file `tasks sync`
     /// reads).
@@ -616,6 +622,22 @@ mod tests {
         );
         assert_eq!(b.commit_stage(Some("reproduce")).unwrap().id, "reproduce");
         assert_eq!(b.commit_stage(Some("analysis")).unwrap().id, "reproduce");
+    }
+
+    #[test]
+    fn fresh_check_is_eligible_on_spec_and_design_document_stages_only() {
+        let p = crate::builtin();
+        let eligible = |flow: &str| -> Vec<String> {
+            p.flow(flow)
+                .unwrap()
+                .stages
+                .iter()
+                .filter(|s| s.fresh_check_eligible())
+                .map(|s| s.id.clone())
+                .collect()
+        };
+        assert_eq!(eligible("feature"), ["spec", "design"]);
+        assert_eq!(eligible("bugfix"), ["analysis"]);
     }
 
     #[test]

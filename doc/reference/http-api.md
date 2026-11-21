@@ -108,10 +108,10 @@ Which saved agent runs which stage of a workflow (a pack's flow). A job created 
 
 | Method and path | Does |
 |---|---|
-| `GET /flows` | `{flows}`: every flow of every pack with its `stages` (`id`, `label`, `role`, `class`, `command`, `assigned`, `human`, `agentId`, `agent`, and `broken`: why the agent cannot run, such as archived or its runtime off) |
+| `GET /flows` | `{flows}`: every flow of every pack with its `stages` (`id`, `label`, `role`, `class`, `command`, `assigned`, `human`, `agentId`, `agent`, `broken`: why the agent cannot run, such as archived or its runtime off, `freshCheck`: the fresh-context check is on for the stage, and `freshCheckAllowed`: the stage can have it, true for a spec or design stage with a document gate) |
 | `GET /flows/{pack}/{flow}` | One flow, the same shape |
 | `GET /flows/{pack}/{flow}/assignments` | `{assignments: [{stage, agentId, human}]}` |
-| `PUT /flows/{pack}/{flow}/assignments` | Replace the flow's assignments with `{assignments}` (agents by id or name; `human` defaults to false). Answers the flow as `GET` does. Refusals: `unknown_pack`, `unknown_flow`, `unknown_stage`, `unknown_agent`, `agent_archived`, `bad_assignment`, `mixed_runtime` (the agents of one flow must share a runtime) |
+| `PUT /flows/{pack}/{flow}/assignments` | Replace the flow's assignments with `{assignments}` (agents by id or name; `human` defaults to false). The optional `freshCheck` (stage ids) replaces the stages with the fresh-context check on, in the same save; absent keeps them. Answers the flow as `GET` does. Refusals: `unknown_pack`, `unknown_flow`, `unknown_stage` (also for a `freshCheck` id), `fresh_check_not_allowed` (the stage has no document gate of role spec or design), `unknown_agent`, `agent_archived`, `bad_assignment`, `mixed_runtime` (the agents of one flow must share a runtime) |
 
 A write publishes `{"type": "agents"}`.
 

@@ -63,4 +63,10 @@ CREATE INDEX flow_assignments_agent ON flow_assignments(agent_id);
     r#"
 ALTER TABLE installs ADD COLUMN declined TEXT;
 "#,
+    // 7: the stages of a workflow that get a fresh-context check before
+    // their gate opens. A row means on; no row means off.
+    r#"
+CREATE TABLE flow_fresh_checks (pack TEXT NOT NULL, flow TEXT NOT NULL, stage TEXT NOT NULL,
+                                PRIMARY KEY (pack, flow, stage));
+"#,
 ];

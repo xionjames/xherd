@@ -136,6 +136,9 @@ pub fn stages_table(flow: &Value) -> String {
         if let Some(b) = s["broken"].as_str() {
             notes.push(format!("broken: {b}"));
         }
+        if s["freshCheck"] == json!(true) {
+            notes.push("fresh check".into());
+        }
         rows.push(vec![
             s["id"].as_str().unwrap_or("?").to_string(),
             s["agent"].as_str().unwrap_or("-").to_string(),
@@ -306,7 +309,7 @@ mod tests {
     #[test]
     fn the_tables_say_what_each_stage_runs() {
         let flow = json!({"pack": "xherd", "flow": "feature", "stages": [
-            {"id": "spec", "assigned": false, "human": false},
+            {"id": "spec", "assigned": false, "human": false, "freshCheck": true},
             {"id": "design", "agent": "architect", "assigned": true, "human": false},
             {"id": "tasks", "agent": "architect", "assigned": false, "human": false},
             {"id": "review", "agent": "reviewer", "assigned": true, "human": true,
@@ -314,7 +317,8 @@ mod tests {
         ]});
         let t = stages_table(&flow);
         let line = |id: &str| t.lines().find(|l| l.starts_with(id)).unwrap().to_string();
-        assert!(line("spec").contains('-'));
+        assert!(line("spec").contains("fresh check"));
+        assert!(!line("design").contains("fresh check"));
         assert!(line("tasks").contains("same as before"));
         assert!(line("design").trim_end().ends_with("architect"));
         assert!(line("review").contains("human, broken: the agent is archived"));

@@ -109,6 +109,10 @@ pub struct StageView {
     /// Why the resolved agent cannot run now (archived, runtime off, gone).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub broken: Option<String>,
+    /// The fresh-context check is on for this stage (new jobs copy it).
+    pub fresh_check: bool,
+    /// The stage can have the check (a spec or design stage with a document gate).
+    pub fresh_check_allowed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -685,6 +689,11 @@ impl Daemon {
             .flow_assignments(pack, flow)
             .await
             .map_err(store)?;
+        let fresh = self
+            .store
+            .flow_fresh_checks(pack, flow)
+            .await
+            .map_err(store)?;
         let ids: Vec<&str> = f.stages.iter().map(|s| s.id.as_str()).collect();
         let resolved = resolve::stage_agents(&ids, &rows, &Default::default(), None);
         let stages = f
@@ -713,6 +722,8 @@ impl Daemon {
                     agent_id: id,
                     agent: def.map(|d| d.name.clone()),
                     broken,
+                    fresh_check: fresh.contains(&s.id),
+                    fresh_check_allowed: s.fresh_check_eligible(),
                 }
             })
             .collect();
@@ -760,8 +771,42 @@ impl Daemon {
         flow: &str,
         rows: Vec<Assignment>,
     ) -> Result<FlowView, ActionError> {
+        self.set_flow_settings(pack, flow, rows, None).await
+    }
+
+    /// `set_assignments` plus the fresh-context check stages: `Some` replaces
+    /// the set in the same transaction (unknown stages and stages that cannot
+    /// have the check are refused, duplicates dropped), `None` keeps it.
+    pub async fn set_flow_settings(
+        &self,
+        pack: &str,
+        flow: &str,
+        rows: Vec<Assignment>,
+        fresh: Option<Vec<String>>,
+    ) -> Result<FlowView, ActionError> {
         let _w = self.agents_write.lock().await;
         let f = self.flow_of(pack, flow)?;
+        let fresh = match fresh {
+            None => None,
+            Some(stages) => {
+                let mut out: Vec<String> = Vec::new();
+                for id in stages {
+                    let s = f.stage(&id).ok_or_else(|| {
+                        err("unknown_stage", format!("flow {flow} has no stage {id:?}"))
+                    })?;
+                    if !s.fresh_check_eligible() {
+                        return Err(err(
+                            "fresh_check_not_allowed",
+                            format!("stage {id} cannot have the fresh-context check"),
+                        ));
+                    }
+                    if !out.contains(&id) {
+                        out.push(id);
+                    }
+                }
+                Some(out)
+            }
+        };
         let agents = self.store.list_agent_defs().await.map_err(store)?;
         let mut out: Vec<Assignment> = Vec::new();
         for r in rows {
@@ -809,7 +854,7 @@ impl Daemon {
         }
         out.sort_by(|a, b| a.stage.cmp(&b.stage));
         self.store
-            .set_flow_assignments(pack, flow, &out)
+            .set_flow_assignments(pack, flow, &out, fresh.as_deref())
             .await
             .map_err(store)?;
         self.agents_changed();

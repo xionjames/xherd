@@ -1067,7 +1067,9 @@ async fn a_ticket_url_names_the_repository() {
     let mut r = req(&t, "x");
     r.ticket = Some("https://github.com/acme/api/issues/12".into());
     let a = t.d.new_job(r).await.unwrap();
-    assert_eq!(a.repo.as_deref(), Some(t.repo.path().to_str().unwrap()));
+    // The daemon canonicalizes the path (macOS tmp is /private/var).
+    let expected = t.repo.path().canonicalize().unwrap();
+    assert_eq!(a.repo.as_deref(), Some(expected.to_str().unwrap()));
 }
 
 #[tokio::test]
@@ -1692,6 +1694,53 @@ async fn without_a_default_an_unassigned_stage_follows_the_one_before() {
     assert_eq!(j.default_agent, None);
     assert!(j.agent().is_none() && j.agents.len() == 1);
     assert_eq!(j.autonomy, Autonomy::Ask);
+}
+
+#[tokio::test]
+async fn a_job_copies_the_fresh_check_stages_and_keeps_them() {
+    let t = setup().await;
+    // off: no field, no section
+    let mut r = req(&t, "F-1");
+    r.name = "plain".into();
+    r.ticket = None;
+    let off = t.d.new_job(r).await.unwrap();
+    assert!(off.fresh_checks.is_empty());
+    let md = std::fs::read_to_string(worktree(&off).join(".xherd/instructions.md")).unwrap();
+    assert!(!md.contains("## Fresh-context check"));
+
+    // on for spec and design
+    t.d.set_flow_settings(
+        "xherd",
+        "feature",
+        vec![],
+        Some(vec!["spec".into(), "design".into()]),
+    )
+    .await
+    .unwrap();
+    let mut r = req(&t, "F-2");
+    r.name = "checked".into();
+    r.ticket = None;
+    let on = t.d.new_job(r).await.unwrap();
+    assert_eq!(
+        on.fresh_checks
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["design", "spec"]
+    );
+    let md = std::fs::read_to_string(worktree(&on).join(".xherd/instructions.md")).unwrap();
+    assert!(md.contains("## Fresh-context check") && md.contains("- `spec`\n"));
+
+    // a later change leaves the job as it was
+    t.d.set_flow_settings("xherd", "feature", vec![], Some(vec![]))
+        .await
+        .unwrap();
+    let md = std::fs::read_to_string(worktree(&on).join(".xherd/instructions.md")).unwrap();
+    assert!(md.contains("- `design`\n") && md.contains("- `spec`\n"));
+    let mut r = req(&t, "F-3");
+    r.name = "after".into();
+    r.ticket = None;
+    assert!(t.d.new_job(r).await.unwrap().fresh_checks.is_empty());
 }
 
 #[tokio::test]

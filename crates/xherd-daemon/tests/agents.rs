@@ -376,6 +376,82 @@ async fn stages_are_assigned_and_resolved_through_the_previous_one() {
 }
 
 #[tokio::test]
+async fn fresh_check_is_set_with_the_assignments() {
+    let t = setup().await;
+    t.d.create_agent(agent("architect")).await.unwrap();
+    let on = |v: &xherd_daemon::agents::FlowView| -> Vec<String> {
+        v.stages
+            .iter()
+            .filter(|s| s.fresh_check)
+            .map(|s| s.id.clone())
+            .collect()
+    };
+    // off by default; only spec and design stages are allowed
+    let v = t.d.flow("xherd", "feature").await.unwrap();
+    assert!(on(&v).is_empty());
+    let allowed: Vec<&str> = v
+        .stages
+        .iter()
+        .filter(|s| s.fresh_check_allowed)
+        .map(|s| s.id.as_str())
+        .collect();
+    assert_eq!(allowed, ["spec", "design"]);
+    // set, with a duplicate dropped, and read back
+    let v =
+        t.d.set_flow_settings(
+            "xherd",
+            "feature",
+            vec![row("design", "architect", false)],
+            Some(vec!["spec".into(), "design".into(), "spec".into()]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(on(&v), ["spec", "design"]);
+    assert_eq!(
+        on(&t.d.flow("xherd", "feature").await.unwrap()),
+        ["spec", "design"]
+    );
+    // another flow is untouched
+    assert!(on(&t.d.flow("xherd", "bugfix").await.unwrap()).is_empty());
+    // absent keeps the set
+    let v =
+        t.d.set_assignments("xherd", "feature", vec![])
+            .await
+            .unwrap();
+    assert_eq!(on(&v), ["spec", "design"]);
+    // an empty list clears it
+    let v =
+        t.d.set_flow_settings("xherd", "feature", vec![], Some(vec![]))
+            .await
+            .unwrap();
+    assert!(on(&v).is_empty());
+    // refusals leave the set as it was
+    let code = |r: Result<_, ActionError>| {
+        r.map(|_: xherd_daemon::agents::FlowView| ())
+            .unwrap_err()
+            .code
+    };
+    t.d.set_flow_settings("xherd", "feature", vec![], Some(vec!["spec".into()]))
+        .await
+        .unwrap();
+    assert_eq!(
+        code(
+            t.d.set_flow_settings("xherd", "feature", vec![], Some(vec!["nope".into()]))
+                .await
+        ),
+        "unknown_stage"
+    );
+    assert_eq!(
+        code(
+            t.d.set_flow_settings("xherd", "feature", vec![], Some(vec!["review".into()]))
+                .await
+        ),
+        "fresh_check_not_allowed"
+    );
+    assert_eq!(on(&t.d.flow("xherd", "feature").await.unwrap()), ["spec"]);
+}
+
+#[tokio::test]
 async fn assignments_are_checked() {
     let t = setup().await;
     let a = t.d.create_agent(agent("architect")).await.unwrap();

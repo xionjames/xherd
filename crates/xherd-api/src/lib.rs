@@ -2160,9 +2160,12 @@ async fn flow_assignments(
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct AssignmentsBody {
     assignments: Vec<xherd_core::resolve::Assignment>,
+    /// Stages with the fresh-context check on; absent keeps the stored set.
+    #[serde(default)]
+    fresh_check: Option<Vec<String>>,
 }
 
 /// Replaces the flow's assignments; answers the flow as `GET` does.
@@ -2173,7 +2176,8 @@ async fn flow_assignments_put(
     Json(body): Json<AssignmentsBody>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(json!(
-        d.set_assignments(&pack, &flow, body.assignments).await?
+        d.set_flow_settings(&pack, &flow, body.assignments, body.fresh_check)
+            .await?
     )))
 }
 

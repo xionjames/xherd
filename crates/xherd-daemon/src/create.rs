@@ -2,7 +2,7 @@
 //! then create the worktree and `.xherd/`, then register the agent. A failure
 //! after the worktree exists removes it again, so nothing is left behind.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use xherd_core::agent_def::{AgentDef, SkillCopy, StageAgent};
@@ -144,6 +144,24 @@ impl Daemon {
                 .collect()
         } else {
             Vec::new()
+        };
+        // The fresh-context check stages, copied now: later changes to the
+        // workflow do not touch this job. Only stages of this flow that are
+        // still eligible count.
+        let fresh_checks: BTreeSet<String> = match pack.and_then(|p| p.flow(&c.flow)) {
+            Some(f) => self
+                .store
+                .flow_fresh_checks(pack_name, &c.flow)
+                .await
+                .map_err(|e| refuse("store", e.to_string()))?
+                .into_iter()
+                .filter(|id| {
+                    f.stages
+                        .iter()
+                        .any(|s| s.id == *id && s.fresh_check_eligible())
+                })
+                .collect(),
+            None => BTreeSet::new(),
         };
         let mut overrides = BTreeMap::new();
         for (stage, key) in &req.agents {
@@ -403,6 +421,7 @@ impl Daemon {
             .map(|(id, (snap, _))| (id.clone(), snap.clone()))
             .collect();
         a.stage_agents = stage_agents;
+        a.fresh_checks = fresh_checks;
         a.default_agent = default_id;
         a.current_agent = current_id.clone();
         a.lowered = eff.lowered.clone();
