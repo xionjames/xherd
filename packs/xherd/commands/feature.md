@@ -21,7 +21,18 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    questions, assumptions. Set `design: skip` only when the rules for skipping
    design hold.
 5. Write `.xherd/spec/memory.md`, with the code map of what you explored.
-6. `xherd gate open spec`. Put every question for the user in the open
+6. Fresh-context check. Only when `.xherd/instructions.md` has a "Fresh-context
+   check" section that lists `spec`; otherwise skip this step. Run a sub-agent
+   with a fresh context: give it `spec.md`, `ticket.md` and the files `spec.md`
+   names, never `memory.md` or this conversation, and ask it to restate in a
+   short paragraph what the spec asks for, then list at most five points where
+   it is unclear, contradictory or missing something; no style notes. It writes
+   no file. Fix what you agree with in `spec.md`; move what only the user can
+   decide to `## Open questions`; add a line to `## Assumptions` saying a
+   fresh-context check ran and what it changed. When you have no sub-agent,
+   write "Fresh-context check skipped: no sub-agent." there instead. Run the
+   check once for each time you open the gate.
+7. `xherd gate open spec`. Put every question for the user in the open
    questions section, one list item each: that is where xherd reads them and
    where the user answers them.
-7. Stop and wait for the user.
+8. Stop and wait for the user.

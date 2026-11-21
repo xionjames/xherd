@@ -6,8 +6,10 @@ description: xherd — review the whole branch against the spec
 Read the xherd rules in `{{path:rules}}` first and follow them.
 
 Review as if you had not written the code: judge the branch by the approved
-documents and the diff, not by what you remember of the work. When you can
-run a sub-agent with a fresh context, give it this review to do.
+documents and the diff, not by what you remember of the work. Whenever your
+runtime has sub-agents, give this review to a sub-agent with a fresh context
+(the approved documents and the diff, never `memory.md` or this conversation)
+and write its findings up yourself; do this every time, not only when asked.
 
 1. `xherd stage enter review`
 2. Read `spec.md`, `design.md` (if any) and `tasks.md`, and the full branch

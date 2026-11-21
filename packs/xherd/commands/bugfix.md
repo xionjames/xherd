@@ -38,8 +38,21 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    call is accepted.
 7. Write `.xherd/spec/memory.md`, with the code map of what you explored
    (the files of the cause and of the test, how to build and run the tests).
-8. `xherd gate open analysis`: one gate over `spec.md` and `tasks.md`. Put
+8. Fresh-context check. Only when `.xherd/instructions.md` has a "Fresh-context
+   check" section that lists `analysis`; otherwise skip this step. Run a
+   sub-agent with a fresh context: give it `spec.md`, `tasks.md`, `ticket.md`
+   and the files they name, never `memory.md` or this conversation, and ask it
+   to restate in a short paragraph the bug and the fix, then list at most five
+   points where the root cause is not backed by the code, the reproduction test
+   would not catch the bug, or the tasks do not cover the fix; no style notes.
+   It writes no file. Fix what you agree with in `spec.md` and `tasks.md`
+   (then run `xherd tasks sync`); move what only the user can decide to
+   `## Open questions` of `spec.md`; add a line to `## Assumptions` saying a
+   fresh-context check ran and what it changed. When you have no sub-agent,
+   write "Fresh-context check skipped: no sub-agent." there instead. Run the
+   check once for each time you open the gate.
+9. `xherd gate open analysis`: one gate over `spec.md` and `tasks.md`. Put
    every question for the user in the open questions section of `spec.md`,
    one list item each: that is where xherd reads them and where the user
    answers them.
-9. Stop and wait for the user.
+10. Stop and wait for the user.
