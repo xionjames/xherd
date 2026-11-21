@@ -1424,16 +1424,17 @@ fn download(c: &Client, job: &str, path: &str, output: Option<&std::path::Path>)
     if let Some(t) = &c.token {
         req = req.header("Authorization", format!("Bearer {t}"));
     }
+    let remove = |t: &Option<std::path::PathBuf>| {
+        if let (Some(t), true) = (t, output.is_none()) {
+            let _ = std::fs::remove_file(t);
+        }
+    };
     let resp = match req.call() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("daemon not reachable at {}: {e}", c.url);
+            remove(&target);
             return 2;
-        }
-    };
-    let remove = |t: &Option<std::path::PathBuf>| {
-        if let (Some(t), true) = (t, output.is_none()) {
-            let _ = std::fs::remove_file(t);
         }
     };
     if !resp.status().is_success() {
@@ -1553,6 +1554,23 @@ mod tests {
         };
         assert_eq!(super::download(&c, "shop", "r.txt", Some(&file)), 2);
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "precious");
+    }
+
+    /// Review F04: without `-o` a download that cannot reach the daemon leaves no
+    /// empty file behind (the next try would be refused as existing).
+    #[test]
+    fn a_failed_download_without_output_leaves_no_file() {
+        // Relative to the working directory: a unique name, removed before the check.
+        let name = format!("xherd-f04-{}.txt", std::process::id());
+        let c = super::Client {
+            url: "http://127.0.0.1:9".into(),
+            token: None,
+            agent: ureq::Agent::new_with_defaults(),
+        };
+        assert_eq!(super::download(&c, "shop", &format!("r/{name}"), None), 2);
+        let left = std::path::Path::new(&name).exists();
+        let _ = std::fs::remove_file(&name);
+        assert!(!left, "{name} was left behind");
     }
 
     #[test]
