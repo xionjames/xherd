@@ -107,6 +107,12 @@ pub fn router(d: Daemon) -> Router {
             "/api/v1/jobs/{id}/actions/{action}/save-to-profile",
             post(action_save),
         )
+        .route(
+            "/api/v1/jobs/{id}/files",
+            get(download)
+                .post(upload)
+                .layer(DefaultBodyLimit::disable()),
+        )
         .route("/api/v1/jobs/{id}/{action}", post(agent_action))
         .route("/api/v1/open-in", get(open_in_view))
         .route(
@@ -287,7 +293,7 @@ impl From<ActionError> for ApiError {
             | "no_manifest" => StatusCode::UNPROCESSABLE_ENTITY,
             "fetch_failed" => StatusCode::BAD_GATEWAY,
             "not_fixable" => StatusCode::NOT_FOUND,
-            "no_such_doc" => StatusCode::NOT_FOUND,
+            "no_such_doc" | "no_such_file" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
             "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1553,6 +1559,116 @@ async fn file(
     Query(q): Query<FileQuery>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.doc(&id, &q.path).await?))
+}
+
+/// `POST /jobs/:id/files` (R1, R3, R5): store the files of one multipart
+/// request under the job's `.xherd/uploads/`. The global body limit is off for
+/// this route; the three upload limits are enforced as the parts arrive, and a
+/// refusal removes what the request already stored.
+async fn upload(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    mut parts: axum::extract::Multipart,
+) -> ApiResult<Json<Value>> {
+    let mut up = d.begin_upload(&id).await?;
+    let mut count = 0usize;
+    let res: ApiResult<()> = async {
+        while let Some(mut field) = parts.next_field().await.map_err(multipart_error)? {
+            let Some(name) = field.file_name().map(str::to_owned) else {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "usage",
+                    "every part must be a file with a name",
+                ));
+            };
+            let mut bytes = Vec::new();
+            while let Some(chunk) = field.chunk().await.map_err(multipart_error)? {
+                if bytes.len() as u64 + chunk.len() as u64 > up.max_bytes() {
+                    return Err(ActionError {
+                        code: "too_large",
+                        message: format!("{name} is larger than the upload limit"),
+                    }
+                    .into());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            up.add(&name, &bytes).await?;
+            count += 1;
+        }
+        if count == 0 {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "usage",
+                "no files in the request",
+            ));
+        }
+        Ok(())
+    }
+    .await;
+    match res {
+        Ok(()) => {
+            let paths: Vec<String> = up
+                .finish()
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            Ok(Json(json!({"paths": paths})))
+        }
+        Err(e) => {
+            up.abort().await;
+            Err(e)
+        }
+    }
+}
+
+fn multipart_error(e: axum::extract::multipart::MultipartError) -> ApiError {
+    ApiError::new(e.status(), "usage", e.body_text())
+}
+
+/// `GET /jobs/:id/files?path=…` (R6): a regular file under the job's workdir,
+/// streamed as a download. Always `application/octet-stream`, so the browser
+/// never renders it.
+async fn download(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Query(q): Query<FileQuery>,
+) -> ApiResult<Response> {
+    let path = d.download_path(&id, &q.path).await?;
+    let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| ActionError {
+            code: "io",
+            message: e.to_string(),
+        })?;
+    let len = file
+        .metadata()
+        .await
+        .map_err(|e| ActionError {
+            code: "io",
+            message: e.to_string(),
+        })?
+        .len();
+    let name = xherd_core::upload::clean_name(
+        &path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, len.to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{name}\""),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+        ],
+        axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file)),
+    )
+        .into_response())
 }
 
 /// `GET /jobs/:id/viewed`: the files of the Changes panel marked viewed.

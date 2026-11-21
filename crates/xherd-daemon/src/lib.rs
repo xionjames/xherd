@@ -40,6 +40,7 @@ pub mod support;
 pub mod tickets;
 pub mod todos;
 pub mod toolchains;
+pub mod uploads;
 pub mod worklog;
 
 pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
@@ -237,6 +238,9 @@ pub struct Daemon {
     /// Held while a profile is read, changed and saved (an edit, or actions
     /// saved from a job), so two writers never drop each other's change.
     pub profiles_write: Arc<tokio::sync::Mutex<()>>,
+    /// Held while an upload request stores its files (R3: limits and
+    /// rollback stay exact).
+    pub uploads: Arc<tokio::sync::Mutex<()>>,
     /// Held while plugins are installed, updated or removed.
     pub plugins_write: Arc<tokio::sync::Mutex<()>>,
     /// See `Options::plugin_install`.
@@ -429,6 +433,7 @@ impl Daemon {
             agents_write: Arc::default(),
             profiles_write: Arc::default(),
             plugins_write: Arc::default(),
+            uploads: Arc::default(),
             plugin_install: opts.plugin_install,
             allow_local_plugin_sources: opts.allow_local_plugin_sources,
             plugin_state: Arc::new(std::sync::Mutex::new(loaded_plugins.clone())),

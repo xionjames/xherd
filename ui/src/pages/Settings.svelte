@@ -27,7 +27,11 @@
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications', 'suggestAgents'];
+  const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications', 'suggestAgents', 'uploadMaxBytes', 'uploadMaxJobBytes', 'uploadMaxFiles'];
+  // Upload sizes are shown in MiB and stored in bytes (R3a).
+  const MIB = ['uploadMaxBytes', 'uploadMaxJobBytes'];
+  const shown = (c: Record<string, unknown>, k: string): string | boolean =>
+    typeof c[k] === 'boolean' ? (c[k] as boolean) : MIB.includes(k) && c[k] != null ? String(Number(c[k]) / 1048576) : String(c[k] ?? '');
   let form = $state<Form>({});
   const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due'], ['suggestion', 'Save a job\'s setup as an agent'], ['outside-commit', 'A commit was made outside xherd']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
@@ -41,7 +45,7 @@
 
   function fill(v: ConfigView) {
     const c = v.config;
-    form = Object.fromEntries(FIELDS.map((k) => [k, typeof c[k] === 'boolean' ? (c[k] as boolean) : String(c[k] ?? '')]));
+    form = Object.fromEntries(FIELDS.map((k) => [k, shown(c, k)]));
     ready = true;
   }
   $effect(() => { if (setup.config && app.state && !ready) fill(setup.config); });
@@ -50,7 +54,7 @@
   const saved = $derived.by(() => {
     if (!setup.config) return {} as Form;
     const c = setup.config.config;
-    return Object.fromEntries(FIELDS.map((k) => [k, typeof c[k] === 'boolean' ? (c[k] as boolean) : String(c[k] ?? '')])) as Form;
+    return Object.fromEntries(FIELDS.map((k) => [k, shown(c, k)])) as Form;
   });
   const changed = $derived(FIELDS.filter((k) => form[k] !== undefined && form[k] !== saved[k]));
   const dirty = $derived(changed.length);
@@ -58,7 +62,7 @@
   async function save() {
     saving = true;
     const body: Record<string, unknown> = {};
-    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'permissionMode' || k === 'defaultRuntime' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : Number(form[k]);
+    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'permissionMode' || k === 'defaultRuntime' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : MIB.includes(k) ? Math.round(Number(form[k]) * 1048576) : Number(form[k]);
     try {
       setup.config = await put<ConfigView>('/config', body);
       fill(setup.config);
@@ -141,6 +145,16 @@
           <span class="hint">Holds <span class="mono">worktrees/&lt;repo&gt;/&lt;agent&gt;</span>. Absolute path; empty for the default.</span></label>
         <label class="f">Keep events
           <span class="unit"><input type="number" min="1" bind:value={form.eventRetentionDays} /><span>days</span></span></label>
+      </Panel>
+      <Panel title="Uploads" hint="Files dropped or pasted into an agent's terminal.">
+        <label class="f">Max file size
+          <span class="unit"><input type="number" min="1" max="30" step="any" bind:value={form.uploadMaxBytes} /><span>MiB</span></span>
+          <span class="hint">At most 30 MiB, and not above the per-job limit.</span></label>
+        <label class="f">Max per job
+          <span class="unit"><input type="number" min="1" step="any" bind:value={form.uploadMaxJobBytes} /><span>MiB</span></span>
+          <span class="hint">Total size of a job's uploads.</span></label>
+        <label class="f">Max files per job
+          <span class="unit"><input type="number" min="1" bind:value={form.uploadMaxFiles} /><span>files</span></span></label>
       </Panel>
     </div>
   {:else if tab === 'gates'}

@@ -53,6 +53,11 @@ pub struct ConfigPatch {
     pub job_token_budget: Option<u64>,
     pub daily_token_budget: Option<u64>,
     pub max_diff_lines: Option<usize>,
+    /// Terminal uploads (#192): bytes per file (at most 30 MiB, not above the
+    /// per-job bytes), bytes per job, files per job.
+    pub upload_max_bytes: Option<u64>,
+    pub upload_max_job_bytes: Option<u64>,
+    pub upload_max_files: Option<usize>,
     /// Replaces the list of sensitive path globs.
     pub sensitive_paths: Option<Vec<String>>,
     /// Tool → default version; an empty version removes the tool's default.
@@ -174,6 +179,25 @@ fn check_open_in(
 
 /// Apply a patch with range checks. Pure, so it is tested directly.
 pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
+    /// The runner moves a file as one hex frame of at most 64 MiB (#192).
+    const UPLOAD_CEILING: u64 = 30 * 1024 * 1024;
+    let file = p.upload_max_bytes.unwrap_or(c.upload_max_bytes);
+    let job = p.upload_max_job_bytes.unwrap_or(c.upload_max_job_bytes);
+    let count = p.upload_max_files.unwrap_or(c.upload_max_files);
+    if file == 0 || job == 0 || count == 0 {
+        return Err(bad(
+            "uploadMaxBytes, uploadMaxJobBytes and uploadMaxFiles must be at least 1",
+        ));
+    }
+    if file > UPLOAD_CEILING {
+        return Err(bad("uploadMaxBytes must be at most 30 MiB"));
+    }
+    if file > job {
+        return Err(bad("uploadMaxBytes must not exceed uploadMaxJobBytes"));
+    }
+    c.upload_max_bytes = file;
+    c.upload_max_job_bytes = job;
+    c.upload_max_files = count;
     if let Some(n) = p.max_concurrent_jobs {
         if !(1..=64).contains(&n) {
             return Err(bad("maxConcurrentJobs must be 1 to 64"));
@@ -559,6 +583,49 @@ mod tests {
         }
         assert!(serde_json::from_value::<ConfigPatch>(json!({"port": 1})).is_err());
         assert!(serde_json::from_value::<ConfigPatch>(json!({"userToken": "x"})).is_err());
+    }
+
+    /// #192 R3a: the upload limits apply together and refuse nonsense.
+    #[test]
+    fn upload_limits_are_checked() {
+        const MIB: u64 = 1024 * 1024;
+        let patch = |v: Value| -> ConfigPatch { serde_json::from_value(v).unwrap() };
+        let mut c = Config::default();
+        apply(
+            &mut c,
+            patch(json!({"uploadMaxBytes": 10 * MIB, "uploadMaxJobBytes": 100 * MIB, "uploadMaxFiles": 5})),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                c.upload_max_bytes,
+                c.upload_max_job_bytes,
+                c.upload_max_files
+            ),
+            (10 * MIB, 100 * MIB, 5)
+        );
+        // Lowering the per-job bytes below the per-file bytes in one patch,
+        // or against the saved value, is refused and changes nothing.
+        for bad in [
+            json!({"uploadMaxBytes": 0}),
+            json!({"uploadMaxJobBytes": 0}),
+            json!({"uploadMaxFiles": 0}),
+            json!({"uploadMaxBytes": 31 * MIB, "uploadMaxJobBytes": 500 * MIB}),
+            json!({"uploadMaxBytes": 20 * MIB, "uploadMaxJobBytes": 10 * MIB}),
+            json!({"uploadMaxJobBytes": 5 * MIB}),
+        ] {
+            assert_eq!(apply(&mut c, patch(bad)).unwrap_err().code, "bad_config");
+        }
+        assert_eq!(
+            (
+                c.upload_max_bytes,
+                c.upload_max_job_bytes,
+                c.upload_max_files
+            ),
+            (10 * MIB, 100 * MIB, 5)
+        );
+        apply(&mut c, patch(json!({"uploadMaxBytes": 30 * MIB}))).unwrap();
+        assert_eq!(c.upload_max_bytes, 30 * MIB);
     }
 
     #[test]
