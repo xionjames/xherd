@@ -38,12 +38,15 @@
   let attempt = $state(0);
   let dropping = $state(false);
   let progress = $state<number | null>(null); // 0..1 while an upload runs
+  // The effect below must not read `files` itself: the caller passes a new
+  // object on every agent update. These strings stay equal, so it re-runs
+  // only when the job or its workdir changes.
+  const target = $derived(files?.jobId);
+  const workdir = $derived(files?.workdir);
 
   $effect(() => {
     void attempt;
     const url = path;
-    const target = files?.jobId;
-    const workdir = files?.workdir;
     if (!host) return;
     const screen = host;
     // The terminal's colours are the --term tokens of app.css.
