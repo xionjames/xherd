@@ -1,6 +1,6 @@
 //! The agent record owned by its actor.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -263,6 +263,10 @@ pub struct Job {
     /// (D26, R37); a stage with none keeps the one before.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub stage_agents: BTreeMap<String, crate::agent_def::StageAgent>,
+    /// The workflow stages whose documents get a fresh-context check before
+    /// their gate opens, copied at creation like `stage_agents`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub fresh_checks: BTreeSet<String>,
     /// The agent for stages with no assignment (`--agent A`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_agent: Option<String>,
@@ -360,6 +364,7 @@ impl Job {
             model: None,
             agents: BTreeMap::new(),
             stage_agents: BTreeMap::new(),
+            fresh_checks: BTreeSet::new(),
             default_agent: None,
             current_agent: None,
             pinned: false,

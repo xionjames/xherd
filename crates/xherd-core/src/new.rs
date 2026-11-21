@@ -317,6 +317,18 @@ pub fn instructions_md(a: &Job, repo_instructions: Option<&str>) -> String {
             "## Actions\n\nThis repository's profile defines actions the user can run from xherd. Reuse them; register another with `xherd action add` only when none fits.\n\n{actions}\n"
         )
     };
+    let fresh = if a.fresh_checks.is_empty() {
+        String::new()
+    } else {
+        let stages = a
+            .fresh_checks
+            .iter()
+            .map(|s| format!("- `{s}`\n"))
+            .collect::<String>();
+        format!(
+            "## Fresh-context check\n\nThese stages get a fresh-context check before their gate opens:\n\n{stages}\n"
+        )
+    };
     format!(
         "# xherd job {name}
 
@@ -350,7 +362,7 @@ Exit codes: 0 accepted; 2 refused (read the one-line message, fix, call again);
 
 Use only ports `$XHERD_PORT_BASE` to `$XHERD_PORT_BASE + 9` for servers you start.
 
-{actions}## Toolchains
+{actions}{fresh}## Toolchains
 
 When this repository has version files (`.nvmrc`, `.sdkmanrc`, …), xherd puts those tools on
 `PATH` before you start. `.xherd/toolchain.env` lists them. If a shell lost them (`command not
@@ -581,5 +593,28 @@ mod tests {
         assert!(!md.contains("`mine`"));
         assert!(md.find("## Ports") < md.find("## Actions"));
         assert!(md.find("## Actions") < md.find("## Toolchains"));
+    }
+
+    #[test]
+    fn instructions_list_fresh_checks_only_when_on() {
+        let mut a = Job::new("login", 0);
+        assert!(!instructions_md(&a, None).contains("## Fresh-context check"));
+        a.fresh_checks = ["design".to_string(), "spec".to_string()].into();
+        let md = instructions_md(&a, None);
+        assert!(md.contains("## Fresh-context check") && md.contains("- `spec`\n"));
+        assert!(md.find("- `design`") < md.find("- `spec`"));
+        assert!(md.find("## Fresh-context check") < md.find("## Toolchains"));
+    }
+
+    #[test]
+    fn job_json_without_fresh_checks_reads_back() {
+        let v = serde_json::to_value(Job::new("j", 1)).unwrap();
+        assert!(v.get("freshChecks").is_none());
+        let j: Job = serde_json::from_value(v).unwrap();
+        assert!(j.fresh_checks.is_empty());
+        let mut on = Job::new("j", 1);
+        on.fresh_checks.insert("spec".into());
+        let back: Job = serde_json::from_value(serde_json::to_value(&on).unwrap()).unwrap();
+        assert_eq!(back.fresh_checks, on.fresh_checks);
     }
 }
