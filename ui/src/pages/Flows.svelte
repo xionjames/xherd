@@ -28,7 +28,7 @@
   $effect(() => { pack; flowName; sel = 0; });
   const agents = $derived((app.state?.agents ?? []));
 
-  type Row = { agent: string; human: boolean };
+  type Row = { agent: string; human: boolean; fresh: boolean };
   let view = $state<FlowView | null>(null);
   let rows = $state<Row[]>([]);
   let orig = $state<Row[]>([]);
@@ -36,7 +36,7 @@
   let busy = $state(false);
 
   const label = (s: FlowStageView) => stageLabel({ ...s, gate: false });
-  const toRows = (v: FlowView): Row[] => v.stages.map((s) => ({ agent: s.assigned ? (s.agent ?? '') : '', human: s.human }));
+  const toRows = (v: FlowView): Row[] => v.stages.map((s) => ({ agent: s.assigned ? (s.agent ?? '') : '', human: s.human, fresh: s.freshCheck }));
 
   async function load(p: string, f: string) {
     view = null; error = null;
@@ -52,7 +52,7 @@
   const sig = $derived(agents.map((a) => `${a.id}:${a.version}:${a.status}:${a.broken ?? ''}`).join('|'));
   $effect(() => { sig; if (pack && flowName && !dirty && !busy) load(pack, flowName); });
 
-  const dirty = $derived(rows.reduce((n, r, i) => n + (r.agent !== orig[i]?.agent || r.human !== orig[i]?.human ? 1 : 0), 0));
+  const dirty = $derived(rows.reduce((n, r, i) => n + (r.agent !== orig[i]?.agent || r.human !== orig[i]?.human || r.fresh !== orig[i]?.fresh ? 1 : 0), 0));
   const choices = $derived(agents.filter(pickable));
   // A stage whose agent is archived or gone is still listed, so it can be changed.
   const names = (cur: string) => (cur && !choices.some((a) => a.name === cur) ? [...choices.map((a) => a.name), cur] : choices.map((a) => a.name));
@@ -62,8 +62,9 @@
     if (!view) return;
     busy = true;
     try {
-      const body: { assignments: AssignmentRow[] } = {
-        assignments: assignmentRows(rows.map((r, i) => ({ stage: view!.stages[i].id, ...r })), agents),
+      const body: { assignments: AssignmentRow[]; freshCheck: string[] } = {
+        assignments: assignmentRows(rows.map((r, i) => ({ stage: view!.stages[i].id, agent: r.agent, human: r.human })), agents),
+        freshCheck: view.stages.filter((_, i) => rows[i].fresh).map((s) => s.id),
       };
       const v = await put<FlowView>(`/flows/${encodeURIComponent(pack)}/${encodeURIComponent(flowName)}/assignments`, body);
       view = v; rows = toRows(v); orig = toRows(v);
@@ -137,6 +138,13 @@
                   options={[{ value: 'auto', label: 'Follow autonomy', disabled: !rows[i].agent || st.class === 'human-only' }, { value: 'wait', label: 'Always wait for me', disabled: !rows[i].agent }]} />
                 <span class="hint">{st.class === 'human-only' ? 'This stage always waits for you.' : '“Always wait” cannot be skipped, even at higher autonomy.'}</span>
               </div>
+              {#if st.freshCheckAllowed}
+                <div class="f">Fresh-context check
+                  <Seg label="Fresh-context check for {label(st)}" value={rows[i].fresh ? 'on' : 'off'} onchange={(v) => (rows[i].fresh = v === 'on')}
+                    options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]} />
+                  <span class="hint">Before this stage asks for your approval, a helper that has not seen the conversation reads the documents and says what it understood, then points out gaps or unclear parts. The agent fixes what it can and leaves the rest as questions for you. It runs once each time the gate opens and uses a little extra time and tokens. If the runtime has no helper, it is skipped.</span>
+                </div>
+              {/if}
             </div>
           </Panel>
           <p class="hint">A job takes a copy of these assignments when it starts. Saving affects new jobs only.</p>
