@@ -51,6 +51,8 @@ The CLI talks to the daemon over [HTTP](http-api.md) at `http://127.0.0.1:<port>
 | `xherd actions <job>` | The job's actions, one line each: id, kind, state and whether the command is approved |
 | `xherd run <job> <action> [--approve]` | Start an action in its own tmux session. A new or changed command is refused (`action_not_approved`) until you approve it: `--approve` approves the command as it stands now |
 | `xherd stop <job> <action>` | Stop a running action: Ctrl-C, then a kill after 5 seconds |
+| `xherd upload <job> FILE…` | Upload files to the job's `.xherd/uploads/` (the same as dropping them on its terminal) and print the stored absolute paths, one per line. Refused with `too_large` over the [upload limits](configuration.md#reference) |
+| `xherd download <job> PATH [-o FILE]` | Download a file under the job's worktree (`PATH` absolute or relative to it). Without `-o` it is saved as `./<name>` and refuses to overwrite an existing file; `-o FILE` replaces `FILE`; `-o -` writes to stdout |
 | `xherd attach <job>` | Attach this terminal to the job's tmux session (in the container when using Docker) |
 | `xherd attach <job> --action <id>` | Attach to a running action's session instead of the job's (refused when the action is not running) |
 | `xherd shell <job>` | A shell in the job's worktree |

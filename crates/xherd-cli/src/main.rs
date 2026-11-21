@@ -154,6 +154,19 @@ enum Cmd {
     RemoveWorktree { job: String },
     /// Type a message into a job's session.
     Send { job: String, text: String },
+    /// Copy files into a job's worktree (`.xherd/uploads/`); prints the stored paths, one per line.
+    Upload {
+        job: String,
+        #[arg(required = true)]
+        files: Vec<std::path::PathBuf>,
+    },
+    /// Copy a file out of a job's worktree (an absolute path or one relative to it); refuses to overwrite a file unless `-o` names it (`-o -` is stdout).
+    Download {
+        job: String,
+        path: String,
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
     /// Ask a paused, parked, watching or failed job something: starts a session with the text and holds it there (no auto-approval, no move to watching) until `xherd finish` or new flow work.
     Talk { job: String, text: String },
     /// End a `talk`: back to watching its PR when it was watching, else paused.
@@ -502,6 +515,10 @@ fn main() -> ExitCode {
         ),
         Cmd::RemoveWorktree { job } => action(&job, "remove-worktree", None),
         Cmd::Send { job, text } => action(&job, "send", Some(serde_json::json!({"text": text}))),
+        Cmd::Upload { job, files } => with_client(|c| upload(c, &job, &files)),
+        Cmd::Download { job, path, output } => {
+            with_client(|c| download(c, &job, &path, output.as_deref()))
+        }
         Cmd::Talk { job, text } => action(&job, "ask", Some(serde_json::json!({"text": text}))),
         Cmd::Finish { job } => action(&job, "finish", None),
         Cmd::Done { job } => action(&job, "mark-done", None),
@@ -1283,6 +1300,173 @@ fn action_call(job: &str, id: &str, what: &str, body: Option<Value>, json: bool)
     }
 }
 
+/// The body of a `multipart/form-data` upload: one `files` part per file.
+/// A name's `"`, CR and LF are percent-escaped, as browsers do.
+fn multipart_body(boundary: &str, files: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (name, bytes) in files {
+        let name = name
+            .replace('"', "%22")
+            .replace('\r', "%0D")
+            .replace('\n', "%0A");
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"files\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
+}
+
+/// `xherd upload <job> FILE…` (R13): one request, the stored paths one per line.
+fn upload(c: &Client, job: &str, files: &[std::path::PathBuf]) -> i32 {
+    let mut parts = Vec::new();
+    for f in files {
+        let bytes = match std::fs::read(f) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("{}: {e}", f.display());
+                return 2;
+            }
+        };
+        let name = f
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        parts.push((name, bytes));
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let boundary = format!("xherd-{nanos}-{}", std::process::id());
+    let body = multipart_body(&boundary, &parts);
+    let slow = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_connect(Some(Duration::from_secs(1)))
+        .timeout_global(Some(Duration::from_secs(30 * 60)))
+        .build()
+        .new_agent();
+    let url = format!("{}/api/v1/jobs/{job}/files", c.url.trim_end_matches('/'));
+    let mut req = slow.post(&url).header(
+        "Content-Type",
+        format!("multipart/form-data; boundary={boundary}"),
+    );
+    if let Some(t) = &c.token {
+        req = req.header("Authorization", format!("Bearer {t}"));
+    }
+    let resp = match req.send(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("daemon not reachable at {}: {e}", c.url);
+            return 2;
+        }
+    };
+    let ok = resp.status().is_success();
+    let v: Value = resp.into_body().read_json().unwrap_or(Value::Null);
+    if !ok {
+        eprintln!("{}", v["error"].as_str().unwrap_or("request failed"));
+        return 2;
+    }
+    for p in v["paths"].as_array().into_iter().flatten() {
+        println!("{}", p.as_str().unwrap_or(""));
+    }
+    0
+}
+
+/// `xherd download <job> PATH [-o FILE]` (R13): the file is streamed to disk,
+/// never held in memory, and an existing file is not overwritten (`-o -` is stdout).
+fn download(c: &Client, job: &str, path: &str, output: Option<&std::path::Path>) -> i32 {
+    let target = match output {
+        Some(p) if p == std::path::Path::new("-") => None,
+        Some(p) => Some(p.to_path_buf()),
+        None => {
+            let name = path.rsplit('/').next().filter(|n| !n.is_empty());
+            let Some(name) = name else {
+                eprintln!("{path} has no file name: give one with -o");
+                return 2;
+            };
+            Some(std::path::PathBuf::from(name))
+        }
+    };
+    // Without -o an existing file is refused, before the request. With -o it is
+    // replaced, but only once the daemon answers (F01: a failed download keeps it).
+    let mut file = None;
+    if let (Some(t), None) = (&target, output) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(t)
+        {
+            Ok(f) => file = Some(f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                eprintln!("{} exists: choose another with -o", t.display());
+                return 2;
+            }
+            Err(e) => {
+                eprintln!("{}: {e}", t.display());
+                return 2;
+            }
+        }
+    }
+    let slow = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_connect(Some(Duration::from_secs(1)))
+        .timeout_global(Some(Duration::from_secs(30 * 60)))
+        .build()
+        .new_agent();
+    let url = format!("{}/api/v1/jobs/{job}/files", c.url.trim_end_matches('/'));
+    let mut req = slow.get(&url).query("path", path);
+    if let Some(t) = &c.token {
+        req = req.header("Authorization", format!("Bearer {t}"));
+    }
+    let remove = |t: &Option<std::path::PathBuf>| {
+        if let (Some(t), true) = (t, output.is_none()) {
+            let _ = std::fs::remove_file(t);
+        }
+    };
+    let resp = match req.call() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("daemon not reachable at {}: {e}", c.url);
+            remove(&target);
+            return 2;
+        }
+    };
+    if !resp.status().is_success() {
+        let v: Value = resp.into_body().read_json().unwrap_or(Value::Null);
+        eprintln!("{}", v["error"].as_str().unwrap_or("request failed"));
+        remove(&target);
+        return 2;
+    }
+    // With -o the file is created (replacing any old one) only now.
+    let file = match (file, &target) {
+        (None, Some(t)) => match std::fs::File::create(t) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                eprintln!("{}: {e}", t.display());
+                return 2;
+            }
+        },
+        (f, _) => f,
+    };
+    let mut reader = resp.into_body().into_reader();
+    let copied = match file {
+        Some(mut f) => std::io::copy(&mut reader, &mut f),
+        None => std::io::copy(&mut reader, &mut std::io::stdout().lock()),
+    };
+    if let Err(e) = copied {
+        eprintln!("download failed: {e}");
+        remove(&target);
+        return 2;
+    }
+    0
+}
+
 fn action(agent: &str, what: &str, body: Option<Value>) -> i32 {
     match Client::new().and_then(|c| c.call("POST", &format!("/jobs/{agent}/{what}"), body)) {
         Ok(v) => {
@@ -1321,6 +1505,73 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn multipart_body_has_one_part_per_file_and_escaped_names() {
+        let body = multipart_body(
+            "B",
+            &[
+                ("a\"b\r\n.png".into(), b"123".to_vec()),
+                ("c.txt".into(), vec![0, 255]),
+            ],
+        );
+        let text = String::from_utf8_lossy(&body).into_owned();
+        assert!(text.starts_with("--B\r\n"));
+        assert!(text.contains("name=\"files\"; filename=\"a%22b%0D%0A.png\"\r\n"));
+        assert!(text.contains("filename=\"c.txt\""));
+        assert_eq!(text.matches("--B\r\n").count(), 2);
+        assert!(text.ends_with("\r\n--B--\r\n"));
+        assert!(body.windows(5).any(|w| w == b"\r\n123"));
+    }
+
+    #[test]
+    fn upload_and_download_parse() {
+        let cli = Cli::try_parse_from(["xherd", "upload", "shop", "a.png", "b.png"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::Upload { ref files, .. } if files.len() == 2));
+        assert!(Cli::try_parse_from(["xherd", "upload", "shop"]).is_err());
+        let cli =
+            Cli::try_parse_from(["xherd", "download", "shop", "out/r.txt", "-o", "-"]).unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::Download {
+                output: Some(_),
+                ..
+            }
+        ));
+    }
+
+    /// Review F01: with `-o` a download that fails leaves the file it would replace.
+    #[test]
+    fn a_failed_download_keeps_the_file_it_would_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("keep.txt");
+        std::fs::write(&file, "precious").unwrap();
+        // Nothing listens on port 9, so the request fails before any byte is written.
+        let c = super::Client {
+            url: "http://127.0.0.1:9".into(),
+            token: None,
+            agent: ureq::Agent::new_with_defaults(),
+        };
+        assert_eq!(super::download(&c, "shop", "r.txt", Some(&file)), 2);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "precious");
+    }
+
+    /// Review F04: without `-o` a download that cannot reach the daemon leaves no
+    /// empty file behind (the next try would be refused as existing).
+    #[test]
+    fn a_failed_download_without_output_leaves_no_file() {
+        // Relative to the working directory: a unique name, removed before the check.
+        let name = format!("xherd-f04-{}.txt", std::process::id());
+        let c = super::Client {
+            url: "http://127.0.0.1:9".into(),
+            token: None,
+            agent: ureq::Agent::new_with_defaults(),
+        };
+        assert_eq!(super::download(&c, "shop", &format!("r/{name}"), None), 2);
+        let left = std::path::Path::new(&name).exists();
+        let _ = std::fs::remove_file(&name);
+        assert!(!left, "{name} was left behind");
+    }
 
     #[test]
     fn daemon_restart_is_a_subcommand() {

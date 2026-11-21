@@ -448,6 +448,11 @@ export interface ConfigView {
   restartNeeded: boolean;
 }
 
+/** `POST /jobs/{id}/files`: the absolute paths the files were stored under. */
+export interface UploadResult {
+  paths: string[];
+}
+
 export type CheckFix = NonNullable<Check['fix']>;
 
 export interface GitHost {

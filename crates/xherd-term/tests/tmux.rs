@@ -11,6 +11,26 @@ fn tmux_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+/// True when tmux is 3.5 or newer, which reports a dead pane's exit status.
+/// Parses `tmux -V` as `checks::tmux_version` does: `tmux 3.5a`, `tmux next-3.6`.
+fn tmux_reports_exit() -> bool {
+    let Ok(out) = std::process::Command::new("tmux").arg("-V").output() else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let Some(num) = text.trim().rsplit([' ', '-']).next() else {
+        return false;
+    };
+    let mut parts = num.split('.');
+    let major: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts
+        .next()
+        .map(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit()))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    (major, minor) >= (3, 5)
+}
+
 /// Kills the private server even when an assertion fails.
 struct Server(Tmux);
 impl Drop for Server {
@@ -123,7 +143,10 @@ async fn held_session_keeps_exit_status_and_history() {
         })
         .await
     );
-    assert_eq!(status.unwrap().exit, Some(3));
+    // tmux 3.4 (CI, Ubuntu 24.04) reports a dead pane with no exit status.
+    if tmux_reports_exit() {
+        assert_eq!(status.unwrap().exit, Some(3));
+    }
     let out = t.history("act-a", 1 << 20).await.unwrap();
     assert!(out.contains("base=4801"), "{out}");
     assert!(out.contains("token=none"), "{out}");

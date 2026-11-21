@@ -5,11 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-axum = { version = "0.8.9", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws", "multipart"] }
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.54.1", features = ["net", "rt", "macros"] }
+tokio = { version = "1.54.1", features = ["net", "rt", "macros", "fs"] }
+tokio-util = { version = "0.7.20", features = ["io"] }
 tower-http = { version = "0.7.1", features = ["trace", "limit"] }
 tracing = "0.1.44"
 xherd-core = { version = "0.1.0", path = "../xherd-core" }

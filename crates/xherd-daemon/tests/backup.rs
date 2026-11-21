@@ -55,6 +55,14 @@ async fn backup_and_restore_on_another_machine() {
     std::fs::create_dir_all(wt1.join(".xherd/spec")).unwrap();
     std::fs::write(wt1.join(".xherd/spec/spec.md"), "# spec\n").unwrap();
     std::fs::write(wt1.join(".xherd/agent.json"), "{}").unwrap();
+    // A file dropped into the terminal (R12): left out of the archive, and
+    // invisible to git.
+    std::fs::create_dir_all(wt1.join(".xherd/uploads")).unwrap();
+    std::fs::write(wt1.join(".xherd/uploads/shot.png"), "png").unwrap();
+    assert_eq!(
+        git(&g, &wt1, &["status", "--porcelain", "--", ".xherd"]).await,
+        ""
+    );
 
     // The first machine's data root.
     let p1 = Paths::at(t.join("data1"));
@@ -137,6 +145,12 @@ async fn backup_and_restore_on_another_machine() {
     assert!(m.jobs[0].bundle && m.jobs[0].patch);
     assert!(!m.files.keys().any(|k| k.contains("secrets")));
     assert!(m.files.keys().any(|k| k.starts_with("jobs/ag1/")));
+    assert!(m.files.keys().any(|k| k.ends_with("spec/spec.md")));
+    assert!(
+        !m.files.keys().any(|k| k.contains("uploads")),
+        "{:?}",
+        m.files.keys()
+    );
     assert!(!m.files.keys().any(|k| k.starts_with("agents/")));
 
     // The second machine: no repository, another workspace.
@@ -170,6 +184,7 @@ async fn backup_and_restore_on_another_machine() {
         !wt2.join(".xherd/agent.json").exists(),
         "xherd writes it again at the next start"
     );
+    assert!(!wt2.join(".xherd/uploads").exists());
 
     let s2 = Store::open(&p2.db(), &p2.backups()).unwrap();
     let back = s2.get_job(&a.id).await.unwrap().unwrap();

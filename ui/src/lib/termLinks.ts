@@ -18,42 +18,47 @@ export type Found = { url: string; segs: Seg[] };
 const START = /https?:\/\//gi;
 const URL = /^https?:\/\/[^\s"'!*(){}|\\^<>`]*[^\s"':,.!?{}|\\^~[\]`()<>]/i;
 const CHAR = /[^\s"'!*(){}|\\^<>`]/;
+const PATH_START = /(?<![^\s"'`([{<])\//g;
+const PATH = /^\/[^\s"'!*(){}|\\^<>`]*[^\s"':,.!?{}|\\^~[\]`()<>]/;
 
 /** How close to the right edge a row must end to count as broken by the TUI
  * (Claude Code leaves about 8 columns). */
 const EDGE = 12;
 
-/** End of the run of URL characters in `text` from `from`. */
-function run(text: string, from: number): number {
+/** End of the run of `char`s in `text` from `from`. */
+function run(text: string, from: number, char: RegExp): number {
   let i = from;
-  while (i < text.length && CHAR.test(text[i])) i++;
+  while (i < text.length && char.test(text[i])) i++;
   return i;
 }
 
-/** URLs found in `rows`, a terminal `cols` wide, with the rows they cover. */
-export function findUrls(rows: Row[], cols: number): Found[] {
+/** Runs found in `rows`, a terminal `cols` wide, with the rows they cover. A run
+ * begins where `start` matches (a global regex whose match begins the run),
+ * goes on over `char`s, possibly over several rows, and is cut to `shape`.
+ * `url` holds the matched text. */
+function findRuns(rows: Row[], cols: number, start: RegExp, shape: RegExp, char: RegExp): Found[] {
   const found: Found[] = [];
-  let resume = 0; // where to look on the current row (after a URL that ended on it)
+  let resume = 0; // where to look on the current row (after a run that ended on it)
   for (let r = 0; r < rows.length; r++) {
     const text = rows[r].text;
-    START.lastIndex = resume;
+    start.lastIndex = resume;
     resume = 0;
-    for (let m; (m = START.exec(text)); ) {
-      // The URL's text, row by row, while it fills its row to the end.
-      const segs: Seg[] = [{ row: r, start: m.index, end: run(text, m.index) }];
+    for (let m; (m = start.exec(text)); ) {
+      // The run's text, row by row, while it fills its row to the end.
+      const segs: Seg[] = [{ row: r, start: m.index, end: run(text, m.index, char) }];
       for (let row = r; ; row++) {
         const cur = rows[row].text;
         const next = rows[row + 1];
         if (!next || segs.at(-1)!.end < cur.trimEnd().length) break;
         const indent = next.wrapped ? 0 : next.text.length - next.text.trimStart().length;
         if (!next.wrapped && cur.trimEnd().length < cols - EDGE) break;
-        const end = run(next.text, indent);
+        const end = run(next.text, indent, char);
         if (end === indent) break;
         segs.push({ row: row + 1, start: indent, end });
       }
-      // Cut to the URL proper (no trailing punctuation), segments to match.
+      // Cut to the run proper (no trailing punctuation), segments to match.
       const joined = segs.map((s) => rows[s.row].text.slice(s.start, s.end)).join('');
-      const url = URL.exec(joined)?.[0];
+      const url = shape.exec(joined)?.[0];
       if (!url) continue;
       let left = url.length;
       const kept: Seg[] = [];
@@ -71,8 +76,44 @@ export function findUrls(rows: Row[], cols: number): Found[] {
         resume = last.end;
         break;
       }
-      START.lastIndex = last.end;
+      start.lastIndex = last.end;
     }
+  }
+  return found;
+}
+
+/** URLs found in `rows`, a terminal `cols` wide, with the rows they cover. */
+export function findUrls(rows: Row[], cols: number): Found[] {
+  return findRuns(rows, cols, START, URL, CHAR);
+}
+
+/** `p` (absolute) as a clean path when it lies strictly inside `workdir`:
+ * `.` and empty segments dropped, `..` resolved, lexically (no filesystem).
+ * Null for a relative path, the workdir itself, or anything that leaves it. */
+export function pathUnder(workdir: string, p: string): string | null {
+  const norm = (s: string) => {
+    const out: string[] = [];
+    for (const seg of s.split('/')) {
+      if (seg === '..') out.pop();
+      else if (seg !== '' && seg !== '.') out.push(seg);
+    }
+    return out;
+  };
+  if (!workdir.startsWith('/') || !p.startsWith('/')) return null;
+  const base = norm(workdir);
+  const segs = norm(p);
+  if (segs.length <= base.length || base.some((b, i) => b !== segs[i])) return null;
+  return '/' + segs.join('/');
+}
+
+/** Absolute paths under `workdir` found in `rows`, with the rows they cover;
+ * `url` holds the clean path. A path starts with `/` at the row start or after
+ * a space, quote or bracket, so the path of a URL is not one. */
+export function findPaths(rows: Row[], cols: number, workdir: string): Found[] {
+  const found: Found[] = [];
+  for (const f of findRuns(rows, cols, PATH_START, PATH, CHAR)) {
+    const url = pathUnder(workdir, f.url);
+    if (url) found.push({ url, segs: f.segs });
   }
   return found;
 }
@@ -99,6 +140,24 @@ function rowAt(term: Terminal, y: number) {
 /** The terminal's link provider for plain URLs: each row's piece of a URL
  * is a link to the whole URL. */
 export function urlLinks(term: Terminal, open: (e: MouseEvent, uri: string) => void): ILinkProvider {
+  return provider(term, findUrls, open);
+}
+
+/** The link provider for absolute paths under `workdir`: each row's piece of a
+ * path is a link to the whole (clean) path. */
+export function pathLinks(
+  term: Terminal,
+  workdir: string,
+  open: (e: MouseEvent, path: string) => void,
+): ILinkProvider {
+  return provider(term, (rows, cols) => findPaths(rows, cols, workdir), open);
+}
+
+function provider(
+  term: Terminal,
+  find: (rows: Row[], cols: number) => Found[],
+  open: (e: MouseEvent, text: string) => void,
+): ILinkProvider {
   return {
     provideLinks(y, done) {
       const at = y - 1; // provideLinks is 1-based
@@ -110,7 +169,7 @@ export function urlLinks(term: Terminal, open: (e: MouseEvent, uri: string) => v
         rows.push(r);
       }
       const out: ILink[] = [];
-      for (const f of findUrls(rows, term.cols)) {
+      for (const f of find(rows, term.cols)) {
         for (const s of f.segs) {
           if (s.row + from !== at || s.end <= s.start) continue;
           const c = rows[s.row].cols;

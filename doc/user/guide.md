@@ -120,6 +120,17 @@ An action is a named command you run from the job page: a dev server, a Storyboo
 - **Save to repo profile.** From an action's page, or from the card a finished job shows for the actions that succeeded, you can write an action to the repository's [profile](#repo-profiles). New jobs for that repository then start with it already approved.
 - **Elsewhere.** Herd cards show `▶ n` for n running services, ⌘K lists the current job's actions, and the CLI has `xherd actions`, `run`, `stop` and `attach --action`. `jobActions` and `maxActionsPerJob` in [Configuration](../reference/configuration.md) switch it off or cap it.
 
+## Files in the terminal
+
+The job's agent terminal (not an action's terminal) takes your files and shows the ones the job made.
+
+- **Drop or paste.** Drop files on the terminal, or paste a screenshot or files from the clipboard (Ctrl+V, Cmd+V). They are uploaded in one request, with a progress chip in the terminal's title bar, to `.xherd/uploads/` in the job's worktree, and their paths are typed into the session, each in single quotes, separated by spaces, with no Enter: you add the sentence around them. Pasting text works as before. A refused upload (too large, too many files) shows its reason and types nothing.
+- **Names.** The stored name keeps letters, digits, `.`, `_` and `-`, drops a leading `.`, and is numbered (`shot-2.png`) when the name is taken. Uploads are never overwritten and never committed (`.xherd/` is excluded from git) and are not part of a [backup](#backups); they go when the worktree does.
+- **Limits.** One file up to 25 MiB, 250 MiB and 200 files per job by default; Settings → General → Uploads changes them at once (a file can be at most 30 MiB).
+- **Path links.** An absolute path in the terminal that lies inside the job's worktree is a link: clicking it downloads the file (uploads and anything the job wrote). Other paths stay text; web links work as before.
+- **Docker.** The daemon asks the agents' user to write the file, so the job owns what you upload and can read, move and delete it.
+- **CLI.** `xherd upload <job> FILE…` prints the stored paths; `xherd download <job> PATH [-o FILE]` fetches a file.
+
 ## Job states
 
 ```mermaid
@@ -261,6 +272,7 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | `xherd send <job> "<text>"` | Type into the job's session (also answers a question) |
 | `xherd pause\|resume\|cancel <job>` | Lifecycle; `xherd pause --all` stops every job at once; `cancel --remove-worktree` also deletes the worktree |
 | `xherd actions <job>`, `xherd run <job> <action> [--approve]`, `xherd stop <job> <action>` | List, run and stop a job's actions |
+| `xherd upload <job> FILE…`, `xherd download <job> PATH [-o FILE]` | Send files to a job, or fetch one from its worktree |
 | `xherd talk <job> "<text>"` / `xherd finish <job>` | Ask a stopped job something, and end that session |
 | `xherd remove-worktree <job>` | Delete a done or cancelled job's worktree (the branch stays) |
 | `xherd autonomy <job> <level>`, `xherd mode <job> <mode>`, `xherd model <job> <model>` | Autonomy, tool permissions and model |

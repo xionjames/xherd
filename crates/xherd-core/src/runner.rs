@@ -79,6 +79,14 @@ enum Request {
         #[serde(default = "one")]
         depth: u8,
     },
+    /// Create a new file in `dir` that never replaces one (see
+    /// [`create_file`]); the reply is `Found` with the path made.
+    CreateFile {
+        dir: PathBuf,
+        name: String,
+        data: String,
+        mode: u32,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -387,6 +395,74 @@ pub async fn remove_file(path: &Path, until: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Most numbered names tried before giving up (`shot.png`, `shot-2.png` …).
+const MAX_TRIES: u32 = 999;
+
+/// Create `dir/name` (or `name` numbered, see `upload::numbered`) with
+/// `O_EXCL`, so an existing file, and a symlink at that name, is never
+/// followed nor overwritten. A half-written file is removed.
+fn create_unique(dir: &Path, name: &str, bytes: &[u8], mode: u32) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if crate::upload::clean_name(name) != name {
+        return Err(std::io::Error::other(format!(
+            "{name:?} is not a clean name"
+        )));
+    }
+    for n in 1..=MAX_TRIES {
+        let path = dir.join(crate::upload::numbered(name, n));
+        let mut f = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&path)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        };
+        let written = f.write_all(bytes).and_then(|()| f.sync_all());
+        if let Err(e) = written {
+            drop(f);
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        return Ok(path);
+    }
+    Err(std::io::Error::other(format!(
+        "{}: too many files with this name",
+        dir.join(name).display()
+    )))
+}
+
+/// Create a file in `dir` (which must exist) as the agent user, never
+/// replacing one: a taken `name` gets a number. `mode` is the permission
+/// before the umask. Returns the path made. Without a runner it is done in
+/// place.
+pub async fn create_file(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    mode: u32,
+) -> std::io::Result<PathBuf> {
+    let Some(sock) = runner_socket() else {
+        return create_unique(dir, name, bytes, mode);
+    };
+    let req = Request::CreateFile {
+        dir: dir.into(),
+        name: name.into(),
+        data: hex::encode(bytes),
+        mode,
+    };
+    match roundtrip(sock, &req, Duration::from_secs(30))
+        .await
+        .map_err(std::io::Error::other)?
+    {
+        Reply::Found { path: Some(p) } => Ok(p),
+        other => Err(file_error(other)),
+    }
+}
+
 fn file_error(r: Reply) -> std::io::Error {
     match r {
         Reply::IoFailed { message } | Reply::Refused { message } => std::io::Error::other(message),
@@ -431,6 +507,27 @@ async fn handle(req: Request) -> Reply {
         Request::Find { dir, name, depth } => Reply::Found {
             path: find_in_subdirs(&dir, &name, depth),
         },
+        Request::CreateFile {
+            dir,
+            name,
+            data,
+            mode,
+        } => {
+            let bytes = match hex::decode(data) {
+                Ok(b) => b,
+                Err(e) => {
+                    return Reply::Refused {
+                        message: format!("data: {e}"),
+                    };
+                }
+            };
+            match create_unique(&dir, &name, &bytes, mode) {
+                Ok(path) => Reply::Found { path: Some(path) },
+                Err(e) => Reply::IoFailed {
+                    message: format!("{}: {e}", dir.display()),
+                },
+            }
+        }
         Request::Mkdir { path, mode } => match make_dir(&path, mode) {
             Ok(()) => Reply::Done,
             Err(e) => Reply::IoFailed {
@@ -771,6 +868,87 @@ mod tests {
             std::fs::metadata(&d).unwrap().permissions().mode() & 0o777,
             0o775
         );
+    }
+
+    #[test]
+    fn create_unique_numbers_and_never_follows_a_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let a = create_unique(d, "x.png", b"one", 0o664).unwrap();
+        let b = create_unique(d, "x.png", b"two", 0o664).unwrap();
+        assert_eq!(a, d.join("x.png"));
+        assert_eq!(b, d.join("x-2.png"));
+        assert_eq!(std::fs::read(&b).unwrap(), b"two");
+        let mode = std::fs::metadata(&a).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode & 0o600, 0o600);
+
+        // a symlink at the name (even a dangling one) is skipped, its target untouched
+        let target = d.join("target.txt");
+        std::fs::write(&target, "keep").unwrap();
+        std::os::unix::fs::symlink(&target, d.join("y.txt")).unwrap();
+        std::os::unix::fs::symlink(d.join("nowhere"), d.join("z.txt")).unwrap();
+        assert_eq!(
+            create_unique(d, "y.txt", b"new", 0o664).unwrap(),
+            d.join("y-2.txt")
+        );
+        assert_eq!(
+            create_unique(d, "z.txt", b"new", 0o664).unwrap(),
+            d.join("z-2.txt")
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert!(!d.join("nowhere").exists());
+
+        // only clean names are accepted
+        assert!(create_unique(d, "../evil", b"x", 0o664).is_err());
+        assert!(create_unique(d, "a/b", b"x", 0o664).is_err());
+    }
+
+    #[tokio::test]
+    async fn create_file_goes_through_the_socket() {
+        let (dir, sock) = start().await;
+        let make = |data: &[u8]| Request::CreateFile {
+            dir: dir.path().to_path_buf(),
+            name: "shot.png".into(),
+            data: hex::encode(data),
+            mode: 0o664,
+        };
+        let Ok(Reply::Found { path: Some(p1) }) =
+            roundtrip(&sock, &make(&[0, 255, 1]), Duration::from_secs(5)).await
+        else {
+            panic!("create failed");
+        };
+        let Ok(Reply::Found { path: Some(p2) }) =
+            roundtrip(&sock, &make(b"b"), Duration::from_secs(5)).await
+        else {
+            panic!("create failed");
+        };
+        assert_eq!(p1, dir.path().join("shot.png"));
+        assert_eq!(p2, dir.path().join("shot-2.png"));
+        assert_eq!(std::fs::read(&p1).unwrap(), vec![0, 255, 1]);
+        let bad = Request::CreateFile {
+            dir: dir.path().to_path_buf(),
+            name: "../x".into(),
+            data: String::new(),
+            mode: 0o664,
+        };
+        assert!(matches!(
+            roundtrip(&sock, &bad, Duration::from_secs(5)).await,
+            Ok(Reply::IoFailed { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn without_a_runner_create_file_works_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = create_file(dir.path(), "a.txt", b"hi", 0o664)
+            .await
+            .unwrap();
+        assert_eq!(p, dir.path().join("a.txt"));
+        let q = create_file(dir.path(), "a.txt", b"yo", 0o664)
+            .await
+            .unwrap();
+        assert_eq!(q, dir.path().join("a-2.txt"));
     }
 
     #[tokio::test]
