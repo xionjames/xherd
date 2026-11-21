@@ -1393,17 +1393,15 @@ fn download(c: &Client, job: &str, path: &str, output: Option<&std::path::Path>)
             Some(std::path::PathBuf::from(name))
         }
     };
-    // Without -o an existing file is refused; with -o it is replaced.
+    // Without -o an existing file is refused, before the request. With -o it is
+    // replaced, but only once the daemon answers (F01: a failed download keeps it).
     let mut file = None;
-    if let Some(t) = &target {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true);
-        if output.is_some() {
-            opts.create(true).truncate(true);
-        } else {
-            opts.create_new(true);
-        }
-        match opts.open(t) {
+    if let (Some(t), None) = (&target, output) {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(t)
+        {
             Ok(f) => file = Some(f),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 eprintln!("{} exists: choose another with -o", t.display());
@@ -1444,6 +1442,17 @@ fn download(c: &Client, job: &str, path: &str, output: Option<&std::path::Path>)
         remove(&target);
         return 2;
     }
+    // With -o the file is created (replacing any old one) only now.
+    let file = match (file, &target) {
+        (None, Some(t)) => match std::fs::File::create(t) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                eprintln!("{}: {e}", t.display());
+                return 2;
+            }
+        },
+        (f, _) => f,
+    };
     let mut reader = resp.into_body().into_reader();
     let copied = match file {
         Some(mut f) => std::io::copy(&mut reader, &mut f),
@@ -1528,6 +1537,22 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// Review F01: with `-o` a download that fails leaves the file it would replace.
+    #[test]
+    fn a_failed_download_keeps_the_file_it_would_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("keep.txt");
+        std::fs::write(&file, "precious").unwrap();
+        // Nothing listens on port 9, so the request fails before any byte is written.
+        let c = super::Client {
+            url: "http://127.0.0.1:9".into(),
+            token: None,
+            agent: ureq::Agent::new_with_defaults(),
+        };
+        assert_eq!(super::download(&c, "shop", "r.txt", Some(&file)), 2);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "precious");
     }
 
     #[test]
