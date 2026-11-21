@@ -37,7 +37,7 @@ export function initials(name?: string): string {
   return s ? s.toUpperCase() : '–';
 }
 
-export interface Seg { stage: string; label: string; state: StepState; agent?: string; initials: string }
+export interface Seg { stage: string; label: string; state: StepState; agent?: string; initials: string; fresh?: boolean }
 
 /** The track of a job: every stage of its workflow with its state and agent.
  *  A job with no workflow has none. */
@@ -46,13 +46,13 @@ export function track(a: Job, flows: FlowInfo[]): Seg[] {
   if (!f) return [];
   return steps(a, f).map(({ stage, state }) => {
     const agent = agentFor(a, stage.id);
-    return { stage: stage.id, label: stageLabel(stage), state, agent, initials: initials(agent) };
+    return { stage: stage.id, label: stageLabel(stage), state, agent, initials: initials(agent), fresh: a.freshChecks?.includes(stage.id) };
   });
 }
 
 /** The words for a segment's tooltip: "Spec · archie (current)". */
 export const segTitle = (s: Seg): string =>
-  `${s.label}${s.agent ? ` · ${s.agent}` : ''}${s.state === 'now' ? ' (waits for you)' : s.state === 'cur' ? ' (current)' : s.state === 'ok' ? ' (done)' : s.state === 'skip' ? ' (skipped)' : ''}`;
+  `${s.label}${s.agent ? ` · ${s.agent}` : ''}${s.state === 'now' ? ' (waits for you)' : s.state === 'cur' ? ' (current)' : s.state === 'ok' ? ' (done)' : s.state === 'skip' ? ' (skipped)' : ''}${s.fresh ? ' · fresh-context check' : ''}`;
 
 /** An avatar's background: the agent's hue, light enough for dark initials. */
 export const avatarBg = (name?: string): string | undefined => (name ? agentHue(name).replace('62% 48%', '58% 72%') : undefined);

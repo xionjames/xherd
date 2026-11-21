@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initials, jobGroup, track } from './jobs';
+import { initials, jobGroup, track, segTitle } from './jobs';
 import type { Job, FlowInfo } from './types';
 
 const job = (o: Partial<Job>): Job => ({ id: 'j', name: 'j', status: 'running', ...o }) as Job;
@@ -34,6 +34,13 @@ describe('track', () => {
     expect(t.map((s) => [s.stage, s.state, s.initials])).toEqual([['spec', 'ok', 'AR'], ['implement', 'cur', 'AR']]);
   });
   it('is empty without a workflow', () => expect(track(job({}), flows)).toEqual([]));
+  it('marks the stages with a fresh-context check in the segment and its title', () => {
+    const j = job({ flow: 'feature', pack: 'xherd', stage: 'spec', freshChecks: ['spec'] });
+    const t = track(j, flows);
+    expect(t.map((s) => !!s.fresh)).toEqual([true, false]);
+    expect(segTitle(t[0])).toContain(' · fresh-context check');
+    expect(segTitle(t[1])).not.toContain('fresh-context');
+  });
 });
 
 import { sortJobs } from './jobs';

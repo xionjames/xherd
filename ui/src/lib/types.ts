@@ -222,6 +222,8 @@ export interface Job {
   agents?: Record<string, JobAgent>;
   /** The agent each stage of the workflow runs with, and whether its gate always waits for you (D26). */
   stageAgents?: Record<string, StageAgent>;
+  /** Stages whose gate documents a fresh-context reader checks first, copied when the job was created. */
+  freshChecks?: string[];
   /** The agent for stages with no assignment. */
   defaultAgent?: string;
   /** The agent the running session uses: a key of `agents`. */
@@ -545,6 +547,10 @@ export interface FlowStageView {
   agentId?: string;
   agent?: string;
   broken?: string;
+  /** A fresh-context reader checks this stage's documents before its gate. */
+  freshCheck: boolean;
+  /** The stage may have the check (a spec or design stage with a documents gate). */
+  freshCheckAllowed: boolean;
 }
 export interface FlowView { pack: string; flow: string; stages: FlowStageView[] }
 /** A row of `PUT /flows/{pack}/{flow}/assignments`. */
