@@ -3339,15 +3339,8 @@ impl Actor {
         env.push(("XHERD_PORT_BASE".into(), port_base.to_string()));
         // The prompts call plain `xherd …`: a command with a variable in it
         // cannot be checked by the runtime and asks every time.
-        if let Some(dir) = Path::new(&s.xherd_bin).parent().filter(|d| d.is_absolute()) {
-            // The agents' PATH, not ours: the daemon's is the system's (R-1203).
-            let old = xherd_core::runner::agent_env("PATH").unwrap_or_default();
-            env.push((
-                "PATH".into(),
-                format!("{}:{old}", dir.display())
-                    .trim_end_matches(':')
-                    .to_string(),
-            ));
+        if let Some(path) = agent_path(&s.xherd_bin) {
+            env.push(("PATH".into(), path));
         }
         env
     }
@@ -3371,10 +3364,17 @@ impl Actor {
         }
     }
 
-    /// The argv of a new session: the runtime, wrapped in `xherd toolchain
-    /// exec` when the worktree's version files ask for tools (R-652). The plan
-    /// is written at every start, so version files edited since count.
+    /// The argv of a new session: the runtime in the agents' PATH (R-1203),
+    /// wrapped in `xherd toolchain exec` when the worktree's version files ask
+    /// for tools (R-652). The plan is written at every start, so version files
+    /// edited since count.
     async fn session_argv(&self, launch: Vec<String>) -> Vec<String> {
+        let argv = self.toolchain_argv(launch).await;
+        let xherd_bin = self.env.settings.get().xherd_bin.clone();
+        agent_pane_argv(agent_path(&xherd_bin).as_deref(), argv)
+    }
+
+    async fn toolchain_argv(&self, launch: Vec<String>) -> Vec<String> {
         use xherd_plugin::toolchain::{PLAN_FILE, plan};
         let Some(wd) = self.job.workdir.as_deref().map(Path::new) else {
             return launch;
@@ -4845,6 +4845,61 @@ fn above_profile(what: &str, want: &str, cap: &str, profile: &str) -> ActionErro
         "above_profile",
         format!("{what} {want} is above what the profile {profile} allows ({cap})"),
     )
+}
+
+/// The PATH of an agent's pane: the folder of `xherd_bin`, then the agents'
+/// PATH, not ours: the daemon's is the system's (R-1203). `None` when the
+/// binary path is not absolute.
+fn agent_path(xherd_bin: &str) -> Option<String> {
+    let dir = Path::new(xherd_bin).parent().filter(|d| d.is_absolute())?;
+    let old = xherd_core::runner::agent_env("PATH").unwrap_or_default();
+    Some(
+        format!("{}:{old}", dir.display())
+            .trim_end_matches(':')
+            .to_string(),
+    )
+}
+
+/// `argv` run as `env PATH=<path> …`, outermost. tmux ignores a `-e PATH` for
+/// a new pane and takes the daemon's PATH, which lacks the agents' folders
+/// (`init.rs`), so the runtime would not be found.
+fn agent_pane_argv(path: Option<&str>, argv: Vec<String>) -> Vec<String> {
+    match path {
+        None => argv,
+        Some(p) => {
+            let mut out = vec!["/usr/bin/env".to_string(), format!("PATH={p}")];
+            out.extend(argv);
+            out
+        }
+    }
+}
+
+#[cfg(test)]
+mod agent_pane_tests {
+    use super::*;
+
+    #[test]
+    fn agent_pane_puts_the_agents_path_outermost() {
+        let argv = vec!["claude".to_string(), "--version".to_string()];
+        let out = agent_pane_argv(Some("/usr/local/bin:/h/.local/bin"), argv.clone());
+        assert_eq!(
+            out,
+            [
+                "/usr/bin/env",
+                "PATH=/usr/local/bin:/h/.local/bin",
+                "claude",
+                "--version"
+            ]
+        );
+        assert_eq!(agent_pane_argv(None, argv.clone()), argv);
+    }
+
+    #[test]
+    fn agent_pane_path_starts_with_the_xherd_folder() {
+        let p = agent_path("/usr/local/bin/xherd").unwrap();
+        assert!(p.starts_with("/usr/local/bin:"), "{p}");
+        assert_eq!(agent_path("xherd"), None);
+    }
 }
 
 #[cfg(test)]
