@@ -98,7 +98,7 @@ A workflow's stages can be given to saved agents (an architect for the spec and 
 | Command | Does |
 |---|---|
 | `xherd flow ls` | Every flow with how many of its stages have an agent |
-| `xherd flow show <flow>` | Each stage with the agent it resolves to: `(same)` when it follows the stage before, `human`, and why an agent cannot run |
+| `xherd flow show <flow>` | Each stage with the agent it resolves to: `(same)` when it follows the stage before, `human`, and why an agent cannot run; a stage with the fresh-context check on is noted `fresh check` |
 | `xherd flow assign <flow> <stage> <agent> [--human\|--no-human]` | Give a stage to an agent, replacing its assignment. `--human` makes the stage's gate always wait for you, whatever the autonomy |
 | `xherd flow unassign <flow> <stage>` | Take the stage back: it uses the agent given at creation, else the stage before |
 
