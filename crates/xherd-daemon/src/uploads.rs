@@ -96,16 +96,37 @@ impl Upload {
     }
 
     /// Done: the paths stored, in the order of `add`.
-    pub fn finish(self) -> Vec<PathBuf> {
-        self.created
+    pub fn finish(mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.created)
     }
 
     /// Refused midway: remove what this request stored (R3).
-    pub async fn abort(self) {
-        for p in &self.created {
-            if let Err(e) = xherd_core::runner::remove_file(p, &self.dir).await {
-                tracing::warn!(path = %p.display(), error = %e, "upload rollback failed");
-            }
+    pub async fn abort(mut self) {
+        let created = std::mem::take(&mut self.created);
+        remove_stored(created, &self.dir).await;
+    }
+}
+
+/// Remove files an upload stored. A failure is logged; the rest still go.
+async fn remove_stored(paths: Vec<PathBuf>, dir: &Path) {
+    for p in &paths {
+        if let Err(e) = xherd_core::runner::remove_file(p, dir).await {
+            tracing::warn!(path = %p.display(), error = %e, "upload rollback failed");
+        }
+    }
+}
+
+impl Drop for Upload {
+    /// A request dropped before `finish` or `abort` (the client went away
+    /// midway) keeps nothing either (R3, F02).
+    fn drop(&mut self) {
+        let created = std::mem::take(&mut self.created);
+        if created.is_empty() {
+            return;
+        }
+        let dir = self.dir.clone();
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move { remove_stored(created, &dir).await });
         }
     }
 }

@@ -311,6 +311,22 @@ async fn uploads_to_one_job_share_the_limits() {
 }
 
 #[tokio::test]
+async fn a_request_dropped_midway_keeps_nothing() {
+    let t = setup().await;
+    let mut u = t.d.begin_upload("up").await.unwrap();
+    u.add("half.txt", b"x").await.unwrap();
+    // The client went away before the request finished.
+    drop(u);
+    let gone = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !t.names().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "{:?}", t.names());
+}
+
+#[tokio::test]
 async fn download_path_resolves_inside_the_workdir_only() {
     let t = setup().await;
     let root = t.wd.canonicalize().unwrap();
