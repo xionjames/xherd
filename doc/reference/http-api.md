@@ -134,7 +134,7 @@ Creating or editing an agent that lists a skill the library does not have is ref
 
 | Method and path | Does |
 |---|---|
-| `GET /reviews`, `POST /reviews/seen {items}` | Automatic approvals to look at, and marking them seen |
+| `GET /reviews`, `POST /reviews/seen {items}` | Automatic approvals to look at, and marking them seen; an approval is `seen` when it was marked, or when its job is done or cancelled |
 | `GET /todos`, `POST /todos`, `PUT /todos/{id}`, `DELETE /todos/{id}` | TODOs |
 | `POST /todos/{id}/complete`, `POST /todos/{id}/reschedule {due}`, `POST /todos/{id}/check` | Complete, reschedule, run a condition check now |
 | `GET /worklog?days=N[&group=agent]` | Job and user time per day and ticket, with delivery metrics; `group=agent` lists the days by saved agent (name) instead of ticket |

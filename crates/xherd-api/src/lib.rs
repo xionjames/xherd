@@ -830,11 +830,27 @@ async fn reviews(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         d.store.reviews_seen().await.map_err(|e| {
             ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string())
         })?;
+    // Approvals of a done or cancelled job need no look: report them as seen.
+    let finished: std::collections::HashSet<String> = d
+        .store
+        .list_jobs()
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "store", e.to_string()))?
+        .into_iter()
+        .filter(|j| {
+            matches!(
+                j.status,
+                xherd_core::Status::Done | xherd_core::Status::Cancelled
+            )
+        })
+        .map(|j| j.id)
+        .collect();
     let items: Vec<Value> = events
         .into_iter()
         .map(|e| {
             let p = e.payload.unwrap_or_default();
-            let seen = seen.contains(&seen_id(&e.job_id, e.at, p["gate"].as_str().unwrap_or("")));
+            let seen = finished.contains(&e.job_id)
+                || seen.contains(&seen_id(&e.job_id, e.at, p["gate"].as_str().unwrap_or("")));
             json!({"jobId": e.job_id, "at": e.at, "gate": p["gate"], "files": p["files"], "reason": p["reason"], "seen": seen})
         })
         .collect();
