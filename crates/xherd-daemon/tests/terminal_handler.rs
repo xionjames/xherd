@@ -717,6 +717,13 @@ fn install_and_uninstall_on_macos_dry_run() {
     let pb = "/usr/libexec/PlistBuddy";
     let ls = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
     let id = "io.github.xionjames.xherd.terminal";
+    // The handler also looks in the real /Applications: a host with Ghostty
+    // reports it too.
+    let ghostty = if Path::new("/Applications/Ghostty.app").is_dir() {
+        ",\"ghostty\""
+    } else {
+        ""
+    };
     for sh in shells() {
         let o = install(&e, &sh, "mac", &[], &[]);
         assert_eq!(o.code, 0, "{sh:?}: {}", o.stderr);
@@ -743,7 +750,7 @@ fn install_and_uninstall_on_macos_dry_run() {
                 format!(
                     "curl -fsS -m 10 -o /dev/null -H Content-Type: application/json -d \
                      {{\"version\":{HANDLER_VERSION},\"xherd\":\"{}\",\"os\":\"mac\",\
-                     \"terminals\":[\"terminal\",\"iterm\"],\"root\":\"{}\"}} \
+                     \"terminals\":[\"terminal\",\"iterm\"{ghostty}],\"root\":\"{}\"}} \
                      {REPORT}/api/v1/open-in/terminal-handler",
                     xherd_core::BUILD_VERSION,
                     e.root.display()
