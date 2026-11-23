@@ -16,7 +16,7 @@ pub mod template;
 pub mod xap;
 
 pub use manifest::{
-    Condition, Facts, Flow, GateKind, GateSpec, NextRule, Pack, PackError, StageDef,
+    Condition, Facts, Flow, GateKind, GateSpec, MemoryNote, NextRule, Pack, PackError, StageDef,
 };
 
 /// XAP major version this daemon speaks (xap.md §9).

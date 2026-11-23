@@ -6,6 +6,7 @@ protocol: 1
 specDir: private
 requiresCommitted: false
 private: [pr-comments.json, pr-decisions.json, pr-templates.json, HANDOFF.md]
+memoryNote: required
 
 install:
   claude-code:
