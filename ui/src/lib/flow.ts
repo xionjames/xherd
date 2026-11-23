@@ -1,4 +1,5 @@
 import type { Job, FlowInfo, StageInfo } from './types';
+import { waitsAtGate } from './format';
 
 export type StepState = 'ok' | 'skip' | 'now' | 'cur' | 'todo';
 
@@ -29,8 +30,8 @@ export function stageLabel(s: StageInfo): string {
 }
 
 /** State of each stage: done (or skipped, when the agent never entered it)
- *  before the current one, waiting (gate open) or running at the current one,
- *  nothing after. A done agent has every stage behind it; a watching one is
+ *  before the current one, waiting (`waitsAtGate`: the gate waits for the
+ *  user) or running at the current one, nothing after. A done agent has every stage behind it; a watching one is
  *  at the flow's last PR stage (watching the PR is that stage's work), with
  *  the stages it went through done. Agents without a record of visited
  *  stages show all done. */
@@ -48,7 +49,7 @@ export function steps(a: Job, f: FlowInfo): { stage: StageInfo; state: StepState
       else if (i <= cur) state = passed(stage.id);
       else if (!visited.length || visited.includes(stage.id)) state = 'ok';
     } else if (i < cur) state = passed(stage.id);
-    else if (i === cur) state = a.gate ? 'now' : 'cur';
+    else if (i === cur) state = waitsAtGate(a) ? 'now' : 'cur';
     return { stage, state };
   });
 }
