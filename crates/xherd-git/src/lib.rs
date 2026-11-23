@@ -245,6 +245,67 @@ impl Git {
             .is_ok_and(|out| out.lines().any(|l| l.trim() == remote))
     }
 
+    /// `git init` with `branch` as the first branch (the folder must exist).
+    pub async fn init(&self, dir: &Path, branch: &str) -> Result<()> {
+        self.run(dir, &["init", "--quiet", "-b", branch])
+            .await
+            .map(drop)
+    }
+
+    /// An empty commit on the current branch (a new repository has no `HEAD`
+    /// until it has one); returns its sha.
+    pub async fn commit_empty(&self, dir: &Path, message: &str) -> Result<String> {
+        self.run(dir, &["commit", "--quiet", "--allow-empty", "-m", message])
+            .await?;
+        self.rev_parse(dir, "HEAD").await
+    }
+
+    pub async fn remote_add(&self, dir: &Path, name: &str, url: &str) -> Result<()> {
+        if name.starts_with('-') || url.starts_with('-') {
+            return Err(GitError::Refused(
+                "a remote name or URL cannot start with '-'".into(),
+            ));
+        }
+        self.run(dir, &["remote", "add", name, url]).await.map(drop)
+    }
+
+    pub async fn remote_remove(&self, dir: &Path, name: &str) -> Result<()> {
+        self.run(dir, &["remote", "remove", name]).await.map(drop)
+    }
+
+    /// Pushes `branch` to `remote` and sets it as upstream. Never forced: a
+    /// remote with other history refuses and git's message is the error.
+    pub async fn push_branch(&self, dir: &Path, remote: &str, branch: &str) -> Result<()> {
+        self.run_env(
+            dir,
+            NO_PROMPT,
+            &["push", "--quiet", "--set-upstream", remote, branch],
+        )
+        .await
+        .map(drop)
+    }
+
+    /// Merges `branch` into the branch checked out in `dir` (a fast-forward
+    /// when possible, else a merge commit). On any failure the merge is
+    /// aborted, so the tree is as it was, and git's error is returned.
+    pub async fn merge_branch(&self, dir: &Path, branch: &str) -> Result<()> {
+        if branch.starts_with('-') {
+            return Err(GitError::Refused("a branch cannot start with '-'".into()));
+        }
+        let merged = self
+            .run(dir, &["merge", "--quiet", "--no-edit", branch])
+            .await;
+        if merged.is_err() && self.merge_in_progress(dir).await {
+            self.run(dir, &["merge", "--abort"]).await?;
+        }
+        merged.map(drop)
+    }
+
+    /// No staged, unstaged or untracked changes (ignored files do not count).
+    pub async fn is_clean(&self, dir: &Path) -> Result<bool> {
+        Ok(self.run(dir, &["status", "--porcelain"]).await?.is_empty())
+    }
+
     /// Fast-forwards the local `branch` to `upstream` (R-002). A branch
     /// checked out in `dir` is merged with `--ff-only`; any other one is
     /// updated through `git fetch . upstream:branch`. Git itself refuses a
