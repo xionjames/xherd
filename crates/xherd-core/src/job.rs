@@ -309,6 +309,10 @@ pub struct Job {
     /// action keeps its ports across a daemon restart (R12a).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port_base: Option<u16>,
+    /// The repository had no `origin` when a ship gate was approved (R9):
+    /// the job page offers to add one or to finish locally.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_origin: bool,
 }
 
 impl Job {
@@ -377,6 +381,7 @@ impl Job {
             actions: Vec::new(),
             actions_card_dismissed: false,
             port_base: None,
+            no_origin: false,
             review_rounds: 0,
             pr_state: None,
             pr_comments_seen: Vec::new(),

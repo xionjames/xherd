@@ -105,12 +105,16 @@ pub enum Trigger {
     /// User finished an Ask session of an agent that was watching its PR
     /// (#121): back to watching. Other Finishes are a `Pause`.
     Finish,
-    /// User marked a flow-`none` job done (R30): it has no PR to merge, so
+    /// User marked a flow-`none` job done (R30), or finished a job that
+    /// shipped without a remote locally (R10): it has no PR to merge, so
     /// nothing else ends it.
     MarkDone,
     /// User asked the agent to merge the base into its PR branch (#139):
     /// a new session with the pack's `conflicts` command.
     ResolveConflicts,
+    /// A job that shipped without a remote has one now (R9): a new session
+    /// with the ship command.
+    ShipAgain,
 }
 
 /// The lifecycle table. `None` means the trigger does not apply in that status.
@@ -140,6 +144,7 @@ pub fn next_status(from: Status, trigger: Trigger) -> Option<Status> {
         }
         (T::PrComments, S::Watching) => Some(S::Queued),
         (T::ResolveConflicts, S::Watching | S::Paused | S::Error | S::Idle) => Some(S::Queued),
+        (T::ShipAgain, S::Idle | S::Paused) => Some(S::Queued),
         (T::PrFinished, S::Watching) => Some(S::Done),
         (T::MarkDone, S::Idle | S::WaitingInput | S::Paused | S::Parked) => Some(S::Done),
         (T::SessionLost, s) if s.is_live() => Some(S::Error),
@@ -192,6 +197,8 @@ mod tests {
             (S::Paused, T::ResolveConflicts, S::Queued),
             (S::Error, T::ResolveConflicts, S::Queued),
             (S::Idle, T::ResolveConflicts, S::Queued),
+            (S::Idle, T::ShipAgain, S::Queued),
+            (S::Paused, T::ShipAgain, S::Queued),
             (S::Watching, T::PrFinished, S::Done),
             (S::Idle, T::MarkDone, S::Done),
             (S::WaitingInput, T::MarkDone, S::Done),
