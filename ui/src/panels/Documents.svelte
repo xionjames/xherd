@@ -15,6 +15,7 @@
   import Findings from '../components/Findings.svelte';
   import Seg from '../components/Seg.svelte';
   import { prGate } from '../lib/flow';
+  import { waitsAtGate } from '../lib/format';
 
   let { agent }: { agent: Job } = $props();
   // Effects key on the id: the agent object is replaced on every update.
@@ -102,7 +103,7 @@
     {#if docs.length}
       <div class="row">
         <Seg label="Document" value={selected ?? ''} onchange={(d) => go(`/jobs/${agent.name}`, { s: 'spec', doc: d })}
-          options={docs.map((d) => ({ value: d, label: gateFiles.includes(d) ? `${d} ✋` : d }))} />
+          options={docs.map((d) => ({ value: d, label: waitsAtGate(agent) && gateFiles.includes(d) ? `${d} ✋` : d }))} />
         <span class="grow"></span>
         {#if count}
           <button class="btn gate sm" onclick={sendNotes} disabled={sending || !agent.gate}

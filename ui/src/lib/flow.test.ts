@@ -16,6 +16,20 @@ describe('steps', () => {
     expect(steps(a({ stage: 'tasks', status: 'running' }), f).map((x) => x.state)).toEqual(['ok', 'ok', 'cur', 'todo']);
   });
 
+  const docs = { kind: 'docs', stage: 'spec', role: 'spec', files: [{ path: '.xherd/spec/spec.md', sha256: 's' }] } as never;
+  it('a running agent that keeps its gate is at the stage, not waiting for you', () => {
+    const s = steps(a({ stage: 'spec', status: 'running', gate: docs }), f);
+    expect(s.map((x) => x.state)).toEqual(['cur', 'todo', 'todo', 'todo']);
+  });
+  it('an agent stopped at its gate waits for you', () => {
+    const s = steps(a({ stage: 'spec', status: 'waiting-input', gate: docs }), f);
+    expect(s.map((x) => x.state)).toEqual(['now', 'todo', 'todo', 'todo']);
+  });
+  it('a gate autonomy will approve does not wait for you', () => {
+    const s = steps(a({ stage: 'spec', status: 'waiting-input', gate: docs, autoApprovePending: true }), f);
+    expect(s.map((x) => x.state)).toEqual(['cur', 'todo', 'todo', 'todo']);
+  });
+
   const pr: FlowInfo = {
     pack: 'xherd', flow: 'feature',
     stages: [['review', 'review'], ['ship', 'ship'], ['pr-review', 'pr'], ['pr', 'pr']].map(([id, role]) => ({ id, role: role as never, class: 'routine', gate: true })),
