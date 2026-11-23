@@ -2223,9 +2223,9 @@ impl Actor {
     /// done inline: the agent waits for the answer anyway.
     async fn observe(&self, pack: Option<&Pack>, cmd: &XapCmd) -> Result<Observed, Refusal> {
         use xherd_flow::xap::{HANDOFF, SPEC_DIR, doc_path, gate_docs};
-        // Every gate and commit proposal of an xherd flow leaves a valid memory.md.
+        // Every gate and commit proposal of a pack that asks for it leaves a valid memory.md.
         if matches!(cmd, XapCmd::GateOpen { .. } | XapCmd::CommitPropose { .. })
-            && pack.is_some_and(|p| p.name == xherd_flow::BUILTIN)
+            && needs_memory_note(pack)
             && xherd_flow::xap::flow_of(&self.job, pack).is_ok()
         {
             let file = self.workdir()?.join(SPEC_DIR).join("memory.md");
@@ -4871,6 +4871,29 @@ fn agent_pane_argv(path: Option<&str>, argv: Vec<String>) -> Vec<String> {
             out.extend(argv);
             out
         }
+    }
+}
+
+/// Whether a gate or commit proposal under `pack` needs a valid `memory.md`:
+/// the pack says so with `memoryNote` (R14a), whatever its name.
+fn needs_memory_note(pack: Option<&Pack>) -> bool {
+    pack.is_some_and(|p| p.memory_note == xherd_flow::MemoryNote::Required)
+}
+
+#[cfg(test)]
+mod memory_note_tests {
+    use super::*;
+
+    #[test]
+    fn the_pack_field_decides_not_the_name() {
+        let mut p = xherd_flow::builtin();
+        assert!(needs_memory_note(Some(&p)));
+        p.memory_note = xherd_flow::MemoryNote::Off;
+        assert!(!needs_memory_note(Some(&p)));
+        p.name = "acme".into();
+        p.memory_note = xherd_flow::MemoryNote::Required;
+        assert!(needs_memory_note(Some(&p)));
+        assert!(!needs_memory_note(None));
     }
 }
 
