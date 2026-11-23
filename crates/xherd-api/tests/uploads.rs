@@ -104,6 +104,7 @@ async fn setup() -> T {
             permission_mode: None,
             runtime: None,
             model: None,
+            new_project: None,
         })
         .await
         .unwrap();

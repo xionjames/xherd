@@ -101,6 +101,7 @@ fn req(t: &T, key: &str) -> NewJob {
         permission_mode: None,
         runtime: None,
         model: None,
+        new_project: None,
     }
 }
 
@@ -843,6 +844,7 @@ async fn refuses_without_a_runtime_plugin() {
         permission_mode: None,
         runtime: None,
         model: None,
+        new_project: None,
     };
     assert_eq!(d.new_job(r).await.unwrap_err().code, "runtime_unusable");
 }

@@ -489,6 +489,7 @@ fn main() -> ExitCode {
                 permission_mode: mode,
                 runtime,
                 model,
+                new_project: None,
             },
         ),
         Cmd::Model { job, model } => {

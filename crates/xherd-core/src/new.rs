@@ -61,6 +61,11 @@ pub struct NewJob {
     /// the setting's (`runtimeModels`), else the runtime's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// A new project instead of an existing repository: xherd creates a git
+    /// repository at `<workspace>/projects/<project>`. `""` takes the job's
+    /// name as the project's name. Excludes `repo` and `base`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_project: Option<String>,
 }
 
 pub const FLOW_NONE: &str = "none";
@@ -88,6 +93,16 @@ pub struct Checked {
     pub ticket: Option<TicketInput>,
     pub flow: String,
     pub prompt: String,
+    /// The new project's folder name, when `newProject` is set.
+    pub project: Option<String>,
+}
+
+/// Folder of new projects under the workspace.
+pub const PROJECTS_DIR: &str = "projects";
+
+/// Where a new project lives: `<workspace>/projects/<name>`.
+pub fn project_path(workspace: &std::path::Path, name: &str) -> std::path::PathBuf {
+    workspace.join(PROJECTS_DIR).join(name)
 }
 
 /// A ticket field: empty = none, `http(s)://…` = a URL (https only), else a key.
@@ -197,6 +212,34 @@ pub fn check(req: &NewJob) -> Result<Checked, Refusal> {
         ));
     }
     let repo = req.repo.trim();
+    if let Some(p) = req.new_project.as_deref() {
+        if !repo.is_empty() {
+            return Err(refuse(
+                "usage",
+                "a new project and a repository exclude each other",
+            ));
+        }
+        if req.base.as_deref().is_some_and(|b| !b.trim().is_empty()) {
+            return Err(refuse(
+                "usage",
+                "a new project has no base branch to choose",
+            ));
+        }
+        let p = p.trim();
+        let project = if p.is_empty() {
+            name.clone()
+        } else {
+            p.to_string()
+        };
+        check_name(&project)?;
+        return Ok(Checked {
+            name,
+            ticket,
+            flow,
+            prompt,
+            project: Some(project),
+        });
+    }
     if repo.is_empty() {
         return Err(refuse(
             "repo_required",
@@ -216,6 +259,7 @@ pub fn check(req: &NewJob) -> Result<Checked, Refusal> {
         ticket,
         flow,
         prompt,
+        project: None,
     })
 }
 
@@ -409,7 +453,32 @@ mod tests {
             permission_mode: None,
             runtime: None,
             model: None,
+            new_project: None,
         }
+    }
+
+    #[test]
+    fn new_projects() {
+        let mut r = req("shop");
+        r.repo = String::new();
+        r.new_project = Some(String::new());
+        let c = check(&r).unwrap();
+        assert_eq!(c.project.as_deref(), Some("shop"));
+        r.new_project = Some(" tool ".into());
+        assert_eq!(check(&r).unwrap().project.as_deref(), Some("tool"));
+        r.new_project = Some("Bad".into());
+        assert_eq!(check(&r).unwrap_err().code, "bad_name");
+        r.new_project = Some(String::new());
+        r.base = Some("dev".into());
+        assert_eq!(check(&r).unwrap_err().code, "usage");
+        let mut r = req("shop");
+        r.new_project = Some(String::new());
+        assert_eq!(check(&r).unwrap_err().code, "usage");
+        assert_eq!(check(&req("shop")).unwrap().project, None);
+        assert_eq!(
+            project_path(std::path::Path::new("/ws"), "tool"),
+            std::path::PathBuf::from("/ws/projects/tool")
+        );
     }
 
     #[test]

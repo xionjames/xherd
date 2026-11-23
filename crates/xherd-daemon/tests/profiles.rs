@@ -95,6 +95,7 @@ fn req(t: &T, key: &str) -> NewJob {
         permission_mode: None,
         runtime: None,
         model: None,
+        new_project: None,
     }
 }
 
