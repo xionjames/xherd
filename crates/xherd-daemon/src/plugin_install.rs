@@ -12,6 +12,7 @@ use xherd_plugin::manifest::parse_version;
 use xherd_plugin::{Kind, MANIFEST_FILE, Manifest, PluginSource};
 
 use crate::create::refuse as refuse_action;
+use crate::flow_plugin::{FlowContext, FlowPluginView, read_flow_plugin};
 use crate::plugin_dirs::{MAX_BYTES, MAX_DEPTH};
 use crate::repos::{CLONE_TIMEOUT, remove_tree};
 use crate::{ActionError, Daemon};
@@ -148,6 +149,9 @@ pub struct PluginView {
     pub replaces: Option<&'static str>,
     pub settings: Vec<SettingView>,
     pub runs: Vec<Run>,
+    /// A flow plugin's pack, agents and assignments (R5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow: Option<FlowPluginView>,
     pub warning: &'static str,
 }
 
@@ -429,6 +433,7 @@ impl Daemon {
         path: Option<&str>,
     ) -> Result<Preview, ActionError> {
         let src = self.plugin_source(url, git_ref, path)?;
+        let ctx = self.flow_context().await?;
         self.with_fetched(&src, |root, sha| {
             let (git_ref, url) = (src.git_ref.clone(), src.url.clone());
             match locate(root, src.path.as_deref())? {
@@ -445,7 +450,7 @@ impl Daemon {
                     git_ref,
                     path,
                     sha,
-                    plugin: Some(self.inspect(&dir)?),
+                    plugin: Some(self.inspect(&dir, &ctx)?),
                     choices: Vec::new(),
                 }),
             }
@@ -468,6 +473,7 @@ impl Daemon {
     ) -> Result<Installed, ActionError> {
         let src = self.plugin_source(url, git_ref, path)?;
         let _write = self.plugins_write.lock().await;
+        let ctx = self.flow_context().await?;
         let plugins = self.paths.plugins();
         let (view, found_path, sha) = self
             .with_fetched(&src, |root, sha| {
@@ -480,13 +486,14 @@ impl Daemon {
                         ));
                     }
                 };
-                let view = self.inspect(&dir)?;
+                let view = self.inspect(&dir, &ctx)?;
                 if view.digest != expect_digest {
                     return Err(refuse_action(
                         "changed_since_preview",
                         "the source changed since the preview: preview it again",
                     ));
                 }
+                not_yet(&view)?;
                 if view.replaces == Some("external") {
                     return Err(refuse_action(
                         "plugin_exists",
@@ -603,6 +610,7 @@ impl Daemon {
     ) -> Result<UpdatePreview, ActionError> {
         let record = self.plugin_record(name).await?;
         let src = self.update_source(&record, new_ref)?;
+        let ctx = self.flow_context().await?;
         let (preview, new_manifest) = self
             .with_fetched(&src, |root, sha| {
                 let Found::One(dir, path) = locate(root, src.path.as_deref())? else {
@@ -611,7 +619,7 @@ impl Daemon {
                         "several plugins in the repository: the recorded path is gone",
                     ));
                 };
-                let view = self.inspect(&dir)?;
+                let view = self.inspect(&dir, &ctx)?;
                 same_name(name, &view.name)?;
                 let text = std::fs::read_to_string(dir.join(MANIFEST_FILE)).unwrap_or_default();
                 Ok((
@@ -674,6 +682,7 @@ impl Daemon {
         let _write = self.plugins_write.lock().await;
         let record = self.plugin_record(name).await?;
         let src = self.update_source(&record, new_ref)?;
+        let ctx = self.flow_context().await?;
         let plugins = self.paths.plugins();
         let (view, found_path, sha, old) = self
             .with_fetched(&src, |root, sha| {
@@ -683,8 +692,9 @@ impl Daemon {
                         "several plugins in the repository: the recorded path is gone",
                     ));
                 };
-                let view = self.inspect(&dir)?;
+                let view = self.inspect(&dir, &ctx)?;
                 same_name(name, &view.name)?;
+                not_yet(&view)?;
                 if view.digest != expect_digest {
                     return Err(refuse_action(
                         "changed_since_preview",
@@ -916,7 +926,7 @@ impl Daemon {
     }
 
     /// Check the plugin folder `dir` and describe it (R3, R5, R5a).
-    pub(crate) fn inspect(&self, dir: &Path) -> Result<PluginView, ActionError> {
+    pub(crate) fn inspect(&self, dir: &Path, ctx: &FlowContext) -> Result<PluginView, ActionError> {
         let scan = scan(dir)?;
         let json = std::fs::read_to_string(dir.join(MANIFEST_FILE))
             .map_err(|e| refuse_action("bad_manifest", format!("{MANIFEST_FILE}: {e}")))?;
@@ -927,12 +937,6 @@ impl Daemon {
                 "build_not_supported",
                 "the manifest has a build step: xherd runs no code at install, so the \
                  repository must contain the built files",
-            ));
-        }
-        if m.kind == Kind::Flow {
-            return Err(refuse_action(
-                "kind_not_supported",
-                "flow packs cannot be installed as plugins",
             ));
         }
         // A plugin that needs a newer xherd is shown, not refused.
@@ -951,7 +955,25 @@ impl Daemon {
             Some(_) => Some("external"),
             None => on_disk.then_some("external"),
         };
+        let flow = match m.kind {
+            Kind::Flow => {
+                let bad = |e: String| refuse_action("bad_manifest", e);
+                let fp = read_flow_plugin(dir, &m).map_err(bad)?;
+                let view = self
+                    .flow_plugin_view(
+                        &fp,
+                        &m.name,
+                        replaces == Some("external"),
+                        ctx,
+                        &xherd_core::runner::agent_env,
+                    )
+                    .map_err(bad)?;
+                Some(view)
+            }
+            _ => None,
+        };
         Ok(PluginView {
+            flow,
             runs: runs(&m),
             settings: m
                 .settings
@@ -977,6 +999,18 @@ impl Daemon {
             warning: WARNING,
         })
     }
+}
+
+/// Installing and updating a flow plugin (its agents and assignments) is the
+/// next change: until then the preview shows it and these refuse.
+fn not_yet(view: &PluginView) -> Result<(), ActionError> {
+    if view.flow.is_some() {
+        return Err(refuse_action(
+            "kind_not_supported",
+            "installing a flow plugin is not available yet",
+        ));
+    }
+    Ok(())
 }
 
 /// An update keeps the plugin's name: its settings, secrets and record are

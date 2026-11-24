@@ -2,16 +2,20 @@
 //! as one plugin of kind `flow` (R1, R3, R4, R6). This part only reads and
 //! checks the structure of a plugin folder; it needs no daemon.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use serde::Serialize;
 use xherd_core::agent_def::{self, AgentDef};
 use xherd_core::resolve::Assignment;
 use xherd_flow::install::{missing_prompts, read_pack_dir};
 use xherd_flow::manifest::Pack;
 use xherd_plugin::manifest::{Manifest, flow_data};
 
+use xherd_core::Status;
+
 use crate::agents::Import;
+use crate::{ActionError, Daemon};
 
 /// What a flow plugin folder holds, checked for structure.
 #[derive(Debug)]
@@ -135,6 +139,290 @@ fn read_agents(path: &Path, shown: &str, plugin: &str) -> Result<Vec<AgentDef>, 
         out.push(def);
     }
     Ok(out)
+}
+
+/// What the preview of a flow plugin needs from the daemon's state, read
+/// before the (sync) inspection of the fetched folder.
+#[derive(Debug, Default)]
+pub(crate) struct FlowContext {
+    pub agents: Vec<AgentDef>,
+    /// `(pack, flow, assignment)` as stored.
+    pub assignments: Vec<(String, String, Assignment)>,
+    /// Pack → the first job that has not ended and uses it.
+    pub in_use: BTreeMap<String, String>,
+}
+
+/// The flow part of a plugin preview (R5, R8).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowPluginView {
+    pub pack: String,
+    pub memory_note: &'static str,
+    pub flows: Vec<PackFlowView>,
+    pub agents: Vec<PluginAgentView>,
+    /// Saved agents of this plugin that the new version no longer has.
+    pub archived: Vec<String>,
+    /// The default assignments the plugin ships.
+    pub assignments: Vec<AssignmentView>,
+    /// Stored assignments of the pack that the defaults would change.
+    pub assignment_changes: Vec<AssignmentChange>,
+    pub files: Vec<RuntimeFiles>,
+    pub in_use_by: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PackFlowView {
+    pub flow: String,
+    pub stages: Vec<PackStageView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PackStageView {
+    pub id: String,
+    pub role: xherd_core::domain::Role,
+    pub class: xherd_core::domain::Class,
+    pub gate: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginAgentView {
+    pub name: String,
+    pub saved_name: String,
+    /// `new`, `taken` (hand-made or from another plugin), `reclaimed` (kept
+    /// from an earlier install), `overwritten` or `unchanged`.
+    pub state: &'static str,
+    pub risky: Vec<&'static str>,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssignmentView {
+    pub flow: String,
+    pub stage: String,
+    pub agent: String,
+    pub human: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssignmentChange {
+    pub flow: String,
+    pub stage: String,
+    pub from: String,
+    /// `None`: the plugin ships no default for the stage any more.
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RuntimeFiles {
+    pub runtime: String,
+    pub paths: Vec<String>,
+}
+
+/// Whether two saved agents say the same thing (ids, versions, dates and the
+/// archive mark are bookkeeping).
+fn same_content(a: &AgentDef, b: &AgentDef) -> bool {
+    let mut a = a.clone();
+    a.id = b.id.clone();
+    a.version = b.version;
+    a.created_at = b.created_at;
+    a.updated_at = b.updated_at;
+    a.archived_at = b.archived_at;
+    a == *b
+}
+
+impl Daemon {
+    pub(crate) async fn flow_context(&self) -> Result<FlowContext, ActionError> {
+        let store = crate::agents::store;
+        let agents = self.store.list_agent_defs().await.map_err(store)?;
+        let assignments = self.store.all_flow_assignments().await.map_err(store)?;
+        let mut in_use = BTreeMap::new();
+        for j in self.store.list_jobs().await.map_err(store)? {
+            if !matches!(j.status, Status::Done | Status::Cancelled) {
+                let pack = j.pack.unwrap_or_else(|| xherd_flow::BUILTIN.to_string());
+                in_use.entry(pack).or_insert(j.name);
+            }
+        }
+        Ok(FlowContext {
+            agents,
+            assignments,
+            in_use,
+        })
+    }
+
+    /// What `validate` would refuse for a reason the install tolerates: the
+    /// runtime is missing or off, a model belongs to no runtime, a skill is
+    /// not in the library (R4, R9). Shown in the preview.
+    pub(crate) fn plugin_agent_issues(&self, def: &AgentDef) -> Vec<String> {
+        let off = self.live_config().disabled_plugins;
+        let mut out = Vec::new();
+        if let Err(m) = self.check_runtime(&def.runtime, &off) {
+            let fallback_runs = def
+                .fallback_runtime
+                .as_deref()
+                .is_some_and(|f| self.check_runtime(f, &off).is_ok());
+            if !fallback_runs {
+                out.push(format!("runtime: {m}"));
+            }
+        }
+        if let Some(f) = &def.fallback_runtime
+            && let Err(m) = self.check_runtime(f, &[])
+        {
+            out.push(format!("fallbackRuntime: {m}"));
+        }
+        for rt in def.models.keys() {
+            if let Err(m) = self.check_model_runtime(rt) {
+                out.push(format!("models: {m}"));
+            }
+        }
+        for s in &def.skills {
+            if !self.has_skill(s) {
+                out.push(format!("skills: no skill named {s:?} in the library"));
+            }
+        }
+        out
+    }
+
+    /// The flow part of a preview (R5, R8). `installed`: the plugin is
+    /// installed already, so an agent of its own is being updated, not taken
+    /// back. Refuses what no install tolerates: a permission mode the host
+    /// does not offer, and install paths outside the pack's folder (R12).
+    pub(crate) fn flow_plugin_view(
+        &self,
+        fp: &FlowPlugin,
+        plugin: &str,
+        installed: bool,
+        ctx: &FlowContext,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<FlowPluginView, String> {
+        let files: Vec<(&str, &str)> = fp
+            .files
+            .iter()
+            .map(|(n, t)| (n.as_str(), t.as_str()))
+            .collect();
+        let builtin = self
+            .packs
+            .get(xherd_flow::BUILTIN)
+            .ok_or("no built-in pack")?;
+        xherd_flow::install::check_plugin_install(&fp.pack, builtin, &files, env)?;
+        let mut runtime_files = Vec::new();
+        for rt in fp.pack.install.keys() {
+            let plan = fp.pack.plan_install(rt, &files, env)?;
+            runtime_files.push(RuntimeFiles {
+                runtime: rt.clone(),
+                paths: plan
+                    .iter()
+                    .map(|p| p.path.to_string_lossy().into_owned())
+                    .collect(),
+            });
+        }
+
+        let mut agents = Vec::new();
+        for def in &fp.agents {
+            if def
+                .permission_mode
+                .is_some_and(|m| !m.allowed(self.sandbox))
+            {
+                return Err(format!(
+                    "agent {}: permission mode all asks nothing, so it is only offered in the container",
+                    def.name
+                ));
+            }
+            let state = match ctx.agents.iter().find(|a| a.name == def.name) {
+                None => "new",
+                Some(a) if a.source.as_deref() != Some(plugin) => "taken",
+                Some(_) if !installed => "reclaimed",
+                Some(a) if same_content(def, a) => "unchanged",
+                Some(_) => "overwritten",
+            };
+            agents.push(PluginAgentView {
+                name: def
+                    .name
+                    .strip_prefix(&format!("{plugin}-"))
+                    .unwrap_or(&def.name)
+                    .to_string(),
+                saved_name: def.name.clone(),
+                state,
+                risky: crate::agents::risky_fields(def),
+                issues: self.plugin_agent_issues(def),
+            });
+        }
+        let archived = ctx
+            .agents
+            .iter()
+            .filter(|a| a.source.as_deref() == Some(plugin) && a.archived_at.is_none())
+            .filter(|a| !fp.agents.iter().any(|d| d.name == a.name))
+            .map(|a| a.name.clone())
+            .collect();
+
+        let name_of = |id: &str| {
+            ctx.agents
+                .iter()
+                .find(|a| a.id == id)
+                .map_or_else(|| id.to_string(), |a| a.name.clone())
+        };
+        let pack = &fp.pack.name;
+        let assignments = fp
+            .assignments
+            .iter()
+            .map(|(flow, a)| AssignmentView {
+                flow: flow.clone(),
+                stage: a.stage.clone(),
+                agent: a.agent_id.clone(),
+                human: a.human,
+            })
+            .collect();
+        let assignment_changes = ctx
+            .assignments
+            .iter()
+            .filter(|(p, _, _)| p == pack)
+            .filter_map(|(_, flow, stored)| {
+                let to = fp
+                    .assignments
+                    .iter()
+                    .find(|(f, a)| f == flow && a.stage == stored.stage)
+                    .map(|(_, a)| a.agent_id.clone());
+                (to.as_deref() != Some(&name_of(&stored.agent_id))).then(|| AssignmentChange {
+                    flow: flow.clone(),
+                    stage: stored.stage.clone(),
+                    from: name_of(&stored.agent_id),
+                    to,
+                })
+            })
+            .collect();
+
+        Ok(FlowPluginView {
+            pack: pack.clone(),
+            memory_note: match fp.pack.memory_note {
+                xherd_flow::manifest::MemoryNote::Required => "required",
+                xherd_flow::manifest::MemoryNote::Off => "off",
+            },
+            flows: fp
+                .pack
+                .flows
+                .iter()
+                .map(|(flow, def)| PackFlowView {
+                    flow: flow.clone(),
+                    stages: def
+                        .stages
+                        .iter()
+                        .map(|s| PackStageView {
+                            id: s.id.clone(),
+                            role: s.role,
+                            class: s.class,
+                            gate: s.gate.is_some(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            agents,
+            archived,
+            assignments,
+            assignment_changes,
+            files: runtime_files,
+            in_use_by: ctx.in_use.get(pack).cloned(),
+        })
+    }
 }
 
 #[cfg(test)]

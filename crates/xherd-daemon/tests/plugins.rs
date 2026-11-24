@@ -323,8 +323,6 @@ async fn preview_refuses_what_cannot_be_installed() {
 
     let build = manifest("b", "tracker", json!({"build": ["make"]}));
     assert_eq!(refused(&t, &at(build)).await, "build_not_supported");
-    let flow = manifest("f", "flow", json!({}));
-    assert_eq!(refused(&t, &at(flow)).await, "kind_not_supported");
     assert_eq!(refused(&t, &at("{ not json".into())).await, "bad_manifest");
     let git = manifest("git", "tracker", json!({}));
     assert_eq!(refused(&t, &at(git)).await, "bad_manifest");
@@ -1221,4 +1219,110 @@ async fn start_installs_every_selectable_pack_and_a_broken_one_does_not_stop_the
     assert!(commands.join("xherd/status.md").exists());
     assert!(commands.join("acme-sdd/start.md").exists());
     assert!(!commands.join("bad-sdd").exists());
+}
+
+/// A git repository holding the `acme-sdd` flow plugin; `agents` is the text
+/// of its agents file.
+fn acme_repo(agents: &str) -> Repo {
+    let m = manifest(
+        "acme-sdd",
+        "flow",
+        json!({"data": {"flow": {"pack": "pack", "agents": "agents.json", "assignments": {
+            "feature": {
+                "brief": {"agent": "analyst"},
+                "design": {"agent": "architect", "human": true}}}}}}),
+    );
+    let prompts: Vec<(String, String)> = ACME_PROMPTS
+        .iter()
+        .map(|p| (format!("pack/commands/{p}.md"), format!("# {p}\n")))
+        .collect();
+    let mut files: Vec<(&str, &str)> = vec![
+        ("xherd-plugin.json", &m),
+        ("agents.json", agents),
+        ("pack/xherd-flow.yaml", ACME_PACK),
+    ];
+    files.extend(prompts.iter().map(|(p, t)| (p.as_str(), t.as_str())));
+    Repo::new(&files)
+}
+
+const ACME_AGENTS: &str = r#"{"agents": [
+    {"name": "analyst", "runtime": "claude-code"},
+    {"name": "architect", "runtime": "claude-code", "instructions": "Draw boxes."}]}"#;
+
+#[tokio::test]
+async fn preview_of_a_flow_plugin_lists_flows_agents_assignments_and_files() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    let p = json_of(&t.d.plugin_preview(&repo.url(), None, None).await.unwrap());
+    assert_eq!(p["kind"], "flow");
+    let f = &p["flow"];
+    assert_eq!(f["pack"], "acme-sdd");
+    assert_eq!(f["memoryNote"], "required");
+    assert_eq!(f["flows"][0]["flow"], "feature");
+    assert_eq!(f["flows"][0]["stages"][0]["id"], "brief");
+    assert_eq!(f["flows"][0]["stages"][0]["role"], "spec");
+    assert_eq!(f["flows"][0]["stages"][0]["class"], "critical");
+    assert_eq!(f["flows"][0]["stages"][0]["gate"], true);
+    assert_eq!(f["agents"][0]["name"], "analyst");
+    assert_eq!(f["agents"][0]["savedName"], "acme-sdd-analyst");
+    assert_eq!(f["agents"][0]["state"], "new");
+    assert_eq!(f["agents"][1]["risky"], json!(["instructions"]));
+    assert_eq!(f["agents"][1]["issues"], json!([]));
+    assert_eq!(f["assignments"][1]["agent"], "acme-sdd-architect");
+    assert_eq!(f["assignments"][1]["human"], true);
+    assert_eq!(f["assignmentChanges"], json!([]));
+    assert_eq!(f["archived"], json!([]));
+    assert_eq!(f["inUseBy"], Value::Null);
+    assert_eq!(f["files"][0]["runtime"], "claude-code");
+    let paths = f["files"][0]["paths"].as_array().unwrap();
+    assert_eq!(paths.len(), ACME_PROMPTS.len());
+    assert!(
+        paths
+            .iter()
+            .all(|p| p.as_str().unwrap().contains("commands/acme-sdd/"))
+    );
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn preview_of_a_flow_plugin_shows_a_taken_name_and_an_unknown_skill_as_findings() {
+    let t = daemon().await;
+    let hand: xherd_core::agent_def::AgentDef =
+        serde_json::from_value(json!({"name": "acme-sdd-architect", "runtime": "claude-code"}))
+            .unwrap();
+    t.d.create_agent(hand).await.unwrap();
+    let agents = r#"{"agents": [
+        {"name": "analyst", "runtime": "claude-code", "skills": ["no-such-skill"]},
+        {"name": "architect", "runtime": "claude-code"}]}"#;
+    let repo = acme_repo(agents);
+    let p = json_of(&t.d.plugin_preview(&repo.url(), None, None).await.unwrap());
+    let a = &p["flow"]["agents"];
+    assert_eq!(a[0]["state"], "new");
+    assert_eq!(a[0]["risky"], json!(["skills"]));
+    assert_eq!(
+        a[0]["issues"],
+        json!(["skills: no skill named \"no-such-skill\" in the library"])
+    );
+    assert_eq!(a[1]["state"], "taken");
+}
+
+#[tokio::test]
+async fn preview_of_a_flow_plugin_refuses_a_broken_pack() {
+    let t = daemon().await;
+    let m = manifest(
+        "acme-sdd",
+        "flow",
+        json!({"data": {"flow": {"pack": "pack"}}}),
+    );
+    let repo = Repo::new(&[
+        ("xherd-plugin.json", &m),
+        ("pack/xherd-flow.yaml", "name: ["),
+    ]);
+    assert_eq!(refused(&t, &repo).await, "bad_manifest");
+    // The structure is checked: a flow plugin without a `flow` section.
+    let m = manifest("acme-sdd", "flow", json!({}));
+    assert_eq!(
+        refused(&t, &Repo::new(&[("xherd-plugin.json", &m)])).await,
+        "bad_manifest"
+    );
 }
