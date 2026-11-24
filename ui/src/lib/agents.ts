@@ -250,6 +250,11 @@ export const suggestionOpen = (job: Pick<Job, 'agents' | 'suggestion'>): boolean
 export const canMarkDone = (job: Pick<Job, 'flow' | 'status'>): boolean =>
   (!job.flow || job.flow === 'none') && ['idle', 'waiting-input', 'paused', 'parked'].includes(job.status);
 
+/** A job that shipped into a repository with no remote waits for the user: add
+ *  one (and ship again) or finish locally (R9, R10). */
+export const canShipWithoutOrigin = (job: Pick<Job, 'noOrigin' | 'gate' | 'status'>): boolean =>
+  !!job.noOrigin && !job.gate && ['idle', 'paused'].includes(job.status);
+
 /** The "Save as agent" form, pre-filled from what the job ran with (R31): the
  *  effective settings, a name and description from the repository and the flow,
  *  and the job's own draft (name, description, instructions) over them. */
