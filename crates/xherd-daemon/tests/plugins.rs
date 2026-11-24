@@ -1612,3 +1612,44 @@ async fn update_of_a_flow_plugin_is_refused_while_a_job_uses_the_pack() {
     t.d.store.put_job(&job).await.unwrap();
     update_acme(&t).await;
 }
+
+#[tokio::test]
+async fn remove_of_a_flow_plugin_is_refused_while_a_job_uses_it_then_keeps_the_agents() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let architect = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    let mut job = xherd_core::Job::new("sdd-1", 1);
+    job.pack = Some("acme-sdd".into());
+    job.status = xherd_core::Status::Paused;
+    t.d.store.put_job(&job).await.unwrap();
+
+    let e = t.d.plugin_remove("acme-sdd", false).await.unwrap_err();
+    assert_eq!(e.code, "plugin_in_use");
+    assert!(e.message.contains("sdd-1"), "{}", e.message);
+    assert!(t.home.path().join("plugins/acme-sdd").is_dir());
+    assert_eq!(t.d.store.all_flow_assignments().await.unwrap().len(), 2);
+
+    job.status = xherd_core::Status::Done;
+    t.d.store.put_job(&job).await.unwrap();
+    t.d.plugin_remove("acme-sdd", false).await.unwrap();
+    assert!(!t.home.path().join("plugins/acme-sdd").exists());
+    assert!(t.d.store.plugin_records().await.unwrap().is_empty());
+    assert!(t.d.store.all_flow_assignments().await.unwrap().is_empty());
+    let kept = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    assert_eq!(kept.source, architect.source);
+    assert!(kept.source.is_some());
+
+    // Installing it again takes back its own agents; a hand-made one with the
+    // plugin's prefix stays the user's and does not block it.
+    let hand: xherd_core::agent_def::AgentDef =
+        serde_json::from_value(json!({"name": "acme-sdd-x", "runtime": "claude-code"})).unwrap();
+    t.d.create_agent(hand).await.unwrap();
+    install_acme(&t, &repo).await;
+    assert_eq!(
+        agent_named(&t, "acme-sdd-architect").await.unwrap().id,
+        architect.id
+    );
+    assert_eq!(agent_named(&t, "acme-sdd-x").await.unwrap().source, None);
+    assert_eq!(t.d.store.all_flow_assignments().await.unwrap().len(), 2);
+}

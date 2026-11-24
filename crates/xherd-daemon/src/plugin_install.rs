@@ -888,7 +888,20 @@ impl Daemon {
         if record.is_none() && !target.is_dir() {
             return Err(unknown());
         }
-        if let Some(job) = self.plugin_user(name).await? {
+        // A flow plugin's pack is named like the plugin (R8): a paused job
+        // will run it again, so it blocks the removal too.
+        let is_flow = std::fs::read_to_string(target.join(MANIFEST_FILE))
+            .ok()
+            .and_then(|j| serde_json::from_str::<Manifest>(&j).ok())
+            .is_some_and(|m| m.kind == Kind::Flow);
+        if is_flow {
+            if let Some(job) = self.flow_context().await?.in_use.get(name) {
+                return Err(refuse_action(
+                    "plugin_in_use",
+                    format!("job {job} uses {name}: finish or cancel it first"),
+                ));
+            }
+        } else if let Some(job) = self.plugin_user(name).await? {
             return Err(refuse_action(
                 "plugin_in_use",
                 format!("job {job} uses {name}: pause or finish it first"),
@@ -901,7 +914,12 @@ impl Daemon {
         }
         let now = self.clock.now();
         let recorded = async {
-            self.store.delete_plugin_record(name).await?;
+            if is_flow {
+                // Assignments and fresh-check rows go with it; agents stay.
+                self.store.delete_flow_plugin(name, name).await?;
+            } else {
+                self.store.delete_plugin_record(name).await?;
+            }
             self.store
                 .insert_event(xherd_store::Event {
                     id: xherd_core::new_id(),
@@ -932,6 +950,15 @@ impl Daemon {
         }
         if moved {
             let _ = std::fs::remove_dir_all(&aside);
+        }
+        if is_flow {
+            if let Err(e) = self
+                .remove_pack_files(name, &xherd_core::runner::agent_env)
+                .await
+            {
+                tracing::warn!(pack = %name, error = %e.message, "removing the pack's commands failed");
+            }
+            self.agents_changed();
         }
         if forget {
             self.forget_plugin(name)?;
