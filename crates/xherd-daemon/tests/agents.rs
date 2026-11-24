@@ -565,3 +565,42 @@ async fn an_assigned_agent_cannot_be_archived_deleted_or_moved_to_another_runtim
     t.d.delete_agent("architect").await.unwrap();
     let _ = a;
 }
+
+/// `source` marks an agent a flow plugin installed (R7): a hand-made agent
+/// never gets one, an edit keeps the stored one, an export/import round trip
+/// keeps it.
+#[tokio::test]
+async fn source_is_set_by_plugins_only_and_kept_by_edit_and_import() {
+    let t = setup().await;
+    let mut a = agent("acme-architect");
+    a.source = Some("acme".into());
+    let made = t.d.create_agent(a).await.unwrap();
+    assert_eq!(made.def.source, None);
+
+    let from_plugin = Import {
+        agents: vec![{
+            let mut a = agent("acme-sdd-architect");
+            a.source = Some("acme-sdd".into());
+            a
+        }],
+        ..Default::default()
+    };
+    t.d.import_agents(from_plugin, false).await.unwrap();
+    let got = t.d.agent("acme-sdd-architect").await.unwrap();
+    assert_eq!(got.def.source.as_deref(), Some("acme-sdd"));
+
+    let mut edit = agent("acme-sdd-architect");
+    edit.description = "Edited".into();
+    edit.source = Some("other".into());
+    let edited = t.d.update_agent("acme-sdd-architect", edit).await.unwrap();
+    assert_eq!(edited.def.source.as_deref(), Some("acme-sdd"));
+    assert_eq!(edited.def.version, 2);
+
+    let export = t.d.export_agents(Some("acme-sdd-architect")).await.unwrap();
+    assert_eq!(export["agents"][0]["source"], "acme-sdd");
+    let u = setup().await;
+    let import: Import = serde_json::from_value(export).unwrap();
+    u.d.import_agents(import, false).await.unwrap();
+    let back = u.d.agent("acme-sdd-architect").await.unwrap();
+    assert_eq!(back.def.source.as_deref(), Some("acme-sdd"));
+}

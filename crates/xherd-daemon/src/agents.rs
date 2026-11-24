@@ -20,7 +20,7 @@ fn err(code: &'static str, message: impl Into<String>) -> ActionError {
     }
 }
 
-fn store(e: xherd_store::StoreError) -> ActionError {
+pub(crate) fn store(e: xherd_store::StoreError) -> ActionError {
     err("store", e.to_string())
 }
 
@@ -152,7 +152,7 @@ fn summarize(id: &str, jobs: &[&Job]) -> (usize, Option<String>) {
 
 /// The fields of an imported agent a person should look at before saying yes
 /// (R22): they widen what a job may do, or add text the job reads.
-fn risky_fields(d: &AgentDef) -> Vec<&'static str> {
+pub(crate) fn risky_fields(d: &AgentDef) -> Vec<&'static str> {
     let mut v = Vec::new();
     if matches!(
         d.permission_mode,
@@ -302,7 +302,7 @@ impl Daemon {
         self.validate(def, true).err().map(|e| e.message)
     }
 
-    fn agents_changed(&self) {
+    pub(crate) fn agents_changed(&self) {
         let _ = self.hub.send(Change::Agents);
     }
 
@@ -322,6 +322,8 @@ impl Daemon {
         def.created_at = now;
         def.updated_at = now;
         def.archived_at = None;
+        // Only a flow plugin's install sets `source` (R7).
+        def.source = None;
         self.store.put_agent_def(&def).await.map_err(store)?;
         self.sup.agent_limit(&def.id, Some(def.max_live_jobs));
         self.agents_changed();
@@ -356,6 +358,7 @@ impl Daemon {
         def.created_at = old.created_at;
         def.updated_at = self.clock.now();
         def.archived_at = old.archived_at;
+        def.source = old.source.clone();
         self.store.put_agent_def(&def).await.map_err(store)?;
         self.sup.agent_limit(&def.id, Some(def.max_live_jobs));
         self.agents_changed();
