@@ -8,6 +8,7 @@ use xherd_flow::Pack;
 use xherd_flow::install::check_plugin_install;
 use xherd_plugin::{Kind, Registry};
 
+use crate::Daemon;
 use crate::flow_plugin::read_flow_plugin;
 
 /// Where a loaded pack comes from, and the files its commands install from.
@@ -77,10 +78,55 @@ pub fn load_packs(plugins: &Registry, env: &dyn Fn(&str) -> Option<String>) -> L
     (packs, sources, errors)
 }
 
+/// Whether a pack's plugin can serve it now: switched on, and unchanged since
+/// start (an install or update waits for a restart, R11, R10).
+fn plugin_serves(
+    name: &str,
+    enabled: bool,
+    loaded: &BTreeMap<String, String>,
+    state: &BTreeMap<String, String>,
+) -> bool {
+    enabled && loaded.get(name) == state.get(name)
+}
+
+impl Daemon {
+    /// A new job may use `pack`: the built-in always, a plugin's pack only
+    /// while its plugin is enabled and unchanged since start (R11, R10).
+    pub fn pack_selectable(&self, pack: &str) -> bool {
+        let Some(source) = self.pack_sources.get(pack) else {
+            return false;
+        };
+        let Some(plugin) = &source.plugin else {
+            return true;
+        };
+        let state = self.plugin_state.lock().unwrap_or_else(|e| e.into_inner());
+        plugin_serves(
+            plugin,
+            self.plugin_enabled(plugin),
+            &self.loaded_plugins,
+            &state,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn a_plugin_serves_only_while_enabled_and_unchanged() {
+        let map = |sha: &str| BTreeMap::from([("acme-sdd".to_string(), sha.to_string())]);
+        assert!(plugin_serves("acme-sdd", true, &map("a"), &map("a")));
+        assert!(!plugin_serves("acme-sdd", false, &map("a"), &map("a")));
+        assert!(!plugin_serves("acme-sdd", true, &map("a"), &map("b")));
+        assert!(!plugin_serves(
+            "acme-sdd",
+            true,
+            &map("a"),
+            &BTreeMap::new()
+        ));
+    }
     use std::path::{Path, PathBuf};
 
     const PACK: &str = r#"
