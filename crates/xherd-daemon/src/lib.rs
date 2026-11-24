@@ -463,17 +463,22 @@ impl Daemon {
             // Commands and hook files follow the running binary at every
             // start (user-edited files are kept), before any actor runs.
             let (mut written, mut declined) = (0, 0);
-            match d.install(None, None, &**env, false).await {
-                Ok(files) => {
-                    use install::InstallAction::*;
-                    written = files.iter().filter(|f| f.action == Written).count();
-                    declined = files
-                        .iter()
-                        .filter(|f| matches!(f.action, Kept | Obsolete))
-                        .count();
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e.message, "installing the xherd commands failed")
+            // The built-in pack first, then every plugin pack that is
+            // selectable (R11); one pack failing never stops the others.
+            let names: Vec<String> = d.packs.keys().cloned().collect();
+            for name in names.iter().filter(|n| d.pack_selectable(n)) {
+                match d.install(None, Some(name), &**env, false).await {
+                    Ok(files) => {
+                        use install::InstallAction::*;
+                        written += files.iter().filter(|f| f.action == Written).count();
+                        declined += files
+                            .iter()
+                            .filter(|f| matches!(f.action, Kept | Obsolete))
+                            .count();
+                    }
+                    Err(e) => {
+                        tracing::warn!(pack = %name, error = %e.message, "installing the pack's commands failed")
+                    }
                 }
             }
             let jobs = d.refresh_job_files().await;

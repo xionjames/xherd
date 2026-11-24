@@ -985,6 +985,12 @@ struct Acme {
 /// A daemon that loaded the `acme-sdd` flow plugin from its plugins folder,
 /// and a git repository to start jobs in.
 async fn acme() -> Acme {
+    acme_with(|_, _| {}).await
+}
+
+/// `acme()` with a say before the daemon starts: in the home (to add more
+/// plugins) and in the options.
+async fn acme_with(setup: impl FnOnce(&Path, &mut Options)) -> Acme {
     let home = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let paths = Paths::at(home.path());
@@ -1041,6 +1047,7 @@ async fn acme() -> Acme {
         .find(|m| m.name == "claude-code")
         .unwrap();
     rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    setup(home.path(), &mut o);
     let d = Daemon::start(paths, o).await.unwrap();
     Acme {
         t: T { home, workspace, d },
@@ -1184,4 +1191,34 @@ async fn an_unknown_pack_a_missing_flow_and_a_disabled_plugin_are_refused() {
             .as_deref(),
         Some("xherd")
     );
+}
+
+#[tokio::test]
+async fn start_installs_every_selectable_pack_and_a_broken_one_does_not_stop_the_others() {
+    let user = tempfile::tempdir().unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let a = acme_with(|home, o| {
+        // A second flow plugin whose pack cannot be read.
+        let bad = home.join("plugins/bad-sdd");
+        std::fs::create_dir_all(bad.join("pack")).unwrap();
+        std::fs::write(
+            bad.join("xherd-plugin.json"),
+            manifest(
+                "bad-sdd",
+                "flow",
+                json!({"data": {"flow": {"pack": "pack"}}}),
+            ),
+        )
+        .unwrap();
+        std::fs::write(bad.join("pack/xherd-flow.yaml"), "name: [").unwrap();
+        o.install_env = Some(Arc::new(move |k: &str| (k == "HOME").then(|| h.clone())));
+    })
+    .await;
+    assert!(a.t.d.pack_selectable("acme-sdd"));
+    assert!(!a.t.d.pack_selectable("bad-sdd"));
+    assert_eq!(a.t.d.pack_errors.len(), 1);
+    let commands = user.path().join(".claude/commands");
+    assert!(commands.join("xherd/status.md").exists());
+    assert!(commands.join("acme-sdd/start.md").exists());
+    assert!(!commands.join("bad-sdd").exists());
 }
