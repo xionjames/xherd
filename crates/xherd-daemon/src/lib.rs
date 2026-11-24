@@ -471,6 +471,7 @@ impl Daemon {
                 "refreshed the pack and the jobs' hook files"
             );
         }
+        create::remove_project_leftovers(&d.config.workspace_root()).await;
         d.reconcile_with(true).await;
         if let Err(e) = d.write_gitconfig() {
             tracing::warn!(error = %e.message, "managed git config not written");
@@ -523,6 +524,89 @@ impl Daemon {
         let launch = self.agent_launch(&a, mode, model.as_deref())?;
         self.action(who, UserAction::SetModel { model, launch })
             .await
+    }
+
+    /// The job, when it stopped after a ship without a remote, else `not_stopped`.
+    /// Git work runs outside the actor, so this narrows but cannot close the
+    /// window before the user action (R9, R10).
+    async fn stopped_without_origin(&self, who: &str) -> Result<Job, ActionError> {
+        let job = self.action(who, UserAction::Get).await?;
+        if !actor::stopped_without_origin(&job) {
+            return Err(action_error(
+                "not_stopped",
+                format!("{} is not stopped after a ship without a remote", job.name),
+            ));
+        }
+        Ok(job)
+    }
+
+    /// Add `origin` to a job's repository, push its base and ship again (R9).
+    /// The job must have stopped after a ship without a remote. A refused
+    /// push leaves no remote behind. Git runs here, not in the actor.
+    pub async fn set_origin(&self, who: &str, url: &str) -> Result<Job, ActionError> {
+        let job = self.stopped_without_origin(who).await?;
+        // The URL forms a repository URL takes (https, http, ssh, scp-like):
+        // no local paths, `file://`, `ext::` or control characters (R9).
+        xherd_core::new::clone_path(std::path::Path::new("/"), url)
+            .map_err(|r| action_error("bad_remote", r.message))?;
+        let (repo, base) = repo_and_base(&job)?;
+        let git = xherd_git::Git::new("git");
+        git.remote_add(&repo, "origin", url)
+            .await
+            .map_err(|e| action_error("bad_remote", e.to_string()))?;
+        // Again just before the push: the job may have moved meanwhile.
+        if let Err(e) = self.stopped_without_origin(who).await {
+            let _ = git.remote_remove(&repo, "origin").await;
+            return Err(e);
+        }
+        if let Err(e) = git.push_branch(&repo, "origin", &base).await {
+            let _ = git.remote_remove(&repo, "origin").await;
+            return Err(action_error("push_failed", e.to_string()));
+        }
+        match self.action(who, UserAction::ShipAgain).await {
+            Ok(job) => Ok(job),
+            Err(e) => {
+                let _ = git.remote_remove(&repo, "origin").await;
+                Err(e)
+            }
+        }
+    }
+
+    /// End a job that stopped without a remote by merging its branch into
+    /// the base branch where the repository has it checked out (R10). The
+    /// worktree and the branch stay. A refused merge leaves the checkout as
+    /// it was.
+    pub async fn finish_local(&self, who: &str) -> Result<Job, ActionError> {
+        let job = self.stopped_without_origin(who).await?;
+        let (repo, base) = repo_and_base(&job)?;
+        let git = xherd_git::Git::new("git");
+        let checkout = git
+            .worktree_list(&repo)
+            .await
+            .map_err(|e| action_error("git", e.to_string()))?
+            .into_iter()
+            .find(|w| w.branch.as_deref() == Some(base.as_str()))
+            .ok_or_else(|| {
+                action_error(
+                    "base_not_checked_out",
+                    format!(
+                        "{base} is not checked out in {}: check it out there first",
+                        repo.display()
+                    ),
+                )
+            })?;
+        if !git.is_clean(&checkout.path).await.unwrap_or(false) {
+            return Err(action_error(
+                "dirty",
+                format!("{} has uncommitted changes", checkout.path.display()),
+            ));
+        }
+        // Again just before the merge: the job may have moved meanwhile.
+        self.stopped_without_origin(who).await?;
+        git.merge_branch(&checkout.path, &job.branch)
+            .await
+            .map_err(|e| action_error("merge_failed", e.to_string()))?;
+        self.action(who, UserAction::FinishLocal).await
     }
 
     /// The models a runtime suggests (issue #112): its fixed list, or what
@@ -1397,6 +1481,21 @@ pub(crate) fn workdir_of(a: &Job) -> Result<&std::path::Path, ActionError> {
             code: "no_workspace",
             message: format!("{} has no worktree", a.name),
         })
+}
+
+fn action_error(code: &'static str, message: String) -> ActionError {
+    ActionError { code, message }
+}
+
+/// The repository folder and base branch of a job, for the local ship actions.
+fn repo_and_base(job: &Job) -> Result<(std::path::PathBuf, String), ActionError> {
+    match (job.repo.as_deref(), job.base.as_deref()) {
+        (Some(r), Some(b)) => Ok((r.into(), b.to_string())),
+        _ => Err(action_error(
+            "no_workspace",
+            format!("{} has no repository or base branch", job.name),
+        )),
+    }
 }
 
 #[cfg(test)]

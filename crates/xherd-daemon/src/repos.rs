@@ -133,6 +133,12 @@ impl Daemon {
         }
         let mut clones = Vec::new();
         scan(&self.config.workspace_root().join("repos"), 0, &mut clones);
+        // New projects (`projects/<name>`), one level deep.
+        scan(
+            &self.config.workspace_root().join(new::PROJECTS_DIR),
+            5,
+            &mut clones,
+        );
         for c in clones {
             // Agents store git's real path (`/private/var` for `/var`).
             let c = std::fs::canonicalize(&c).unwrap_or(c);

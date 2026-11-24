@@ -69,6 +69,75 @@ fn repo_dir_name(repo: &Path) -> String {
         .unwrap_or_else(|| "repo".into())
 }
 
+/// The first branch of a new project.
+const PROJECT_BRANCH: &str = "main";
+
+/// Make the repository of a new project (R3): `git init` and one empty commit
+/// in a hidden folder beside it, then a rename, so a failure never leaves a
+/// half-made project at `repo`. The daemon makes `projects/`; git makes the
+/// folder itself, as the agents' user who owns what is inside (R-1203).
+async fn create_project(git: &Git, repo: &Path) -> Result<(), ActionError> {
+    let parent = repo.parent().expect("project_path has a parent");
+    std::fs::create_dir_all(parent)
+        .map_err(|e| refuse("io", format!("{}: {e}", parent.display())))?;
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let name = repo_dir_name(repo);
+    let tmp_name = format!(".{name}.creating-{nanos}");
+    let tmp = parent.join(&tmp_name);
+    let made = async {
+        git.run(
+            parent,
+            &["init", "--quiet", "-b", PROJECT_BRANCH, &tmp_name],
+        )
+        .await?;
+        // The managed git config has the identity; a bare one gets a stand-in
+        // so the first commit never fails for lack of it.
+        if git.run(&tmp, &["config", "user.email"]).await.is_err() {
+            git.run(&tmp, &["config", "user.name", "xherd"]).await?;
+            git.run(&tmp, &["config", "user.email", "xherd@localhost"])
+                .await?;
+        }
+        git.commit_empty(&tmp, "Initial commit").await?;
+        Ok::<(), xherd_git::GitError>(())
+    }
+    .await;
+    if let Err(e) = made {
+        crate::repos::remove_tree(&tmp).await;
+        return Err(refuse("git", e.to_string()));
+    }
+    // Another creation of the same project may have won meanwhile: a
+    // rename never replaces its folder (it holds `.git`), and the loser
+    // gets `path_exists` (R3).
+    let renamed = if repo.exists() {
+        Err(None)
+    } else {
+        std::fs::rename(&tmp, repo).map_err(Some)
+    };
+    if let Err(e) = renamed {
+        crate::repos::remove_tree(&tmp).await;
+        return Err(match e {
+            Some(e) if !repo.exists() => refuse("io", format!("{}: {e}", repo.display())),
+            _ => refuse("path_exists", format!("{} already exists", repo.display())),
+        });
+    }
+    Ok(())
+}
+
+/// Remove the `.<project>.creating-<nanos>` folders a crash left in
+/// `projects/`; called at start, before any creation can run.
+pub(crate) async fn remove_project_leftovers(workspace: &Path) {
+    let dir = workspace.join(new::PROJECTS_DIR);
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && name.contains(".creating-") {
+            tracing::info!(folder = %name, "removing a half-made project");
+            crate::repos::remove_tree(&e.path()).await;
+        }
+    }
+}
+
 impl Daemon {
     /// A saved agent a job may start from: it exists, is not archived and
     /// its runtime (or its fallback) can run now (R15, R36).
@@ -101,6 +170,7 @@ impl Daemon {
         // No repository yet: the one a ticket URL names (#148). An explicit
         // repository always wins; without any, `check` refuses.
         if req.repo.trim().is_empty()
+            && req.new_project.is_none()
             && let Some(Ok(Some(input))) = req.ticket.as_deref().map(new::parse_ticket)
             && let Some(url) = self.ticket_repo(&input)
         {
@@ -127,7 +197,12 @@ impl Daemon {
         let git = Git::new("git");
         // A URL is cloned (or fetched) here, before the other checks: the
         // clone is kept for the next job even if a later check fails.
-        let repo = self.locate_repo(&req.repo).await?.path;
+        // A new project has no repository yet: its folder is only computed
+        // here and made right before the worktree (R1, R3).
+        let repo = match &c.project {
+            Some(p) => new::project_path(&self.config.workspace_root(), p),
+            None => self.locate_repo(&req.repo).await?.path,
+        };
         // Who runs each stage (D26, R37): the request's override, the
         // workflow's assignment, the default agent, the stage before.
         let stage_ids: Vec<&str> = pack
@@ -358,7 +433,13 @@ impl Daemon {
             None => None,
         };
         let branch = new::branch_name(ticket.as_ref().and_then(|t| t.key.as_deref()), &c.name);
-        if git.branch_exists(&repo, &branch).await {
+        if c.project.is_some() && repo.exists() {
+            return Err(refuse(
+                "path_exists",
+                format!("{} already exists", repo.display()),
+            ));
+        }
+        if c.project.is_none() && git.branch_exists(&repo, &branch).await {
             return Err(refuse(
                 "branch_exists",
                 format!("branch {branch} already exists in {}", repo.display()),
@@ -376,25 +457,43 @@ impl Daemon {
                 format!("{} already exists", workdir.display()),
             ));
         }
-        let base = resolve_base(&git, &repo, eff.base.as_deref()).await?;
-        // A plain local base branch follows its origin counterpart when that
-        // is a fast-forward; anything else leaves it as it is.
-        let upstream = format!("origin/{base}");
-        if git.branch_exists(&repo, &base).await
-            && git.rev_parse(&repo, &upstream).await.is_ok()
-            && let Err(e) = git.fast_forward_branch(&repo, &base, &upstream).await
-        {
-            tracing::warn!(base = %base, error = %e, "base branch not fast-forwarded");
-        }
+        let base = if c.project.is_some() {
+            PROJECT_BRANCH.to_string()
+        } else {
+            let base = resolve_base(&git, &repo, eff.base.as_deref()).await?;
+            // A plain local base branch follows its origin counterpart when
+            // that is a fast-forward; anything else leaves it as it is.
+            let upstream = format!("origin/{base}");
+            if git.branch_exists(&repo, &base).await
+                && git.rev_parse(&repo, &upstream).await.is_ok()
+                && let Err(e) = git.fast_forward_branch(&repo, &base, &upstream).await
+            {
+                tracing::warn!(base = %base, error = %e, "base branch not fast-forwarded");
+            }
+            base
+        };
 
-        // Everything checked; create.
-        if let Some(parent) = workdir.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| refuse("io", format!("{}: {e}", parent.display())))?;
+        // Everything checked; create. A project made here goes again when
+        // anything after it fails (R6).
+        if c.project.is_some() {
+            create_project(&git, &repo).await?;
         }
-        git.worktree_add(&repo, &workdir, &branch, &base)
-            .await
-            .map_err(|e| refuse("git", e.to_string()))?;
+        let made = async {
+            if let Some(parent) = workdir.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| refuse("io", format!("{}: {e}", parent.display())))?;
+            }
+            git.worktree_add(&repo, &workdir, &branch, &base)
+                .await
+                .map_err(|e| refuse("git", e.to_string()))
+        }
+        .await;
+        if let Err(e) = made {
+            if c.project.is_some() {
+                crate::repos::remove_tree(&repo).await;
+            }
+            return Err(e);
+        }
 
         let mut a = Job::new(&c.name, self.clock.now());
         a.ticket = ticket;
@@ -476,6 +575,9 @@ impl Daemon {
             // Leave nothing behind (R-002).
             let _ = git.worktree_remove(&repo, &workdir, true).await;
             let _ = git.run(&repo, &["branch", "-D", &branch]).await;
+            if c.project.is_some() {
+                crate::repos::remove_tree(&repo).await;
+            }
         }
         let a = res?;
         debug_assert_eq!(a.status, Status::Queued);

@@ -126,6 +126,12 @@ pub enum UserAction {
     /// Merge the PR's base into its branch (#139, R14): a new session with
     /// the pack's `conflicts` command.
     ResolveConflicts,
+    /// A job that stopped without a remote has one now (R9): a new session
+    /// with the ship command. `Daemon::set_origin` added and pushed it first.
+    ShipAgain,
+    /// End a job that stopped without a remote (R10). `Daemon::finish_local`
+    /// merged its branch into the base checkout first.
+    FinishLocal,
     /// Run an action of the job (R9, R14): `approve` is the user's allowance
     /// of its exact command; `port_base` is filled in by the supervisor.
     ActionRun {
@@ -320,6 +326,11 @@ async fn stop_action_session(driver: &dyn Driver, session: &str) -> (Option<i32>
         .await
         .unwrap_or_default();
     (exit, output)
+}
+
+/// A job that shipped without a remote and now waits for the user (R9, R10).
+pub(crate) fn stopped_without_origin(job: &Job) -> bool {
+    job.no_origin && job.gate.is_none() && matches!(job.status, Status::Idle | Status::Paused)
 }
 
 fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
@@ -1589,7 +1600,9 @@ impl Actor {
             .as_deref()
             .and_then(|s| self.stage_role(pack, s));
         if self.job.pr_url.is_none() {
-            if role == Some(Role::Ship) {
+            // R9: no `origin` means no PR to look for, and the job page
+            // offers a remote or a local finish instead.
+            if role == Some(Role::Ship) && !self.job.no_origin {
                 self.find_pr();
             }
             return;
@@ -2741,6 +2754,19 @@ impl Actor {
                 self.resolve_conflicts().await?;
                 "user.resolve-conflicts"
             }
+            UserAction::ShipAgain => {
+                self.ship_again().await?;
+                "user.ship-again"
+            }
+            UserAction::FinishLocal => {
+                self.require_stopped_without_origin()?;
+                if self.job.status.is_live() {
+                    self.end_session().await;
+                }
+                self.job.pause_requested_at = None;
+                self.job.fire(Trigger::MarkDone, now);
+                "user.finish-local"
+            }
             UserAction::ActionRun {
                 id,
                 approve,
@@ -2966,6 +2992,64 @@ impl Actor {
         self.resume_session = None;
         self.job.ask_hold = None;
         self.job.fire(Trigger::ResolveConflicts, self.now());
+        Ok(())
+    }
+
+    /// R9, R10: only a job that shipped without a remote and stopped can be
+    /// shipped again or finished locally.
+    fn require_stopped_without_origin(&self) -> Result<(), ActionError> {
+        if stopped_without_origin(&self.job) {
+            return Ok(());
+        }
+        Err(refuse(
+            "not_stopped",
+            format!(
+                "{} is not stopped after a ship without a remote",
+                self.job.name
+            ),
+        ))
+    }
+
+    /// Ship again (R9): a clean session with the ship stage's command.
+    async fn ship_again(&mut self) -> Result<(), ActionError> {
+        self.require_stopped_without_origin()?;
+        let name = self.job.name.clone();
+        if self.job.worktree_removed_at.is_some() {
+            return Err(refuse(
+                "worktree_removed",
+                format!("{name}'s worktree was removed"),
+            ));
+        }
+        let pack = self.job.pack.as_deref().and_then(|p| self.env.packs.get(p));
+        let template = pack
+            .zip(self.job.flow.as_deref())
+            .and_then(|(p, f)| p.flow(f))
+            .and_then(|f| {
+                f.stages
+                    .iter()
+                    .find(|s| s.role == xherd_core::domain::Role::Ship)
+            })
+            .and_then(|s| s.command.clone());
+        let Some(command) = template.and_then(|t| {
+            pack?
+                .command(self.runtime_name(), &t, &[])
+                .map_err(|e| tracing::warn!(agent = %name, error = %e, "no ship command"))
+                .ok()
+        }) else {
+            return Err(refuse(
+                "not_allowed",
+                format!("{name}'s flow has no ship command"),
+            ));
+        };
+        if self.job.status == Status::Idle {
+            self.end_session().await;
+        }
+        self.job.pause_requested_at = None;
+        self.job.next_prompt = Some(command);
+        self.resume_session = None;
+        self.job.ask_hold = None;
+        self.job.no_origin = false;
+        self.job.fire(Trigger::ShipAgain, self.now());
         Ok(())
     }
 
@@ -3914,6 +3998,14 @@ impl Actor {
             && let Some(mine) = self.job.commits.iter_mut().find(|x| x.id == c.id)
         {
             mine.status = CommitStatus::Approved;
+        }
+        // R9: a ship approved in a repository with no `origin` stops without
+        // a push or a PR; the job page then offers a remote or a local finish.
+        if let Gate::Docs { stage, .. } = &gate {
+            let pack = self.job.pack.as_ref().and_then(|p| self.env.packs.get(p));
+            if self.stage_role(pack, stage) == Some(xherd_core::domain::Role::Ship) {
+                self.job.no_origin = !self.env.git.has_remote(&wd, "origin").await;
+            }
         }
         self.job.gate = None;
         self.job.generation += 1;

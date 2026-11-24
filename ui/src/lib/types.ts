@@ -182,6 +182,8 @@ export interface Job {
   /** Stages entered, in order; earlier ones missing were skipped. */
   visitedStages?: string[];
   gate?: Gate;
+  /** The repository has no `origin`: the ship step stopped without a pull request. */
+  noOrigin?: boolean;
   tasks?: Task[];
   commits?: Commit[];
   prUrl?: string;

@@ -58,6 +58,7 @@ fn req(repo: &Path, name: &str) -> NewJob {
         permission_mode: None,
         runtime: None,
         model: None,
+        new_project: None,
     }
 }
 

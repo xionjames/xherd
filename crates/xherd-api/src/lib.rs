@@ -1784,6 +1784,8 @@ struct ActionBody {
     mode: Option<xherd_core::permission::PermissionMode>,
     /// Model: a name, or null/empty for the runtime's default (issue #112).
     model: Option<String>,
+    /// Set origin: the remote's URL (R9).
+    url: Option<String>,
     /// Cancel: also remove the worktree (R12).
     #[serde(rename = "removeWorktree")]
     remove_worktree: Option<bool>,
@@ -2005,6 +2007,15 @@ async fn agent_action(
     if action == "model" {
         let agent = d.set_model(&id, b.model.as_deref()).await?;
         return Ok(Json(json!({"job": agent})));
+    }
+    if action == "set-origin" {
+        let url = required(b.url, "url")?;
+        let job = d.set_origin(&id, &url).await?;
+        return Ok(Json(json!({"job": job})));
+    }
+    if action == "finish-local" {
+        let job = d.finish_local(&id).await?;
+        return Ok(Json(json!({"job": job})));
     }
     let a = match action.as_str() {
         "pause" => UserAction::Pause,

@@ -82,6 +82,17 @@ enum Cmd {
         repo: Option<String>,
         #[arg(long)]
         base: Option<String>,
+        /// Start a new project (a new git repository under `<workspace>/projects/`) instead of
+        /// using a repository; `--new-project=<project>` names the folder (default: the job name).
+        #[arg(
+            long,
+            value_name = "PROJECT",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "",
+            conflicts_with_all = ["repo", "base"]
+        )]
+        new_project: Option<String>,
         /// What xherd may approve by itself: ask (default) or important.
         #[arg(long)]
         autonomy: Option<xherd_core::autonomy::Autonomy>,
@@ -465,6 +476,7 @@ fn main() -> ExitCode {
             flow,
             repo,
             base,
+            new_project,
             autonomy,
             mode,
             runtime,
@@ -489,6 +501,7 @@ fn main() -> ExitCode {
                 permission_mode: mode,
                 runtime,
                 model,
+                new_project,
             },
         ),
         Cmd::Model { job, model } => {
@@ -1138,7 +1151,8 @@ fn new_job(repo: Option<String>, mut req: xherd_core::new::NewJob) -> i32 {
                 .is_ok_and(|v| v["repo"].as_str().is_some_and(|r| !r.is_empty()))
         });
     let repo = match repo {
-        _ if agent_has_repo => String::new(),
+        // A new project has no repository to send.
+        _ if agent_has_repo || req.new_project.is_some() => String::new(),
         Some(r) if r.contains("://") || r.starts_with("git@") => r,
         None if req
             .ticket
@@ -1624,6 +1638,33 @@ mod tests {
         let cli = Cli::try_parse_from(argv(&["xherd", "new", "shop"])).unwrap();
         assert!(matches!(cli.cmd, Cmd::New { .. }));
         assert!(Cli::try_parse_from(argv(&["xherd", "job"])).is_err());
+    }
+
+    #[test]
+    fn new_project_flag_with_and_without_a_name() {
+        let parse = |v: &[&str]| Cli::try_parse_from(v.iter().copied()).unwrap();
+        match parse(&["xherd", "new", "shop", "--new-project", "Build a CLI"]).cmd {
+            Cmd::New {
+                new_project,
+                prompt,
+                ..
+            } => {
+                assert_eq!(new_project.as_deref(), Some(""));
+                assert_eq!(prompt.as_deref(), Some("Build a CLI"));
+            }
+            _ => panic!("not new"),
+        }
+        match parse(&["xherd", "new", "shop", "--new-project=tool"]).cmd {
+            Cmd::New { new_project, .. } => assert_eq!(new_project.as_deref(), Some("tool")),
+            _ => panic!("not new"),
+        }
+        match parse(&["xherd", "new", "shop"]).cmd {
+            Cmd::New { new_project, .. } => assert_eq!(new_project, None),
+            _ => panic!("not new"),
+        }
+        assert!(
+            Cli::try_parse_from(["xherd", "new", "shop", "--new-project", "--repo", "x"]).is_err()
+        );
     }
 
     #[test]
