@@ -3,7 +3,25 @@
   // Commits of the agent: click one for its message, files and the diff.
   import type { Job, Commit } from '../lib/types';
   import { href } from '../lib/router.svelte';
+  import { canPush, unpushed } from '../lib/flow';
+  import { post } from '../lib/api';
+  import { showError } from '../lib/errors.svelte';
   let { agent }: { agent: Job } = $props();
+  // Effects key on the id: the agent object is replaced on every update.
+  const id = $derived(agent.id);
+  // Pushing sends the branch to origin; the new status arrives on the websocket.
+  let pushing = $state(false);
+  async function push() {
+    pushing = true;
+    try {
+      await post(`/jobs/${id}/push`);
+    } catch (e) {
+      showError('Could not push the branch', e);
+    } finally {
+      pushing = false;
+    }
+  }
+  const waiting = $derived(unpushed(agent));
   const TONE = { proposed: 'gate', approved: 'acc', done: 'live', dropped: '' };
   const GLYPH = { proposed: '✋', approved: '✓', done: '✓', dropped: '–' };
   let picked = $state<string | null>(null);
@@ -16,6 +34,12 @@
 
 <div class="stack">
   <Panel title="Commits" flush>
+    {#if waiting}
+      <div class="cb row">
+        <span class="grow">{waiting} commit{waiting === 1 ? '' : 's'} not pushed to origin.</span>
+        <button class="btn sm primary" disabled={pushing || !canPush(agent)} onclick={push}>Push</button>
+      </div>
+    {/if}
     {#if agent.commits?.length}
       <div class="tscroll">
         <table class="tbl">
@@ -26,7 +50,8 @@
                 tabindex="0" onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (picked = c.id)} aria-selected={c.id === selected?.id}>
                 <td><span class="mono muted">{c.id}</span> <span class="mono">{c.subject}</span>
                   {#if c.needsHuman}<div><span class="pill gate">held: {c.needsHuman}</span></div>{/if}</td>
-                <td><span class="pill {c.status === 'proposed' && agent.gate?.kind !== 'commit' ? '' : TONE[c.status]}">{GLYPH[c.status]} {c.status}</span></td>
+                <td><span class="pill {c.status === 'proposed' && agent.gate?.kind !== 'commit' ? '' : TONE[c.status]}">{GLYPH[c.status]} {c.status}</span>
+                  {#if c.pushed === true}<span class="pill live">↑ pushed</span>{:else if c.pushed === false}<span class="pill">not pushed</span>{/if}</td>
                 <td class="num muted hide-sm">{c.files.length}</td>
                 <td class="mono muted hide-sm">{c.tasks.join(', ')}</td>
                 <td class="mono muted hide-sm">{c.sha?.slice(0, 8) ?? ''}</td>

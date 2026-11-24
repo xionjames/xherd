@@ -70,6 +70,17 @@ export function stageNow(a: Job, flows: FlowInfo[]): { name: string; waits?: str
   return { name, waits };
 }
 
+/** Done commits the local `origin/<branch>` ref does not have yet. */
+export function unpushed(a: Job): number {
+  return (a.commits ?? []).filter((c) => c.pushed === false).length;
+}
+
+/** The Push button: something is unpushed, no turn is under way (the daemon
+ *  refuses a running job) and the worktree still exists. */
+export function canPush(a: Job): boolean {
+  return unpushed(a) > 0 && a.status !== 'running' && !a.worktreeRemovedAt;
+}
+
 /** The Resolve conflicts button of the Pull request tab (#139): shown when an
  *  open flow agent's PR conflicts with its base, usable when the agent has no
  *  turn under way and no gate open (the daemon refuses otherwise). */
