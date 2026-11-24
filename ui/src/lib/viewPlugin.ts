@@ -7,7 +7,7 @@
 // `ui/view-kit/xherd-view.js`.
 import { stageNow } from './flow';
 import { agentHue, needsYou, repoName } from './format';
-import { jobAgent, usesAgent } from './agents';
+import { agentLabel, jobAgent, usesAgent } from './agents';
 import type { AgentView, Job, FlowInfo, Gate, Status, Ticket } from './types';
 
 export const VIEW_PROTOCOL = 1;
@@ -36,6 +36,8 @@ export interface ViewAgent {
   needsYou: boolean;
   /** The saved agent running the job's current stage, by name; absent for a job with none. */
   agent?: string;
+  /** `agent` without a flow plugin's prefix (what the Herd page shows); `agent` stays the name for `openAgent`. */
+  agentLabel?: string;
   /** The agent's colour, a CSS `hsl(…)`. */
   hue: string;
   prUrl?: string;
@@ -47,7 +49,10 @@ export interface ViewAgent {
  *  skills, budgets or paths. `jobs` are ids of jobs in `agents`. */
 export interface ViewSavedAgent {
   id: string;
+  /** The full name: what `openAgent` takes. */
   name: string;
+  /** The name without a flow plugin's prefix: what to show. */
+  label: string;
   description: string;
   version: number;
   runtime: string;
@@ -78,6 +83,7 @@ const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
 export function project(a: Job, flows: FlowInfo[]): ViewAgent {
   const now = stageNow(a, flows);
   const ticket = a.ticket ? { key: str(a.ticket.key), url: str(a.ticket.url) } : undefined;
+  const ja = jobAgent(a);
   return strip({
     id: a.id,
     name: a.name,
@@ -95,7 +101,8 @@ export function project(a: Job, flows: FlowInfo[]): ViewAgent {
     waitsOn: now?.waits,
     gate: a.gate?.kind,
     needsYou: needsYou(a),
-    agent: jobAgent(a)?.name,
+    agent: ja?.name,
+    agentLabel: ja && agentLabel(ja.name, ja.source),
     hue: agentHue(a.name),
     prUrl: a.prUrl,
     prState: a.prState,
@@ -113,6 +120,7 @@ export function projectSaved(d: AgentView, jobs: readonly Job[]): ViewSavedAgent
   return {
     id: d.id,
     name: d.name,
+    label: agentLabel(d.name, d.source),
     description: d.description,
     version: d.version,
     runtime: d.runtime,

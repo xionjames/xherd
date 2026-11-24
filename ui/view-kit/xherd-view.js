@@ -6,6 +6,9 @@
 //   xherdView.onData(cb)   cb({agents, savedAgents, flows, theme}) for every `data` message
 //                          from the Herd page; a callback added late gets the
 //                          last one at once.
+//   Saved agents carry `name` (the full name, what openAgent takes) and `label`
+//   (the name without a flow plugin's prefix: show this one). Jobs carry
+//   `agent` (full name) and, when they have one, `agentLabel` (to show).
 //   xherdView.open(id)     ask the Herd page to open that job's page (`agents` holds jobs).
 //   xherdView.openAgent(name)  ask it to open that saved agent's page.
 //

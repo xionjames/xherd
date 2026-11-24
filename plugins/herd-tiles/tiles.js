@@ -83,7 +83,7 @@
     t.appendChild(head);
     t.appendChild(pill(a));
     var stage = a.stageName || a.stage || 'no stage';
-    t.appendChild(el('div', 'hint', stage + (a.agent ? ' · ' + a.agent : '') + ' · ' + ago(a.lastActivity)));
+    t.appendChild(el('div', 'hint', stage + (a.agent ? ' · ' + (a.agentLabel || a.agent) : '') + ' · ' + ago(a.lastActivity)));
     return t;
   }
 
@@ -92,7 +92,7 @@
     var t = el('button', 'card tile' + (d.status === 'needs-you' ? ' need' : ''));
     t.type = 'button';
     t.addEventListener('click', function () { xherdView.openAgent(d.name); });
-    t.appendChild(el('span', 'mono name', d.name));
+    t.appendChild(el('span', 'mono name', d.label || d.name));
     if (d.description) t.appendChild(el('div', 'hint', d.description));
     var load = d.liveJobs + '/' + d.maxLiveJobs + ' live';
     t.appendChild(el('div', 'hint', (d.status === 'needs-you' ? '✋ ' : '') + load + ' · ' + d.jobs.length + ' jobs'));
