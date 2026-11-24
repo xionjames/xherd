@@ -39,9 +39,11 @@ Refusals any command may return: `not_live` (the job has no live session), `no_f
 
 Plain text by default (one line on success). `--json` prints `{"ok": true, "result": {...}}` or `{"ok": false, "code": "...", "message": "..."}`. Refusal codes are stable strings (see each command).
 
+A call that is accepted but changes nothing answers `"changed": false` and, when there is something to say, a short `"reason"` (`already in stage spec`, `C01 is already recorded as done`, `this call was already applied`). The plain output is then `<call>: no change (<reason>)`; exit 0 as always, so the agent continues.
+
 ### 1.4 Idempotency and ordering
 
-- Calls with the same arguments in the same state are no-ops (exit 0).
+- Calls with the same arguments in the same state are no-ops (exit 0, `no change` with its reason, see 1.3).
 - Every call carries a client-generated id (dedupe on replay) and, for status reports, a sequence number (`--seq`, monotonic per job; the CLI generates it from a counter in `.xherd/seq` when omitted).
 - The daemon records every accepted call as an event `xap.<command>`.
 

@@ -1718,7 +1718,11 @@ impl Actor {
             ));
         }
         if self.env.store.event_exists(&call.id).await.unwrap_or(false) {
-            return Ok(json!({"changed": false, "duplicate": true}));
+            return Ok(json!({
+                "changed": false,
+                "duplicate": true,
+                "reason": "this call was already applied",
+            }));
         }
         // Actions are not flow work (R7): handled before the flow checks.
         if matches!(
@@ -1783,7 +1787,15 @@ impl Actor {
         if changed || hold_ended {
             self.commit(before).await;
         }
-        Ok(json!({"changed": changed, "stage": self.job.stage, "gate": self.job.gate}))
+        let reason = (!changed)
+            .then(|| xherd_flow::xap::no_change_reason(&call.cmd))
+            .flatten();
+        let mut answer =
+            json!({"changed": changed, "stage": self.job.stage, "gate": self.job.gate});
+        if let Some(r) = reason {
+            answer["reason"] = r.into();
+        }
+        Ok(answer)
     }
 
     /// `action.add|rm|ls|log` (R1–R7, R17): the job's own list of actions.
@@ -1880,7 +1892,14 @@ impl Actor {
         if changed {
             self.commit(before).await;
         }
-        Ok(json!({"changed": changed, "text": text}))
+        let reason = (!changed && text.is_none())
+            .then(|| xherd_flow::xap::no_change_reason(&call.cmd))
+            .flatten();
+        let mut answer = json!({"changed": changed, "text": text});
+        if let Some(r) = reason {
+            answer["reason"] = r.into();
+        }
+        Ok(answer)
     }
 
     /// Approving the `pr-review` gate (R-306): settle one decision per comment

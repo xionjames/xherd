@@ -218,6 +218,32 @@ fn extra_questions(in_docs: &[String], given: &[String]) -> Vec<String> {
     out
 }
 
+/// Why `cmd` answered "no change": the state it asks for already matched. Each
+/// call has one no-op meaning, so the text follows from the call alone; `None`
+/// for calls that never answer "no change" (xap.md §1.4).
+pub fn no_change_reason(cmd: &XapCmd) -> Option<String> {
+    Some(match cmd {
+        XapCmd::StageEnter { stage, .. } => format!("already in stage {stage}"),
+        XapCmd::GateOpen { stage, .. } => {
+            format!("the {stage} gate is already open with these documents")
+        }
+        XapCmd::Ask { .. } => "this question is already asked".into(),
+        XapCmd::TasksSync { file } => format!(
+            "the tasks already match {}",
+            file.as_deref().unwrap_or("tasks.md")
+        ),
+        XapCmd::TaskStart { id } => format!("{id} is already in progress"),
+        XapCmd::TaskDone { id, .. } => format!("{id} is already done with this evidence"),
+        XapCmd::TaskBlock { id, .. } => format!("{id} is already blocked for this reason"),
+        XapCmd::CommitPropose { id, .. } => format!("{id} is already proposed as it is"),
+        XapCmd::CommitDone { id, .. } => format!("{id} is already recorded as done"),
+        XapCmd::CommitDrop { id, .. } => format!("{id} is already dropped"),
+        XapCmd::PrOpened { .. } => "this pull request is already recorded".into(),
+        XapCmd::ActionAdd { id, .. } => format!("action {id} is already registered as it is"),
+        _ => return None,
+    })
+}
+
 /// Validate and apply one call. Returns whether the agent changed; `Ok(false)`
 /// means "already in that state" (still exit 0, xap.md §1.4).
 pub fn apply(
