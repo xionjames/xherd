@@ -540,6 +540,7 @@ mod tests {
             job_token_budget: None,
             skills: vec![],
             memory: None,
+            source: None,
         };
         let mut v = serde_json::to_value(Job::new("j", 1)).unwrap();
         v.as_object_mut()

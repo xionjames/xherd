@@ -1500,6 +1500,7 @@ mod tests {
             created_at: 1,
             updated_at: 10 + Millis::from(version),
             archived_at: None,
+            source: None,
         }
     }
 

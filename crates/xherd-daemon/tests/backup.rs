@@ -105,6 +105,7 @@ async fn backup_and_restore_on_another_machine() {
         created_at: 1,
         updated_at: 10,
         archived_at: None,
+        source: None,
     };
     store.put_agent_def(&def).await.unwrap();
     def.version = 2;

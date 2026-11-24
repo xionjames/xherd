@@ -71,6 +71,20 @@ pub struct AgentDef {
     pub updated_at: Millis,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<Millis>,
+    /// The flow plugin that installed this agent; its name is then
+    /// `<source>-<label>`. `None` for agents made by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// The short name of an agent to show in running and past work: the name
+/// without its `<source>-` prefix.
+pub fn label<'a>(name: &'a str, source: Option<&str>) -> &'a str {
+    source
+        .and_then(|s| name.strip_prefix(s))
+        .and_then(|n| n.strip_prefix('-'))
+        .filter(|n| !n.is_empty())
+        .unwrap_or(name)
 }
 
 fn one_u32() -> u32 {
@@ -118,6 +132,9 @@ pub struct JobAgent {
     /// The agent's memory when the job was created (R28), never changed after.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<String>,
+    /// The flow plugin the agent came from (see `AgentDef::source`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// The agent a workflow stage runs with in one job, and whether the stage's
@@ -161,6 +178,7 @@ impl AgentDef {
             job_token_budget: self.job_token_budget,
             skills: vec![],
             memory: None,
+            source: self.source.clone(),
         }
     }
 }
@@ -328,6 +346,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             archived_at: None,
+            source: None,
         }
     }
 
@@ -496,6 +515,34 @@ mod tests {
         assert_eq!((s.runtime.as_str(), s.fell_back), ("claude-code", false));
         let back: JobAgent = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
+    }
+
+    #[test]
+    fn source_is_kept_by_the_snapshot_and_skipped_when_none() {
+        let mut d = def();
+        assert!(!serde_json::to_string(&d).unwrap().contains("source"));
+        assert!(
+            !serde_json::to_string(&d.snapshot())
+                .unwrap()
+                .contains("source")
+        );
+        d.source = Some("acme-sdd".into());
+        let s = d.snapshot();
+        assert_eq!(s.source.as_deref(), Some("acme-sdd"));
+        let back: JobAgent = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back, s);
+        let d2: AgentDef = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(d2, d);
+    }
+
+    #[test]
+    fn label_strips_the_source_prefix() {
+        assert_eq!(label("acme-sdd-architect", Some("acme-sdd")), "architect");
+        assert_eq!(label("architect", None), "architect");
+        // a name that does not carry the prefix, or is only the prefix, stays whole
+        assert_eq!(label("architect", Some("acme-sdd")), "architect");
+        assert_eq!(label("acme-sdd-", Some("acme-sdd")), "acme-sdd-");
+        assert_eq!(label("acme-sddx", Some("acme-sdd")), "acme-sddx");
     }
 
     #[test]
