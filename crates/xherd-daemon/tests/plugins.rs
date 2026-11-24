@@ -1145,6 +1145,44 @@ async fn a_job_runs_on_a_plugin_pack_to_a_gate_and_an_approval() {
     );
 }
 
+/// Opens the `brief` gate of a job on `acme-sdd` with a spec and no memory.md.
+async fn gate_without_memory(a: &Acme) -> Result<Value, xherd_core::xap::Refusal> {
+    let job =
+        a.t.d
+            .new_job(new_on(a, "login", Some("acme-sdd"), None))
+            .await
+            .unwrap();
+    let wt = std::path::PathBuf::from(job.workdir.as_deref().unwrap());
+    std::fs::write(wt.join(".xherd/spec/spec.md"), "# Spec\n").unwrap();
+    let call: xherd_core::xap::XapCall = serde_json::from_value(
+        json!({"id": "c1", "jobId": job.id, "cmd": "gate.open", "args": {"stage": "brief"}, "at": 1}),
+    )
+    .unwrap();
+    a.t.d.xap(call).await
+}
+
+#[tokio::test]
+async fn a_gate_of_a_plugin_pack_that_requires_a_memory_note_is_refused_without_one() {
+    let a = acme().await;
+    let e = gate_without_memory(&a).await.unwrap_err();
+    assert_eq!(e.code, "memory_invalid", "{}", e.message);
+}
+
+#[tokio::test]
+async fn a_gate_of_a_plugin_pack_with_memory_note_off_needs_no_memory_note() {
+    let a = acme_with(|home, _| {
+        let yaml = home.join("plugins/acme-sdd/pack/xherd-flow.yaml");
+        let text = std::fs::read_to_string(&yaml).unwrap();
+        std::fs::write(
+            yaml,
+            text.replace("memoryNote: required", "memoryNote: off"),
+        )
+        .unwrap();
+    })
+    .await;
+    gate_without_memory(&a).await.unwrap();
+}
+
 #[tokio::test]
 async fn an_unknown_pack_a_missing_flow_and_a_disabled_plugin_are_refused() {
     let a = acme().await;
