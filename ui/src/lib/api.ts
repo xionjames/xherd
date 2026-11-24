@@ -68,6 +68,36 @@ export function uploadFiles(jobId: string, files: File[], onProgress?: (fraction
   });
 }
 
+/**
+ * One image of a job (`/jobs/{id}/image?…`, R1). SVG comes back as a `data:` URL, so it can only be drawn as an
+ * `<img>` and never runs; raster images as a `blob:` URL (the caller revokes it). `blob` is the git blob id
+ * (`X-Xherd-Blob`), empty when the header is missing. Refusals are `ApiError`s with the daemon's code.
+ */
+export async function getImage(path: string): Promise<{ url: string; blob: string }> {
+  const res = await fetch(`/api/v1${path}`);
+  if (!res.ok) {
+    let data: { code?: string; error?: string; message?: string } = {};
+    try {
+      data = JSON.parse(await res.text());
+    } catch {
+      // not JSON (a proxy's page): fall back to the status text
+    }
+    throw new ApiError(res.status, data.code ?? 'http', data.error ?? data.message ?? res.statusText);
+  }
+  const blob = res.headers.get('X-Xherd-Blob') ?? '';
+  const body = await res.blob();
+  if (body.type === 'image/svg+xml' || res.headers.get('content-type')?.startsWith('image/svg+xml')) {
+    const url = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(new ApiError(0, 'read', 'The image could not be read'));
+      r.readAsDataURL(body.type === 'image/svg+xml' ? body : new Blob([body], { type: 'image/svg+xml' }));
+    });
+    return { url, blob };
+  }
+  return { url: URL.createObjectURL(body), blob };
+}
+
 /** The URL that downloads `path` (absolute, or relative to the job's workdir) as a file. */
 export const downloadUrl = (jobId: string, path: string) =>
   `/api/v1/jobs/${encodeURIComponent(jobId)}/files?path=${encodeURIComponent(path)}`;
