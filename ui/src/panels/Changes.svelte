@@ -6,7 +6,7 @@
   import { mdNoteText, type MdNote } from '../lib/notes';
   import { showError } from '../lib/errors.svelte';
   import { route, go } from '../lib/router.svelte';
-  import { parseUnified, expand, matches, sourceLines, STEP, type FileDiff, type Reveal } from '../lib/diff';
+  import { parseUnified, expand, fingerprint, matches, sourceLines, STEP, type FileDiff, type Reveal } from '../lib/diff';
   import DiffLines, { lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
   import FilePath from '../components/FilePath.svelte';
@@ -57,13 +57,8 @@
   }
   // "Viewed" marks (spec §16): a file's mark holds while its diff is unchanged.
   let viewed = $state<Record<string, string>>({});
-  const fingerprint = (f: { lines: { kind: string; text: string }[] }) => {
-    let h = 5381;
-    for (const l of f.lines) for (const c of l.kind + l.text + '\n') h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
-    return String(h);
-  };
-  const isViewed = (f: { path: string; lines: { kind: string; text: string }[] }) => viewed[f.path] === fingerprint(f);
-  async function toggleViewed(f: { path: string; lines: { kind: string; text: string }[] }) {
+  const isViewed = (f: FileDiff) => viewed[f.path] === fingerprint(f);
+  async function toggleViewed(f: FileDiff) {
     const fp = isViewed(f) ? undefined : fingerprint(f);
     try {
       await post(`/jobs/${id}/viewed`, { path: f.path, ...(fp ? { fingerprint: fp } : {}) });
@@ -85,7 +80,7 @@
     const e = ex[f.path];
     return e && e.fp === fingerprint(f) && e.q === query ? e : null;
   };
-  const expandable = (f: FileDiff) => (f.status === 'modified' || f.status === 'renamed') && !f.note;
+  const expandable = (f: FileDiff) => (f.status === 'modified' || f.status === 'renamed') && !f.binary && !f.note;
   const shown = (f: FileDiff) => {
     if (!expandable(f)) return f.lines;
     const e = cur(f);
