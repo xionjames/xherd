@@ -21,6 +21,7 @@ pub mod backup;
 pub mod checks;
 mod create;
 pub mod driver;
+pub mod flow_plugin;
 pub mod git_access;
 pub mod install;
 pub mod notifier;
