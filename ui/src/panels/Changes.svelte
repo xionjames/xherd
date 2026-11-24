@@ -7,7 +7,8 @@
   import { showError } from '../lib/errors.svelte';
   import { route, go } from '../lib/router.svelte';
   import { parseUnified, expand, fingerprint, matches, sourceLines, STEP, type FileDiff, type Reveal } from '../lib/diff';
-  import DiffLines, { lineKey } from '../components/DiffLines.svelte';
+  import { previewKind } from '../lib/images';
+  import DiffLines,{ lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
   import FilePath from '../components/FilePath.svelte';
   import Clamp from '../components/Clamp.svelte';
@@ -112,11 +113,6 @@
   };
   let collapsed = $state<Record<string, boolean>>({});
   let previewing = $state<Record<string, boolean>>({});
-  const previewKind = (p: string) => {
-    const e = p.split('.').pop()?.toLowerCase() ?? '';
-    return e === 'md' || e === 'markdown' ? 'markdown' : e === 'html' || e === 'htm' ? 'html'
-      : ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(e) ? 'image' : null;
-  };
 
   // Tabs: Uncommitted · All changes (branch against its base) · one commit.
   // Without a `view` in the URL the open gate decides, as before.
