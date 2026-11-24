@@ -1,6 +1,6 @@
 # Flow packs
 
-A **flow pack** defines the stages jobs go through, where they stop for approval, and the prompts that drive each step. A pack is a folder with `xherd-flow.yaml`, command prompts and a description of the document formats. The built-in `xherd` pack is in `packs/xherd/` and is embedded in the binary. Only the built-in pack can be loaded today (see [Limits today](#limits-today)); for running your own spec-driven method under xherd, planned, see [Add xherd support to your SDD](integrate-your-sdd.md); to teach xherd about a tool, see [Plugins](plugins.md).
+A **flow pack** defines the stages jobs go through, where they stop for approval, and the prompts that drive each step. A pack is a folder with `xherd-flow.yaml`, command prompts and a description of the document formats. The built-in `xherd` pack is in `packs/xherd/` and is embedded in the binary. Another pack is loaded from a **flow plugin**, together with the saved agents and stage assignments that go with it (see [Workflow plugins](plugins.md#workflow-plugins-kind-flow) and [Plugin packs](#plugin-packs)); for running your own spec-driven method under xherd, see also [Add xherd support to your SDD](integrate-your-sdd.md); to teach xherd about a tool, see [Plugins](plugins.md).
 
 ```yaml
 name: xherd
@@ -27,6 +27,7 @@ Top-level fields:
 | `name`, `version`, `protocol` | The pack, its version, and the XAP major version it speaks |
 | `specDir` | Where the documents live (`private`: `.xherd/spec/` in the worktree, out of git) |
 | `private` | Files of the spec folder that are xherd's working files, not documents |
+| `memoryNote` | `required` or `off` (default `off`). With `required`, `gate open` and `commit propose` are refused without a valid `.xherd/spec/memory.md` (four `##` sections, at most 80 lines); the built-in pack is `required`. With `off` (the default) xherd checks no memory note |
 | `install.<runtime>` | Per runtime: `prefix` (how a command is called: `/xherd:` for Claude Code, `/xherd/` for opencode, `$xherd-` for Codex, `/xherd-` for Pi), `commands` (`from` glob, `to` destination with `{name}`, `format` `command` or `skill`), `args` (how the runtime passes arguments), `slashEnters` (Enters needed to run a command from the completion list). A job can use a runtime only if the pack has an entry for it |
 | `commands` | Named commands xherd sends itself: `resume`, `handoff`, `status`, `prReview`, `conflicts` (sent by *Resolve conflicts*; `{base}` is the PR's base branch as `origin/<base>`; without it the action is refused), `ask` (sent by *Ask* with the user's text as `{prompt}`; without it the bare text is sent) |
 | `flows` | Flows by name; each has `start` (the first command, with `{key}` and `{prompt}`) and `stages` |
@@ -52,7 +53,7 @@ Rules that follow from the stages:
 Each file in `commands/` becomes a runtime command (`/xherd:design`, …). Conventions that matter:
 
 - Teach XAP as plain `xherd <call>` on one line in backticks, with concrete example values, never through a variable: Claude Code cannot check a command that uses a variable and asks every time. The worktree's `permissions.allow` lists the XAP subcommands.
-- Every step starts a new session with no history. Each command reads `.xherd/spec/memory.md` first and rewrites it before its gate; the daemon refuses a gate or commit proposal without a valid one.
+- Every step starts a new session with no history. Each command reads `.xherd/spec/memory.md` first and rewrites it before its gate; with `memoryNote: required` (the built-in pack) the daemon refuses a gate or commit proposal without a valid one.
 - Wrap nothing the daemon owns: it writes the `status:`/`evidence:`/`sha:` progress lines of `tasks.md` and `commits.md`, and makes approved commits itself.
 
 `packs/xherd/FORMAT.md` documents the document formats (`tasks.md`, `commits.md`, `review.md`, `pr-review.md`, `memory.md`) that the daemon's parsers read.
@@ -70,6 +71,18 @@ Two kinds of file need you, and Setup checks list them in a `pack-files` check (
 
 The `pack` check also fails when a planned file is missing or out of date, not only when it is missing.
 
+## Plugin packs
+
+A pack other than `xherd` comes from a [flow plugin](plugins.md#workflow-plugins-kind-flow): its `data.flow.pack` names the folder that holds `xherd-flow.yaml`, `FORMAT.md` and `commands/`. The pack's `name` must be the plugin's name. Rules a plugin pack must follow, checked at preview, at load and before every write:
+
+- **Install paths.** Each runtime's `commands.to` must land inside that runtime's command folder, in a sub-folder (or, for a skill, a skill folder) named for the pack, so it cannot overwrite the built-in pack's files, another pack's, or anything else: `${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md`, `${CODEX_HOME:-~/.codex}/skills/acme-sdd-{name}/SKILL.md`. A `to` that goes elsewhere, a `prefix` that does not belong to the pack (`/acme-sdd:`, `$acme-sdd-`) or a path another pack already owns (`path_taken`) is refused as `bad_manifest`.
+- **Pack names.** `xherd` and `xherd-*` are reserved for the built-in pack.
+- **`specDir: private`**, and no `schemas` key.
+- **Every command the templates call has a prompt.** Each `{prefix}<name>` in a flow's `start`, a stage's `command`, `next[].run` and `autoApproved`, and in the `commands` map must match a file of `install.<runtime>.commands.from`; every `{{…}}` in a prompt must resolve. A pack that calls a missing command is refused.
+- **Prompts** follow the conventions above; the pack may ship its own `FORMAT.md` (`{{format}}`).
+
+A job picks its pack when it is created (`xherd new --pack`, `POST /jobs` `pack`, the New job form) and keeps it. Plugin packs are installed with the built-in one: at every daemon start and from `xherd install --pack <name>`, for every runtime that is on, with the same edited/obsolete file handling as above (the choices in `/install/review` and `/install/resolve` carry the `pack`). Setup checks show `pack:<pack>/<runtime>` and `pack-files:<pack>/<runtime>` for each plugin pack; they never block (only the built-in pack's check can be required).
+
 ## Limits today
 
-Only the built-in `xherd` pack and its `feature` and `bugfix` flows ship, and xherd cannot load another pack yet (`xherd install --pack` accepts only `xherd`). Editing the installed command files works: `xherd install` keeps your edits (above). Fields not implemented yet (`views`, `extends`, `parse`, …) are rejected by the manifest parser instead of being silently ignored. A new file in `packs/xherd/` must also be added to `xherd_flow::install::BUILTIN_FILES`.
+The built-in pack ships `feature` and `bugfix`; any other pack comes from a flow plugin, which loads at daemon start (no live reload). Editing the installed command files works: `xherd install` keeps your edits (above). Fields not implemented yet (`views`, `extends`, `parse`, …) are rejected by the manifest parser instead of being silently ignored, so a plugin pack uses the xherd document formats. A new file in `packs/xherd/` must also be added to `xherd_flow::install::BUILTIN_FILES`.

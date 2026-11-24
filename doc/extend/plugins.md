@@ -19,7 +19,7 @@ A plugin is a folder with an `xherd-plugin.json` manifest. xherd loads built-in 
 `rustup` also has an optional check for a C compiler (`cc`), which Rust needs to link. In the container, where nothing can install system packages, its Fix downloads a pinned Zig into `~/.local/zig` and adds a `cc` shim that runs `zig cc`; natively it shows how to install the platform's compiler.
 | `herd-tiles` | view | A layout of the Herd page: saved agents, then one tile per job grouped by repository. The example of a [Herd view plugin](#herd-view-plugins) |
 
-Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `view`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host, tracker, toolchain and view plugins; the others are accepted by the manifest but nothing consumes them yet.
+Kinds in a manifest: `runtime`, `host`, `toolchain`, `tracker`, `view`, `flow`, `notifier`, `panel`. Today xherd uses runtime, host, tracker, toolchain, view and flow plugins; the others are accepted by the manifest but nothing consumes them yet.
 
 Every plugin can be switched on or off in Settings → Plugins (or the Welcome screen), as long as one plugin of each kind stays on; host plugins (shown as **Git providers**), trackers and view plugins (shown as **Herd views**) are optional, so having none is fine (with no Git provider on, no job gets pull request lookup, polling, comments or templates). Its card there opens its options in a dialog: settings, secrets, checks with their fixes, its login, and for a toolchain the versions.
 
@@ -164,6 +164,8 @@ A field with no value is left out. `savedAgents` holds every saved agent, archiv
 
 A field with no value is left out. `gate` may also be `pr-triage` or `pr-replies` (pull request comment rounds).
 
+**Short agent names.** A saved agent that comes from a [workflow plugin](#workflow-plugins-kind-flow) is named `<plugin>-<agent>` (`acme-sdd-architect`). Two fields give views the short name, so a layout need not cut the prefix itself: `agentLabel` on a job (the label of the job's current agent, left out with `agent`) and `label` on a saved agent (`architect`). `agent` and `name` stay the full names, and `open-agent` takes the full `name`. Draw the label and open by the name. Protocol v1 is unchanged: a view that ignores them keeps working.
+
 **The view kit.** Two files at `/api/v1/view-kit/` save writing the protocol and the styles yourself:
 
 - `xherd-view.js`, a classic script that defines the global `xherdView`: `xherdView.onData(cb)` calls `cb({agents, savedAgents, flows, theme})` for every `data` message (a callback added after the first message gets the last one at once), `xherdView.open(agentId)` asks to open a job, `xherdView.openAgent(name)` a saved agent. It says `ready` when it loads and sets `data-theme` on `<html>` before each callback. Load it before your own scripts.
@@ -213,6 +215,68 @@ xherdView.onData(function (d) {
 ```
 
 `vite build` then gives `dist/` with `index.html` and `assets/` (Vite warns that the kit's URLs do not exist at build time; that is expected). The plugin folder is the contents of `dist/` plus `xherd-plugin.json` with `"entry": "index.html"`. `vite dev` does not work as a view (its client uses inline scripts and a WebSocket): build, copy the folder to `<data root>/plugins/<name>/` and restart the daemon. After a later build, reloading the Herd page is enough natively (files are served with `no-cache`); in the container the daemon serves a copy made at start, so restart it again.
+
+## Workflow plugins (kind `flow`)
+
+A `flow` plugin brings a whole method: a [flow pack](flow-packs.md) (stages, gates, prompts), the saved agents that work its stages, and which agent starts on which stage. Install it like any plugin ([External plugins](#external-plugins)); after the restart, jobs can pick its pack and flows, and its agents are on the Agents page.
+
+A flow plugin is **files only**, like a view plugin: a manifest with `commands`, `hooks`, `checks`, `requires`, `login`, `build` or `instructions` is refused. Layout (the plugin is the repository root, or the folder `--path` names):
+
+```text
+acme-sdd/
+├── xherd-plugin.json      # kind: flow, data.flow
+├── agents.json            # optional: saved agents, the shape of GET /agents/export
+└── pack/
+    ├── xherd-flow.yaml    # the pack; its name is the plugin's name
+    ├── FORMAT.md          # optional, {{format}} in prompts
+    └── commands/*.md      # one prompt per command the pack calls
+```
+
+```json
+{
+  "name": "acme-sdd",
+  "kind": "flow",
+  "version": "1.2.0",
+  "label": "Acme SDD",
+  "description": "Brief, design and plan before code, one agent per stage.",
+  "data": {
+    "flow": {
+      "pack": "pack",
+      "agents": "agents.json",
+      "assignments": {
+        "feature": {
+          "brief":     { "agent": "analyst" },
+          "design":    { "agent": "architect", "human": true },
+          "plan":      { "agent": "planner" },
+          "implement": { "agent": "coder" },
+          "review":    { "agent": "reviewer" }
+        }
+      }
+    }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `pack` | Required. Relative folder with `xherd-flow.yaml` (plain relative path, nothing outside the plugin folder) |
+| `agents` | Optional. Relative path of the agents file. Without it the plugin ships no agents |
+| `assignments` | Optional. Flow → stage → `{agent, human?}`: the default assignments, written when the plugin is installed. `agent` is the name in `agents.json` without the prefix; `human: true` makes that stage's gate always wait for the user. A stage with no entry keeps the stage before's agent |
+
+**Agents.** Each agent of `agents.json` is saved as `<plugin>-<name>` with `"source": "<plugin>"`; the UI shows `name` without the prefix on job pages, the Board, the Inbox, the Herd and the Time page, and the full name where you configure agents (Agents page, Flows page, CLI, API). All agents assigned to one flow must share a runtime (`mixed_runtime`). Skills are not shipped inside plugins: an agent's `skills` name skills of your library. A saved name over the length limit or a permission mode `all` outside the container is refused at preview.
+
+**Preview.** *Add plugin* and `xherd plugin install` add a flow section to the preview: the pack's flows and stages, each agent with its state (`new`, `unchanged`, `overwritten`, `reclaimed` for one a removed plugin left behind, `taken` when a saved agent of yours has that name), fields that widen what the agent may do (`risky`), problems with it, agents the new version drops (`archived`), the assignment changes, the files that will be written per runtime and the job that uses the pack. A manifest or pack that breaks a rule is refused as `bad_manifest` with the reason. Installing refuses with `name_taken` when a saved agent of yours has the name of one of the plugin's, and nothing is written.
+
+**Install, update, remove.** Each one changes the plugin's folder, its record, its agents and its assignments together, or none of them.
+
+- *Install*: new agents start at version 1; the default assignments are written. The pack loads after the restart; until then its jobs cannot be created.
+- *Update*: an agent whose content changed gets a new version and the others stay; agents the new version drops are archived (never deleted); the default assignments are written again, replacing the pack's rows, so edit assignments on the Flows page after an update only if you accept that. A job created before keeps its snapshot of the agents.
+- *Remove*: the pack's files are removed from each runtime's command folder (a file you edited stays, listed as obsolete in Setup), the pack's assignments go, and the agents **stay** (still marked with their `source`) so your jobs and history keep their names.
+- Update and remove are refused with `plugin_in_use` while a job that has not ended (a paused one counts) uses the pack; finished jobs of a removed pack still open.
+
+**Rules for the pack** (install paths, reserved names, prompts for every command) are in [Flow packs → Plugin packs](flow-packs.md#plugin-packs); they are checked at preview, at load and before every write, so a plugin cannot write outside its own command folder. Review a plugin's prompts before installing it: they run with your jobs' permissions, and its agents' `instructions` and `permissionMode` too.
+
+A job uses the plugin's flow with `xherd new --pack acme-sdd --flow feature`, `"pack": "acme-sdd"` in `POST /jobs`, or *acme-sdd / feature* in the New job form.
 
 ## Tools a plugin needs (`requires`)
 
