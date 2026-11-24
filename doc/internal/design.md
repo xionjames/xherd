@@ -259,6 +259,8 @@ With the container runner, tmux still runs in the daemon's container and the pan
                                                   normalised state → gates, views, Kanban
 ```
 
+Packs come from the built-in `packs/xherd` or from a workflow plugin (kind `flow`, see §18); a job names its pack and keeps it.
+
 The daemon never interprets a pack's prose: it needs the stage graph with roles, which files form each gate, how to render commands, and the normalised state.
 
 ### 6.2 `xherd-flow.yaml`
@@ -786,6 +788,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] Toolchain plugins and Welcome installer
   - [x] Plugin install from a git URL (CLI and Settings → Plugins): shallow fetch into a scratch folder, preview and digest, install only the previewed digest, update with manifest diff, remove with `--forget`; source `url@sha` in the `plugins` table (no migration), audit events `plugin-install|update|remove`; restart by re-exec (`POST /admin/restart`, `xherd daemon restart`); `XHERD_PLUGIN_INSTALL=off`. No live reload, catalogue, archives or `plugin new|test|link`
   - [x] Herd views as plugins (#108): kind `view`, sandboxed frame, protocol v1, view kit
+  - [x] Workflow plugins: kind `flow` carries a flow pack, saved agents (`<plugin>-<agent>`, `source`) and default assignments; packs from plugins load next to the built-in one (`pack_sources`), jobs choose one with `pack`, install/update/remove from a git URL (update and remove refused while a job uses the pack), pack files per runtime, Herd `agentLabel`/`label`. Not checked with real runtimes; pi packs use flat `<pack>-*.md` files (to confirm)
   - [x] TODOs: reminders, once or repeating (`/todos`, 30 s tick, kind `todo`)
   - [x] TODO condition checks (spec §16.2): a headless read-only run of the runtime (`data.terminal.check`) answering `XHERD_RESULT {met, summary}`; met or unclear needs you, not met is rescheduled, failure is an error
   - [ ] Budgets per profile and a cost estimate (token budgets are global since M4)

@@ -76,7 +76,8 @@ by theme; update it together with them.
 - [x] Each step starts from `memory.md` (state, decisions, code map) instead of re-exploring the code
 - [ ] Measure the token savings per step; validate the size and accuracy of the code map
 - [ ] Pack JSON schemas for gate documents (R-204); `views`, `extends`, `parse` for external packs
-- [ ] Loading external flow packs (only the built-in pack loads today) and dynamic flows, so an SDD that makes XAP calls gets gates without a pack of its own (`doc/extend/integrate-your-sdd.md`)
+- [x] Loading external flow packs as workflow plugins (kind `flow`: a pack, saved agents and default assignments; install, update and remove from a git URL, chosen per job with `new --pack`; `doc/extend/plugins.md`)
+- [ ] Dynamic flows, so an SDD that makes XAP calls gets gates without a pack of its own (`doc/extend/integrate-your-sdd.md`)
 - [x] `bugfix` flow in the built-in pack: analysis, a failing reproduction test committed first, then the fix (#142); the Herd's By stage lanes per workflow and the Board's lanes by workflow
 - [ ] More flow packs: PR review, research/design; multi-repo tickets
 - [x] `xherd memory propose` and the Shared memory tab (AGENTS.md, #65)
