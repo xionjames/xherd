@@ -1314,13 +1314,17 @@ impl Actor {
         if !found.is_empty() {
             changed = self.settle_found(&on_branch, &found).await;
         }
-        if push_known && seq > self.push_applied {
+        if seq > self.push_applied {
+            // A failed read still moves the mark, so an older, slower result
+            // cannot apply after it.
             self.push_applied = seq;
-            changed |= xherd_core::domain::apply_push_status(
-                &mut self.job.commits,
-                &on_branch,
-                unpushed.as_deref(),
-            );
+            if push_known {
+                changed |= xherd_core::domain::apply_push_status(
+                    &mut self.job.commits,
+                    &on_branch,
+                    unpushed.as_deref(),
+                );
+            }
         }
         if changed {
             self.commit(self.job.status).await;
@@ -2848,12 +2852,7 @@ impl Actor {
                 "user.finish-local"
             }
             UserAction::Pushed { head } => {
-                if self.job.status == Status::Running {
-                    return Err(refuse(
-                        "not_stopped",
-                        format!("{} is running", self.job.name),
-                    ));
-                }
+                // The push already happened: record it whatever the status.
                 payload = Some(json!({"sha": head}));
                 self.check_branch_commits();
                 "user.push"

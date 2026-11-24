@@ -309,6 +309,21 @@ async fn a_running_job_cannot_push() {
 }
 
 #[tokio::test]
+async fn a_finished_push_is_recorded_even_if_the_job_runs_again() {
+    let t = setup().await;
+    // The job is running when the push result reaches the actor.
+    t.d.action(
+        "SC-1",
+        UserAction::Pushed {
+            head: t.shas[1].clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(push_events(&t).await, 1);
+}
+
+#[tokio::test]
 async fn without_an_origin_remote_nothing_is_pushed() {
     let t = setup().await;
     stopped(&t, 1).await;
