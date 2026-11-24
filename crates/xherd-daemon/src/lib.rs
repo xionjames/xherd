@@ -821,7 +821,8 @@ impl Daemon {
         let a = self.action(who, UserAction::Get).await?;
         let wd = workdir_of(&a)?;
         let canon = xherd_flow::xap::doc_path(path, wd).map_err(|r| fail("bad_path", r.message))?;
-        let (abs, bytes) = read_worktree_file(wd, xherd_flow::xap::worktree_rel(&canon), path)?;
+        let (abs, bytes) =
+            read_worktree_file(wd, xherd_flow::xap::worktree_rel(&canon), path, TEXT_MAX)?;
         let flow = a
             .pack
             .as_deref()
@@ -834,19 +835,7 @@ impl Daemon {
             .await
             .map_err(|e| fail("store", e.to_string()))?;
         // Images (diff preview) travel as a data URL; their bytes are not text.
-        let mime = match abs
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("png") => Some("image/png"),
-            Some("jpg" | "jpeg") => Some("image/jpeg"),
-            Some("gif") => Some("image/gif"),
-            Some("webp") => Some("image/webp"),
-            Some("svg") => Some("image/svg+xml"),
-            _ => None,
-        };
+        let mime = image_mime(&abs);
         let data_url = mime.map(|m| {
             use base64::Engine;
             format!(
@@ -1011,7 +1000,7 @@ impl Daemon {
         view: Option<&str>,
         commit: Option<&str>,
     ) -> Result<serde_json::Value, ActionError> {
-        const MAX: u64 = 2 * 1024 * 1024;
+        const MAX: u64 = TEXT_MAX;
         let fail = |code: &'static str, message: String| ActionError { code, message };
         let a = self.action(who, UserAction::Get).await?;
         let wd = workdir_of(&a)?;
@@ -1022,7 +1011,7 @@ impl Daemon {
             Rev::Sha(s) => s,
             _ => "HEAD".to_string(),
         }) else {
-            let (_, bytes) = read_worktree_file(wd, rel.clone(), path)?;
+            let (_, bytes) = read_worktree_file(wd, rel.clone(), path, TEXT_MAX)?;
             return Ok(serde_json::json!({
                 "path": rel, "rev": "worktree",
                 "text": String::from_utf8_lossy(&bytes),
@@ -1044,6 +1033,82 @@ impl Daemon {
             .await
             .map_err(|e| fail("git", e.to_string()))?;
         Ok(serde_json::json!({ "path": rel, "rev": rev, "text": text }))
+    }
+
+    /// The bytes of one image of the job (R1, R2, R7c, R7e, R9), for the
+    /// image route. `side` absent reads the worktree; `new` / `old` read the
+    /// side of the diff that `view`/`commit` select, resolved by `diff_sides`
+    /// (never a revision from the caller). On both paths a missing file is
+    /// `no_such_doc`, then the extension decides (`not_an_image`), then the
+    /// size (`too_large`, 8 MiB). Read-only, run here rather than in the actor.
+    pub async fn image(
+        &self,
+        who: &str,
+        path: &str,
+        side: Option<&str>,
+        view: Option<&str>,
+        commit: Option<&str>,
+    ) -> Result<Image, ActionError> {
+        let fail = |code: &'static str, message: String| ActionError { code, message };
+        let a = self.action(who, UserAction::Get).await?;
+        let wd = workdir_of(&a)?;
+        let canon = xherd_flow::xap::doc_path(path, wd).map_err(|r| match r.code {
+            "doc_missing" => fail("no_such_doc", r.message),
+            _ => fail("bad_path", r.message),
+        })?;
+        let rel = xherd_flow::xap::worktree_rel(&canon);
+        let mime = image_mime(std::path::Path::new(&rel));
+        let not_an_image = || fail("not_an_image", format!("{path} is not an image"));
+        let git = xherd_git::Git::new("git");
+        let git_err = |e: xherd_git::GitError| fail("git", e.to_string());
+        let rev = match side {
+            None => None,
+            Some("new") => diff_sides(&a, view, commit)?.new,
+            Some("old") => Some(
+                diff_sides(&a, view, commit)?
+                    .old
+                    .ok_or_else(|| fail("no_such_doc", format!("{path} has no old version")))?,
+            ),
+            Some(s) => return Err(fail("bad_request", format!("unknown side {s:?}"))),
+        };
+        let Some(rev) = rev else {
+            worktree_entry(wd, &rel, path)?;
+            let mime = mime.ok_or_else(not_an_image)?;
+            let (_, bytes) = read_worktree_file(wd, rel.clone(), path, IMAGE_MAX)?;
+            // The id git would give these bytes (filters included), taken from
+            // the bytes just read so a later write cannot make them disagree.
+            let blob = git
+                .run_bytes(
+                    wd,
+                    &["hash-object", "--stdin", &format!("--path={rel}")],
+                    128,
+                    Some(bytes.clone()),
+                )
+                .await
+                .map_err(git_err)?;
+            let blob = String::from_utf8_lossy(&blob).trim().to_string();
+            return Ok(Image { mime, bytes, blob });
+        };
+        // A root commit has no old revision: the file shows as added.
+        let name = rev_name(&git, wd, &rev)
+            .await?
+            .ok_or_else(|| fail("no_such_doc", format!("{path} has no old version")))?;
+        // A file that is not an image is only looked up (limit 0): missing is
+        // `no_such_doc`, whatever exists is `not_an_image` whatever its size.
+        let max = if mime.is_some() { IMAGE_MAX } else { 0 };
+        match git.blob_at(wd, &name, &rel, max).await.map_err(git_err)? {
+            xherd_git::BlobAt::Missing => {
+                Err(fail("no_such_doc", format!("{path} does not exist")))
+            }
+            xherd_git::BlobAt::NotFile => Err(not_an_image()),
+            _ if mime.is_none() => Err(not_an_image()),
+            xherd_git::BlobAt::TooLarge(_) => Err(too_large(path, IMAGE_MAX)),
+            xherd_git::BlobAt::Found { oid, bytes } => Ok(Image {
+                mime: mime.expect("checked above"),
+                bytes,
+                blob: oid,
+            }),
+        }
     }
 
     /// Apply `hook-queue.jsonl` in order (R-014). Returns how many were applied.
@@ -1143,27 +1208,78 @@ impl Daemon {
     }
 }
 
+/// Largest text file the UI reads (documents, diff sources).
+const TEXT_MAX: u64 = 2 * 1024 * 1024;
+/// Largest image the UI reads (R9); the size `diff_proposed` also stops at.
+const IMAGE_MAX: u64 = xherd_git::DIFF_FILE_LIMIT;
+
+/// The MIME type of a file the UI may show as an image, from its extension
+/// (case-insensitive); the bytes are never sniffed.
+fn image_mime(path: &std::path::Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("svg") => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
+/// The absolute path of a regular file inside the worktree. A missing file,
+/// a directory or a symlink that leaves the worktree is `no_such_doc`.
+fn worktree_entry(
+    wd: &std::path::Path,
+    rel: &str,
+    shown: &str,
+) -> Result<std::path::PathBuf, ActionError> {
+    wd.join(rel)
+        .canonicalize()
+        .ok()
+        .filter(|p| wd.canonicalize().is_ok_and(|w| p.starts_with(w)) && p.is_file())
+        .ok_or_else(|| ActionError {
+            code: "no_such_doc",
+            message: format!("{shown} does not exist"),
+        })
+}
+
 /// A file inside the worktree: canonical path and bytes. `shown` names it in
-/// errors. At most 2 MiB (`too_large`); outside the worktree or not a file is
-/// `no_such_doc`.
+/// errors. At most `max` bytes (`too_large`); outside the worktree or not a
+/// file is `no_such_doc`.
 fn read_worktree_file(
     wd: &std::path::Path,
     rel: String,
     shown: &str,
+    max: u64,
 ) -> Result<(std::path::PathBuf, Vec<u8>), ActionError> {
-    const MAX: u64 = 2 * 1024 * 1024;
     let fail = |code: &'static str, message: String| ActionError { code, message };
-    let abs = wd
-        .join(rel)
-        .canonicalize()
-        .ok()
-        .filter(|p| wd.canonicalize().is_ok_and(|w| p.starts_with(w)) && p.is_file())
-        .ok_or_else(|| fail("no_such_doc", format!("{shown} does not exist")))?;
-    if std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0) > MAX {
-        return Err(fail("too_large", format!("{shown} is larger than 2 MiB")));
+    let abs = worktree_entry(wd, &rel, shown)?;
+    if std::fs::metadata(&abs).map(|m| m.len()).unwrap_or(0) > max {
+        return Err(too_large(shown, max));
     }
     let bytes = std::fs::read(&abs).map_err(|e| fail("io", e.to_string()))?;
     Ok((abs, bytes))
+}
+
+fn too_large(shown: &str, max: u64) -> ActionError {
+    ActionError {
+        code: "too_large",
+        message: format!("{shown} is larger than {} MiB", max / (1024 * 1024)),
+    }
+}
+
+/// An image of a job as the image route serves it (R1).
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub mime: &'static str,
+    pub bytes: Vec<u8>,
+    /// The git blob id of `bytes`.
+    pub blob: String,
 }
 
 /// A revision a diff side is read from (R7c).
@@ -1242,7 +1358,6 @@ fn diff_sides(a: &Job, view: Option<&str>, commit: Option<&str>) -> Result<Sides
 }
 
 /// The revision git reads a side from; `None` for a root commit's old side.
-#[allow(dead_code)] // used by `Daemon::image` (T03)
 async fn rev_name(
     git: &xherd_git::Git,
     wd: &std::path::Path,
@@ -1282,4 +1397,50 @@ pub(crate) fn workdir_of(a: &Job) -> Result<&std::path::Path, ActionError> {
             code: "no_workspace",
             message: format!("{} has no worktree", a.name),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xherd_core::domain::{Gate, Role};
+
+    /// The rows of R7c that the integration tests cannot reach: the ship
+    /// gate's default view, and a commit without a sha.
+    #[test]
+    fn diff_sides_follow_the_r7c_table() {
+        let mut a = Job::new("SC-1", 1);
+        a.base = Some("main".into());
+        let sides = |a: &Job, v, c| diff_sides(a, v, c).unwrap();
+        let head_vs_worktree = Sides {
+            old: Some(Rev::Head),
+            new: None,
+        };
+        assert_eq!(sides(&a, None, None), head_vs_worktree);
+
+        a.gate = Some(Gate::Docs {
+            stage: "ship".into(),
+            role: Role::Ship,
+            files: vec![],
+            next: None,
+            needs_human: None,
+            questions: vec![],
+            asked: vec![],
+        });
+        assert_eq!(
+            sides(&a, None, None),
+            Sides {
+                old: Some(Rev::MergeBase("main".into())),
+                new: Some(Rev::Head),
+            }
+        );
+        // An explicit view wins over the gate's default.
+        assert_eq!(sides(&a, Some("uncommitted"), None), head_vs_worktree);
+        // No base: the branch view refuses, the ship default falls back.
+        a.base = None;
+        assert_eq!(sides(&a, None, None), head_vs_worktree);
+        assert_eq!(
+            diff_sides(&a, Some("branch"), None).unwrap_err().code,
+            "no_base"
+        );
+    }
 }
