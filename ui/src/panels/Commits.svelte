@@ -37,7 +37,9 @@
     {#if waiting}
       <div class="cb row">
         <span class="grow">{waiting} commit{waiting === 1 ? '' : 's'} not pushed to origin.</span>
-        <button class="btn sm primary" disabled={pushing || !canPush(agent)} onclick={push}>Push</button>
+        {#if canPush(agent)}
+          <button class="btn sm primary" disabled={pushing} onclick={push}>Push</button>
+        {/if}
       </div>
     {/if}
     {#if agent.commits?.length}
