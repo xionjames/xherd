@@ -373,6 +373,41 @@ impl Git {
         .map(drop)
     }
 
+    /// Pushes `branch` to `remote` without touching its upstream setting.
+    /// Never forced: a diverged remote refuses and git's message is the error.
+    pub async fn push(&self, dir: &Path, remote: &str, branch: &str) -> Result<()> {
+        if branch.starts_with('-') || remote.starts_with('-') {
+            return Err(GitError::Refused(
+                "a remote or branch cannot start with '-'".into(),
+            ));
+        }
+        self.run_env(dir, NO_PROMPT, &["push", "--quiet", remote, branch])
+            .await
+            .map(drop)
+    }
+
+    /// The commits of `branch` that `refs/remotes/origin/<branch>` lacks
+    /// (shas, newest first), from local refs only (no fetch). `None` when
+    /// there is no such tracking ref.
+    pub async fn unpushed(&self, dir: &Path, branch: &str) -> Result<Option<Vec<String>>> {
+        if branch.starts_with('-') {
+            return Err(GitError::Refused("a branch cannot start with '-'".into()));
+        }
+        let tracking = format!("refs/remotes/origin/{branch}");
+        if self
+            .run(dir, &["rev-parse", "--verify", "--quiet", &tracking])
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+        let local = format!("refs/heads/{branch}");
+        let out = self
+            .run(dir, &["rev-list", &local, "--not", &tracking])
+            .await?;
+        Ok(Some(out.lines().map(str::to_string).collect()))
+    }
+
     /// Merges `branch` into the branch checked out in `dir` (a fast-forward
     /// when possible, else a merge commit). On any failure the merge is
     /// aborted, so the tree is as it was, and git's error is returned.
@@ -1109,5 +1144,47 @@ mod tests {
             "{second}"
         );
         assert!(hooks.join("commit-msg").symlink_metadata().is_ok());
+    }
+
+    #[tokio::test]
+    async fn unpushed_lists_local_only_commits_and_push_sends_them() {
+        let d = tempfile::tempdir().unwrap();
+        let g = Git::new("git");
+        let bare = d.path().join("bare.git");
+        std::fs::create_dir(&bare).unwrap();
+        g.run(&bare, &["init", "--quiet", "--bare", "-b", "main"])
+            .await
+            .unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        g.init(&repo, "main").await.unwrap();
+        for args in [
+            &["config", "user.email", "t@example.com"][..],
+            &["config", "user.name", "t"],
+            &["config", "commit.gpgsign", "false"],
+        ] {
+            g.run(&repo, args).await.unwrap();
+        }
+        let one = g.commit_empty(&repo, "one").await.unwrap();
+        g.remote_add(&repo, "origin", &bare.to_string_lossy())
+            .await
+            .unwrap();
+
+        assert_eq!(g.unpushed(&repo, "main").await.unwrap(), None);
+        g.push(&repo, "origin", "main").await.unwrap();
+        assert_eq!(g.rev_parse(&bare, "main").await.unwrap(), one);
+        assert_eq!(g.unpushed(&repo, "main").await.unwrap(), Some(vec![]));
+
+        let two = g.commit_empty(&repo, "two").await.unwrap();
+        assert_eq!(
+            g.unpushed(&repo, "main").await.unwrap(),
+            Some(vec![two.clone()])
+        );
+        g.push(&repo, "origin", "main").await.unwrap();
+        assert_eq!(g.rev_parse(&bare, "main").await.unwrap(), two);
+        assert_eq!(g.unpushed(&repo, "main").await.unwrap(), Some(vec![]));
+
+        assert!(g.push(&repo, "origin", "-x").await.is_err());
+        assert!(g.unpushed(&repo, "-x").await.is_err());
     }
 }

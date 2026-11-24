@@ -15,7 +15,7 @@
   import { app, upsertJob } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
-  import { flowOf, prGate } from '../lib/flow';
+  import { canPush, flowOf, prGate } from '../lib/flow';
   import { agentRunning, agoText, needsYou, repoName, shortBase, waitsAtGate } from '../lib/format';
   import { get, post } from '../lib/api';
   import { showError } from '../lib/errors.svelte';
@@ -110,6 +110,7 @@
       const blocked = agent.tasks.filter((t) => t.status === 'blocked').length;
       return blocked ? { n: blocked, tone: 'h' } : { n: `${agent.tasks.filter((t) => t.status === 'done').length}/${agent.tasks.length}`, tone: '' };
     }
+    if (id === 'commits' && canPush(agent)) return { n: '✋', tone: 'g' };
     if (id === 'commits' && agent.commits?.length) return { n: agent.commits.length, tone: '' };
     if (id === 'memory' && agent.memoryProposal) return { n: '✋', tone: 'g' };
     if (id === 'agent-memory' && agent.agentMemoryProposal) return { n: '✋', tone: 'g' };

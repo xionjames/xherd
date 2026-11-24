@@ -567,6 +567,7 @@ pub fn apply(
                 tasks: tasks.clone(),
                 sha: None,
                 needs_human,
+                pushed: None,
             };
             if let Some(open) = open_commit(a) {
                 if open.id == *id && open.status == CommitStatus::Proposed {

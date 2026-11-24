@@ -169,6 +169,10 @@ pub struct Commit {
     pub sha: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs_human: Option<String>,
+    /// Whether the commit is on the local `origin/<branch>` ref. Absent when
+    /// unknown: no tracking ref, or the commit is not (yet) on the branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed: Option<bool>,
 }
 
 /// Why a commit made outside xherd is held (shown on its row).
@@ -293,6 +297,7 @@ pub fn settle_branch_commits(
                 tasks: vec![],
                 sha: Some(b.sha.clone()),
                 needs_human: None,
+                pushed: None,
             });
             out.push(Settled::Memory {
                 id,
@@ -330,6 +335,7 @@ pub fn settle_branch_commits(
             tasks: vec![],
             sha: Some(b.sha.clone()),
             needs_human: Some(OUTSIDE_COMMIT_HOLD.into()),
+            pushed: None,
         });
         out.push(Settled::Outside {
             id,
@@ -337,6 +343,33 @@ pub fn settle_branch_commits(
         });
     }
     out
+}
+
+/// Set `pushed` on the recorded `Done` commits from the local view of the
+/// remote: `on_branch` is every sha on the branch, `unpushed` the ones not
+/// on `origin/<branch>` (`None`: no tracking ref). A row whose sha is not on
+/// the branch, or that is not `Done`, gets `None`. Returns whether anything
+/// changed.
+pub fn apply_push_status(
+    commits: &mut [Commit],
+    on_branch: &[String],
+    unpushed: Option<&[String]>,
+) -> bool {
+    let mut changed = false;
+    for c in commits.iter_mut() {
+        let pushed = match (&c.sha, unpushed) {
+            (Some(sha), Some(unpushed)) if c.status == CommitStatus::Done => on_branch
+                .iter()
+                .any(|o| same_sha(o, sha))
+                .then(|| !unpushed.iter().any(|u| same_sha(u, sha))),
+            _ => None,
+        };
+        if c.pushed != pushed {
+            c.pushed = pushed;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// An open gate. Priority when several apply: commit > PR > docs > question (R-103).
@@ -440,6 +473,7 @@ mod tests {
             tasks: vec![],
             sha: None,
             needs_human: None,
+            pushed: None,
         });
         assert!(c.priority() < g.priority());
     }
@@ -466,6 +500,7 @@ mod tests {
             tasks: vec![],
             sha: None,
             needs_human: needs_human.map(Into::into),
+            pushed: None,
         })
     }
 
@@ -479,7 +514,51 @@ mod tests {
             tasks: vec![],
             sha: Some(sha.into()),
             needs_human: None,
+            pushed: None,
         }
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn push_status_marks_pushed_and_unpushed_rows() {
+        let mut commits = vec![done("C01", "aaaa111"), done("C02", "bbbb222")];
+        let on_branch = strs(&["aaaa1112222", "bbbb2223333"]);
+        let unpushed = strs(&["bbbb2223333"]);
+        assert!(apply_push_status(&mut commits, &on_branch, Some(&unpushed)));
+        assert_eq!(commits[0].pushed, Some(true));
+        assert_eq!(commits[1].pushed, Some(false));
+        assert!(!apply_push_status(
+            &mut commits,
+            &on_branch,
+            Some(&unpushed)
+        ));
+    }
+
+    #[test]
+    fn push_status_is_none_without_tracking_ref_or_branch_membership() {
+        let mut commits = vec![done("C01", "aaaa111"), done("C02", "gone222")];
+        let on_branch = strs(&["aaaa1112222"]);
+        assert!(apply_push_status(&mut commits, &on_branch, Some(&[])));
+        assert_eq!(commits[0].pushed, Some(true));
+        assert_eq!(commits[1].pushed, None);
+        assert!(apply_push_status(&mut commits, &on_branch, None));
+        assert!(commits.iter().all(|c| c.pushed.is_none()));
+        assert!(!apply_push_status(&mut commits, &on_branch, None));
+    }
+
+    #[test]
+    fn push_status_skips_rows_that_are_not_done() {
+        let mut p = done("C01", "aaaa111");
+        p.status = CommitStatus::Proposed;
+        let mut d = done("C02", "bbbb222");
+        d.status = CommitStatus::Dropped;
+        let mut commits = vec![p, d];
+        let on_branch = strs(&["aaaa1112222", "bbbb2223333"]);
+        assert!(!apply_push_status(&mut commits, &on_branch, Some(&[])));
+        assert!(commits.iter().all(|c| c.pushed.is_none()));
     }
 
     fn branch(shas: &[&str]) -> Vec<(String, String)> {

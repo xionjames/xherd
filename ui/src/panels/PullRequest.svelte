@@ -2,7 +2,7 @@
   import Panel from '../components/Panel.svelte';
   import type { Job, PrCheck, PrReviewer } from '../lib/types';
   import { agoText } from '../lib/format';
-  import { conflictsAction } from '../lib/flow';
+  import { conflictsAction, unpushed } from '../lib/flow';
   import { post } from '../lib/api';
   import { upsertJob } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
@@ -74,6 +74,7 @@
   // Agents polled before prMergeable existed only have the conflict flag.
   const merge = $derived(agent.prMergeable ?? (agent.prConflict ? 'no' : undefined));
   const open = $derived(agent.prState === 'open');
+  const waiting = $derived(unpushed(agent));
 </script>
 
 <div class="stack">
@@ -94,6 +95,7 @@
         {/if}
         <button class="btn sm" disabled={checking} onclick={checkNow}>↻ Check now</button>
       </p>
+      {#if waiting}<p class="hint">{waiting} commit{waiting === 1 ? '' : 's'} not pushed: push them from the Commits tab.</p>{/if}
       {#if conflicts.show && conflicts.why}<p class="hint">Resolve conflicts: {conflicts.why}</p>{/if}
       {#if !agent.prState && agent.status === 'watching'}
         <p class="empty">Waiting for the first check of the pull request.</p>

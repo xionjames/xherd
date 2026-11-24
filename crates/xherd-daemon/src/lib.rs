@@ -572,6 +572,62 @@ impl Daemon {
         }
     }
 
+    /// The job, when it is not running, else `not_stopped` (R5, R6).
+    async fn not_running(&self, who: &str) -> Result<Job, ActionError> {
+        let job = self.action(who, UserAction::Get).await?;
+        if job.status == xherd_core::Status::Running {
+            return Err(action_error(
+                "not_stopped",
+                format!("{} is running: push when it stops", job.name),
+            ));
+        }
+        Ok(job)
+    }
+
+    /// Push a job's branch to `origin` (R5, R6, R7): never forced, no
+    /// upstream set, git runs here as in `set_origin`. Refused while the job
+    /// runs, without a worktree or an `origin`, or with nothing to push.
+    pub async fn push(&self, who: &str) -> Result<Job, ActionError> {
+        let job = self.not_running(who).await?;
+        if job.worktree_removed_at.is_some() {
+            return Err(action_error(
+                "worktree_removed",
+                format!("{}'s worktree was removed", job.name),
+            ));
+        }
+        let (repo, _) = repo_and_base(&job)?;
+        let git = xherd_git::Git::new("git");
+        if job.no_origin || !git.has_remote(&repo, "origin").await {
+            return Err(action_error(
+                "no_origin",
+                format!("{}'s repository has no origin", job.name),
+            ));
+        }
+        let local = format!("refs/heads/{}", job.branch);
+        // No tracking ref for the branch counts as nothing to push (R3, R6).
+        let pending = match git.unpushed(&repo, &job.branch).await {
+            Ok(Some(u)) => u.len(),
+            Ok(None) => 0,
+            Err(e) => return Err(action_error("git", e.to_string())),
+        };
+        if pending == 0 {
+            return Err(action_error(
+                "nothing_to_push",
+                format!("{} has nothing to push", job.name),
+            ));
+        }
+        // Again just before the push: the job may have moved meanwhile.
+        self.not_running(who).await?;
+        git.push(&repo, "origin", &job.branch)
+            .await
+            .map_err(|e| action_error("push_failed", e.to_string()))?;
+        let head = git
+            .rev_parse(&repo, &local)
+            .await
+            .map_err(|e| action_error("git", e.to_string()))?;
+        self.action(who, UserAction::Pushed { head }).await
+    }
+
     /// End a job that stopped without a remote by merging its branch into
     /// the base branch where the repository has it checked out (R10). The
     /// worktree and the branch stay. A refused merge leaves the checkout as

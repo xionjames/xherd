@@ -81,6 +81,9 @@ export interface Commit {
   tasks: string[];
   sha?: string;
   needsHuman?: string;
+  /** Whether the commit is on the local `origin/<branch>` ref; absent when
+   *  there is no such ref or the commit is not done. */
+  pushed?: boolean;
 }
 
 export type Gate =
