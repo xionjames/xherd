@@ -948,3 +948,240 @@ async fn security_lists_external_plugins_with_their_source_or_as_by_hand() {
         p.detail
     );
 }
+
+// ---- Jobs on a plugin pack (R13, R14) ----
+
+const ACME_PACK: &str = r#"
+name: acme-sdd
+version: 1.2.0
+protocol: 1
+specDir: private
+memoryNote: required
+private: [HANDOFF.md]
+install:
+  claude-code:
+    prefix: "/acme-sdd:"
+    commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md", format: command }
+    args: "$ARGUMENTS"
+commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", ask: "{prefix}ask {prompt}" }
+flows:
+  feature:
+    start: "{prefix}start {key} {prompt}"
+    stages:
+      - { id: brief, role: spec, class: critical, gate: { docs: [spec.md] }, next: [{ run: "{prefix}design" }] }
+      - { id: design, role: design, class: routine, command: "{prefix}design", gate: { docs: [design.md] }, next: [{ run: "{prefix}design" }] }
+"#;
+
+const ACME_PROMPTS: [&str; 12] = [
+    "rules", "start", "design", "plan", "next", "commit", "review", "ship", "ask", "resume",
+    "handoff", "status",
+];
+
+struct Acme {
+    t: T,
+    repo: tempfile::TempDir,
+}
+
+/// A daemon that loaded the `acme-sdd` flow plugin from its plugins folder,
+/// and a git repository to start jobs in.
+async fn acme() -> Acme {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path());
+    paths.ensure().unwrap();
+    let cfg = xherd_core::config::Config {
+        workspace: Some(workspace.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    cfg.save(&paths.config()).unwrap();
+    let dir = home.path().join("plugins/acme-sdd");
+    std::fs::create_dir_all(dir.join("pack/commands")).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        manifest(
+            "acme-sdd",
+            "flow",
+            json!({"data": {"flow": {"pack": "pack"}}}),
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.join("pack/xherd-flow.yaml"), ACME_PACK).unwrap();
+    for p in ACME_PROMPTS {
+        std::fs::write(
+            dir.join(format!("pack/commands/{p}.md")),
+            format!("# {p}\n"),
+        )
+        .unwrap();
+    }
+    let repo = tempfile::tempdir().unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["commit", "-q", "--allow-empty", "-m", "base"][..],
+    ] {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    // Never the real Claude Code config: a fixture that trusts the workspace.
+    let trust = home.path().join("claude.json");
+    std::fs::write(
+        &trust,
+        json!({"projects": {workspace.path().to_string_lossy(): {"hasTrustDialogAccepted": true}}})
+            .to_string(),
+    )
+    .unwrap();
+    let rt = o
+        .builtin_plugins
+        .iter_mut()
+        .find(|m| m.name == "claude-code")
+        .unwrap();
+    rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    let d = Daemon::start(paths, o).await.unwrap();
+    Acme {
+        t: T { home, workspace, d },
+        repo,
+    }
+}
+
+fn new_on(a: &Acme, name: &str, pack: Option<&str>, flow: Option<&str>) -> xherd_core::new::NewJob {
+    xherd_core::new::NewJob {
+        name: name.into(),
+        ticket: None,
+        ticket_key: None,
+        slug: None,
+        repo: a.repo.path().to_string_lossy().into_owned(),
+        agent: None,
+        agents: Default::default(),
+        base: None,
+        flow: flow.map(Into::into),
+        pack: pack.map(Into::into),
+        prompt: Some("add login".into()),
+        autonomy: None,
+        permission_mode: None,
+        runtime: None,
+        model: None,
+    }
+}
+
+#[tokio::test]
+async fn a_job_runs_on_a_plugin_pack_to_a_gate_and_an_approval() {
+    let a = acme().await;
+    assert!(a.t.d.pack_selectable("acme-sdd"));
+    let job =
+        a.t.d
+            .new_job(new_on(&a, "login", Some("acme-sdd"), None))
+            .await
+            .unwrap();
+    assert_eq!(
+        (job.pack.as_deref(), job.flow.as_deref()),
+        (Some("acme-sdd"), Some("feature"))
+    );
+    assert_eq!(
+        job.next_prompt.as_deref(),
+        Some("/acme-sdd:start  add login")
+    );
+    // The hook file allows reading the plugin's installed commands.
+    let wt = std::path::PathBuf::from(job.workdir.as_deref().unwrap());
+    let settings = std::fs::read_to_string(wt.join(".claude/settings.local.json")).unwrap();
+    assert!(settings.contains("commands/acme-sdd"), "{settings}");
+
+    // A gate of the plugin's flow, then the user's approval.
+    let name = job.name.clone();
+    let memory = "# Memory\n## State\nbrief\n## Decisions\nnone\n## Code map\nsrc/a.rs: a\n## Watch out\nnothing\n";
+    std::fs::write(wt.join(".xherd/spec/memory.md"), memory).unwrap();
+    std::fs::write(wt.join(".xherd/spec/spec.md"), "# Spec\n").unwrap();
+    let call = |id: &str, cmd: &str, args: Value| -> xherd_core::xap::XapCall {
+        serde_json::from_value(
+            json!({"id": id, "jobId": job.id, "cmd": cmd, "args": args, "at": 1}),
+        )
+        .unwrap()
+    };
+    a.t.d
+        .xap(call("c1", "gate.open", json!({"stage": "brief"})))
+        .await
+        .unwrap();
+    a.t.d
+        .report(xherd_core::report::Report {
+            id: "stop-1".into(),
+            job_id: job.id.clone(),
+            event: xherd_core::report::ReportEvent::Stop,
+            payload: Value::Null,
+            seq: 1,
+            at: 0,
+        })
+        .await;
+    let waiting = a.t.d.action(&name, UserAction::Get).await.unwrap();
+    assert_eq!(waiting.status, xherd_core::Status::WaitingInput);
+    let approved =
+        a.t.d
+            .action(
+                &name,
+                UserAction::Approve {
+                    reason: None,
+                    expect: Default::default(),
+                    message: None,
+                },
+            )
+            .await
+            .unwrap();
+    assert_eq!(approved.pack.as_deref(), Some("acme-sdd"));
+    assert!(
+        approved
+            .next_prompt
+            .as_deref()
+            .is_some_and(|p| p.starts_with("/acme-sdd:design")),
+        "{:?}",
+        approved.next_prompt
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_pack_a_missing_flow_and_a_disabled_plugin_are_refused() {
+    let a = acme().await;
+    let e =
+        a.t.d
+            .new_job(new_on(&a, "one", Some("nope"), None))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "unknown_pack");
+    let e =
+        a.t.d
+            .new_job(new_on(&a, "two", Some("acme-sdd"), Some("bugfix")))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "unknown_flow");
+    // `flow: none` ignores the pack.
+    let plain =
+        a.t.d
+            .new_job(new_on(&a, "three", Some("nope"), Some("none")))
+            .await
+            .unwrap();
+    assert_eq!(plain.pack, None);
+
+    // Switched off while running: refused at once.
+    let paths = Paths::at(a.t.home.path());
+    let (mut cfg, _) = xherd_core::config::Config::load(&paths.config()).unwrap();
+    cfg.disabled_plugins.push("acme-sdd".into());
+    cfg.save(&paths.config()).unwrap();
+    let e =
+        a.t.d
+            .new_job(new_on(&a, "four", Some("acme-sdd"), None))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "unknown_pack");
+    // The built-in pack is still there.
+    assert_eq!(
+        a.t.d
+            .new_job(new_on(&a, "five", None, None))
+            .await
+            .unwrap()
+            .pack
+            .as_deref(),
+        Some("xherd")
+    );
+}
