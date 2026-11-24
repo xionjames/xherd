@@ -1437,3 +1437,178 @@ async fn two_flow_plugins_with_an_architect_live_side_by_side() {
     assert_eq!(rows.iter().filter(|(p, _, _)| p == "acme-sdd").count(), 2);
     assert_eq!(rows.iter().filter(|(p, _, _)| p == "beta-sdd").count(), 2);
 }
+
+/// The `acme-sdd` manifest with other default assignments (stage → agent).
+fn acme_manifest(assign: &[(&str, &str)]) -> String {
+    let stages: serde_json::Map<String, Value> = assign
+        .iter()
+        .map(|(s, a)| (s.to_string(), json!({"agent": a})))
+        .collect();
+    manifest(
+        "acme-sdd",
+        "flow",
+        json!({"data": {"flow": {"pack": "pack", "agents": "agents.json",
+            "assignments": {"feature": stages}}}}),
+    )
+}
+
+async fn install_acme(t: &T, repo: &Repo) {
+    let digest = digest_of(t, repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+}
+
+/// Preview the update of `acme-sdd`, then apply it; the preview as JSON.
+async fn update_acme(t: &T) -> Value {
+    let p = t.d.plugin_update_preview("acme-sdd", None).await.unwrap();
+    let digest = json_of(&p)["digest"].as_str().unwrap().to_string();
+    t.d.plugin_update("acme-sdd", None, &digest).await.unwrap();
+    json_of(&p)
+}
+
+async fn agent_named(t: &T, name: &str) -> Option<xherd_core::agent_def::AgentDef> {
+    let all = t.d.store.list_agent_defs().await.unwrap();
+    all.into_iter().find(|a| a.name == name)
+}
+
+#[tokio::test]
+async fn update_of_a_flow_plugin_overwrites_adds_archives_and_replaces_assignments() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let analyst = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    let mut architect = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    architect.instructions = Some("Draw circles.".into());
+    t.d.store.put_agent_def(&architect).await.unwrap();
+
+    // v2: the analyst is gone, a planner arrives, the architect is as shipped.
+    repo.commit(&[
+        (
+            "agents.json",
+            r#"{"agents": [
+                {"name": "architect", "runtime": "claude-code", "instructions": "Draw boxes."},
+                {"name": "planner", "runtime": "claude-code"}]}"#,
+        ),
+        (
+            "xherd-plugin.json",
+            &acme_manifest(&[("brief", "planner"), ("design", "architect")]),
+        ),
+    ]);
+    let p = t.d.plugin_update_preview("acme-sdd", None).await.unwrap();
+    let json = json_of(&p);
+    let flow = &json["flow"];
+    let state = |n: &str| {
+        flow["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["savedName"] == n)
+            .unwrap()["state"]
+            .clone()
+    };
+    assert_eq!(state("acme-sdd-architect"), "overwritten");
+    assert_eq!(state("acme-sdd-planner"), "new");
+    assert_eq!(flow["archived"], json!(["acme-sdd-analyst"]));
+    let changes = flow["assignmentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["stage"], "brief");
+    assert_eq!(changes[0]["from"], "acme-sdd-analyst");
+    assert_eq!(changes[0]["to"], "acme-sdd-planner");
+    // The preview writes nothing.
+    assert!(agent_named(&t, "acme-sdd-planner").await.is_none());
+
+    update_acme(&t).await;
+    let architect_now = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    assert_eq!(architect_now.id, architect.id);
+    assert_eq!(architect_now.version, architect.version + 1);
+    assert_eq!(architect_now.instructions.as_deref(), Some("Draw boxes."));
+    let planner = agent_named(&t, "acme-sdd-planner").await.unwrap();
+    assert_eq!(
+        (planner.version, planner.source.as_deref()),
+        (1, Some("acme-sdd"))
+    );
+    let gone = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    assert_eq!(gone.id, analyst.id);
+    assert!(gone.archived_at.is_some());
+    let rows = t.d.store.all_flow_assignments().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let of = |stage: &str| {
+        rows.iter()
+            .find(|(_, _, a)| a.stage == stage)
+            .unwrap()
+            .2
+            .agent_id
+            .clone()
+    };
+    assert_eq!(of("brief"), planner.id);
+    assert_eq!(of("design"), architect.id);
+    assert!(t.d.store.plugin_records().await.unwrap()[0].data["updatedAt"].is_number());
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn update_of_a_flow_plugin_keeps_an_archived_agent_archived_and_recreates_a_deleted_one() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let analyst = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+
+    // v2 drops the analyst: archived. v3 ships it again: still archived.
+    let architect_only = r#"{"agents": [{"name": "architect", "runtime": "claude-code"}]}"#;
+    let both = r#"{"agents": [
+        {"name": "analyst", "runtime": "claude-code"},
+        {"name": "architect", "runtime": "claude-code"}]}"#;
+    let only_design = acme_manifest(&[("design", "architect")]);
+    repo.commit(&[
+        ("agents.json", architect_only),
+        ("xherd-plugin.json", &only_design),
+    ]);
+    update_acme(&t).await;
+    assert!(
+        agent_named(&t, "acme-sdd-analyst")
+            .await
+            .unwrap()
+            .archived_at
+            .is_some()
+    );
+    repo.commit(&[("agents.json", both)]);
+    update_acme(&t).await;
+    let still = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    assert_eq!(still.id, analyst.id);
+    assert!(still.archived_at.is_some());
+
+    // Deleted by the user (it is unassigned): the next update creates it again.
+    t.d.delete_agent("acme-sdd-analyst").await.unwrap();
+    repo.commit(&[("README.md", "v4")]);
+    update_acme(&t).await;
+    let again = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    assert_ne!(again.id, analyst.id);
+    assert_eq!((again.version, again.archived_at), (1, None));
+}
+
+#[tokio::test]
+async fn update_of_a_flow_plugin_is_refused_while_a_job_uses_the_pack() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    repo.commit(&[("README.md", "v2")]);
+    let mut job = xherd_core::Job::new("sdd-1", 1);
+    job.pack = Some("acme-sdd".into());
+    job.status = xherd_core::Status::Paused;
+    t.d.store.put_job(&job).await.unwrap();
+
+    let e =
+        t.d.plugin_update_preview("acme-sdd", None)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "plugin_in_use");
+    assert!(e.message.contains("sdd-1"), "{}", e.message);
+    let e = t.d.plugin_update("acme-sdd", None, "x").await.unwrap_err();
+    assert_eq!(e.code, "plugin_in_use");
+    assert!(t.home.path().join("plugins/acme-sdd").is_dir());
+
+    job.status = xherd_core::Status::Done;
+    t.d.store.put_job(&job).await.unwrap();
+    update_acme(&t).await;
+}

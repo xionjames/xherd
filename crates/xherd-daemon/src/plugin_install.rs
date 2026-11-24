@@ -543,7 +543,7 @@ impl Daemon {
         let recorded = async {
             match &flow {
                 Some(fp) => self
-                    .apply_flow_plugin(&record, fp)
+                    .apply_flow_plugin(&record, fp, false)
                     .await
                     .map_err(|e| e.message)?,
                 None => self
@@ -645,6 +645,7 @@ impl Daemon {
                 };
                 let view = self.inspect(&dir, &ctx)?;
                 same_name(name, &view.name)?;
+                refuse_in_use(&view)?;
                 let text = std::fs::read_to_string(dir.join(MANIFEST_FILE)).unwrap_or_default();
                 Ok((
                     Preview {
@@ -708,7 +709,7 @@ impl Daemon {
         let src = self.update_source(&record, new_ref)?;
         let ctx = self.flow_context().await?;
         let plugins = self.paths.plugins();
-        let (view, found_path, sha, old) = self
+        let (view, found_path, sha, old, flow) = self
             .with_fetched(&src, |root, sha| {
                 let Found::One(dir, found_path) = locate(root, src.path.as_deref())? else {
                     return Err(refuse_action(
@@ -716,9 +717,9 @@ impl Daemon {
                         "several plugins in the repository: the recorded path is gone",
                     ));
                 };
-                let view = self.inspect(&dir, &ctx)?;
+                let (view, flow) = self.inspect_full(&dir, &ctx)?;
                 same_name(name, &view.name)?;
-                not_yet(&view)?;
+                refuse_in_use(&view)?;
                 if view.digest != expect_digest {
                     return Err(refuse_action(
                         "changed_since_preview",
@@ -746,7 +747,7 @@ impl Daemon {
                     }
                     return Err(refuse_action("io", format!("{name}: {e}")));
                 }
-                Ok((view, found_path, sha, old))
+                Ok((view, found_path, sha, old, flow))
             })
             .await?;
         let now = self.clock.now();
@@ -762,7 +763,17 @@ impl Daemon {
             ..record.clone()
         };
         let recorded = async {
-            self.store.upsert_plugin_record(&updated).await?;
+            match &flow {
+                Some(fp) => self
+                    .apply_flow_plugin(&updated, fp, true)
+                    .await
+                    .map_err(|e| e.message)?,
+                None => self
+                    .store
+                    .upsert_plugin_record(&updated)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            }
             self.store
                 .insert_event(xherd_store::Event {
                     id: xherd_core::new_id(),
@@ -776,6 +787,7 @@ impl Daemon {
                     at: now,
                 })
                 .await
+                .map_err(|e| e.to_string())
         }
         .await;
         if let Err(e) = recorded {
@@ -1035,13 +1047,13 @@ impl Daemon {
     }
 }
 
-/// Updating a flow plugin (its agents and assignments) is the next change:
-/// until then the preview shows it and the update refuses.
-fn not_yet(view: &PluginView) -> Result<(), ActionError> {
-    if view.flow.is_some() {
+/// R8: a flow plugin is not updated while a job that has not ended uses its
+/// pack (a paused job will run it again).
+fn refuse_in_use(view: &PluginView) -> Result<(), ActionError> {
+    if let Some(job) = view.flow.as_ref().and_then(|f| f.in_use_by.as_ref()) {
         return Err(refuse_action(
-            "kind_not_supported",
-            "installing a flow plugin is not available yet",
+            "plugin_in_use",
+            format!("job {job} uses {}: finish or cancel it first", view.name),
         ));
     }
     Ok(())

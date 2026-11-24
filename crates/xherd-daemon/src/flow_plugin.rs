@@ -235,13 +235,15 @@ impl Daemon {
     /// R6, R7, R9: store a flow plugin's record, its agents and its default
     /// assignments in one transaction, under the agents lock. An agent of the
     /// plugin that is already saved (an earlier install) keeps its id and
-    /// dates and gets a new version only when its content changed; it is
-    /// brought back from the archive, since the assignments name it. A name
-    /// held by another agent is `name_taken` and nothing is written.
+    /// dates and gets a new version only when its content changed. An install
+    /// brings it back from the archive; an update (R8) leaves it archived and
+    /// archives the plugin's agents the new version dropped. A name held by
+    /// another agent is `name_taken` and nothing is written.
     pub(crate) async fn apply_flow_plugin(
         &self,
         record: &xherd_store::PluginRecord,
         fp: &FlowPlugin,
+        update: bool,
     ) -> Result<(), ActionError> {
         let store = crate::agents::store;
         let _w = self.agents_write.lock().await;
@@ -269,6 +271,7 @@ impl Daemon {
                 Some(old) => {
                     def.id = old.id.clone();
                     def.created_at = old.created_at;
+                    def.archived_at = if update { old.archived_at } else { None };
                     if same_content(&def, old) {
                         def.version = old.version;
                         def.updated_at = old.updated_at;
@@ -278,8 +281,19 @@ impl Daemon {
                     }
                 }
             }
-            def.archived_at = None;
             defs.push(def);
+        }
+        if update {
+            for old in &have {
+                if old.source.as_deref() == Some(record.name.as_str())
+                    && old.archived_at.is_none()
+                    && !defs.iter().any(|d| d.name == old.name)
+                {
+                    let mut gone = old.clone();
+                    gone.archived_at = Some(now);
+                    defs.push(gone);
+                }
+            }
         }
         let rows: Vec<(String, Assignment)> = fp
             .assignments
