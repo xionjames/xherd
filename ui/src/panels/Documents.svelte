@@ -2,7 +2,8 @@
   // `documents` panel: the agent's spec documents, rendered as paper, with
   // "changed since you approved" against the last approved text (R-107).
   import type { Job } from '../lib/types';
-  import { get, post } from '../lib/api';
+  import { get, getImage, post } from '../lib/api';
+  import { docBase } from '../lib/images';
   import { showError } from '../lib/errors.svelte';
   import { mdNoteText, questionBlocks, type MdNote } from '../lib/notes';
   import { tick } from 'svelte';
@@ -25,6 +26,8 @@
   let docs = $state<string[]>([]);
   let doc = $state<Doc | null>(null);
   let error = $state<string | null>(null);
+  // Counts document loads: a reload fetches the images again.
+  let loads = $state(0);
   // When the document changed since the user read it, the changes are marked
   // in the page; "Show changes" switches to a line diff.
   let showDiff = $state(false);
@@ -47,7 +50,7 @@
     const path = selected;
     if (!path) return;
     get<Doc>(`/jobs/${id}/file?path=${encodeURIComponent(path)}`).then(
-      (d) => { doc = d; error = null; markRead(id, d.path, d.sha256); },
+      (d) => { doc = d; loads++; error = null; markRead(id, d.path, d.sha256); },
       (e) => { doc = null; error = e.message; },
     );
   });
@@ -88,7 +91,8 @@
         : [],
     ),
   );
-  const rendered = $derived(parsed ? render(parsed.body, added) : null);
+  const rendered = $derived(parsed && doc ? render(parsed.body, added, false, docBase(doc.path)) : null);
+  const loadImage = (path: string) => getImage(`/jobs/${id}/image?path=${encodeURIComponent(path)}`);
   // Open questions of a gate document get their answer boxes (R-105a).
   const questions = $derived(rendered && selected && gateFiles.includes(selected) ? questionBlocks(rendered.blocks) : []);
   // `?q=1` (the band's link) scrolls to the first question.
@@ -142,7 +146,7 @@
             {#each parsed.meta as [k, v] (k)}<span class="pill">{k}: {v}</span>{/each}
           </div>
         {/if}
-        <div class="md"><MdBlocks blocks={rendered.blocks} notes={selected ? notes[selected] : undefined} onnote={setNote} {questions} /></div>
+        <div class="md"><MdBlocks blocks={rendered.blocks} notes={selected ? notes[selected] : undefined} onnote={setNote} {questions} load={loadImage} reload={`${doc?.sha256}:${loads}`} /></div>
       </article>
     {/if}
   </div>
