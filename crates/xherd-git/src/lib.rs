@@ -66,6 +66,21 @@ fn human_size(n: u64) -> String {
     }
 }
 
+/// What [`Git::blob_at`] found at a path of a revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobAt {
+    /// Nothing at that path.
+    Missing,
+    /// A symlink, a submodule or a directory.
+    NotFile,
+    /// A regular file larger than the limit (its size).
+    TooLarge(u64),
+    Found {
+        oid: String,
+        bytes: Vec<u8>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct Git {
     bin: String,
@@ -113,6 +128,34 @@ impl Git {
     }
 
     async fn run_raw_env(&self, dir: &Path, env: &[(&str, &str)], args: &[&str]) -> Result<String> {
+        Ok(self.exec(dir, env, args, None, None).await?.stdout_str())
+    }
+
+    /// Run git in `dir` with `stdin`; returns stdout as raw bytes (blobs,
+    /// hashes of binary files). Output over `max` bytes is an error, not a
+    /// silent cut: `exec::run` caps output at 4 MiB unless told otherwise.
+    pub async fn run_bytes(
+        &self,
+        dir: &Path,
+        args: &[&str],
+        max: usize,
+        stdin: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>> {
+        let out = self.exec(dir, &[], args, Some(max), stdin).await?;
+        if out.truncated {
+            return Err(GitError::Refused(format!("output is over {max} bytes")));
+        }
+        Ok(out.stdout)
+    }
+
+    async fn exec(
+        &self,
+        dir: &Path,
+        env: &[(&str, &str)],
+        args: &[&str],
+        max_output: Option<usize>,
+        stdin: Option<Vec<u8>>,
+    ) -> Result<xherd_core::exec::Output> {
         let mut argv = vec![self.bin.clone()];
         argv.extend(args.iter().map(|s| s.to_string()));
         let mut cmd = Cmd::new(argv)
@@ -125,6 +168,10 @@ impl Git {
         for (k, v) in env {
             cmd = cmd.env(*k, *v);
         }
+        if let Some(m) = max_output {
+            cmd.max_output = m;
+        }
+        cmd.stdin = stdin;
         let out = run(cmd).await?;
         let joined = args.join(" ");
         if out.timed_out {
@@ -136,7 +183,48 @@ impl Git {
                 stderr: out.stderr.trim().to_string(),
             });
         }
-        Ok(out.stdout_str())
+        Ok(out)
+    }
+
+    /// The file `path` (a literal repository-relative path) at `rev`, read
+    /// from the object database: no checkout, no filters, no symlink followed.
+    pub async fn blob_at(&self, dir: &Path, rev: &str, path: &str, max: u64) -> Result<BlobAt> {
+        let listing = self
+            .run_bytes(
+                dir,
+                &["--literal-pathspecs", "ls-tree", "-z", rev, "--", path],
+                64 * 1024,
+                None,
+            )
+            .await?;
+        let listing = String::from_utf8_lossy(&listing);
+        let Some(entry) = listing.split('\0').find(|e| !e.is_empty()) else {
+            return Ok(BlobAt::Missing);
+        };
+        let Some((meta, _)) = entry.split_once('\t') else {
+            return Ok(BlobAt::Missing);
+        };
+        let mut f = meta.split(' ');
+        let (mode, kind, oid) = (f.next(), f.next(), f.next().unwrap_or(""));
+        if kind != Some("blob") || !matches!(mode, Some("100644" | "100755")) {
+            return Ok(BlobAt::NotFile);
+        }
+        let size: u64 = self
+            .run(dir, &["cat-file", "-s", oid])
+            .await?
+            .trim()
+            .parse()
+            .unwrap_or(u64::MAX);
+        if size > max {
+            return Ok(BlobAt::TooLarge(size));
+        }
+        let bytes = self
+            .run_bytes(dir, &["cat-file", "blob", oid], max as usize, None)
+            .await?;
+        Ok(BlobAt::Found {
+            oid: oid.to_string(),
+            bytes,
+        })
     }
 
     pub async fn is_repo(&self, dir: &Path) -> bool {
