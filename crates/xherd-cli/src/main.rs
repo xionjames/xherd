@@ -484,6 +484,7 @@ fn main() -> ExitCode {
                 agents: stage_agent.into_iter().collect(),
                 base,
                 flow,
+                pack: None,
                 prompt,
                 autonomy,
                 permission_mode: mode,

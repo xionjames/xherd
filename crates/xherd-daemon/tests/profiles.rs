@@ -90,6 +90,7 @@ fn req(t: &T, key: &str) -> NewJob {
         agents: Default::default(),
         base: None,
         flow: None,
+        pack: None,
         prompt: Some("add login".into()),
         autonomy: None,
         permission_mode: None,

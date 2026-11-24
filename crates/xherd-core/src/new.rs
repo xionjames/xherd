@@ -46,6 +46,9 @@ pub struct NewJob {
     /// Flow of the built-in pack, or `none` (default `feature`).
     #[serde(default)]
     pub flow: Option<String>,
+    /// Flow pack that provides `flow`; default: the built-in pack (`xherd`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pack: Option<String>,
     #[serde(default)]
     pub prompt: Option<String>,
     /// `ask` or `important` (R-001); default: the setting.
@@ -404,12 +407,23 @@ mod tests {
             agents: Default::default(),
             base: None,
             flow: None,
+            pack: None,
             prompt: None,
             autonomy: None,
             permission_mode: None,
             runtime: None,
             model: None,
         }
+    }
+
+    #[test]
+    fn pack_is_optional_on_the_wire() {
+        let without: NewJob = serde_json::from_str(r#"{"repo":"/r"}"#).unwrap();
+        assert_eq!(without.pack, None);
+        let with: NewJob = serde_json::from_str(r#"{"repo":"/r","pack":"acme-sdd"}"#).unwrap();
+        assert_eq!(with.pack.as_deref(), Some("acme-sdd"));
+        let out = serde_json::to_value(&without).unwrap();
+        assert!(out.get("pack").is_none());
     }
 
     #[test]
