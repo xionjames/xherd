@@ -183,9 +183,26 @@ impl Daemon {
                 "autonomy never is not available yet (v1.x, R-1209)",
             ));
         }
-        let pack_name = xherd_flow::BUILTIN;
+        // `flow: none` ignores the pack (R13); otherwise the request's pack,
+        // default the built-in, and only a selectable one (R11, R14).
+        let pack_name = req
+            .pack
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .unwrap_or(xherd_flow::BUILTIN);
         let pack = (c.flow != FLOW_NONE)
-            .then(|| self.packs.get(pack_name))
+            .then(|| {
+                if self.pack_selectable(pack_name) {
+                    Ok(self.packs.get(pack_name))
+                } else {
+                    Err(refuse(
+                        "unknown_pack",
+                        format!("pack {pack_name} is not installed or its plugin is switched off or changed since start"),
+                    ))
+                }
+            })
+            .transpose()?
             .flatten();
         if c.flow != FLOW_NONE && pack.and_then(|p| p.flow(&c.flow)).is_none() {
             return Err(refuse(
@@ -620,11 +637,7 @@ impl Daemon {
             .ok_or_else(|| format!("runtime plugin {rt_name} is not installed or is switched off"))
             .and_then(|p| Ok((p.manifest.label.clone(), Terminal::of(&p.manifest)?)))
             .map_err(|e| refuse("runtime_unusable", e))?;
-        let pack = a
-            .pack
-            .is_some()
-            .then(|| self.packs.get(xherd_flow::BUILTIN))
-            .flatten();
+        let pack = a.pack.as_deref().and_then(|p| self.packs.get(p));
         let git = Git::new("git");
         if let Some(t) = &rt.trust {
             let w = TrustWriter {
@@ -663,7 +676,16 @@ impl Daemon {
             .await
             .map_err(|e| refuse("push_guard", e.to_string()))?;
         if let Some(h) = &rt.hooks {
-            let allow = permission_rules(pack, rt_name);
+            let files: Vec<(&str, &str)> = pack
+                .and_then(|p| self.pack_sources.get(&p.name))
+                .map(|s| {
+                    s.files
+                        .iter()
+                        .map(|(n, t)| (n.as_str(), t.as_str()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let allow = permission_rules(pack, &files, rt_name);
             wrote |= install_hooks(git, workdir, h, &self.xherd_bin, &allow).await?;
         }
         Ok(wrote)
@@ -701,11 +723,7 @@ impl Daemon {
                     continue;
                 }
             };
-            let pack = a
-                .pack
-                .is_some()
-                .then(|| self.packs.get(xherd_flow::BUILTIN))
-                .flatten();
+            let pack = a.pack.as_deref().and_then(|p| self.packs.get(p));
             match self
                 .write_hook_files(&git, &a, &w, &rt, pack, rt_name)
                 .await
@@ -1109,21 +1127,25 @@ const XAP_ALLOW: &[&str] = &[
 /// What the runtime allows without asking in a new worktree: reading the
 /// pack's installed commands and the XAP calls. This is where profile and
 /// toolchain commands will be added.
-fn permission_rules(pack: Option<&xherd_flow::Pack>, runtime: &str) -> runtime::Allow {
+fn permission_rules(
+    pack: Option<&xherd_flow::Pack>,
+    files: &[(&str, &str)],
+    runtime: &str,
+) -> runtime::Allow {
     runtime::Allow {
         commands: XAP_ALLOW.iter().map(|s| s.to_string()).collect(),
-        read_dirs: pack.map(|p| command_dirs(p, runtime)).unwrap_or_default(),
+        read_dirs: pack
+            .map(|p| command_dirs(p, files, runtime))
+            .unwrap_or_default(),
     }
 }
 
 /// Folders the runtime's pack commands are installed in (outside the
 /// worktree, read by every command: `rules.md`, `next.md`…). Empty when the
 /// plan cannot be made (no HOME).
-fn command_dirs(pack: &xherd_flow::Pack, runtime: &str) -> Vec<String> {
+fn command_dirs(pack: &xherd_flow::Pack, files: &[(&str, &str)], runtime: &str) -> Vec<String> {
     let env = xherd_core::runner::agent_env;
-    let plan = pack
-        .plan_install(runtime, xherd_flow::install::BUILTIN_FILES, &env)
-        .unwrap_or_default();
+    let plan = pack.plan_install(runtime, files, &env).unwrap_or_default();
     let mut dirs: Vec<String> = plan
         .iter()
         .filter_map(|f| f.path.parent())
@@ -1170,15 +1192,16 @@ mod tests {
     #[test]
     fn permission_rules_are_the_command_reads_and_the_xap_calls() {
         let xap: Vec<String> = XAP_ALLOW.iter().map(|s| s.to_string()).collect();
-        let none = permission_rules(None, "claude-code");
+        let none = permission_rules(None, &[], "claude-code");
         assert_eq!((none.commands, none.read_dirs.len()), (xap.clone(), 0));
         let pack = xherd_flow::builtin();
+        let files = xherd_flow::install::BUILTIN_FILES;
         for rt in ["claude-code", "opencode", "codex", "pi"] {
-            let rules = permission_rules(Some(&pack), rt);
+            let rules = permission_rules(Some(&pack), files, rt);
             assert_eq!(rules.commands, xap);
-            assert_eq!(rules.read_dirs, command_dirs(&pack, rt));
+            assert_eq!(rules.read_dirs, command_dirs(&pack, files, rt));
         }
-        let dirs = |rt| command_dirs(&pack, rt);
+        let dirs = |rt| command_dirs(&pack, files, rt);
         assert_ne!(
             dirs("claude-code"),
             dirs("opencode"),

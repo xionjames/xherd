@@ -11,7 +11,7 @@
   import { upsertJob } from '../lib/store.svelte';
   import { showError } from '../lib/errors.svelte';
   import { lineDiff } from '../lib/diff';
-  import { jobAgent } from '../lib/agents';
+  import { agentLabel, jobAgent } from '../lib/agents';
   import { agoText } from '../lib/format';
 
   let { agent }: { agent: Job } = $props();
@@ -23,6 +23,10 @@
     version?: number | null;
   };
   const id = $derived(agent.id);
+  const label = $derived.by(() => {
+    const a = jobAgent(agent);
+    return a ? agentLabel(a.name, a.source) : undefined;
+  });
   const at = $derived(agent.agentMemoryProposal?.at);
   let view = $state<View | null>(null);
   let mode = $state<'diff' | 'edit'>('diff');
@@ -61,7 +65,7 @@
     {#if !view}
       <p class="muted">Loading…</p>
     {:else if !view.proposal}
-      <p class="empty">No proposal. At review, the job may propose a new memory for {jobAgent(agent)?.name ?? 'its agent'}.</p>
+      <p class="empty">No proposal. At review, the job may propose a new memory for {label ?? 'its agent'}.</p>
     {:else}
       <p><b style="font-weight:500">{view.proposal.reason}</b> <span class="hint">proposed {agoText(view.proposal.at)}</span></p>
       {#if view.proposed == null}
@@ -73,7 +77,7 @@
           {#if edited}<p class="hint">Edited: your text replaces the job's. <button class="btn ghost sm" onclick={() => (text = view?.proposed ?? '')}>Undo edits</button></p>{/if}
           {#if tooLong}<Callout tone="bad">Over 4 000 characters: shorten it.</Callout>{/if}
         {:else}
-          <p class="hint mono">{view.agent?.name ?? 'agent'} memory{view.version != null ? `, version ${view.version}` : ''}</p>
+          <p class="hint mono">{label ?? view.agent?.name ?? 'agent'} memory{view.version != null ? `, version ${view.version}` : ''}</p>
           <DiffLines lines={diff} />
         {/if}
       {/if}

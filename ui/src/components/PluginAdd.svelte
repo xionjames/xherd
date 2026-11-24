@@ -101,6 +101,40 @@
           <span class="lbl">Settings it asks for</span>
           <p>{preview.settings.map((s) => s.label || s.key).join(', ')}</p>
         {/if}
+        {#if preview.flow}
+          {@const fl = preview.flow}
+          {#if fl.inUseBy}<Callout tone="need">A job still uses the pack <span class="mono">{fl.pack}</span>: <span class="wrap-any">{fl.inUseBy}</span>. It cannot be updated or removed until that job is done.</Callout>{/if}
+          <span class="lbl">Flow pack <span class="mono">{fl.pack}</span></span>
+          <ul class="plain">
+            {#each fl.flows as f (f.flow)}
+              <li><b>{f.flow}</b> <span class="hint">{f.stages.map((s) => s.id + (s.gate ? ' (gate)' : '')).join(' → ')}</span></li>
+            {/each}
+          </ul>
+          {#if fl.memoryNote === 'off'}<p class="hint">Jobs of this pack need no <span class="mono">memory.md</span>.</p>{/if}
+          {#if fl.agents.length}
+            <span class="lbl">Agents</span>
+            <ul class="plain">
+              {#each fl.agents as a (a.savedName)}
+                <li><span class="mono">{a.savedName}</span> <span class="hint">{a.state}</span>
+                  {#if a.risky.length}<span class="hint">risky: {a.risky.join(', ')}</span>{/if}
+                  {#each a.issues as i (i)}<span class="err">{i}</span>{/each}</li>
+              {/each}
+            </ul>
+          {/if}
+          {#if fl.archived.length}<p class="hint">Archived (the new version drops them): <span class="mono">{fl.archived.join(', ')}</span></p>{/if}
+          {#if fl.assignmentChanges.length}
+            <span class="lbl">Assignment changes</span>
+            <ul class="plain">
+              {#each fl.assignmentChanges as c (c.flow + c.stage)}
+                <li><span class="mono">{c.flow} / {c.stage}</span> <span class="hint">{c.from} → {c.to ?? 'none'}</span></li>
+              {/each}
+            </ul>
+          {/if}
+          {#each fl.files as r (r.runtime)}
+            <span class="lbl">Files for {r.runtime}</span>
+            <ul class="plain">{#each r.paths as p (p)}<li class="mono wrap-any">{p}</li>{/each}</ul>
+          {/each}
+        {/if}
       </div>
     {/if}
   {/if}

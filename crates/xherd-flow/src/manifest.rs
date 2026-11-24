@@ -40,7 +40,18 @@ pub struct Pack {
     /// `resume`, `handoff`, `status` command templates.
     #[serde(default)]
     pub commands: BTreeMap<String, String>,
+    /// Whether a gate needs a valid `memory.md` (`required`) or not (`off`, the default).
+    #[serde(default)]
+    pub memory_note: MemoryNote,
     pub flows: BTreeMap<String, Flow>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MemoryNote {
+    Required,
+    #[default]
+    Off,
 }
 
 fn default_spec_dir() -> String {
@@ -928,6 +939,26 @@ mod tests {
             .map(|s| s.id.as_str())
             .collect();
         assert_eq!(gating, ["tasks"]);
+    }
+
+    #[test]
+    fn memory_note_field() {
+        let pack = |extra: &str| {
+            Pack::parse(&format!(
+                "name: t\nversion: 1.0.0\nprotocol: 1\n{extra}flows:\n  f: {{ start: x, stages: [{{ id: a, role: spec, class: critical }}] }}\n"
+            ))
+        };
+        assert_eq!(
+            pack("memoryNote: required\n").unwrap().memory_note,
+            MemoryNote::Required
+        );
+        assert_eq!(
+            pack("memoryNote: off\n").unwrap().memory_note,
+            MemoryNote::Off
+        );
+        assert_eq!(pack("").unwrap().memory_note, MemoryNote::Off);
+        assert!(pack("memoryNote: maybe\n").is_err());
+        assert_eq!(crate::builtin().memory_note, MemoryNote::Required);
     }
 
     #[test]

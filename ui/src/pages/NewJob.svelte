@@ -18,8 +18,9 @@
   import { FORM_DEFAULTS, fillFromAgent, pickable, resolveStages, stageOverrides, unmark, type FormField } from '../lib/agents';
   import { nextRepo } from '../lib/repoFromTicket';
 
-  const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
-  let f = $state({ name: '', ticket: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
+  // The (pack, flow) pairs a job can start on: `flow` for the built-in pack, `pack / flow` for a plugin's.
+  const flows = $derived((app.state?.flows ?? []).filter((x) => x.selectable !== false));
+  let f = $state({ name: '', ticket: '', repo: '', base: '', pack: 'xherd', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
   let busy = $state(false);
   // New project (R2, R8): no repository; the daemon makes a git folder under
   // the workspace's projects/ (named after the job unless a name is given).
@@ -74,7 +75,7 @@
   // a way to give one stage another agent for this job only.
   let flowView = $state<FlowView | null>(null);
   let stagePick = $state<Record<string, string>>({});
-  const flowPack = $derived((app.state?.flows ?? []).find((x) => x.flow === f.flow)?.pack);
+  const flowPack = $derived(f.pack);
   $effect(() => {
     const pack = flowPack, flow = f.flow;
     stagePick = {};
@@ -220,6 +221,7 @@
       body.repo = r.path;
       if (f.base.trim()) body.base = f.base.trim();
     }
+    if (f.flow !== 'none' && f.pack !== 'xherd') body.pack = f.pack;
     if (f.name) body.name = f.name;
     if (ticketIn) body.ticket = ticketIn;
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
@@ -253,8 +255,9 @@
         {:else if agent}<span class="hint">Empty: <span class="mono">{agent.name}</span>-ticket key, else a number.</span>
         {:else}<span class="hint">Job, session and worktree folder.</span>{/if}</label>
       <div class="f">Workflow
-        <Seg label="Workflow" value={f.flow} onchange={(v) => { f.flow = v; }}
-          options={[...flows, 'none'].map((fl) => ({ value: fl, label: fl === 'none' ? 'No workflow' : fl }))} /></div>
+        <Seg label="Workflow" value={f.flow === 'none' ? 'none' : `${f.pack}/${f.flow}`}
+          onchange={(v) => { const [p, ...r] = v.split('/'); if (v === 'none') f.flow = 'none'; else { f.pack = p; f.flow = r.join('/'); } }}
+          options={[...flows.map((x) => ({ value: `${x.pack}/${x.flow}`, label: x.pack === 'xherd' ? x.flow : `${x.pack} / ${x.flow}` })), { value: 'none', label: 'No workflow' }]} /></div>
     </div>
     {#if f.flow === 'none'}
     <label class="f">Agent (optional)

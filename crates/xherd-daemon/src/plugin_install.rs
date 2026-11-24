@@ -12,6 +12,7 @@ use xherd_plugin::manifest::parse_version;
 use xherd_plugin::{Kind, MANIFEST_FILE, Manifest, PluginSource};
 
 use crate::create::refuse as refuse_action;
+use crate::flow_plugin::{FlowContext, FlowPlugin, FlowPluginView, read_flow_plugin};
 use crate::plugin_dirs::{MAX_BYTES, MAX_DEPTH};
 use crate::repos::{CLONE_TIMEOUT, remove_tree};
 use crate::{ActionError, Daemon};
@@ -148,6 +149,9 @@ pub struct PluginView {
     pub replaces: Option<&'static str>,
     pub settings: Vec<SettingView>,
     pub runs: Vec<Run>,
+    /// A flow plugin's pack, agents and assignments (R5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow: Option<FlowPluginView>,
     pub warning: &'static str,
 }
 
@@ -429,6 +433,7 @@ impl Daemon {
         path: Option<&str>,
     ) -> Result<Preview, ActionError> {
         let src = self.plugin_source(url, git_ref, path)?;
+        let ctx = self.flow_context().await?;
         self.with_fetched(&src, |root, sha| {
             let (git_ref, url) = (src.git_ref.clone(), src.url.clone());
             match locate(root, src.path.as_deref())? {
@@ -445,7 +450,7 @@ impl Daemon {
                     git_ref,
                     path,
                     sha,
-                    plugin: Some(self.inspect(&dir)?),
+                    plugin: Some(self.inspect(&dir, &ctx)?),
                     choices: Vec::new(),
                 }),
             }
@@ -468,8 +473,9 @@ impl Daemon {
     ) -> Result<Installed, ActionError> {
         let src = self.plugin_source(url, git_ref, path)?;
         let _write = self.plugins_write.lock().await;
+        let ctx = self.flow_context().await?;
         let plugins = self.paths.plugins();
-        let (view, found_path, sha) = self
+        let (view, found_path, sha, flow) = self
             .with_fetched(&src, |root, sha| {
                 let (dir, found_path) = match locate(root, src.path.as_deref())? {
                     Found::One(dir, p) => (dir, p),
@@ -480,7 +486,7 @@ impl Daemon {
                         ));
                     }
                 };
-                let view = self.inspect(&dir)?;
+                let (view, flow) = self.inspect_full(&dir, &ctx)?;
                 if view.digest != expect_digest {
                     return Err(refuse_action(
                         "changed_since_preview",
@@ -493,12 +499,26 @@ impl Daemon {
                         format!("a plugin named {} is already installed", view.name),
                     ));
                 }
+                if let Some(taken) = view
+                    .flow
+                    .iter()
+                    .flat_map(|f| &f.agents)
+                    .find(|a| a.state == "taken")
+                {
+                    return Err(refuse_action(
+                        "name_taken",
+                        format!(
+                            "an agent named {} exists and is not from this plugin",
+                            taken.saved_name
+                        ),
+                    ));
+                }
                 let staging = stage_plugin(&plugins, &view.name, &dir)?;
                 if let Err(e) = std::fs::rename(&staging, plugins.join(&view.name)) {
                     let _ = std::fs::remove_dir_all(&staging);
                     return Err(refuse_action("io", format!("{}: {e}", view.name)));
                 }
-                Ok((view, found_path, sha))
+                Ok((view, found_path, sha, flow))
             })
             .await?;
         let now = self.clock.now();
@@ -521,7 +541,17 @@ impl Daemon {
             }),
         };
         let recorded = async {
-            self.store.upsert_plugin_record(&record).await?;
+            match &flow {
+                Some(fp) => self
+                    .apply_flow_plugin(&record, fp, false)
+                    .await
+                    .map_err(|e| e.message)?,
+                None => self
+                    .store
+                    .upsert_plugin_record(&record)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            }
             self.store
                 .insert_event(xherd_store::Event {
                     id: xherd_core::new_id(),
@@ -534,6 +564,7 @@ impl Daemon {
                     at: now,
                 })
                 .await
+                .map_err(|e| e.to_string())
         }
         .await;
         if let Err(e) = recorded {
@@ -603,6 +634,7 @@ impl Daemon {
     ) -> Result<UpdatePreview, ActionError> {
         let record = self.plugin_record(name).await?;
         let src = self.update_source(&record, new_ref)?;
+        let ctx = self.flow_context().await?;
         let (preview, new_manifest) = self
             .with_fetched(&src, |root, sha| {
                 let Found::One(dir, path) = locate(root, src.path.as_deref())? else {
@@ -611,8 +643,9 @@ impl Daemon {
                         "several plugins in the repository: the recorded path is gone",
                     ));
                 };
-                let view = self.inspect(&dir)?;
+                let view = self.inspect(&dir, &ctx)?;
                 same_name(name, &view.name)?;
+                refuse_in_use(&view)?;
                 let text = std::fs::read_to_string(dir.join(MANIFEST_FILE)).unwrap_or_default();
                 Ok((
                     Preview {
@@ -674,8 +707,9 @@ impl Daemon {
         let _write = self.plugins_write.lock().await;
         let record = self.plugin_record(name).await?;
         let src = self.update_source(&record, new_ref)?;
+        let ctx = self.flow_context().await?;
         let plugins = self.paths.plugins();
-        let (view, found_path, sha, old) = self
+        let (view, found_path, sha, old, flow) = self
             .with_fetched(&src, |root, sha| {
                 let Found::One(dir, found_path) = locate(root, src.path.as_deref())? else {
                     return Err(refuse_action(
@@ -683,8 +717,9 @@ impl Daemon {
                         "several plugins in the repository: the recorded path is gone",
                     ));
                 };
-                let view = self.inspect(&dir)?;
+                let (view, flow) = self.inspect_full(&dir, &ctx)?;
                 same_name(name, &view.name)?;
+                refuse_in_use(&view)?;
                 if view.digest != expect_digest {
                     return Err(refuse_action(
                         "changed_since_preview",
@@ -712,7 +747,7 @@ impl Daemon {
                     }
                     return Err(refuse_action("io", format!("{name}: {e}")));
                 }
-                Ok((view, found_path, sha, old))
+                Ok((view, found_path, sha, old, flow))
             })
             .await?;
         let now = self.clock.now();
@@ -728,7 +763,17 @@ impl Daemon {
             ..record.clone()
         };
         let recorded = async {
-            self.store.upsert_plugin_record(&updated).await?;
+            match &flow {
+                Some(fp) => self
+                    .apply_flow_plugin(&updated, fp, true)
+                    .await
+                    .map_err(|e| e.message)?,
+                None => self
+                    .store
+                    .upsert_plugin_record(&updated)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            }
             self.store
                 .insert_event(xherd_store::Event {
                     id: xherd_core::new_id(),
@@ -742,6 +787,7 @@ impl Daemon {
                     at: now,
                 })
                 .await
+                .map_err(|e| e.to_string())
         }
         .await;
         if let Err(e) = recorded {
@@ -842,7 +888,20 @@ impl Daemon {
         if record.is_none() && !target.is_dir() {
             return Err(unknown());
         }
-        if let Some(job) = self.plugin_user(name).await? {
+        // A flow plugin's pack is named like the plugin (R8): a paused job
+        // will run it again, so it blocks the removal too.
+        let is_flow = std::fs::read_to_string(target.join(MANIFEST_FILE))
+            .ok()
+            .and_then(|j| serde_json::from_str::<Manifest>(&j).ok())
+            .is_some_and(|m| m.kind == Kind::Flow);
+        if is_flow {
+            if let Some(job) = self.flow_context().await?.in_use.get(name) {
+                return Err(refuse_action(
+                    "plugin_in_use",
+                    format!("job {job} uses {name}: finish or cancel it first"),
+                ));
+            }
+        } else if let Some(job) = self.plugin_user(name).await? {
             return Err(refuse_action(
                 "plugin_in_use",
                 format!("job {job} uses {name}: pause or finish it first"),
@@ -855,7 +914,12 @@ impl Daemon {
         }
         let now = self.clock.now();
         let recorded = async {
-            self.store.delete_plugin_record(name).await?;
+            if is_flow {
+                // Assignments and fresh-check rows go with it; agents stay.
+                self.store.delete_flow_plugin(name, name).await?;
+            } else {
+                self.store.delete_plugin_record(name).await?;
+            }
             self.store
                 .insert_event(xherd_store::Event {
                     id: xherd_core::new_id(),
@@ -887,6 +951,15 @@ impl Daemon {
         if moved {
             let _ = std::fs::remove_dir_all(&aside);
         }
+        if is_flow {
+            if let Err(e) = self
+                .remove_pack_files(name, &xherd_core::runner::agent_env)
+                .await
+            {
+                tracing::warn!(pack = %name, error = %e.message, "removing the pack's commands failed");
+            }
+            self.agents_changed();
+        }
         if forget {
             self.forget_plugin(name)?;
         }
@@ -916,7 +989,16 @@ impl Daemon {
     }
 
     /// Check the plugin folder `dir` and describe it (R3, R5, R5a).
-    pub(crate) fn inspect(&self, dir: &Path) -> Result<PluginView, ActionError> {
+    pub(crate) fn inspect(&self, dir: &Path, ctx: &FlowContext) -> Result<PluginView, ActionError> {
+        self.inspect_full(dir, ctx).map(|(view, _)| view)
+    }
+
+    /// `inspect`, and the flow plugin it read (kind `flow`), for the install.
+    pub(crate) fn inspect_full(
+        &self,
+        dir: &Path,
+        ctx: &FlowContext,
+    ) -> Result<(PluginView, Option<FlowPlugin>), ActionError> {
         let scan = scan(dir)?;
         let json = std::fs::read_to_string(dir.join(MANIFEST_FILE))
             .map_err(|e| refuse_action("bad_manifest", format!("{MANIFEST_FILE}: {e}")))?;
@@ -927,12 +1009,6 @@ impl Daemon {
                 "build_not_supported",
                 "the manifest has a build step: xherd runs no code at install, so the \
                  repository must contain the built files",
-            ));
-        }
-        if m.kind == Kind::Flow {
-            return Err(refuse_action(
-                "kind_not_supported",
-                "flow packs cannot be installed as plugins",
             ));
         }
         // A plugin that needs a newer xherd is shown, not refused.
@@ -951,7 +1027,25 @@ impl Daemon {
             Some(_) => Some("external"),
             None => on_disk.then_some("external"),
         };
-        Ok(PluginView {
+        let (flow, read) = match m.kind {
+            Kind::Flow => {
+                let bad = |e: String| refuse_action("bad_manifest", e);
+                let fp = read_flow_plugin(dir, &m).map_err(bad)?;
+                let view = self
+                    .flow_plugin_view(
+                        &fp,
+                        &m.name,
+                        replaces == Some("external"),
+                        ctx,
+                        &xherd_core::runner::agent_env,
+                    )
+                    .map_err(bad)?;
+                (Some(view), Some(fp))
+            }
+            _ => (None, None),
+        };
+        let view = PluginView {
+            flow,
             runs: runs(&m),
             settings: m
                 .settings
@@ -975,8 +1069,21 @@ impl Daemon {
             bytes: scan.bytes,
             replaces,
             warning: WARNING,
-        })
+        };
+        Ok((view, read))
     }
+}
+
+/// R8: a flow plugin is not updated while a job that has not ended uses its
+/// pack (a paused job will run it again).
+fn refuse_in_use(view: &PluginView) -> Result<(), ActionError> {
+    if let Some(job) = view.flow.as_ref().and_then(|f| f.in_use_by.as_ref()) {
+        return Err(refuse_action(
+            "plugin_in_use",
+            format!("job {job} uses {}: finish or cancel it first", view.name),
+        ));
+    }
+    Ok(())
 }
 
 /// An update keeps the plugin's name: its settings, secrets and record are

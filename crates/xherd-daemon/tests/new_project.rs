@@ -70,6 +70,7 @@ fn req(name: &str, project: &str) -> NewJob {
         agents: Default::default(),
         base: None,
         flow: None,
+        pack: None,
         prompt: Some("build a tool".into()),
         autonomy: None,
         permission_mode: None,

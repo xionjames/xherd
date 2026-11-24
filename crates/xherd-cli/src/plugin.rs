@@ -159,10 +159,80 @@ pub fn preview_text(v: &Value) -> String {
             argv.join(" ")
         ));
     }
+    flow_text(&v["flow"], &mut o);
     if let Some(w) = v["warning"].as_str().filter(|w| !w.is_empty()) {
         o.push_str(&format!("\n{w}\n"));
     }
     o
+}
+
+/// The `flow` part of a flow plugin's preview: flows, agents with their
+/// state, and the files per runtime.
+fn flow_text(f: &Value, o: &mut String) {
+    if !f.is_object() {
+        return;
+    }
+    o.push_str(&format!(
+        "  flow pack {}\n",
+        f["pack"].as_str().unwrap_or("?")
+    ));
+    for fl in f["flows"].as_array().into_iter().flatten() {
+        let stages: Vec<&str> = fl["stages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["id"].as_str())
+            .collect();
+        o.push_str(&format!(
+            "  flow {}: {}\n",
+            fl["flow"].as_str().unwrap_or("?"),
+            stages.join(", ")
+        ));
+    }
+    for a in f["agents"].as_array().into_iter().flatten() {
+        let risky: Vec<&str> = a["risky"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        o.push_str(&format!(
+            "  agent {} ({}){}\n",
+            a["savedName"].as_str().unwrap_or("?"),
+            a["state"].as_str().unwrap_or("?"),
+            if risky.is_empty() {
+                String::new()
+            } else {
+                format!(", risky: {}", risky.join(", "))
+            }
+        ));
+        for i in a["issues"].as_array().into_iter().flatten() {
+            o.push_str(&format!("    problem: {}\n", i.as_str().unwrap_or("?")));
+        }
+    }
+    for a in f["archived"].as_array().into_iter().flatten() {
+        o.push_str(&format!(
+            "  agent {} is archived\n",
+            a.as_str().unwrap_or("?")
+        ));
+    }
+    for r in f["files"].as_array().into_iter().flatten() {
+        let paths: Vec<&str> = r["paths"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        o.push_str(&format!(
+            "  files for {} ({}): {}\n",
+            r["runtime"].as_str().unwrap_or("?"),
+            paths.len(),
+            paths.join(", ")
+        ));
+    }
+    if let Some(u) = f["inUseBy"].as_str() {
+        o.push_str(&format!("  in use by job {u}\n"));
+    }
 }
 
 /// The repository holds several plugins: say which `--path` to give.
@@ -359,6 +429,40 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<PluginCmd, clap::Error> {
         T::try_parse_from(std::iter::once("plugin").chain(args.iter().copied())).map(|t| t.c)
+    }
+
+    #[test]
+    fn preview_prints_the_flow_part() {
+        let v = json!({
+            "name": "acme-sdd", "version": "1.0.0", "kind": "flow", "url": "u", "sha": "abc",
+            "files": 3, "bytes": 10, "digest": "d",
+            "flow": {
+                "pack": "acme-sdd",
+                "flows": [{"flow": "sdd", "stages": [{"id": "spec"}, {"id": "build"}]}],
+                "agents": [
+                    {"savedName": "acme-sdd-architect", "state": "new", "risky": ["mode"], "issues": []},
+                    {"savedName": "acme-sdd-dev", "state": "taken", "risky": [], "issues": ["name taken"]}
+                ],
+                "archived": ["acme-sdd-old"],
+                "files": [{"runtime": "claude-code", "paths": ["a.md", "b.md"]}]
+            }
+        });
+        let t = preview_text(&v);
+        assert!(t.contains("  flow sdd: spec, build\n"), "{t}");
+        assert!(
+            t.contains("  agent acme-sdd-architect (new), risky: mode\n"),
+            "{t}"
+        );
+        assert!(
+            t.contains("  agent acme-sdd-dev (taken)\n    problem: name taken\n"),
+            "{t}"
+        );
+        assert!(t.contains("  agent acme-sdd-old is archived\n"), "{t}");
+        assert!(
+            t.contains("  files for claude-code (2): a.md, b.md\n"),
+            "{t}"
+        );
+        assert!(!preview_text(&json!({"name": "x"})).contains("flow pack"));
     }
 
     #[test]

@@ -421,3 +421,83 @@ async fn enabling_plugins_one_by_one_after_a_first_run() {
     assert!(save(off_but(&["opencode"])).is_err());
     save(off_but(&["opencode", "uv"])).unwrap();
 }
+
+/// A flow plugin `name` whose pack ships one command for Claude Code, or an
+/// unreadable pack when `broken`.
+fn flow_plugin(data: &std::path::Path, name: &str, broken: bool) {
+    let dir = data.join("plugins").join(name);
+    std::fs::create_dir_all(dir.join("pack/commands")).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        json!({"name": name, "kind": "flow", "version": "1.0.0",
+               "data": {"flow": {"pack": "pack"}}})
+        .to_string(),
+    )
+    .unwrap();
+    let pack = match broken {
+        true => "name: [".to_string(),
+        false => format!(
+            "name: {name}\nversion: 1.0.0\nprotocol: 1\nspecDir: private\nmemoryNote: required\n\
+             install:\n  claude-code:\n    prefix: \"/{name}:\"\n    \
+             commands: {{ from: commands/*.md, to: \"${{CLAUDE_CONFIG_DIR:-~/.claude}}/commands/{name}/{{name}}.md\", format: command }}\n    \
+             args: \"$ARGUMENTS\"\n\
+             commands: {{ resume: \"{{prefix}}resume\", handoff: \"{{prefix}}handoff\", status: \"{{prefix}}status\", ask: \"{{prefix}}ask {{prompt}}\" }}\n\
+             flows:\n  feature:\n    start: \"{{prefix}}start {{key}} {{prompt}}\"\n    stages:\n      \
+             - {{ id: brief, role: spec, class: critical, gate: {{ docs: [spec.md] }}, next: [{{ run: \"{{prefix}}start\" }}] }}\n"
+        ),
+    };
+    std::fs::write(dir.join("pack/xherd-flow.yaml"), pack).unwrap();
+    for p in [
+        "rules", "start", "design", "plan", "next", "commit", "review", "ship", "ask", "resume",
+        "handoff", "status",
+    ] {
+        std::fs::write(
+            dir.join(format!("pack/commands/{p}.md")),
+            format!("# {p}\n"),
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn checks_cover_each_plugin_pack_and_a_pack_that_cannot_load() {
+    let home = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path().join("data"));
+    paths.ensure().unwrap();
+    xherd_core::config::Config {
+        workspace: Some(home.path().join("ws").to_string_lossy().into_owned()),
+        ..Default::default()
+    }
+    .save(&paths.config())
+    .unwrap();
+    flow_plugin(&paths.root, "acme-sdd", false);
+    flow_plugin(&paths.root, "bad-sdd", true);
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    o.scheduler = None;
+    o.builtin_plugins.retain(|m| m.name == "claude-code");
+    let h = home.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let d = Daemon::start(paths, o).await.unwrap();
+    let by_id = |cs: &[checks::Check], id: &str| cs.iter().find(|c| c.id == id).cloned();
+
+    let cs = d.checks(&env).await;
+    // The built-in ids are unchanged; the plugin's are per pack and optional.
+    assert!(by_id(&cs, "pack").unwrap().required);
+    let commands = by_id(&cs, "pack:acme-sdd/claude-code").unwrap();
+    assert!(!commands.ok && !commands.required);
+    assert!(by_id(&cs, "pack-files:acme-sdd/claude-code").unwrap().ok);
+    let bad = by_id(&cs, "plugin-pack:bad-sdd").unwrap();
+    assert!(!bad.ok && !bad.required && bad.fix.is_none());
+    assert!(by_id(&cs, "pack:bad-sdd/claude-code").is_none());
+
+    // Its fix installs that pack's commands only.
+    d.fix_check("pack:acme-sdd/claude-code", &env)
+        .await
+        .unwrap();
+    let dir = home.path().join(".claude/commands");
+    assert!(dir.join("acme-sdd/start.md").exists());
+    assert!(!dir.join("xherd").exists());
+    let cs = d.checks(&env).await;
+    assert!(by_id(&cs, "pack:acme-sdd/claude-code").unwrap().ok);
+    assert!(!by_id(&cs, "pack").unwrap().ok);
+}

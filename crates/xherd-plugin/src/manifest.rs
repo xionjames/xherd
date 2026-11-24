@@ -311,7 +311,7 @@ impl Manifest {
                 }
             }
         }
-        if self.kind == Kind::View {
+        if matches!(self.kind, Kind::View | Kind::Flow) {
             let runs = !self.commands.is_empty()
                 || !self.hooks.is_empty()
                 || !self.checks.is_empty()
@@ -320,11 +320,21 @@ impl Manifest {
                 || self.build.is_some()
                 || !self.instructions.is_empty();
             if runs {
-                return Err("a view plugin has files only: no commands, hooks, checks, \
-                     requires, login, build or instructions"
-                    .into());
+                return Err(format!(
+                    "a {} plugin has files only: no commands, hooks, checks, \
+                     requires, login, build or instructions",
+                    if self.kind == Kind::View {
+                        "view"
+                    } else {
+                        "flow"
+                    }
+                ));
             }
-            view_entry(self)?;
+            if self.kind == Kind::View {
+                view_entry(self)?;
+            } else {
+                flow_data(self)?;
+            }
         }
         let argvs = self
             .commands
@@ -388,9 +398,89 @@ pub fn view_entry(m: &Manifest) -> Result<&str, String> {
     }
 }
 
+/// `data.flow` of a flow plugin: the pack folder, an optional agents file and
+/// the default stage assignments (`flow` → `stage` → agent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FlowData {
+    pub pack: String,
+    #[serde(default)]
+    pub agents: Option<String>,
+    #[serde(default)]
+    pub assignments: BTreeMap<String, BTreeMap<String, DefaultAssignment>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DefaultAssignment {
+    pub agent: String,
+    #[serde(default)]
+    pub human: bool,
+}
+
+/// Parse `data.flow` and check that `pack` and `agents` are plain relative
+/// paths inside the plugin folder.
+pub fn flow_data(m: &Manifest) -> Result<FlowData, String> {
+    let raw = m.data.get("flow").ok_or("data.flow is missing")?;
+    let flow: FlowData =
+        serde_json::from_value(raw.clone()).map_err(|e| format!("data.flow: {e}"))?;
+    for (key, path) in [("pack", Some(&flow.pack)), ("agents", flow.agents.as_ref())] {
+        if let Some(p) = path
+            && crate::view::clean_path(p).is_none()
+        {
+            return Err(format!(
+                "data.flow.{key} {p:?} must be a relative path inside the plugin folder"
+            ));
+        }
+    }
+    Ok(flow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flow_plugins_have_files_only_and_a_plain_pack() {
+        let flow = |extra: &str, data: &str| {
+            Manifest::parse(&format!(
+                r#"{{"name": "acme-sdd", "kind": "flow", "version": "0.1.0",
+                    "data": {{"flow": {data}}}{extra}}}"#
+            ))
+        };
+        let ok = r#"{"pack": "pack", "agents": "agents.json", "assignments":
+            {"feature": {"design": {"agent": "architect", "human": true},
+                         "plan": {"agent": "planner"}}}}"#;
+        let m = flow("", ok).unwrap();
+        let d = flow_data(&m).unwrap();
+        assert_eq!(d.pack, "pack");
+        assert_eq!(d.agents.as_deref(), Some("agents.json"));
+        assert!(d.assignments["feature"]["design"].human);
+        assert!(!d.assignments["feature"]["plan"].human);
+        assert!(flow("", r#"{"pack": "pack"}"#).is_ok());
+        for extra in [
+            r#", "commands": {"x": ["true"]}"#,
+            r#", "hooks": {"x": ["true"]}"#,
+            r#", "checks": [{"name": "c", "argv": ["true"]}]"#,
+            r#", "requires": [{"name": "jq"}]"#,
+            r#", "login": ["true"]"#,
+            r#", "build": ["true"]"#,
+            r#", "instructions": {"a": "b"}"#,
+        ] {
+            let err = flow(extra, ok).unwrap_err();
+            assert!(err.contains("files only"), "{extra}: {err}");
+        }
+        for pack in ["../x", "/x", ".hidden", "a//b", ""] {
+            let err = flow("", &format!(r#"{{"pack": {pack:?}}}"#)).unwrap_err();
+            assert!(err.contains("data.flow.pack"), "{pack}: {err}");
+        }
+        let err = flow("", r#"{"pack": "p", "agents": "../a.json"}"#).unwrap_err();
+        assert!(err.contains("data.flow.agents"), "{err}");
+        let err = flow("", r#"{"pack": "p", "extra": 1}"#).unwrap_err();
+        assert!(err.contains("extra"), "{err}");
+        let none = r#"{"name": "acme-sdd", "kind": "flow", "version": "0.1.0"}"#;
+        assert!(Manifest::parse(none).unwrap_err().contains("missing"));
+    }
 
     const OK: &str = r#"{
         "name": "github", "kind": "host", "version": "1.2.0", "min_xherd_version": "0.1.0",

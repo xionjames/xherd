@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentFor,
-  FORM_DEFAULTS, agentLane, agentLaneOrder, canMarkDone, canShipWithoutOrigin, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
-  profileMarks, slugify, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
+  FORM_DEFAULTS, agentLabel, agentLane, agentLaneOrder, canMarkDone, canShipWithoutOrigin, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
+  profileMarks, slugify, stageRuns, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
 } from './agents';
 import type { AgentDef, AgentView, Job } from './types';
 
@@ -101,6 +101,20 @@ describe('versionDiff', () => {
   it('shows the fallback runtime', () => {
     const d = versionDiff(def(), def({ fallbackRuntime: 'opencode' }));
     expect(d).toEqual([{ field: 'fallbackRuntime', label: 'Fallback runtime', from: '', to: 'opencode' }]);
+  });
+});
+
+describe('agentLabel', () => {
+  it('cuts the source prefix and keeps anything else', () => {
+    expect(agentLabel('acme-sdd-architect', 'acme-sdd')).toBe('architect');
+    expect(agentLabel('acme-sdd-architect')).toBe('acme-sdd-architect');
+    expect(agentLabel('acme-sdd', 'acme-sdd')).toBe('acme-sdd');
+    expect(agentLabel('acme-sdd-', 'acme-sdd')).toBe('acme-sdd-');
+    expect(agentLabel('other-architect', 'acme-sdd')).toBe('other-architect');
+  });
+  it('labels the lane of a plugin agent', () => {
+    const job = { agents: { x: { id: 'x', name: 'acme-sdd-architect', version: 1, source: 'acme-sdd' } }, currentAgent: 'x' };
+    expect(agentLane(job)).toBe('architect');
   });
 });
 
@@ -209,4 +223,10 @@ describe('agentFor', () => {
   });
   it('has none for a stage without one', () => expect(agentFor(job, 'ship')).toBeUndefined());
   it('uses the current agent for a job with no workflow', () => expect(agentFor(job)).toBe('peter'));
+  it('cuts the plugin prefix of a plugin agent', () => {
+    const p = { agents: { a1: { name: 'acme-sdd-architect', source: 'acme-sdd' } }, stageAgents: { spec: { agent: 'a1', human: false } }, currentAgent: 'a1' } as unknown as Job;
+    expect(agentFor(p, 'spec')).toBe('architect');
+    expect(agentFor(p)).toBe('architect');
+    expect(stageRuns({ ...p, stage: 'spec' }, [{ id: 'spec' }])[0].agent).toBe('architect');
+  });
 });

@@ -323,8 +323,6 @@ async fn preview_refuses_what_cannot_be_installed() {
 
     let build = manifest("b", "tracker", json!({"build": ["make"]}));
     assert_eq!(refused(&t, &at(build)).await, "build_not_supported");
-    let flow = manifest("f", "flow", json!({}));
-    assert_eq!(refused(&t, &at(flow)).await, "kind_not_supported");
     assert_eq!(refused(&t, &at("{ not json".into())).await, "bad_manifest");
     let git = manifest("git", "tracker", json!({}));
     assert_eq!(refused(&t, &at(git)).await, "bad_manifest");
@@ -947,4 +945,789 @@ async fn security_lists_external_plugins_with_their_source_or_as_by_hand() {
         "{}",
         p.detail
     );
+}
+
+// ---- Jobs on a plugin pack (R13, R14) ----
+
+const ACME_PACK: &str = r#"
+name: acme-sdd
+version: 1.2.0
+protocol: 1
+specDir: private
+memoryNote: required
+private: [HANDOFF.md]
+install:
+  claude-code:
+    prefix: "/acme-sdd:"
+    commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md", format: command }
+    args: "$ARGUMENTS"
+commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", ask: "{prefix}ask {prompt}" }
+flows:
+  feature:
+    start: "{prefix}start {key} {prompt}"
+    stages:
+      - { id: brief, role: spec, class: critical, gate: { docs: [spec.md] }, next: [{ run: "{prefix}design" }] }
+      - { id: design, role: design, class: routine, command: "{prefix}design", gate: { docs: [design.md] }, next: [{ run: "{prefix}design" }] }
+"#;
+
+const ACME_PROMPTS: [&str; 12] = [
+    "rules", "start", "design", "plan", "next", "commit", "review", "ship", "ask", "resume",
+    "handoff", "status",
+];
+
+struct Acme {
+    t: T,
+    repo: tempfile::TempDir,
+}
+
+/// A daemon that loaded the `acme-sdd` flow plugin from its plugins folder,
+/// and a git repository to start jobs in.
+async fn acme() -> Acme {
+    acme_with(|_, _| {}).await
+}
+
+/// `acme()` with a say before the daemon starts: in the home (to add more
+/// plugins) and in the options.
+async fn acme_with(setup: impl FnOnce(&Path, &mut Options)) -> Acme {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let paths = Paths::at(home.path());
+    paths.ensure().unwrap();
+    let cfg = xherd_core::config::Config {
+        workspace: Some(workspace.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    cfg.save(&paths.config()).unwrap();
+    let dir = home.path().join("plugins/acme-sdd");
+    std::fs::create_dir_all(dir.join("pack/commands")).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        manifest(
+            "acme-sdd",
+            "flow",
+            json!({"data": {"flow": {"pack": "pack"}}}),
+        ),
+    )
+    .unwrap();
+    std::fs::write(dir.join("pack/xherd-flow.yaml"), ACME_PACK).unwrap();
+    for p in ACME_PROMPTS {
+        std::fs::write(
+            dir.join(format!("pack/commands/{p}.md")),
+            format!("# {p}\n"),
+        )
+        .unwrap();
+    }
+    let repo = tempfile::tempdir().unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["commit", "-q", "--allow-empty", "-m", "base"][..],
+    ] {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .current_dir(repo.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+    let mut o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    // Never the real Claude Code config: a fixture that trusts the workspace.
+    let trust = home.path().join("claude.json");
+    std::fs::write(
+        &trust,
+        json!({"projects": {workspace.path().to_string_lossy(): {"hasTrustDialogAccepted": true}}})
+            .to_string(),
+    )
+    .unwrap();
+    let rt = o
+        .builtin_plugins
+        .iter_mut()
+        .find(|m| m.name == "claude-code")
+        .unwrap();
+    rt.data.get_mut("terminal").unwrap()["trust"]["file"] = trust.to_string_lossy().into();
+    setup(home.path(), &mut o);
+    let d = Daemon::start(paths, o).await.unwrap();
+    Acme {
+        t: T { home, workspace, d },
+        repo,
+    }
+}
+
+fn new_on(a: &Acme, name: &str, pack: Option<&str>, flow: Option<&str>) -> xherd_core::new::NewJob {
+    xherd_core::new::NewJob {
+        name: name.into(),
+        ticket: None,
+        ticket_key: None,
+        slug: None,
+        repo: a.repo.path().to_string_lossy().into_owned(),
+        agent: None,
+        agents: Default::default(),
+        base: None,
+        flow: flow.map(Into::into),
+        pack: pack.map(Into::into),
+        prompt: Some("add login".into()),
+        autonomy: None,
+        permission_mode: None,
+        runtime: None,
+        model: None,
+        new_project: None,
+    }
+}
+
+#[tokio::test]
+async fn a_job_runs_on_a_plugin_pack_to_a_gate_and_an_approval() {
+    let a = acme().await;
+    assert!(a.t.d.pack_selectable("acme-sdd"));
+    let job =
+        a.t.d
+            .new_job(new_on(&a, "login", Some("acme-sdd"), None))
+            .await
+            .unwrap();
+    assert_eq!(
+        (job.pack.as_deref(), job.flow.as_deref()),
+        (Some("acme-sdd"), Some("feature"))
+    );
+    assert_eq!(
+        job.next_prompt.as_deref(),
+        Some("/acme-sdd:start  add login")
+    );
+    // The hook file allows reading the plugin's installed commands.
+    let wt = std::path::PathBuf::from(job.workdir.as_deref().unwrap());
+    let settings = std::fs::read_to_string(wt.join(".claude/settings.local.json")).unwrap();
+    assert!(settings.contains("commands/acme-sdd"), "{settings}");
+
+    // A gate of the plugin's flow, then the user's approval.
+    let name = job.name.clone();
+    let memory = "# Memory\n## State\nbrief\n## Decisions\nnone\n## Code map\nsrc/a.rs: a\n## Watch out\nnothing\n";
+    std::fs::write(wt.join(".xherd/spec/memory.md"), memory).unwrap();
+    std::fs::write(wt.join(".xherd/spec/spec.md"), "# Spec\n").unwrap();
+    let call = |id: &str, cmd: &str, args: Value| -> xherd_core::xap::XapCall {
+        serde_json::from_value(
+            json!({"id": id, "jobId": job.id, "cmd": cmd, "args": args, "at": 1}),
+        )
+        .unwrap()
+    };
+    a.t.d
+        .xap(call("c1", "gate.open", json!({"stage": "brief"})))
+        .await
+        .unwrap();
+    a.t.d
+        .report(xherd_core::report::Report {
+            id: "stop-1".into(),
+            job_id: job.id.clone(),
+            event: xherd_core::report::ReportEvent::Stop,
+            payload: Value::Null,
+            seq: 1,
+            at: 0,
+        })
+        .await;
+    let waiting = a.t.d.action(&name, UserAction::Get).await.unwrap();
+    assert_eq!(waiting.status, xherd_core::Status::WaitingInput);
+    let approved =
+        a.t.d
+            .action(
+                &name,
+                UserAction::Approve {
+                    reason: None,
+                    expect: Default::default(),
+                    message: None,
+                },
+            )
+            .await
+            .unwrap();
+    assert_eq!(approved.pack.as_deref(), Some("acme-sdd"));
+    assert!(
+        approved
+            .next_prompt
+            .as_deref()
+            .is_some_and(|p| p.starts_with("/acme-sdd:design")),
+        "{:?}",
+        approved.next_prompt
+    );
+}
+
+/// Opens the `brief` gate of a job on `acme-sdd` with a spec and no memory.md.
+async fn gate_without_memory(a: &Acme) -> Result<Value, xherd_core::xap::Refusal> {
+    let job =
+        a.t.d
+            .new_job(new_on(a, "login", Some("acme-sdd"), None))
+            .await
+            .unwrap();
+    let wt = std::path::PathBuf::from(job.workdir.as_deref().unwrap());
+    std::fs::write(wt.join(".xherd/spec/spec.md"), "# Spec\n").unwrap();
+    let call: xherd_core::xap::XapCall = serde_json::from_value(
+        json!({"id": "c1", "jobId": job.id, "cmd": "gate.open", "args": {"stage": "brief"}, "at": 1}),
+    )
+    .unwrap();
+    a.t.d.xap(call).await
+}
+
+#[tokio::test]
+async fn a_gate_of_a_plugin_pack_that_requires_a_memory_note_is_refused_without_one() {
+    let a = acme().await;
+    let e = gate_without_memory(&a).await.unwrap_err();
+    assert_eq!(e.code, "memory_invalid", "{}", e.message);
+}
+
+#[tokio::test]
+async fn a_gate_of_a_plugin_pack_with_memory_note_off_needs_no_memory_note() {
+    let a = acme_with(|home, _| {
+        let yaml = home.join("plugins/acme-sdd/pack/xherd-flow.yaml");
+        let text = std::fs::read_to_string(&yaml).unwrap();
+        std::fs::write(
+            yaml,
+            text.replace("memoryNote: required", "memoryNote: off"),
+        )
+        .unwrap();
+    })
+    .await;
+    gate_without_memory(&a).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unknown_pack_a_missing_flow_and_a_disabled_plugin_are_refused() {
+    let a = acme().await;
+    let e =
+        a.t.d
+            .new_job(new_on(&a, "one", Some("nope"), None))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "unknown_pack");
+    let e =
+        a.t.d
+            .new_job(new_on(&a, "two", Some("acme-sdd"), Some("bugfix")))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "unknown_flow");
+    // `flow: none` ignores the pack.
+    let plain =
+        a.t.d
+            .new_job(new_on(&a, "three", Some("nope"), Some("none")))
+            .await
+            .unwrap();
+    assert_eq!(plain.pack, None);
+
+    // Switched off while running: refused at once.
+    let paths = Paths::at(a.t.home.path());
+    let (mut cfg, _) = xherd_core::config::Config::load(&paths.config()).unwrap();
+    cfg.disabled_plugins.push("acme-sdd".into());
+    cfg.save(&paths.config()).unwrap();
+    let e =
+        a.t.d
+            .new_job(new_on(&a, "four", Some("acme-sdd"), None))
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "unknown_pack");
+    // The built-in pack is still there.
+    assert_eq!(
+        a.t.d
+            .new_job(new_on(&a, "five", None, None))
+            .await
+            .unwrap()
+            .pack
+            .as_deref(),
+        Some("xherd")
+    );
+}
+
+#[tokio::test]
+async fn start_installs_every_selectable_pack_and_a_broken_one_does_not_stop_the_others() {
+    let user = tempfile::tempdir().unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let a = acme_with(|home, o| {
+        // A second flow plugin whose pack cannot be read.
+        let bad = home.join("plugins/bad-sdd");
+        std::fs::create_dir_all(bad.join("pack")).unwrap();
+        std::fs::write(
+            bad.join("xherd-plugin.json"),
+            manifest(
+                "bad-sdd",
+                "flow",
+                json!({"data": {"flow": {"pack": "pack"}}}),
+            ),
+        )
+        .unwrap();
+        std::fs::write(bad.join("pack/xherd-flow.yaml"), "name: [").unwrap();
+        o.install_env = Some(Arc::new(move |k: &str| (k == "HOME").then(|| h.clone())));
+    })
+    .await;
+    assert!(a.t.d.pack_selectable("acme-sdd"));
+    assert!(!a.t.d.pack_selectable("bad-sdd"));
+    assert_eq!(a.t.d.pack_errors.len(), 1);
+    let commands = user.path().join(".claude/commands");
+    assert!(commands.join("xherd/status.md").exists());
+    assert!(commands.join("acme-sdd/start.md").exists());
+    assert!(!commands.join("bad-sdd").exists());
+}
+
+/// A git repository holding the `acme-sdd` flow plugin; `agents` is the text
+/// of its agents file.
+fn acme_repo(agents: &str) -> Repo {
+    flow_repo("acme-sdd", agents)
+}
+
+/// The same plugin under another name (the pack is named like the plugin).
+fn flow_repo(name: &str, agents: &str) -> Repo {
+    let m = manifest(
+        name,
+        "flow",
+        json!({"data": {"flow": {"pack": "pack", "agents": "agents.json", "assignments": {
+            "feature": {
+                "brief": {"agent": "analyst"},
+                "design": {"agent": "architect", "human": true}}}}}}),
+    );
+    let prompts: Vec<(String, String)> = ACME_PROMPTS
+        .iter()
+        .map(|p| (format!("pack/commands/{p}.md"), format!("# {p}\n")))
+        .collect();
+    let pack = ACME_PACK.replace("acme-sdd", name);
+    let mut files: Vec<(&str, &str)> = vec![
+        ("xherd-plugin.json", &m),
+        ("agents.json", agents),
+        ("pack/xherd-flow.yaml", &pack),
+    ];
+    files.extend(prompts.iter().map(|(p, t)| (p.as_str(), t.as_str())));
+    Repo::new(&files)
+}
+
+const ACME_AGENTS: &str = r#"{"agents": [
+    {"name": "analyst", "runtime": "claude-code"},
+    {"name": "architect", "runtime": "claude-code", "instructions": "Draw boxes."}]}"#;
+
+#[tokio::test]
+async fn preview_of_a_flow_plugin_lists_flows_agents_assignments_and_files() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    let p = json_of(&t.d.plugin_preview(&repo.url(), None, None).await.unwrap());
+    assert_eq!(p["kind"], "flow");
+    let f = &p["flow"];
+    assert_eq!(f["pack"], "acme-sdd");
+    assert_eq!(f["memoryNote"], "required");
+    assert_eq!(f["flows"][0]["flow"], "feature");
+    assert_eq!(f["flows"][0]["stages"][0]["id"], "brief");
+    assert_eq!(f["flows"][0]["stages"][0]["role"], "spec");
+    assert_eq!(f["flows"][0]["stages"][0]["class"], "critical");
+    assert_eq!(f["flows"][0]["stages"][0]["gate"], true);
+    assert_eq!(f["agents"][0]["name"], "analyst");
+    assert_eq!(f["agents"][0]["savedName"], "acme-sdd-analyst");
+    assert_eq!(f["agents"][0]["state"], "new");
+    assert_eq!(f["agents"][1]["risky"], json!(["instructions"]));
+    assert_eq!(f["agents"][1]["issues"], json!([]));
+    assert_eq!(f["assignments"][1]["agent"], "acme-sdd-architect");
+    assert_eq!(f["assignments"][1]["human"], true);
+    assert_eq!(f["assignmentChanges"], json!([]));
+    assert_eq!(f["archived"], json!([]));
+    assert_eq!(f["inUseBy"], Value::Null);
+    assert_eq!(f["files"][0]["runtime"], "claude-code");
+    let paths = f["files"][0]["paths"].as_array().unwrap();
+    assert_eq!(paths.len(), ACME_PROMPTS.len());
+    assert!(
+        paths
+            .iter()
+            .all(|p| p.as_str().unwrap().contains("commands/acme-sdd/"))
+    );
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn preview_of_a_flow_plugin_shows_a_taken_name_and_an_unknown_skill_as_findings() {
+    let t = daemon().await;
+    let hand: xherd_core::agent_def::AgentDef =
+        serde_json::from_value(json!({"name": "acme-sdd-architect", "runtime": "claude-code"}))
+            .unwrap();
+    t.d.create_agent(hand).await.unwrap();
+    let agents = r#"{"agents": [
+        {"name": "analyst", "runtime": "claude-code", "skills": ["no-such-skill"]},
+        {"name": "architect", "runtime": "claude-code"}]}"#;
+    let repo = acme_repo(agents);
+    let p = json_of(&t.d.plugin_preview(&repo.url(), None, None).await.unwrap());
+    let a = &p["flow"]["agents"];
+    assert_eq!(a[0]["state"], "new");
+    assert_eq!(a[0]["risky"], json!(["skills"]));
+    assert_eq!(
+        a[0]["issues"],
+        json!(["skills: no skill named \"no-such-skill\" in the library"])
+    );
+    assert_eq!(a[1]["state"], "taken");
+}
+
+#[tokio::test]
+async fn preview_of_a_flow_plugin_refuses_a_broken_pack() {
+    let t = daemon().await;
+    let m = manifest(
+        "acme-sdd",
+        "flow",
+        json!({"data": {"flow": {"pack": "pack"}}}),
+    );
+    let repo = Repo::new(&[
+        ("xherd-plugin.json", &m),
+        ("pack/xherd-flow.yaml", "name: ["),
+    ]);
+    assert_eq!(refused(&t, &repo).await, "bad_manifest");
+    // The structure is checked: a flow plugin without a `flow` section.
+    let m = manifest("acme-sdd", "flow", json!({}));
+    assert_eq!(
+        refused(&t, &Repo::new(&[("xherd-plugin.json", &m)])).await,
+        "bad_manifest"
+    );
+}
+
+#[tokio::test]
+async fn install_of_a_flow_plugin_saves_its_agents_and_assignments() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    let digest = digest_of(&t, &repo).await;
+    let i =
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap();
+    assert_eq!(i.name, "acme-sdd");
+    assert!(t.home.path().join("plugins/acme-sdd/agents.json").exists());
+    assert_eq!(t.d.store.plugin_records().await.unwrap().len(), 1);
+
+    let agents = t.d.store.list_agent_defs().await.unwrap();
+    let mut names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["acme-sdd-analyst", "acme-sdd-architect"]);
+    assert!(
+        agents
+            .iter()
+            .all(|a| a.source.as_deref() == Some("acme-sdd") && a.version == 1 && !a.id.is_empty())
+    );
+    let architect = agents
+        .iter()
+        .find(|a| a.name.ends_with("architect"))
+        .unwrap();
+
+    let rows = t.d.store.all_flow_assignments().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|(pack, flow, _)| pack == "acme-sdd" && flow == "feature")
+    );
+    let design = rows.iter().find(|(_, _, a)| a.stage == "design").unwrap();
+    assert_eq!(design.2.agent_id, architect.id);
+    assert!(design.2.human);
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn install_of_a_flow_plugin_refuses_a_taken_name_and_leaves_nothing() {
+    let t = daemon().await;
+    let hand: xherd_core::agent_def::AgentDef =
+        serde_json::from_value(json!({"name": "acme-sdd-architect", "runtime": "claude-code"}))
+            .unwrap();
+    t.d.create_agent(hand).await.unwrap();
+    let repo = acme_repo(ACME_AGENTS);
+    let digest = digest_of(&t, &repo).await;
+    let e =
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "name_taken");
+    assert!(!t.home.path().join("plugins/acme-sdd").exists());
+    assert!(t.d.store.plugin_records().await.unwrap().is_empty());
+    let agents = t.d.store.list_agent_defs().await.unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].source, None);
+    assert!(t.d.store.all_flow_assignments().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn install_of_a_flow_plugin_with_an_unknown_skill_works_and_the_agent_is_broken() {
+    let t = daemon().await;
+    let agents = r#"{"agents": [
+        {"name": "analyst", "runtime": "claude-code", "skills": ["no-such-skill"]},
+        {"name": "architect", "runtime": "claude-code"}]}"#;
+    let repo = acme_repo(agents);
+    let digest = digest_of(&t, &repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+    let views = t.d.agents().await.unwrap();
+    let by = |n: &str| views.iter().find(|v| v.def.name == n).unwrap();
+    assert!(by("acme-sdd-analyst").broken.is_some());
+    assert!(by("acme-sdd-architect").broken.is_none());
+}
+
+#[tokio::test]
+async fn two_flow_plugins_with_an_architect_live_side_by_side() {
+    let t = daemon().await;
+    for name in ["acme-sdd", "beta-sdd"] {
+        let repo = flow_repo(name, ACME_AGENTS);
+        let digest = digest_of(&t, &repo).await;
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap();
+    }
+    let agents = t.d.store.list_agent_defs().await.unwrap();
+    let mut names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "acme-sdd-analyst",
+            "acme-sdd-architect",
+            "beta-sdd-analyst",
+            "beta-sdd-architect"
+        ]
+    );
+    let rows = t.d.store.all_flow_assignments().await.unwrap();
+    assert_eq!(rows.iter().filter(|(p, _, _)| p == "acme-sdd").count(), 2);
+    assert_eq!(rows.iter().filter(|(p, _, _)| p == "beta-sdd").count(), 2);
+}
+
+/// The `acme-sdd` manifest with other default assignments (stage → agent).
+fn acme_manifest(assign: &[(&str, &str)]) -> String {
+    let stages: serde_json::Map<String, Value> = assign
+        .iter()
+        .map(|(s, a)| (s.to_string(), json!({"agent": a})))
+        .collect();
+    manifest(
+        "acme-sdd",
+        "flow",
+        json!({"data": {"flow": {"pack": "pack", "agents": "agents.json",
+            "assignments": {"feature": stages}}}}),
+    )
+}
+
+async fn install_acme(t: &T, repo: &Repo) {
+    let digest = digest_of(t, repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+}
+
+/// Preview the update of `acme-sdd`, then apply it; the preview as JSON.
+async fn update_acme(t: &T) -> Value {
+    let p = t.d.plugin_update_preview("acme-sdd", None).await.unwrap();
+    let digest = json_of(&p)["digest"].as_str().unwrap().to_string();
+    t.d.plugin_update("acme-sdd", None, &digest).await.unwrap();
+    json_of(&p)
+}
+
+async fn agent_named(t: &T, name: &str) -> Option<xherd_core::agent_def::AgentDef> {
+    let all = t.d.store.list_agent_defs().await.unwrap();
+    all.into_iter().find(|a| a.name == name)
+}
+
+#[tokio::test]
+async fn update_of_a_flow_plugin_overwrites_adds_archives_and_replaces_assignments() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let analyst = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    let mut architect = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    architect.instructions = Some("Draw circles.".into());
+    t.d.store.put_agent_def(&architect).await.unwrap();
+
+    // v2: the analyst is gone, a planner arrives, the architect is as shipped.
+    repo.commit(&[
+        (
+            "agents.json",
+            r#"{"agents": [
+                {"name": "architect", "runtime": "claude-code", "instructions": "Draw boxes."},
+                {"name": "planner", "runtime": "claude-code"}]}"#,
+        ),
+        (
+            "xherd-plugin.json",
+            &acme_manifest(&[("brief", "planner"), ("design", "architect")]),
+        ),
+    ]);
+    let p = t.d.plugin_update_preview("acme-sdd", None).await.unwrap();
+    let json = json_of(&p);
+    let flow = &json["flow"];
+    let state = |n: &str| {
+        flow["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["savedName"] == n)
+            .unwrap()["state"]
+            .clone()
+    };
+    assert_eq!(state("acme-sdd-architect"), "overwritten");
+    assert_eq!(state("acme-sdd-planner"), "new");
+    assert_eq!(flow["archived"], json!(["acme-sdd-analyst"]));
+    let changes = flow["assignmentChanges"].as_array().unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["stage"], "brief");
+    assert_eq!(changes[0]["from"], "acme-sdd-analyst");
+    assert_eq!(changes[0]["to"], "acme-sdd-planner");
+    // The preview writes nothing.
+    assert!(agent_named(&t, "acme-sdd-planner").await.is_none());
+
+    update_acme(&t).await;
+    let architect_now = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    assert_eq!(architect_now.id, architect.id);
+    assert_eq!(architect_now.version, architect.version + 1);
+    assert_eq!(architect_now.instructions.as_deref(), Some("Draw boxes."));
+    let planner = agent_named(&t, "acme-sdd-planner").await.unwrap();
+    assert_eq!(
+        (planner.version, planner.source.as_deref()),
+        (1, Some("acme-sdd"))
+    );
+    let gone = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    assert_eq!(gone.id, analyst.id);
+    assert!(gone.archived_at.is_some());
+    let rows = t.d.store.all_flow_assignments().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let of = |stage: &str| {
+        rows.iter()
+            .find(|(_, _, a)| a.stage == stage)
+            .unwrap()
+            .2
+            .agent_id
+            .clone()
+    };
+    assert_eq!(of("brief"), planner.id);
+    assert_eq!(of("design"), architect.id);
+    assert!(t.d.store.plugin_records().await.unwrap()[0].data["updatedAt"].is_number());
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn update_of_a_flow_plugin_keeps_an_archived_agent_archived_and_recreates_a_deleted_one() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let analyst = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+
+    // v2 drops the analyst: archived. v3 ships it again: still archived.
+    let architect_only = r#"{"agents": [{"name": "architect", "runtime": "claude-code"}]}"#;
+    let both = r#"{"agents": [
+        {"name": "analyst", "runtime": "claude-code"},
+        {"name": "architect", "runtime": "claude-code"}]}"#;
+    let only_design = acme_manifest(&[("design", "architect")]);
+    repo.commit(&[
+        ("agents.json", architect_only),
+        ("xherd-plugin.json", &only_design),
+    ]);
+    update_acme(&t).await;
+    assert!(
+        agent_named(&t, "acme-sdd-analyst")
+            .await
+            .unwrap()
+            .archived_at
+            .is_some()
+    );
+    repo.commit(&[("agents.json", both)]);
+    update_acme(&t).await;
+    let still = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    assert_eq!(still.id, analyst.id);
+    assert!(still.archived_at.is_some());
+
+    // Deleted by the user (it is unassigned): the next update creates it again.
+    t.d.delete_agent("acme-sdd-analyst").await.unwrap();
+    repo.commit(&[("README.md", "v4")]);
+    update_acme(&t).await;
+    let again = agent_named(&t, "acme-sdd-analyst").await.unwrap();
+    assert_ne!(again.id, analyst.id);
+    assert_eq!((again.version, again.archived_at), (1, None));
+}
+
+#[tokio::test]
+async fn update_of_a_flow_plugin_is_refused_while_a_job_uses_the_pack() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    repo.commit(&[("README.md", "v2")]);
+    let mut job = xherd_core::Job::new("sdd-1", 1);
+    job.pack = Some("acme-sdd".into());
+    job.status = xherd_core::Status::Paused;
+    t.d.store.put_job(&job).await.unwrap();
+
+    let e =
+        t.d.plugin_update_preview("acme-sdd", None)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "plugin_in_use");
+    assert!(e.message.contains("sdd-1"), "{}", e.message);
+    let e = t.d.plugin_update("acme-sdd", None, "x").await.unwrap_err();
+    assert_eq!(e.code, "plugin_in_use");
+    assert!(t.home.path().join("plugins/acme-sdd").is_dir());
+
+    job.status = xherd_core::Status::Done;
+    t.d.store.put_job(&job).await.unwrap();
+    update_acme(&t).await;
+}
+
+#[tokio::test]
+async fn remove_of_a_flow_plugin_is_refused_while_a_job_uses_it_then_keeps_the_agents() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let architect = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    let mut job = xherd_core::Job::new("sdd-1", 1);
+    job.pack = Some("acme-sdd".into());
+    job.status = xherd_core::Status::Paused;
+    t.d.store.put_job(&job).await.unwrap();
+
+    let e = t.d.plugin_remove("acme-sdd", false).await.unwrap_err();
+    assert_eq!(e.code, "plugin_in_use");
+    assert!(e.message.contains("sdd-1"), "{}", e.message);
+    assert!(t.home.path().join("plugins/acme-sdd").is_dir());
+    assert_eq!(t.d.store.all_flow_assignments().await.unwrap().len(), 2);
+
+    job.status = xherd_core::Status::Done;
+    t.d.store.put_job(&job).await.unwrap();
+    t.d.plugin_remove("acme-sdd", false).await.unwrap();
+    assert!(!t.home.path().join("plugins/acme-sdd").exists());
+    assert!(t.d.store.plugin_records().await.unwrap().is_empty());
+    assert!(t.d.store.all_flow_assignments().await.unwrap().is_empty());
+    let kept = agent_named(&t, "acme-sdd-architect").await.unwrap();
+    assert_eq!(kept.source, architect.source);
+    assert!(kept.source.is_some());
+
+    // Installing it again takes back its own agents; a hand-made one with the
+    // plugin's prefix stays the user's and does not block it.
+    let hand: xherd_core::agent_def::AgentDef =
+        serde_json::from_value(json!({"name": "acme-sdd-x", "runtime": "claude-code"})).unwrap();
+    t.d.create_agent(hand).await.unwrap();
+    install_acme(&t, &repo).await;
+    assert_eq!(
+        agent_named(&t, "acme-sdd-architect").await.unwrap().id,
+        architect.id
+    );
+    assert_eq!(agent_named(&t, "acme-sdd-x").await.unwrap().source, None);
+    assert_eq!(t.d.store.all_flow_assignments().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_finished_job_of_a_removed_pack_still_loads_after_a_restart() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let mut job = xherd_core::Job::new("sdd-1", 1);
+    job.pack = Some("acme-sdd".into());
+    job.status = xherd_core::Status::Done;
+    t.d.store.put_job(&job).await.unwrap();
+    t.d.plugin_remove("acme-sdd", false).await.unwrap();
+
+    let d2 = restarted(&t).await;
+    assert!(!d2.packs.contains_key("acme-sdd"));
+    let a = d2.action("sdd-1", UserAction::Get).await.unwrap();
+    assert_eq!(a.pack.as_deref(), Some("acme-sdd"));
+    assert!(
+        d2.store
+            .list_jobs()
+            .await
+            .unwrap()
+            .iter()
+            .any(|j| j.name == "sdd-1")
+    );
+}
+
+#[tokio::test]
+async fn flows_name_the_plugin_that_provides_the_pack() {
+    let a = acme().await;
+    let flows = a.t.d.flows().await.unwrap();
+    let source_of = |pack: &str| {
+        let f = flows.iter().find(|f| f.pack == pack).unwrap();
+        serde_json::to_value(f).unwrap().get("source").cloned()
+    };
+    assert_eq!(source_of("acme-sdd"), Some(json!("acme-sdd")));
+    assert_eq!(source_of("xherd"), None);
+    assert!(a.t.d.pack_selectable("acme-sdd"));
+    assert!(a.t.d.pack_selectable("xherd"));
 }

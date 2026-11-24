@@ -8,7 +8,7 @@
   import Seg from './Seg.svelte';
   import { href, route, go } from '../lib/router.svelte';
   import { app } from '../lib/store.svelte';
-  import { agentLane, agentLaneOrder, jobAgent } from '../lib/agents';
+  import { agentLabel, agentLane, agentLaneOrder, jobAgent } from '../lib/agents';
   import { ago, repoName } from '../lib/format';
   import { stageNow } from '../lib/flow';
   import { groups, running } from '../lib/actions';
@@ -78,7 +78,7 @@
               <div class="jnow">
                 {#if jobGroup(a) === 'needs'}<b style="color:var(--gate)">{a.gate?.kind === 'question' || !a.gate ? (a.status === 'blocked' ? 'Blocked' : 'Your answer') : `${st?.waits ?? 'Decision'} ready`}</b>
                 {:else if st}<b>{st.name}</b>{:else}{a.status === 'watching' ? 'Watching the PR' : a.status}{/if}
-                {#if jobAgent(a)}{' · '}{jobAgent(a)?.name}{/if}
+                {#if jobAgent(a)}{' · '}{agentLabel(jobAgent(a)!.name, jobAgent(a)!.source)}{/if}
               </div>
               <span class="num muted" style="text-align:right">{ago(a.lastActivity)}</span>
             </div>

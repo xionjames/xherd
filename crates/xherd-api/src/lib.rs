@@ -557,7 +557,8 @@ fn flows(d: &Daemon) -> Vec<Value> {
                         v
                     })
                     .collect();
-                json!({"pack": p.name, "flow": name, "stages": stages})
+                let source = d.pack_sources.get(&p.name).and_then(|s| s.plugin.clone());
+                json!({"pack": p.name, "flow": name, "source": source, "selectable": d.pack_selectable(&p.name), "stages": stages})
             })
         })
         .collect()

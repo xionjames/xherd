@@ -173,7 +173,7 @@ describe('saved agents in the data message', () => {
   it('projects only what is listed, with the jobs that use it', () => {
     const m = dataMessage([job, agent({ id: 'a2', name: 'other' })], flows, 'light', [def]);
     expect(m.savedAgents).toEqual([
-      { id: 'g1', name: 'peter', description: 'code review', version: 3, runtime: 'claude-code', status: 'working', archived: false, liveJobs: 1, maxLiveJobs: 2, tokensToday: 120, jobs: ['a1'] },
+      { id: 'g1', name: 'peter', label: 'peter', description: 'code review', version: 3, runtime: 'claude-code', status: 'working', archived: false, liveJobs: 1, maxLiveJobs: 2, tokensToday: 120, jobs: ['a1'] },
     ]);
     expect(JSON.stringify(m)).not.toContain('SECRET INSTRUCTIONS');
   });
@@ -181,6 +181,13 @@ describe('saved agents in the data message', () => {
     const m = dataMessage([job], flows, 'dark', [{ ...def, archivedAt: 5 }]);
     expect(m.savedAgents[0].archived).toBe(true);
     expect(m.agents[0].agent).toBe('peter');
+  });
+  it('gives a plugin agent a short label and keeps the full name', () => {
+    const plug = { ...def, name: 'acme-sdd-architect', source: 'acme-sdd' } as AgentView;
+    const j = agent({ agents: { g1: { name: 'acme-sdd-architect', source: 'acme-sdd' } }, currentAgent: 'g1' } as unknown as Partial<Job>);
+    const m = dataMessage([j], flows, 'light', [plug]);
+    expect(m.savedAgents[0]).toMatchObject({ name: 'acme-sdd-architect', label: 'architect' });
+    expect(m.agents[0]).toMatchObject({ agent: 'acme-sdd-architect', agentLabel: 'architect' });
   });
   it('is empty without agents', () => expect(dataMessage([job], flows, 'light').savedAgents).toEqual([]));
 });
