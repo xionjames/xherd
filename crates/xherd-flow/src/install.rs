@@ -291,6 +291,15 @@ pub fn read_pack_dir(dir: &Path, pack: &Pack) -> Result<Vec<(String, String)>, S
         .flatten()
         .map(|s| s.from.as_str());
     for glob in globs {
+        // R12: a `from` glob stays inside the pack folder.
+        if Path::new(glob)
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+        {
+            return Err(format!(
+                "{glob}: `from` must be a relative path inside the pack"
+            ));
+        }
         let folder = glob.rsplit_once('/').map_or("", |(d, _)| d);
         let Ok(entries) = std::fs::read_dir(dir.join(folder)) else {
             continue;
@@ -660,6 +669,23 @@ mod tests {
         );
         std::fs::write(d.join("commands/bad.md"), [0xff, 0xfe]).unwrap();
         assert!(read_pack_dir(d, &p).unwrap_err().contains("bad.md"));
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn read_pack_dir_refuses_a_from_outside_the_pack() {
+        let d = &std::env::temp_dir().join(format!("xherd-read-from-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(d);
+        std::fs::create_dir_all(d.join("pack")).unwrap();
+        std::fs::write(d.join("outside.md"), "secret").unwrap();
+        for from in ["../*.md", "commands/../../*.md", "/etc/*.md"] {
+            let mut p = mini_pack("{prefix}spec");
+            for inst in p.install.values_mut() {
+                inst.commands.as_mut().unwrap().from = from.to_string();
+            }
+            let e = read_pack_dir(&d.join("pack"), &p).unwrap_err();
+            assert!(e.contains("relative path"), "{from}: {e}");
+        }
         std::fs::remove_dir_all(d).unwrap();
     }
 
