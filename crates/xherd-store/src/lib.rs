@@ -138,6 +138,26 @@ pub fn write_version_1_database(db: &Path, job: &Job) -> Result<()> {
     Ok(())
 }
 
+/// The agent row and its `agent_versions` row for `def.version`, inside `tx`.
+fn put_agent_tx(
+    tx: &rusqlite::Transaction<'_>,
+    def: &xherd_core::agent_def::AgentDef,
+) -> Result<()> {
+    let data = serde_json::to_string(def)?;
+    tx.execute(
+        "INSERT INTO agents (id, name, archived_at, data) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name,
+           archived_at = excluded.archived_at, data = excluded.data",
+        params![def.id, def.name, def.archived_at, data],
+    )?;
+    tx.execute(
+        "INSERT INTO agent_versions (agent_id, version, at, data) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(agent_id, version) DO UPDATE SET at = excluded.at, data = excluded.data",
+        params![def.id, def.version, def.updated_at, data],
+    )?;
+    Ok(())
+}
+
 fn migrations() -> Migrations<'static> {
     Migrations::new(schema::MIGRATIONS.iter().map(|sql| M::up(sql)).collect())
 }
@@ -606,24 +626,89 @@ impl Store {
     /// Write the agent and its `agent_versions` row for `def.version` in one
     /// transaction (R11). A name used by another agent is an error.
     pub async fn put_agent_def(&self, def: &xherd_core::agent_def::AgentDef) -> Result<()> {
-        let data = serde_json::to_string(def)?;
-        let (id, name, version) = (def.id.clone(), def.name.clone(), def.version);
-        let (archived, at) = (def.archived_at, def.updated_at);
+        let def = def.clone();
+        self.write(move |c| {
+            let tx = c.transaction()?;
+            put_agent_tx(&tx, &def)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Install or update a flow plugin in one transaction: its record, its
+    /// agents (with their version rows) and the assignments of `pack`, which
+    /// replace every earlier one of that pack. Any failure (a name used by
+    /// another agent, say) leaves the store as it was.
+    pub async fn put_flow_plugin(
+        &self,
+        record: &PluginRecord,
+        agents: &[xherd_core::agent_def::AgentDef],
+        pack: &str,
+        rows: &[(String, xherd_core::resolve::Assignment)],
+    ) -> Result<()> {
+        let (record, agents, pack, rows) = (
+            record.clone(),
+            agents.to_vec(),
+            pack.to_string(),
+            rows.to_vec(),
+        );
+        let data = serde_json::to_string(&record.data)?;
         self.write(move |c| {
             let tx = c.transaction()?;
             tx.execute(
-                "INSERT INTO agents (id, name, archived_at, data) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(id) DO UPDATE SET name = excluded.name,
-                   archived_at = excluded.archived_at, data = excluded.data",
-                params![id, name, archived, data],
+                "INSERT INTO plugins (name, kind, source, sha, enabled, data) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, source = excluded.source,
+                   sha = excluded.sha, enabled = excluded.enabled, data = excluded.data",
+                params![
+                    record.name,
+                    record.kind,
+                    record.source,
+                    record.sha,
+                    record.enabled,
+                    data
+                ],
             )?;
-            tx.execute(
-                "INSERT INTO agent_versions (agent_id, version, at, data) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(agent_id, version) DO UPDATE SET at = excluded.at, data = excluded.data",
-                params![id, version, at, data],
-            )?;
+            for def in &agents {
+                put_agent_tx(&tx, def)?;
+            }
+            tx.execute("DELETE FROM flow_assignments WHERE pack = ?1", [&pack])?;
+            for (flow, a) in &rows {
+                tx.execute(
+                    "INSERT INTO flow_assignments (pack, flow, stage, agent_id, human)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![pack, flow, a.stage, a.agent_id, a.human as i64],
+                )?;
+            }
             tx.commit()?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Remove a flow plugin's record and every assignment and fresh-check
+    /// row of `pack`, in one transaction. The agents stay. Whether the
+    /// record existed.
+    pub async fn delete_flow_plugin(&self, name: &str, pack: &str) -> Result<bool> {
+        let (name, pack) = (name.to_string(), pack.to_string());
+        self.write(move |c| {
+            let tx = c.transaction()?;
+            tx.execute("DELETE FROM flow_assignments WHERE pack = ?1", [&pack])?;
+            tx.execute("DELETE FROM flow_fresh_checks WHERE pack = ?1", [&pack])?;
+            let n = tx.execute("DELETE FROM plugins WHERE name = ?1", [&name])?;
+            tx.commit()?;
+            Ok(n == 1)
+        })
+        .await
+    }
+
+    /// The distinct `(runtime, pack)` pairs that have install records.
+    pub async fn install_packs(&self) -> Result<Vec<(String, String)>> {
+        self.read(|c| {
+            let mut st =
+                c.prepare("SELECT DISTINCT runtime, pack FROM installs ORDER BY runtime, pack")?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
         })
         .await
     }
@@ -1502,6 +1587,112 @@ mod tests {
             archived_at: None,
             source: None,
         }
+    }
+
+    fn flow_record(sha: &str) -> PluginRecord {
+        PluginRecord {
+            name: "acme".into(),
+            kind: "flow".into(),
+            source: "https://example.com/acme.git".into(),
+            sha: Some(sha.into()),
+            enabled: true,
+            data: serde_json::json!({}),
+        }
+    }
+
+    fn assignment(stage: &str, agent: &str) -> (String, xherd_core::resolve::Assignment) {
+        (
+            "sdd".into(),
+            xherd_core::resolve::Assignment {
+                stage: stage.into(),
+                agent_id: agent.into(),
+                human: false,
+            },
+        )
+    }
+
+    /// `put_flow_plugin` writes record, agents and assignments together, and
+    /// a failing agent insert leaves all three as they were.
+    #[tokio::test]
+    async fn put_flow_plugin_is_atomic() {
+        let (_d, s) = open();
+        s.put_agent_def(&agent("own", "acme-taken", 1))
+            .await
+            .unwrap();
+        s.put_flow_plugin(
+            &flow_record("s1"),
+            &[agent("a1", "acme-architect", 1)],
+            "acme",
+            &[assignment("design", "a1")],
+        )
+        .await
+        .unwrap();
+        // The second agent reuses the name of "own": the insert fails.
+        let err = s
+            .put_flow_plugin(
+                &flow_record("s2"),
+                &[
+                    agent("a1", "acme-architect", 2),
+                    agent("a2", "acme-taken", 1),
+                ],
+                "acme",
+                &[assignment("tasks", "a2")],
+            )
+            .await;
+        assert!(err.is_err());
+        let records = s.plugin_records().await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].sha.as_deref(), Some("s1"));
+        let a1 = s.get_agent_def("a1").await.unwrap().unwrap();
+        assert_eq!(a1.version, 1);
+        assert!(s.get_agent_def("a2").await.unwrap().is_none());
+        assert_eq!(
+            s.flow_assignments("acme", "sdd").await.unwrap(),
+            [assignment("design", "a1").1]
+        );
+    }
+
+    /// Delete drops the record, the pack's assignments and fresh checks, and
+    /// keeps the agents.
+    #[tokio::test]
+    async fn delete_flow_plugin_keeps_agents() {
+        let (_d, s) = open();
+        s.put_flow_plugin(
+            &flow_record("s1"),
+            &[agent("a1", "acme-architect", 1)],
+            "acme",
+            &[assignment("design", "a1")],
+        )
+        .await
+        .unwrap();
+        s.set_flow_assignments("acme", "sdd", &[], Some(&["design".to_string()]))
+            .await
+            .unwrap();
+        assert!(s.delete_flow_plugin("acme", "acme").await.unwrap());
+        assert!(!s.delete_flow_plugin("acme", "acme").await.unwrap());
+        assert!(s.plugin_records().await.unwrap().is_empty());
+        assert!(s.flow_assignments("acme", "sdd").await.unwrap().is_empty());
+        assert!(s.flow_fresh_checks("acme", "sdd").await.unwrap().is_empty());
+        assert!(s.get_agent_def("a1").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn install_packs_lists_distinct_runtime_pack_pairs() {
+        let (_d, s) = open();
+        s.put_install("claude-code", "xherd", "a.md", "h")
+            .await
+            .unwrap();
+        s.put_install("claude-code", "xherd", "b.md", "h")
+            .await
+            .unwrap();
+        s.put_install("codex", "acme", "a.md", "h").await.unwrap();
+        assert_eq!(
+            s.install_packs().await.unwrap(),
+            [
+                ("claude-code".to_string(), "xherd".to_string()),
+                ("codex".to_string(), "acme".to_string())
+            ]
+        );
     }
 
     /// Migration 5: assignments are replaced per flow, listed per flow and
