@@ -960,6 +960,7 @@ async fn worklog_and_tokens_are_kept_per_saved_agent() {
     assert_eq!(rows[0]["ticket"], "reviewer");
     assert!(rows[0]["agentMs"].as_u64().unwrap() >= 60_000);
     assert_eq!(rows[0]["userMs"], 30_000);
+    assert_eq!(rows[0]["label"], "reviewer");
 
     // Tokens recorded under `agent:<id>` show as the agent's tokens today.
     let today = xherd_core::usage::day(t.d.clock.now());
@@ -968,4 +969,26 @@ async fn worklog_and_tokens_are_kept_per_saved_agent() {
         .await
         .unwrap();
     assert_eq!(t.d.agent("reviewer").await.unwrap().tokens_today, 1234);
+}
+
+#[tokio::test]
+async fn worklog_by_agent_labels_a_plugin_agent_without_its_prefix() {
+    let t = daemon(4).await;
+    let mut def: xherd_core::agent_def::AgentDef = serde_json::from_value(json!({
+        "name": "acme-sdd-architect",
+        "runtime": "claude-code",
+        "source": "acme-sdd",
+    }))
+    .unwrap();
+    def.id = "ag-acme".into();
+    t.d.store.put_agent_def(&def).await.unwrap();
+    let today = xherd_core::usage::day(t.d.clock.now());
+    t.d.store
+        .add_worklog(&today, "agent:ag-acme", "user", 5_000)
+        .await
+        .unwrap();
+    let v = t.d.worklog(1, true).await.unwrap();
+    let rows = v["days"][0]["tickets"].as_array().unwrap();
+    assert_eq!(rows[0]["ticket"], "acme-sdd-architect");
+    assert_eq!(rows[0]["label"], "architect");
 }

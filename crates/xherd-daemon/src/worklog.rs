@@ -108,8 +108,13 @@ impl Daemon {
         let since = day(now - i64::from(days.clamp(1, 366)) * 86_400_000);
         let rows = self.store.worklog(&since).await.map_err(io)?;
         let mut by_day: BTreeMap<String, BTreeMap<String, (u64, u64)>> = BTreeMap::new();
+        let mut labels: BTreeMap<String, String> = BTreeMap::new();
         let names: BTreeMap<String, String> = if by_agent {
             let defs = self.store.list_agent_defs().await.map_err(io)?;
+            for a in &defs {
+                let l = xherd_core::agent_def::label(&a.name, a.source.as_deref());
+                labels.insert(a.name.clone(), l.to_string());
+            }
             defs.into_iter().map(|a| (a.id, a.name)).collect()
         } else {
             BTreeMap::new()
@@ -133,7 +138,13 @@ impl Daemon {
             .map(|(d, t)| {
                 let tickets: Vec<Value> = t
                     .into_iter()
-                    .map(|(k, (a, u))| json!({"ticket": k, "agentMs": a, "userMs": u}))
+                    .map(|(k, (a, u))| {
+                        let mut row = json!({"ticket": k, "agentMs": a, "userMs": u});
+                        if let Some(l) = labels.get(&k) {
+                            row["label"] = json!(l);
+                        }
+                        row
+                    })
                     .collect();
                 json!({"day": d, "tickets": tickets})
             })
