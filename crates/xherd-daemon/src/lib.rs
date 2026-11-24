@@ -894,14 +894,14 @@ impl Daemon {
                 }));
             }
             Some("branch") => {
-                let base = a
-                    .base
-                    .as_deref()
-                    .ok_or_else(|| fail("no_base", format!("{} has no base branch", a.name)))?;
-                let mb = git
-                    .run(wd, &["merge-base", base, "HEAD"])
-                    .await
-                    .map_err(git_err)?;
+                let old = diff_sides(&a, view, commit)?.old;
+                let base = match &old {
+                    Some(Rev::MergeBase(base)) => base.as_str(),
+                    _ => unreachable!("the branch view's old side is a merge base"),
+                };
+                let mb = rev_name(&git, wd, old.as_ref().expect("checked above"))
+                    .await?
+                    .expect("a merge base always has a name");
                 // Tracked changes since the merge base (committed or not),
                 // then the files git does not know yet.
                 let mut files: Vec<String> = git
@@ -963,13 +963,10 @@ impl Daemon {
                 return Err(fail("bad_request", format!("unknown view {v:?}")));
             }
         }
-        if let (
-            Some(xherd_core::domain::Gate::Docs {
-                role: xherd_core::domain::Role::Ship,
-                ..
-            }),
-            Some(base),
-        ) = (&a.gate, &a.base)
+        if let Sides {
+            old: Some(Rev::MergeBase(base)),
+            new: Some(Rev::Head),
+        } = diff_sides(&a, None, None)?
         {
             let range = format!("{base}...HEAD");
             let files: Vec<String> = git
@@ -1021,7 +1018,10 @@ impl Daemon {
         let canon = xherd_flow::xap::doc_path(&format!("./{path}"), wd)
             .map_err(|r| fail("bad_path", r.message))?;
         let rel = xherd_flow::xap::worktree_rel(&canon);
-        let Some(rev) = diff_new_side(&a, view, commit)? else {
+        let Some(rev) = diff_sides(&a, view, commit)?.new.map(|r| match r {
+            Rev::Sha(s) => s,
+            _ => "HEAD".to_string(),
+        }) else {
             let (_, bytes) = read_worktree_file(wd, rel.clone(), path)?;
             return Ok(serde_json::json!({
                 "path": rel, "rev": "worktree",
@@ -1166,16 +1166,43 @@ fn read_worktree_file(
     Ok((abs, bytes))
 }
 
-/// The revision holding a diff's new side, or `None` for the worktree; the
-/// same view rules as `Daemon::diff`.
-fn diff_new_side(
-    a: &Job,
-    view: Option<&str>,
-    commit: Option<&str>,
-) -> Result<Option<String>, ActionError> {
+/// A revision a diff side is read from (R7c).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Rev {
+    Head,
+    Sha(String),
+    /// The first parent of a commit (none for a root commit).
+    ParentOf(String),
+    /// `git merge-base <base> HEAD`.
+    MergeBase(String),
+}
+
+/// Both sides of a diff; `None` is the worktree (new side) or no revision
+/// (old side).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Sides {
+    old: Option<Rev>,
+    new: Option<Rev>,
+}
+
+/// The sides `Daemon::diff` compares for a view (R7c), in one place so the
+/// text diff and the file reads cannot drift apart.
+fn diff_sides(a: &Job, view: Option<&str>, commit: Option<&str>) -> Result<Sides, ActionError> {
     let fail = |code: &'static str, message: String| ActionError { code, message };
+    let base = || {
+        a.base
+            .clone()
+            .ok_or_else(|| fail("no_base", format!("{} has no base branch", a.name)))
+    };
     match view {
-        Some("uncommitted" | "branch") => Ok(None),
+        Some("uncommitted") => Ok(Sides {
+            old: Some(Rev::Head),
+            new: None,
+        }),
+        Some("branch") => Ok(Sides {
+            old: Some(Rev::MergeBase(base()?)),
+            new: None,
+        }),
         Some("commit") => {
             let id = commit.ok_or_else(|| fail("bad_request", "commit=<id> is needed".into()))?;
             let c = a
@@ -1183,21 +1210,62 @@ fn diff_new_side(
                 .iter()
                 .find(|c| c.id == id)
                 .ok_or_else(|| fail("commit_unknown", format!("no commit {id}")))?;
-            Ok(c.sha.clone())
+            Ok(match &c.sha {
+                Some(sha) => Sides {
+                    old: Some(Rev::ParentOf(sha.clone())),
+                    new: Some(Rev::Sha(sha.clone())),
+                },
+                None => Sides {
+                    old: Some(Rev::Head),
+                    new: None,
+                },
+            })
         }
         Some(v) => Err(fail("bad_request", format!("unknown view {v:?}"))),
-        None => Ok(matches!(
-            (&a.gate, &a.base),
+        None => Ok(match (&a.gate, &a.base) {
             (
                 Some(xherd_core::domain::Gate::Docs {
                     role: xherd_core::domain::Role::Ship,
                     ..
                 }),
-                Some(_)
-            )
-        )
-        .then(|| "HEAD".to_string())),
+                Some(base),
+            ) => Sides {
+                old: Some(Rev::MergeBase(base.clone())),
+                new: Some(Rev::Head),
+            },
+            _ => Sides {
+                old: Some(Rev::Head),
+                new: None,
+            },
+        }),
     }
+}
+
+/// The revision git reads a side from; `None` for a root commit's old side.
+#[allow(dead_code)] // used by `Daemon::image` (T03)
+async fn rev_name(
+    git: &xherd_git::Git,
+    wd: &std::path::Path,
+    rev: &Rev,
+) -> Result<Option<String>, ActionError> {
+    let git_err = |e: xherd_git::GitError| ActionError {
+        code: "git",
+        message: e.to_string(),
+    };
+    Ok(match rev {
+        Rev::Head => Some("HEAD".to_string()),
+        Rev::Sha(sha) => Some(sha.clone()),
+        Rev::ParentOf(sha) => git
+            .run(wd, &["rev-parse", "--verify", "-q", &format!("{sha}^")])
+            .await
+            .ok()
+            .filter(|s| !s.is_empty()),
+        Rev::MergeBase(base) => Some(
+            git.run(wd, &["merge-base", base, "HEAD"])
+                .await
+                .map_err(git_err)?,
+        ),
+    })
 }
 
 pub(crate) fn workdir_of(a: &Job) -> Result<&std::path::Path, ActionError> {
