@@ -13,7 +13,7 @@
   let files = $state<PackFile[] | null>(null);
   // Keyed by runtime and path; the defaults keep the user's files.
   let picks = $state<Record<string, PackChoiceValue>>({});
-  const key = (f: PackFile) => `${f.runtime}\u0000${f.path}`;
+  const key = (f: PackFile) => `${f.pack}\u0000${f.runtime}\u0000${f.path}`;
 
   $effect(() => {
     loadPackReview().then(
@@ -32,7 +32,7 @@
 
   async function apply() {
     if (!files) return;
-    const choices: PackChoice[] = files.map((f) => ({ runtime: f.runtime, path: f.path, choice: picks[key(f)] }));
+    const choices: PackChoice[] = files.map((f) => ({ pack: f.pack, runtime: f.runtime, path: f.path, choice: picks[key(f)] }));
     try {
       await resolvePackFiles(choices);
       onclose();
