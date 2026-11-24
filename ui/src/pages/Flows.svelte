@@ -95,7 +95,7 @@
           {@const n = jobsOf(f.flow)}
           <a class="flw-item" class:on={f.pack === pack && f.flow === flowName} href={href(`/flows/${f.pack}/${f.flow}`)}>
             <b class="mono">{f.flow}</b>
-            <span class="hint">{f.stages.length} stages · {n ? `${n} job${n === 1 ? '' : 's'}` : 'not used'}</span>
+            <span class="hint">{f.source ? `plugin ${f.source} · ` : ''}{f.stages.length} stages · {n ? `${n} job${n === 1 ? '' : 's'}` : 'not used'}</span>
           </a>
         {/each}
       </nav>
@@ -107,7 +107,7 @@
         {:else}
           {@const st = view.stages[sel] ?? view.stages[0]}
           {@const i = view.stages.indexOf(st)}
-          <div class="flw-head"><b class="mono big">{flowName}</b> <span class="hint">from pack {pack}</span></div>
+          <div class="flw-head"><b class="mono big">{flowName}</b> <span class="hint">{view.source ? `from plugin ${view.source}` : `from pack ${pack}`}</span></div>
           <div class="flw-track">
             {#each view.stages as s, k (s.id)}
               {@const who = resolved[k]}

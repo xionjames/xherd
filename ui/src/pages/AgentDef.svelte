@@ -190,6 +190,9 @@
   {#if agent?.broken}
     <Callout tone="bad">Jobs cannot start from this agent: {agent.broken}. Fix its settings or switch the plugin back on.</Callout>
   {/if}
+  {#if agent?.source}
+    <Callout tone="plain">From plugin <b class="mono">{agent.source}</b>..</Callout>
+  {/if}
   {#if agent?.status === 'archived'}
     <Callout tone="plain">Archived: hidden from pickers. Its jobs keep working.
       <button class="btn" onclick={() => archive(false)}>Bring it back</button></Callout>
