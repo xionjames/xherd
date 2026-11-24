@@ -72,9 +72,12 @@ enum Cmd {
         /// Ticket: an issue URL or a key (PAY-412, #12). Its key prefixes the branch.
         #[arg(long)]
         ticket: Option<String>,
-        /// Flow of the built-in pack, or `none` (default `feature`).
+        /// Flow of the pack, or `none` (default `feature`).
         #[arg(long)]
         flow: Option<String>,
+        /// Flow pack that provides the flow: the name of a flow plugin (default: the built-in `xherd`).
+        #[arg(long)]
+        pack: Option<String>,
         /// Local repository, or a remote URL cloned into the workspace. Default: the current
         /// directory when it is inside a git repository, else the repository of an https
         /// ticket URL that a tracker reads.
@@ -463,6 +466,7 @@ fn main() -> ExitCode {
             name,
             ticket,
             flow,
+            pack,
             repo,
             base,
             autonomy,
@@ -484,7 +488,7 @@ fn main() -> ExitCode {
                 agents: stage_agent.into_iter().collect(),
                 base,
                 flow,
-                pack: None,
+                pack,
                 prompt,
                 autonomy,
                 permission_mode: mode,
@@ -1625,6 +1629,20 @@ mod tests {
         let cli = Cli::try_parse_from(argv(&["xherd", "new", "shop"])).unwrap();
         assert!(matches!(cli.cmd, Cmd::New { .. }));
         assert!(Cli::try_parse_from(argv(&["xherd", "job"])).is_err());
+    }
+
+    #[test]
+    fn new_takes_a_pack() {
+        let cli = Cli::try_parse_from([
+            "xherd", "new", "shop", "--pack", "acme-sdd", "--flow", "sdd",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.cmd,
+            Cmd::New { pack: Some(ref p), flow: Some(ref f), .. } if p == "acme-sdd" && f == "sdd"
+        ));
+        let cli = Cli::try_parse_from(["xherd", "new", "shop"]).unwrap();
+        assert!(matches!(cli.cmd, Cmd::New { pack: None, .. }));
     }
 
     #[test]
