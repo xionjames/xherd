@@ -586,3 +586,105 @@ async fn diff_files_shows_a_change_and_is_empty_when_equal() {
     let gone = g.diff_files(&a, &d.path().join("missing")).await.unwrap();
     assert!(gone.contains("-x"), "a missing file is empty: {gone}");
 }
+
+#[tokio::test]
+async fn blob_at_reads_files_and_tells_other_entries_apart() {
+    use xherd_git::BlobAt;
+
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let g = init_repo(&repo).await;
+
+    // Bytes that are not UTF-8, one over the 4 MiB exec cap, a symlink,
+    // a submodule entry and a directory.
+    let binary: Vec<u8> = (0..=255u8).cycle().take(300).collect();
+    std::fs::write(repo.join("pic.png"), &binary).unwrap();
+    let big: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(repo.join("big.bin"), &big).unwrap();
+    std::os::unix::fs::symlink("a.txt", repo.join("link")).unwrap();
+    std::fs::create_dir(repo.join("dir")).unwrap();
+    std::fs::write(repo.join("dir/x.txt"), "x").unwrap();
+    g.run(&repo, &["add", "."]).await.unwrap();
+    let head = g.run(&repo, &["rev-parse", "HEAD"]).await.unwrap();
+    g.run(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{head},sub"),
+        ],
+    )
+    .await
+    .unwrap();
+    g.run(&repo, &["commit", "--quiet", "-m", "more"])
+        .await
+        .unwrap();
+
+    let limit = 8 * 1024 * 1024;
+    assert_eq!(
+        g.blob_at(&repo, "HEAD", "nope.png", limit).await.unwrap(),
+        BlobAt::Missing
+    );
+    for p in ["link", "sub", "dir"] {
+        assert_eq!(
+            g.blob_at(&repo, "HEAD", p, limit).await.unwrap(),
+            BlobAt::NotFile,
+            "{p}"
+        );
+    }
+    match g.blob_at(&repo, "HEAD", "pic.png", limit).await.unwrap() {
+        BlobAt::Found { oid, bytes } => {
+            assert_eq!(bytes, binary);
+            let want = g.run(&repo, &["rev-parse", "HEAD:pic.png"]).await.unwrap();
+            assert_eq!(oid, want);
+        }
+        other => panic!("{other:?}"),
+    }
+    match g.blob_at(&repo, "HEAD", "big.bin", limit).await.unwrap() {
+        BlobAt::Found { bytes, .. } => assert!(bytes == big),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        g.blob_at(&repo, "HEAD", "big.bin", 1024 * 1024)
+            .await
+            .unwrap(),
+        BlobAt::TooLarge(big.len() as u64)
+    );
+    // The path is literal: a glob matches nothing.
+    assert_eq!(
+        g.blob_at(&repo, "HEAD", "*.png", limit).await.unwrap(),
+        BlobAt::Missing
+    );
+}
+
+#[tokio::test]
+async fn run_bytes_keeps_bytes_and_refuses_output_over_the_limit() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let g = init_repo(&repo).await;
+
+    let bytes = vec![0xff, 0x00, 0xfe, 0x89];
+    let out = g
+        .run_bytes(
+            &repo,
+            &["hash-object", "--stdin", "-w"],
+            1024,
+            Some(bytes.clone()),
+        )
+        .await
+        .unwrap();
+    let oid = String::from_utf8(out).unwrap().trim().to_string();
+    let back = g
+        .run_bytes(&repo, &["cat-file", "blob", &oid], 1024, None)
+        .await
+        .unwrap();
+    assert_eq!(back, bytes);
+    assert!(
+        g.run_bytes(&repo, &["cat-file", "blob", &oid], 3, None)
+            .await
+            .is_err()
+    );
+}
