@@ -136,12 +136,20 @@ export const hasAgents = (job: Pick<Job, 'agents'>): boolean => Object.keys(job.
 /** The job started with, or was attached to, agent `id`. */
 export const usesAgent = (job: Pick<Job, 'agents'>, id: string): boolean => !!job.agents?.[id];
 
+/** The short name of an agent in running and past work: the name without its
+ *  `<source>-` prefix. Mirrors `agent_def::label` in Rust. */
+export const agentLabel = (name: string, source?: string | null): string => {
+  const rest = source && name.startsWith(`${source}-`) ? name.slice(source.length + 1) : '';
+  return rest || name;
+};
+
 export const NO_AGENT_LANE = 'No agent';
 
 /** The group of a job when jobs are grouped by agent (Herd `?group=agent`,
  *  Board `?lanes=agent-def`): the snapshot's name, else `No agent`. */
 export function agentLane(job: Pick<Job, 'agents' | 'currentAgent'>): string {
-  return jobAgent(job)?.name ?? NO_AGENT_LANE;
+  const a = jobAgent(job);
+  return a ? agentLabel(a.name, a.source) : NO_AGENT_LANE;
 }
 
 /** Lane names in name order, `No agent` last. */

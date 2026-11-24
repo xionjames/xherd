@@ -101,6 +101,8 @@ export interface JobAgent {
   id: string;
   name: string;
   version: number;
+  /** The flow plugin that provides the agent; its name carries a `<source>-` prefix. */
+  source?: string;
   instructions?: string;
   sensitivePaths?: string[];
   maxDiffLines?: number;
@@ -130,6 +132,8 @@ export interface AgentDef {
   name: string;
   description: string;
   version: number;
+  /** The flow plugin that provides the agent; its name carries a `<source>-` prefix. */
+  source?: string;
   runtime: string;
   models?: Record<string, string>;
   /** Used once, at job creation, when `runtime` is switched off (R36). */
@@ -265,7 +269,8 @@ export interface ActionsView { actions: JobAction[]; portBase?: number; saveOffe
 
 /** `label`: the pack's own name for the stage ("Fix"), when it sets one. */
 export interface StageInfo { id: string; role: Role; class: string; gate: boolean; label?: string }
-export interface FlowInfo { pack: string; flow: string; stages: StageInfo[] }
+/** `source`: the plugin that provides the pack (absent for the built-in); `selectable`: a job can start on it. */
+export interface FlowInfo { pack: string; flow: string; stages: StageInfo[]; source?: string | null; selectable?: boolean }
 
 export interface PluginInfo {
   name: string;
@@ -335,6 +340,29 @@ export interface PluginPreview {
   /** Every command the plugin declares. */
   runs?: { what: string; argv: string[] }[];
   warning?: string;
+  /** A flow plugin: what it brings (R5). */
+  flow?: FlowPluginPreview;
+}
+
+export interface FlowPluginPreview {
+  pack: string;
+  memoryNote: 'required' | 'off' | string;
+  flows: { flow: string; stages: { id: string; role: Role; class: string; gate: boolean }[] }[];
+  agents: PluginAgentPreview[];
+  /** Saved agents of this plugin that the new version no longer has. */
+  archived: string[];
+  assignments: { flow: string; stage: string; agent: string; human: boolean }[];
+  assignmentChanges: { flow: string; stage: string; from: string; to: string | null }[];
+  files: { runtime: string; paths: string[] }[];
+  inUseBy: string | null;
+}
+
+export interface PluginAgentPreview {
+  name: string;
+  savedName: string;
+  state: 'new' | 'taken' | 'reclaimed' | 'overwritten' | 'unchanged';
+  risky: string[];
+  issues: string[];
 }
 
 export interface PluginChoice { path: string; name: string; kind?: string | null; error?: string }
@@ -426,6 +454,7 @@ export interface Check {
 
 /** A pack file waiting for a decision (`GET /install/review`): edited or obsolete. */
 export interface PackFile {
+  pack: string;
   runtime: string;
   path: string;
   state: 'edited' | 'obsolete';
@@ -437,6 +466,8 @@ export type PackChoiceValue = 'use-new' | 'keep-mine' | 'remove' | 'keep';
 
 /** One decision of `POST /install/resolve`. */
 export interface PackChoice {
+  /** Absent means the built-in pack. */
+  pack?: string;
   runtime: string;
   path: string;
   choice: PackChoiceValue;
@@ -557,6 +588,6 @@ export interface FlowStageView {
   /** The stage may have the check (a spec or design stage with a documents gate). */
   freshCheckAllowed: boolean;
 }
-export interface FlowView { pack: string; flow: string; stages: FlowStageView[] }
+export interface FlowView { pack: string; flow: string; stages: FlowStageView[]; source?: string | null }
 /** A row of `PUT /flows/{pack}/{flow}/assignments`. */
 export interface AssignmentRow { stage: string; agentId: string; human: boolean }

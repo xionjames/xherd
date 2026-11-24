@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentFor,
-  FORM_DEFAULTS, agentLane, agentLaneOrder, canMarkDone, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
+  FORM_DEFAULTS, agentLabel, agentLane, agentLaneOrder, canMarkDone, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
   profileMarks, slugify, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
 } from './agents';
 import type { AgentDef, AgentView, Job } from './types';
@@ -101,6 +101,20 @@ describe('versionDiff', () => {
   it('shows the fallback runtime', () => {
     const d = versionDiff(def(), def({ fallbackRuntime: 'opencode' }));
     expect(d).toEqual([{ field: 'fallbackRuntime', label: 'Fallback runtime', from: '', to: 'opencode' }]);
+  });
+});
+
+describe('agentLabel', () => {
+  it('cuts the source prefix and keeps anything else', () => {
+    expect(agentLabel('acme-sdd-architect', 'acme-sdd')).toBe('architect');
+    expect(agentLabel('acme-sdd-architect')).toBe('acme-sdd-architect');
+    expect(agentLabel('acme-sdd', 'acme-sdd')).toBe('acme-sdd');
+    expect(agentLabel('acme-sdd-', 'acme-sdd')).toBe('acme-sdd-');
+    expect(agentLabel('other-architect', 'acme-sdd')).toBe('other-architect');
+  });
+  it('labels the lane of a plugin agent', () => {
+    const job = { agents: { x: { id: 'x', name: 'acme-sdd-architect', version: 1, source: 'acme-sdd' } }, currentAgent: 'x' };
+    expect(agentLane(job)).toBe('architect');
   });
 });
 
