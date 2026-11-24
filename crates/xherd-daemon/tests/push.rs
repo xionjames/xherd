@@ -233,3 +233,137 @@ async fn without_a_tracking_ref_no_commit_has_a_flag() {
     // Nothing was fetched or pushed behind the user's back.
     assert!(git(&t.bare(), &["branch", "--list", "SC-1"]).is_empty());
 }
+
+/// Stop the job and wait until it is no longer running.
+async fn stopped(t: &T, seq: u64) {
+    stop(t, seq).await;
+    for _ in 0..200 {
+        if get(t).await.status != Status::Running {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("the job never stopped");
+}
+
+async fn pushed_flags(t: &T) -> Vec<Option<bool>> {
+    get(t).await.commits.iter().map(|c| c.pushed).collect()
+}
+
+async fn push_events(t: &T) -> usize {
+    t.d.store
+        .events(&t.id, 100)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| e.kind == "user.push")
+        .count()
+}
+
+async fn refusal(t: &T) -> &'static str {
+    t.d.push("SC-1").await.unwrap_err().code
+}
+
+#[tokio::test]
+async fn push_sends_the_branch_and_marks_every_row() {
+    let t = setup().await;
+    git(
+        &t.wt(),
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{}:refs/heads/SC-1", t.shas[0]),
+        ],
+    );
+    stopped(&t, 1).await;
+    let got = pushed_after_stop(&t, 2, [Some(true), Some(false)]).await;
+    assert_eq!(got, vec![Some(true), Some(false)]);
+
+    t.d.push("SC-1").await.unwrap();
+    assert_eq!(git(&t.bare(), &["rev-parse", "SC-1"]), t.shas[1]);
+    for _ in 0..200 {
+        if pushed_flags(&t).await == [Some(true), Some(true)] {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(pushed_flags(&t).await, vec![Some(true), Some(true)]);
+    let ev =
+        t.d.store
+            .events(&t.id, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "user.push")
+            .expect("user.push event");
+    assert!(format!("{:?}", ev.payload).contains(&t.shas[1]));
+}
+
+#[tokio::test]
+async fn a_running_job_cannot_push() {
+    let t = setup().await;
+    assert_eq!(refusal(&t).await, "not_stopped");
+    assert!(git(&t.bare(), &["branch", "--list", "SC-1"]).is_empty());
+    assert_eq!(push_events(&t).await, 0);
+}
+
+#[tokio::test]
+async fn without_an_origin_remote_nothing_is_pushed() {
+    let t = setup().await;
+    stopped(&t, 1).await;
+    git(&t.repo(), &["remote", "remove", "origin"]);
+    assert_eq!(refusal(&t).await, "no_origin");
+    assert!(git(&t.bare(), &["branch", "--list", "SC-1"]).is_empty());
+    assert_eq!(push_events(&t).await, 0);
+}
+
+#[tokio::test]
+async fn nothing_to_push_is_refused() {
+    let t = setup().await;
+    git(&t.wt(), &["push", "-q", "origin", "SC-1"]);
+    stopped(&t, 1).await;
+    assert_eq!(refusal(&t).await, "nothing_to_push");
+    assert_eq!(push_events(&t).await, 0);
+}
+
+#[tokio::test]
+async fn a_refused_push_leaves_the_job_unchanged() {
+    let t = setup().await;
+    git(
+        &t.wt(),
+        &[
+            "push",
+            "-q",
+            "origin",
+            &format!("{}:refs/heads/SC-1", t.shas[0]),
+        ],
+    );
+    // Someone else moved origin's branch to a commit this one does not have.
+    let other = t.ws.path().join("other");
+    git(
+        t.ws.path(),
+        &["clone", "-q", t.bare().to_str().unwrap(), "other"],
+    );
+    git(&other, &["config", "user.name", "o"]);
+    git(&other, &["config", "user.email", "o@o"]);
+    git(
+        &other,
+        &["checkout", "-q", "-b", "elsewhere", "origin/main"],
+    );
+    std::fs::write(other.join("x.txt"), "x").unwrap();
+    git(&other, &["add", "x.txt"]);
+    git(&other, &["commit", "-q", "-m", "x"]);
+    git(
+        &other,
+        &["push", "-q", "--force", "origin", "elsewhere:SC-1"],
+    );
+    let theirs = git(&t.bare(), &["rev-parse", "SC-1"]);
+
+    let got = pushed_after_stop(&t, 1, [Some(true), Some(false)]).await;
+    assert_eq!(got, vec![Some(true), Some(false)]);
+    assert_eq!(refusal(&t).await, "push_failed");
+    assert_eq!(git(&t.bare(), &["rev-parse", "SC-1"]), theirs);
+    assert_eq!(pushed_flags(&t).await, vec![Some(true), Some(false)]);
+    assert_eq!(push_events(&t).await, 0);
+}

@@ -2013,6 +2013,10 @@ async fn agent_action(
         let job = d.set_origin(&id, &url).await?;
         return Ok(Json(json!({"job": job})));
     }
+    if action == "push" {
+        let job = d.push(&id).await?;
+        return Ok(Json(json!({"job": job})));
+    }
     if action == "finish-local" {
         let job = d.finish_local(&id).await?;
         return Ok(Json(json!({"job": job})));

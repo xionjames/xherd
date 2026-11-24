@@ -132,6 +132,12 @@ pub enum UserAction {
     /// End a job that stopped without a remote (R10). `Daemon::finish_local`
     /// merged its branch into the base checkout first.
     FinishLocal,
+    /// The branch was pushed to `origin` (R5): log `user.push` with the sha
+    /// that went out and check the push status again. `Daemon::push` ran git
+    /// first.
+    Pushed {
+        head: String,
+    },
     /// Run an action of the job (R9, R14): `approve` is the user's allowance
     /// of its exact command; `port_base` is filled in by the supervisor.
     ActionRun {
@@ -2840,6 +2846,17 @@ impl Actor {
                 self.job.pause_requested_at = None;
                 self.job.fire(Trigger::MarkDone, now);
                 "user.finish-local"
+            }
+            UserAction::Pushed { head } => {
+                if self.job.status == Status::Running {
+                    return Err(refuse(
+                        "not_stopped",
+                        format!("{} is running", self.job.name),
+                    ));
+                }
+                payload = Some(json!({"sha": head}));
+                self.check_branch_commits();
+                "user.push"
             }
             UserAction::ActionRun {
                 id,
