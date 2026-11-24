@@ -3,7 +3,7 @@
 // five flows, sixteen jobs in three repositories). No daemon, no tmux, nothing real.
 //   pnpm -C ui build && node scripts/demo/server.mjs [port]      (default 4811)
 import http from 'node:http'; import fs from 'node:fs'; import path from 'node:path'; import crypto from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath } from 'node:url'; import zlib from 'node:zlib';
 import * as C from './content.mjs';
 
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../ui/dist');
@@ -131,6 +131,47 @@ const flowView = (flow) => ({ pack: 'xherd', flow, stages: FLOWS[flow].map((s, i
 const docsOf = (j) => (j.name === 'coupon-codes' ? ['design.md', 'memory.md'] : j.name === 'invoice-pdf' ? ['spec.md', 'memory.md'] : []);
 const textOf = (p) => (p.endsWith('design.md') ? C.design : p.endsWith('spec.md') ? C.spec : p.endsWith('memory.md') ? C.memory : '');
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
+// Image fixtures for the by-hand check of the image preview: a 1x1 PNG per colour and an SVG, each with its blob id.
+const png = (rgb) => { const crc = (b) => { let c, x = ~0; for (const v of b) { c = (x ^ v) & 255; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; x = (x >>> 8) ^ c; } return ~x >>> 0; };
+  const ch = (t, d) => { const b = Buffer.concat([Buffer.from(t), d]); const o = Buffer.alloc(4), c = Buffer.alloc(4); o.writeUInt32BE(d.length); c.writeUInt32BE(crc(b)); return Buffer.concat([o, b, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(1, 0); ihdr.writeUInt32BE(1, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ch('IHDR', ihdr), ch('IDAT', zlib.deflateSync(Buffer.from([0, ...rgb]))), ch('IEND', Buffer.alloc(0))]); };
+const IMAGES = {
+  'docs/img/logo.png': { type: 'image/png', old: png([30, 90, 200]), new: png([240, 120, 30]) },
+  'docs/img/chart.png': { type: 'image/png', new: png([40, 160, 90]) },
+  'docs/img/banner.png': { type: 'image/png', old: png([120, 120, 120]), new: png([120, 120, 120]) },
+  'docs/img/mark.svg': { type: 'image/svg+xml', new: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#1e5ac8"/></svg>') },
+};
+const blobOf = (b) => crypto.createHash('sha1').update(b).digest('hex').slice(0, 7);
+const imageOf = (p, side) => { const i = IMAGES[p.replace(/^\.\//, '')]; return i && (i[side] ?? (side === 'old' ? undefined : i.new)); };
+const imageDiff = () => {
+  const l = IMAGES['docs/img/logo.png'], c = IMAGES['docs/img/chart.png'], b = IMAGES['docs/img/banner.png'];
+  return `diff --git a/docs/img/logo.png b/docs/img/logo.png
+index ${blobOf(l.old)}..${blobOf(l.new)} 100644
+Binary files a/docs/img/logo.png and b/docs/img/logo.png differ
+diff --git a/docs/img/chart.png b/docs/img/chart.png
+new file mode 100644
+index 0000000..${blobOf(c.new)}
+Binary files /dev/null and b/docs/img/chart.png differ
+diff --git a/docs/img/old-banner.png b/docs/img/banner.png
+similarity index 100%
+rename from docs/img/old-banner.png
+rename to docs/img/banner.png
+index ${blobOf(b.old)}..${blobOf(b.new)}
+diff --git a/docs/README.md b/docs/README.md
+new file mode 100644
+index 0000000..1a2b3c4
+--- /dev/null
++++ b/docs/README.md
+@@ -0,0 +1,5 @@
++# Export
++
++![Local logo](img/logo.png)
++
++![Remote image](https://example.com/remote.png)
+`;
+};
+const README = '# Export\n\n![Local logo](img/logo.png)\n\n![Remote image](https://example.com/remote.png)\n';
 const events = [['stage.enter', { stage: 'implement' }], ['task.start', { task: 'T03' }], ['commit.propose', { id: 'C02' }], ['gate.open', { stage: 'design' }], ['approval', { gate: 'spec', actor: 'user' }], ['stage.enter', { stage: 'spec' }]].map(([kind, payload], i) => ({ id: i + 1, kind, payload, at: ago(5 + i * 9) }));
 
 let packResolved = false;
@@ -158,7 +199,9 @@ const srv = http.createServer((q, r) => {
     if ((m = k.match(/^\/flows\/[^/]+\/([^/]+)$/))) return json(r, flowView(m[1]));
     if ((m = k.match(/^\/jobs\/([^/]+)\/docs$/))) return json(r, { docs: docsOf(jobById[m[1]] ?? {}) });
     if ((m = k.match(/^\/jobs\/([^/]+)\/file$/))) { const p = url.searchParams.get('path') ?? ''; const t = textOf(p); return json(r, { path: p, text: t, sha256: sha(t), reviewed: null }); }
-    if ((m = k.match(/^\/jobs\/([^/]+)\/diff$/))) { const j = jobById[m[1]]; const g = j?.gate; const files = g?.kind === 'commit' ? g.files : []; return json(r, { job: m[1], head: 'a1b2c3d', commit: g?.kind === 'commit' ? g : undefined, view: 'commit', files, others: [], diff: C.diff }); }
+    if ((m = k.match(/^\/jobs\/([^/]+)\/diff$/))) { const j = jobById[m[1]]; const g = j?.gate; const files = g?.kind === 'commit' ? g.files : []; return json(r, { job: m[1], head: 'a1b2c3d', commit: g?.kind === 'commit' ? g : undefined, view: 'commit', files: files.length ? [...files, 'docs/img/logo.png', 'docs/img/chart.png', 'docs/img/banner.png', 'docs/README.md'] : files, others: [], diff: files.length ? C.diff + imageDiff() : C.diff }); }
+    if ((m = k.match(/^\/jobs\/([^/]+)\/diff\/source$/))) { const p = url.searchParams.get('path') ?? ''; return json(r, { path: p, rev: 'a1b2c3d', text: p.endsWith('README.md') ? README : '' }); }
+    if ((m = k.match(/^\/jobs\/([^/]+)\/image$/))) { const p = url.searchParams.get('path') ?? ''; const side = url.searchParams.get('side') === 'old' ? 'old' : 'new'; const b = imageOf(p, side); if (!b) { r.statusCode = 404; return json(r, { error: { code: 'not_found', message: 'no such image' } }); } r.setHeader('content-type', IMAGES[p.replace(/^\.\//, '')].type); r.setHeader('X-Xherd-Blob', blobOf(b)); return r.end(b); }
     if ((m = k.match(/^\/jobs\/([^/]+)\/actions$/))) return json(r, actionsView(m[1]));
     if ((m = k.match(/^\/jobs\/([^/]+)\/actions\/([^/]+)\/log$/))) return json(r, { log: C.actionLog, last: (ACTIONS[m[1]] ?? []).find((x) => x.def.id === m[2])?.last ?? null });
     if ((m = k.match(/^\/jobs\/([^/]+)\/actions\//)) && q.method !== 'GET') return json(r, { job: { ...(jobById[m[1]] ?? {}), events } });
