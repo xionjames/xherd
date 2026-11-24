@@ -120,6 +120,9 @@ pub struct StageView {
 pub struct FlowView {
     pub pack: String,
     pub flow: String,
+    /// The plugin that provides the pack; absent for the built-in one (R15).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub stages: Vec<StageView>,
 }
 
@@ -733,6 +736,7 @@ impl Daemon {
         Ok(FlowView {
             pack: pack.to_string(),
             flow: flow.to_string(),
+            source: self.pack_sources.get(pack).and_then(|s| s.plugin.clone()),
             stages,
         })
     }

@@ -1678,3 +1678,17 @@ async fn a_finished_job_of_a_removed_pack_still_loads_after_a_restart() {
             .any(|j| j.name == "sdd-1")
     );
 }
+
+#[tokio::test]
+async fn flows_name_the_plugin_that_provides_the_pack() {
+    let a = acme().await;
+    let flows = a.t.d.flows().await.unwrap();
+    let source_of = |pack: &str| {
+        let f = flows.iter().find(|f| f.pack == pack).unwrap();
+        serde_json::to_value(f).unwrap().get("source").cloned()
+    };
+    assert_eq!(source_of("acme-sdd"), Some(json!("acme-sdd")));
+    assert_eq!(source_of("xherd"), None);
+    assert!(a.t.d.pack_selectable("acme-sdd"));
+    assert!(a.t.d.pack_selectable("xherd"));
+}
