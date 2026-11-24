@@ -26,6 +26,7 @@ pub mod git_access;
 pub mod install;
 pub mod notifier;
 pub mod open_in;
+pub mod packs;
 mod plugin_dirs;
 pub mod plugin_install;
 pub mod pr_round;
@@ -209,6 +210,10 @@ pub struct Daemon {
     pub store: Store,
     pub plugins: Arc<Registry>,
     pub packs: Arc<BTreeMap<String, Pack>>,
+    /// Where each loaded pack comes from, with its files (R11).
+    pub pack_sources: Arc<BTreeMap<String, packs::PackSource>>,
+    /// Plugins whose pack did not load (plugin, error).
+    pub pack_errors: Arc<Vec<(String, String)>>,
     pub hub: Hub,
     pub sup: SupervisorHandle,
     /// What the actors read; replaced by `save_config` (live settings).
@@ -351,10 +356,15 @@ impl Daemon {
             })
             .collect();
 
-        let packs = Arc::new(BTreeMap::from([(
-            xherd_flow::BUILTIN.to_string(),
-            xherd_flow::builtin(),
-        )]));
+        // Without an install env (tests) the R12 rule is checked under a
+        // placeholder HOME: it is structural, no real path is read.
+        let (packs, pack_sources, pack_errors) = match &opts.install_env {
+            Some(env) => packs::load_packs(&plugins, &**env),
+            None => packs::load_packs(&plugins, &|k| {
+                (k == "HOME").then(|| "/xherd-check-home".to_string())
+            }),
+        };
+        let packs = Arc::new(packs);
         let hosts = host_plugins(&plugins, &paths, &config, &secrets, &opts.xherd_bin);
         let hub = support::hub();
         let pr_poll_override = opts.pr_poll;
@@ -417,6 +427,8 @@ impl Daemon {
             store,
             plugins: Arc::new(plugins),
             packs,
+            pack_sources: Arc::new(pack_sources),
+            pack_errors: Arc::new(pack_errors),
             hub,
             sup,
             settings,
