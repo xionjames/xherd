@@ -131,6 +131,29 @@ async fn write(path: &Path, text: &str) -> Result<(), ActionError> {
         .map_err(|e| refuse("io", format!("{}: {e}", path.display())))
 }
 
+/// The sha256 of the file on disk, `None` when it is not there.
+async fn disk_sha(path: &Path) -> Option<String> {
+    xherd_core::runner::read_file(path)
+        .await
+        .ok()
+        .flatten()
+        .map(|b| content_sha256(&b))
+}
+
+/// A recorded file the pack no longer ships (or whose pack is gone).
+async fn obsolete_file(pack: &str, runtime: &str, r: xherd_store::InstallRow) -> PackFile {
+    let cur = disk_sha(Path::new(&r.path)).await;
+    PackFile {
+        pack: pack.into(),
+        runtime: runtime.into(),
+        edited: cur.is_some_and(|c| c != r.sha256),
+        path: r.path,
+        state: FileState::Obsolete,
+        text: String::new(),
+        new: String::new(),
+    }
+}
+
 impl Daemon {
     /// Every file of `pack` for `runtime`, classified, then the obsolete ones
     /// (recorded, no longer in the pack), by path. A plugin pack first passes
@@ -168,18 +191,11 @@ impl Daemon {
             .installs(runtime, name)
             .await
             .map_err(|e| refuse("store", e.to_string()))?;
-        let disk = |path: std::path::PathBuf| async move {
-            xherd_core::runner::read_file(&path)
-                .await
-                .ok()
-                .flatten()
-                .map(|b| content_sha256(&b))
-        };
         let mut out = Vec::new();
         for f in plan {
             let path = f.path.to_string_lossy().into_owned();
             let new = content_sha256(f.text.as_bytes());
-            let cur = disk(f.path).await;
+            let cur = disk_sha(&f.path).await;
             let rec = records.iter().find(|r| r.path == path);
             let state = classify(
                 &new,
@@ -201,16 +217,7 @@ impl Daemon {
             if out.iter().any(|f| f.path == r.path) {
                 continue;
             }
-            let cur = disk(r.path.clone().into()).await;
-            out.push(PackFile {
-                pack: name.into(),
-                runtime: runtime.into(),
-                edited: cur.is_some_and(|c| c != r.sha256),
-                path: r.path,
-                state: FileState::Obsolete,
-                text: String::new(),
-                new: String::new(),
-            });
+            out.push(obsolete_file(name, runtime, r).await);
         }
         Ok(out)
     }
@@ -243,19 +250,118 @@ impl Daemon {
     }
 
     /// The files that need the user: edited ones (kept, new text beside them)
-    /// and obsolete ones, for every runtime of the pack (R5, R6).
+    /// and obsolete ones, for every loaded pack and runtime it supports, then
+    /// the files recorded under a pack that is no longer loaded (a removed
+    /// plugin's): all obsolete (R5, R6, R10).
     pub async fn pack_review(
         &self,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<PackFile>, ActionError> {
         let mut out = Vec::new();
-        for rt in self.pack_runtimes() {
-            out.extend(
-                self.pack_files(xherd_flow::BUILTIN, &rt, env)
-                    .await?
-                    .into_iter()
-                    .filter(|f| matches!(f.state, FileState::Edited | FileState::Obsolete)),
-            );
+        for (name, p) in self.packs.iter() {
+            let runtimes = p.install.keys().filter(|r| self.runtime_on(r));
+            for rt in runtimes {
+                out.extend(
+                    self.pack_files(name, rt, env)
+                        .await?
+                        .into_iter()
+                        .filter(|f| matches!(f.state, FileState::Edited | FileState::Obsolete)),
+                );
+            }
+        }
+        let store = |e: xherd_store::StoreError| refuse("store", e.to_string());
+        for (rt, pack) in self.store.install_packs().await.map_err(store)? {
+            if self.packs.contains_key(&pack) {
+                continue;
+            }
+            for r in self.store.installs(&rt, &pack).await.map_err(store)? {
+                out.push(obsolete_file(&pack, &rt, r).await);
+            }
+        }
+        Ok(out)
+    }
+
+    /// A runtime that is switched on and installed.
+    fn runtime_on(&self, runtime: &str) -> bool {
+        self.plugin_enabled(runtime) && self.plugins.get(runtime).is_some()
+    }
+
+    /// The folder `pack`'s files for `runtime` live under, below which empty
+    /// folders are pruned. A pack that is no longer loaded has none of its own:
+    /// the built-in pack's runtime folder stands in.
+    fn install_root_of(
+        &self,
+        pack: &str,
+        runtime: &str,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<std::path::PathBuf, ActionError> {
+        match self.packs.get(pack) {
+            Some(p) => p
+                .install_root(runtime, env)
+                .map_err(|e| refuse("install", e)),
+            None => self.runtime_root(runtime, env),
+        }
+    }
+
+    /// The runtime's own folder for commands (`~/.claude/commands`): where the
+    /// built-in pack and, by R12, every plugin pack install under.
+    fn runtime_root(
+        &self,
+        runtime: &str,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<std::path::PathBuf, ActionError> {
+        let builtin = self
+            .packs
+            .get(xherd_flow::BUILTIN)
+            .ok_or_else(|| refuse("unknown_pack", "no built-in pack"))?;
+        xherd_flow::install::runtime_folder(builtin, runtime, env).map_err(|e| refuse("install", e))
+    }
+
+    /// Delete the files `pack` installed that the user did not edit and
+    /// forget their rows (a plugin being removed, R10), pruning the pack's
+    /// emptied folders but never the runtime's own. An edited file stays on
+    /// disk with its row, so [`Daemon::pack_review`] lists it as obsolete; a
+    /// file that is already gone only loses its row.
+    pub async fn remove_pack_files(
+        &self,
+        pack: &str,
+        env: &(dyn Fn(&str) -> Option<String> + Sync),
+    ) -> Result<Vec<Installed>, ActionError> {
+        let store = |e: xherd_store::StoreError| refuse("store", e.to_string());
+        let mut out = Vec::new();
+        for (rt, name) in self.store.install_packs().await.map_err(store)? {
+            if name != pack {
+                continue;
+            }
+            let root = self.runtime_root(&rt, env)?;
+            for r in self.store.installs(&rt, pack).await.map_err(store)? {
+                let path = Path::new(&r.path);
+                if !path.starts_with(&root) {
+                    return Err(refuse(
+                        "install",
+                        format!("{}: outside {}", r.path, root.display()),
+                    ));
+                }
+                let action = match disk_sha(path).await {
+                    Some(cur) if cur != r.sha256 => InstallAction::Obsolete,
+                    _ => {
+                        // A file already gone is fine; its folder is still pruned.
+                        xherd_core::runner::remove_file(path, &root)
+                            .await
+                            .map_err(|e| refuse("io", format!("{}: {e}", r.path)))?;
+                        self.store
+                            .delete_install(&rt, pack, &r.path)
+                            .await
+                            .map_err(store)?;
+                        InstallAction::Removed
+                    }
+                };
+                out.push(Installed {
+                    runtime: rt.clone(),
+                    path: r.path,
+                    action,
+                });
+            }
         }
         Ok(out)
     }
@@ -290,12 +396,7 @@ impl Daemon {
         let store = |e: xherd_store::StoreError| refuse("store", e.to_string());
         for (f, choice) in picked {
             let (rt, name) = (f.runtime.as_str(), f.pack.as_str());
-            let root = self
-                .packs
-                .get(name)
-                .ok_or_else(|| refuse("unknown_pack", format!("no pack {name}")))?
-                .install_root(rt, env)
-                .map_err(|e| refuse("install", e))?;
+            let root = self.install_root_of(name, rt, env)?;
             let path = Path::new(&f.path);
             let side = format!("{}.xherd-new", f.path);
             let gone = |e: std::io::Error, p: &str| refuse("io", format!("{p}: {e}"));
@@ -370,7 +471,7 @@ impl Daemon {
                 .install
                 .keys()
                 .map(String::as_str)
-                .filter(|r| self.plugin_enabled(r) && self.plugins.get(r).is_some())
+                .filter(|r| self.runtime_on(r))
                 .collect(),
         };
         let mut out = Vec::new();

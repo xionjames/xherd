@@ -510,3 +510,105 @@ async fn a_path_recorded_under_another_pack_is_refused() {
     assert_eq!(e.code, "path_taken");
     assert!(!taken.exists());
 }
+
+#[tokio::test]
+async fn remove_pack_files_deletes_unedited_and_prunes_the_folder() {
+    let home = home_with_acme("${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md");
+    let user = tempfile::tempdir().unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let dir = user.path().join(".claude/commands/acme-sdd");
+    d.install(Some("claude-code"), Some("acme-sdd"), &env, false)
+        .await
+        .unwrap();
+    let start = dir.join("start.md");
+    std::fs::write(&start, "my start\n").unwrap();
+    let gone = dir.join("plan.md");
+    std::fs::remove_file(&gone).unwrap();
+
+    // The edited file stays with its row and is listed as obsolete once the
+    // pack is no longer loaded; the others are deleted with their rows.
+    let done = d.remove_pack_files("acme-sdd", &env).await.unwrap();
+    assert_eq!(done.len(), ACME_PROMPTS.len());
+    let kept: Vec<_> = done
+        .iter()
+        .filter(|f| f.action == InstallAction::Obsolete)
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert!(kept[0].path.ends_with("/start.md"));
+    assert_eq!(std::fs::read_to_string(&start).unwrap(), "my start\n");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let rows = d.store.installs("claude-code", "acme-sdd").await.unwrap();
+    assert_eq!(rows.len(), 1);
+
+    // Nothing edited: the folder goes too, but never the runtime's folder.
+    std::fs::remove_file(&start).unwrap();
+    d.remove_pack_files("acme-sdd", &env).await.unwrap();
+    assert!(!dir.exists());
+    assert!(user.path().join(".claude/commands").is_dir());
+    assert!(
+        d.store
+            .installs("claude-code", "acme-sdd")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn files_of_a_pack_that_is_not_loaded_are_reviewed_as_obsolete() {
+    let home = tempfile::tempdir().unwrap();
+    let user = tempfile::tempdir().unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let d = Daemon::start(home_with_config(&home), o).await.unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let dir = user.path().join(".claude/commands/gone-pack");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (kept, edited) = (dir.join("a.md"), dir.join("b.md"));
+    std::fs::write(&kept, "a\n").unwrap();
+    std::fs::write(&edited, "mine\n").unwrap();
+    for (p, text) in [(&kept, "a\n"), (&edited, "b\n")] {
+        d.store
+            .put_install(
+                "claude-code",
+                "gone-pack",
+                &p.to_string_lossy(),
+                &content_sha256(text.as_bytes()),
+            )
+            .await
+            .unwrap();
+    }
+
+    let review = d.pack_review(&env).await.unwrap();
+    assert_eq!(review.len(), 2, "{review:?}");
+    assert!(review.iter().all(|f| f.pack == "gone-pack"));
+    assert!(review.iter().all(|f| f.state == FileState::Obsolete));
+    let flag = |p: &std::path::Path| {
+        review
+            .iter()
+            .find(|f| f.path == p.to_string_lossy())
+            .unwrap()
+            .edited
+    };
+    assert!(!flag(&kept) && flag(&edited));
+
+    // The user can resolve them under their own pack.
+    let pick = |p: &std::path::Path, c: Choice| PackChoice {
+        pack: "gone-pack".into(),
+        runtime: "claude-code".into(),
+        path: p.to_string_lossy().into_owned(),
+        choice: c,
+    };
+    d.resolve_pack_files(
+        &[pick(&kept, Choice::Remove), pick(&edited, Choice::Keep)],
+        &env,
+    )
+    .await
+    .unwrap();
+    assert!(!kept.exists());
+    assert_eq!(std::fs::read_to_string(&edited).unwrap(), "mine\n");
+    assert!(d.pack_review(&env).await.unwrap().is_empty());
+}
