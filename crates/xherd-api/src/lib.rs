@@ -77,6 +77,7 @@ pub fn router(d: Daemon) -> Router {
             axum::routing::put(put_pr_decisions),
         )
         .route("/api/v1/jobs/{id}/file", get(file))
+        .route("/api/v1/jobs/{id}/image", get(image))
         .route(
             "/api/v1/jobs/{id}/viewed",
             get(get_viewed).post(post_viewed),
@@ -295,6 +296,7 @@ impl From<ActionError> for ApiError {
             "not_fixable" => StatusCode::NOT_FOUND,
             "no_such_doc" | "no_such_file" => StatusCode::NOT_FOUND,
             "too_large" => StatusCode::PAYLOAD_TOO_LARGE,
+            "not_an_image" => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "io" | "git" | "install" => StatusCode::INTERNAL_SERVER_ERROR,
             "store" | "driver" | "ledger" | "flow" => StatusCode::INTERNAL_SERVER_ERROR,
             _ => StatusCode::CONFLICT,
@@ -1575,6 +1577,52 @@ async fn file(
     Query(q): Query<FileQuery>,
 ) -> ApiResult<Json<Value>> {
     Ok(Json(d.doc(&id, &q.path).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImageQuery {
+    path: String,
+    side: Option<String>,
+    view: Option<String>,
+    commit: Option<String>,
+}
+
+/// `GET /jobs/:id/image?path=./a.png[&side=old|new][&view][&commit]` (R1,
+/// R10, R11, R12): the raw bytes of one image (`Daemon::image`). The type
+/// comes from the extension, and the headers lock the answer down: even an
+/// SVG opened as a page runs nothing, loads nothing and is never cached. No
+/// CORS header: only the UI's own origin reads it.
+async fn image(
+    _: User,
+    State(d): State<Daemon>,
+    Path(id): Path<String>,
+    Query(q): Query<ImageQuery>,
+) -> ApiResult<Response> {
+    let img = d
+        .image(
+            &id,
+            &q.path,
+            q.side.as_deref(),
+            q.view.as_deref(),
+            q.commit.as_deref(),
+        )
+        .await?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, img.mime.to_string()),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "sandbox; default-src 'none'; style-src 'unsafe-inline'".to_string(),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (header::REFERRER_POLICY, "no-referrer".to_string()),
+            (header::HeaderName::from_static("x-xherd-blob"), img.blob),
+        ],
+        img.bytes,
+    )
+        .into_response())
 }
 
 /// `POST /jobs/:id/files` (R1, R3, R5): store the files of one multipart
