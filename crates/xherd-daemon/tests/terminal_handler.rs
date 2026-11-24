@@ -77,6 +77,8 @@ struct Env {
     tools: PathBuf,
     /// The handler the install wrote.
     handler: PathBuf,
+    /// The empty folder standing for `/Applications` (`XHERD_TERM_APPS_DIR`).
+    apps: PathBuf,
 }
 
 /// Writes an executable script `name` running `body` in the fake `PATH`.
@@ -103,6 +105,8 @@ fn setup() -> Env {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::create_dir_all(&tools).unwrap();
+    let apps = base.join("apps");
+    std::fs::create_dir_all(&apps).unwrap();
     for t in ["awk", "sed", "uname"] {
         symlink(which(t), bin.join(t)).unwrap();
     }
@@ -119,6 +123,7 @@ fn setup() -> Env {
         bin,
         tools,
         handler,
+        apps,
     };
     let o = install(&e, &sh(), "linux", &["install"], &[]);
     assert_eq!(o.code, 0, "install failed: {}", o.stderr);
@@ -143,6 +148,7 @@ fn install(e: &Env, shell: &[String], os: &str, args: &[&str], extra: &[(&str, &
         .env_clear()
         .env("HOME", &e.home)
         .env("PATH", path)
+        .env("XHERD_TERM_APPS_DIR", &e.apps)
         .env("XHERD_TERM_DRY_RUN", "1")
         .env("XHERD_TERM_OS", os)
         .current_dir(&e.base)
@@ -227,6 +233,7 @@ fn run_with(e: &Env, shell: &[String], os: &str, args: &[&str], extra: &[(&str, 
         .env_clear()
         .env("HOME", &e.home)
         .env("PATH", &e.bin)
+        .env("XHERD_TERM_APPS_DIR", &e.apps)
         .env("XHERD_TERM_DRY_RUN", "1")
         .env("XHERD_TERM_OS", os)
         .current_dir(&e.base);
@@ -402,6 +409,13 @@ fn terminals_lists_the_installed_ones_default_first() {
     let o = run_with(&e, &sh(), "linux", &["terminals"], &[]);
     assert_eq!(o.stdout, "kitty\nfoot\nxterm\n");
     std::fs::create_dir_all(e.home.join("Applications/Ghostty.app")).unwrap();
+    let o = run_with(&e, &sh(), "mac", &["terminals"], &[]);
+    assert_eq!(o.stdout, "terminal\nghostty\n");
+    // The apps folder stands for `/Applications`: only what is in it counts.
+    std::fs::remove_dir_all(e.home.join("Applications")).unwrap();
+    let o = run_with(&e, &sh(), "mac", &["terminals"], &[]);
+    assert_eq!(o.stdout, "terminal\n");
+    std::fs::create_dir_all(e.apps.join("Ghostty.app")).unwrap();
     let o = run_with(&e, &sh(), "mac", &["terminals"], &[]);
     assert_eq!(o.stdout, "terminal\nghostty\n");
 }
@@ -717,13 +731,6 @@ fn install_and_uninstall_on_macos_dry_run() {
     let pb = "/usr/libexec/PlistBuddy";
     let ls = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
     let id = "io.github.xionjames.xherd.terminal";
-    // The handler also looks in the real /Applications: a host with Ghostty
-    // reports it too.
-    let ghostty = if Path::new("/Applications/Ghostty.app").is_dir() {
-        ",\"ghostty\""
-    } else {
-        ""
-    };
     for sh in shells() {
         let o = install(&e, &sh, "mac", &[], &[]);
         assert_eq!(o.code, 0, "{sh:?}: {}", o.stderr);
@@ -750,7 +757,7 @@ fn install_and_uninstall_on_macos_dry_run() {
                 format!(
                     "curl -fsS -m 10 -o /dev/null -H Content-Type: application/json -d \
                      {{\"version\":{HANDLER_VERSION},\"xherd\":\"{}\",\"os\":\"mac\",\
-                     \"terminals\":[\"terminal\",\"iterm\"{ghostty}],\"root\":\"{}\"}} \
+                     \"terminals\":[\"terminal\",\"iterm\"],\"root\":\"{}\"}} \
                      {REPORT}/api/v1/open-in/terminal-handler",
                     xherd_core::BUILD_VERSION,
                     e.root.display()

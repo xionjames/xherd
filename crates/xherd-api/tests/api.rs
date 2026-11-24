@@ -2276,3 +2276,61 @@ async fn action_routes() {
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["job"]["actions"].as_array().unwrap().len(), 1);
 }
+
+/// R1-R4 (#217): an auto-approval of a done or cancelled job reads as seen,
+/// whatever the review-seen events say; other jobs' stay unseen until marked.
+#[tokio::test]
+async fn approvals_of_finished_jobs_are_seen() {
+    let (_dir, d, _a) = setup().await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let mut ids = Vec::new();
+    for (n, (name, status)) in [
+        ("DONE-1", Some(Status::Done)),
+        ("CANC-1", Some(Status::Cancelled)),
+        ("IDLE-1", Some(Status::Idle)),
+        ("GONE-1", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut j = Job::new(name, 1);
+        let id = j.id.clone();
+        if let Some(s) = status {
+            j.status = s;
+            d.store.put_job(&j).await.unwrap();
+        }
+        d.store
+            .insert_event(xherd_store::Event {
+                id: format!("ev-{n}"),
+                job_id: id.clone(),
+                kind: "approval".into(),
+                payload: Some(json!({"auto": true, "gate": "spec", "files": ["spec.md"]})),
+                at: 1000 + n as i64,
+            })
+            .await
+            .unwrap();
+        ids.push(id);
+    }
+    let seen = |v: &Value, id: &str| {
+        let items = v["reviews"].as_array().unwrap();
+        let it = items.iter().find(|i| i["jobId"] == id).expect("listed");
+        it["seen"].as_bool().unwrap()
+    };
+    let (s, v) = call(app.clone(), send("GET", "/api/v1/reviews", None)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        ids.iter().map(|i| seen(&v, i)).collect::<Vec<_>>(),
+        [true, true, false, false]
+    );
+    let body = json!({"items": [{"jobId": ids[2], "at": 1002, "gate": "spec"}]});
+    let (s, _) = call(
+        app.clone(),
+        send("POST", "/api/v1/reviews/seen", Some(body)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = call(app, send("GET", "/api/v1/reviews", None)).await;
+    assert!(seen(&v, &ids[2]));
+    assert!(!seen(&v, &ids[3]));
+}

@@ -12,7 +12,7 @@ use crate::{ActionError, Daemon, UserAction};
 
 /// Version of the link handler and its installer; bumped whenever either
 /// script changes, so the UI offers an update.
-pub const HANDLER_VERSION: u32 = 1;
+pub const HANDLER_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -488,8 +488,8 @@ mod tests {
         assert_eq!(
             (HANDLER_VERSION, sha(HANDLER_SH), sha(INSTALL_SH)),
             (
-                1,
-                "6235be7359183ae7050b788df7cc07cb1c723fe98b7c0a35c7009287758473cf".to_string(),
+                2,
+                "8e7d45fc2d953a469ad263540216f52069eadb82569a4c2556cbb620443ddca6".to_string(),
                 "c827fca1d327bdcd6f3b0d6ba17bb501a77467570441ca9d17efd92ac9d21050".to_string()
             ),
             "a script changed: bump HANDLER_VERSION and update the pinned hashes"

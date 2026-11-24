@@ -12,7 +12,8 @@
 # the URL is run, evaluated or put in a command line.
 #
 # XHERD_TERM_DRY_RUN=1 prints the command, one word per line, instead of
-# running it; XHERD_TERM_OS=mac|linux forces the OS. Both are for tests.
+# running it; XHERD_TERM_OS=mac|linux forces the OS; XHERD_TERM_APPS_DIR
+# replaces `/Applications` when looking for mac apps. All three are for tests.
 #
 # Installed by xherd (Settings -> Open in); edits are lost on the next install.
 
@@ -70,7 +71,7 @@ installed() { # <id>: known for this OS and present
 	if [ "$os" = mac ]; then
 		[ "$1" = terminal ] && return 0
 		app=$(mac_app "$1")
-		[ -d "/Applications/$app" ] || [ -d "$HOME/Applications/$app" ]
+		[ -d "${XHERD_TERM_APPS_DIR:-/Applications}/$app" ] || [ -d "$HOME/Applications/$app" ]
 	else
 		command -v "$1" >/dev/null 2>&1
 	fi
