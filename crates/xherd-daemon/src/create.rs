@@ -107,11 +107,35 @@ async fn create_project(git: &Git, repo: &Path) -> Result<(), ActionError> {
         crate::repos::remove_tree(&tmp).await;
         return Err(refuse("git", e.to_string()));
     }
-    if let Err(e) = std::fs::rename(&tmp, repo) {
+    // Another creation of the same project may have won meanwhile: a
+    // rename never replaces its folder (it holds `.git`), and the loser
+    // gets `path_exists` (R3).
+    let renamed = if repo.exists() {
+        Err(None)
+    } else {
+        std::fs::rename(&tmp, repo).map_err(Some)
+    };
+    if let Err(e) = renamed {
         crate::repos::remove_tree(&tmp).await;
-        return Err(refuse("io", format!("{}: {e}", repo.display())));
+        return Err(match e {
+            Some(e) if !repo.exists() => refuse("io", format!("{}: {e}", repo.display())),
+            _ => refuse("path_exists", format!("{} already exists", repo.display())),
+        });
     }
     Ok(())
+}
+
+/// Remove the `.<project>.creating-<nanos>` folders a crash left in
+/// `projects/`; called at start, before any creation can run.
+pub(crate) async fn remove_project_leftovers(workspace: &Path) {
+    let dir = workspace.join(new::PROJECTS_DIR);
+    for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') && name.contains(".creating-") {
+            tracing::info!(folder = %name, "removing a half-made project");
+            crate::repos::remove_tree(&e.path()).await;
+        }
+    }
 }
 
 impl Daemon {

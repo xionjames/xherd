@@ -25,8 +25,14 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 async fn setup() -> T {
+    setup_with(|_| {}).await
+}
+
+/// `before` runs on the workspace before the daemon starts.
+async fn setup_with(before: impl FnOnce(&Path)) -> T {
     let home = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
+    before(ws.path());
     let paths = Paths::at(home.path());
     paths.ensure().unwrap();
     let cfg = xherd_core::config::Config {
@@ -174,4 +180,41 @@ async fn a_ticket_url_does_not_clone_a_repository() {
     let repo = projects(&t).join("fix-login");
     assert_eq!(job.repo.as_deref(), Some(repo.to_string_lossy().as_ref()));
     assert!(!t.ws.path().join("repos").exists());
+}
+
+#[tokio::test]
+async fn two_creations_of_one_project_make_it_once() {
+    let t = setup().await;
+    let (a, b) = tokio::join!(
+        t.d.new_job(req("one", "tool")),
+        t.d.new_job(req("two", "tool"))
+    );
+    let codes: Vec<_> = [&a, &b]
+        .iter()
+        .map(|r| r.as_ref().err().map(|e| e.code))
+        .collect();
+    assert!(
+        codes.contains(&None) && codes.contains(&Some("path_exists")),
+        "{codes:?}"
+    );
+    let left: Vec<_> = std::fs::read_dir(projects(&t))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["tool"]);
+}
+
+#[tokio::test]
+async fn start_removes_half_made_projects() {
+    let t = setup_with(|ws| {
+        let p = ws.join("projects");
+        std::fs::create_dir_all(p.join(".tool.creating-1/.git")).unwrap();
+        std::fs::create_dir_all(p.join("kept/.git")).unwrap();
+    })
+    .await;
+    let left: Vec<_> = std::fs::read_dir(projects(&t))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["kept"]);
 }

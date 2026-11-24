@@ -172,6 +172,18 @@ fn bare(t: &T, name: &str) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// A bare repository behind an https URL: the repository's own git config
+/// rewrites the URL to the bare repo's path (`set-origin` refuses paths).
+fn remote(t: &T, name: &str) -> (String, PathBuf) {
+    let path = bare(t, name);
+    let url = format!("https://example.test/acme/{name}");
+    git(
+        &t.repo(),
+        &["config", &format!("url.{path}.insteadOf"), &url],
+    );
+    (url, PathBuf::from(path))
+}
+
 #[tokio::test]
 async fn approving_the_ship_gate_without_origin_marks_the_job() {
     let t = setup().await;
@@ -197,12 +209,11 @@ async fn approving_the_ship_gate_with_origin_does_not() {
 async fn set_origin_pushes_the_base_and_ships_again() {
     let t = setup().await;
     stopped_without_origin(&t).await;
-    let url = bare(&t, "origin.git");
+    let (url, bare) = remote(&t, "origin.git");
 
     let a = t.d.set_origin("SC-1", &url).await.unwrap();
     assert!(!a.no_origin);
-    assert_eq!(git(&t.repo(), &["remote", "get-url", "origin"]), url);
-    let bare = PathBuf::from(&url);
+    assert_eq!(git(&t.repo(), &["config", "remote.origin.url"]), url);
     assert_eq!(
         git(&bare, &["rev-parse", "main"]),
         git(&t.repo(), &["rev-parse", "main"])
@@ -231,8 +242,8 @@ async fn set_origin_refuses_other_history_and_leaves_no_remote() {
         &other,
         &["commit", "-q", "--allow-empty", "-m", "elsewhere"],
     );
-    let url = bare(&t, "busy.git");
-    git(&other, &["push", "-q", &url, "main"]);
+    let (url, busy) = remote(&t, "busy.git");
+    git(&other, &["push", "-q", &busy.to_string_lossy(), "main"]);
 
     let e = t.d.set_origin("SC-1", &url).await.unwrap_err();
     assert_eq!(e.code, "push_failed");
@@ -245,10 +256,30 @@ async fn set_origin_refuses_other_history_and_leaves_no_remote() {
 #[tokio::test]
 async fn set_origin_is_refused_when_the_job_is_not_stopped() {
     let t = setup().await;
-    let url = bare(&t, "origin.git");
+    let (url, _) = remote(&t, "origin.git");
     let e = t.d.set_origin("SC-1", &url).await.unwrap_err();
     assert_eq!(e.code, "not_stopped");
     assert!(git(&t.repo(), &["remote"]).is_empty());
+}
+
+#[tokio::test]
+async fn set_origin_refuses_what_is_not_a_repository_url() {
+    let t = setup().await;
+    stopped_without_origin(&t).await;
+    let path = bare(&t, "origin.git");
+    for url in [
+        path.as_str(),
+        &format!("file://{path}"),
+        "ext::sh -c touch% /tmp/x",
+        "https://example.test/acme/app\nx",
+        "",
+    ] {
+        let e = t.d.set_origin("SC-1", url).await.unwrap_err();
+        assert_eq!(e.code, "bad_remote", "{url}");
+    }
+    assert!(git(&t.repo(), &["remote"]).is_empty());
+    let a = get(&t).await;
+    assert_eq!((a.status, a.no_origin), (Status::Idle, true));
 }
 
 #[tokio::test]
