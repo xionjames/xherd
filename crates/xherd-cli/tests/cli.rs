@@ -289,6 +289,14 @@ fn end_to_end_replay_and_live_hooks() {
     let o = xherd(home.path(), wt.path(), &["ask", "which db?"], &env, "");
     assert_eq!(o.status.code(), Some(0), "{o:?}");
     assert!(ls().contains("question: which db?"), "{}", ls());
+    // The same question again changes nothing and says why.
+    let o = xherd(home.path(), wt.path(), &["ask", "which db?"], &env, "");
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout).trim(),
+        "ask: no change (this question is already asked)",
+        "{o:?}"
+    );
     let o = xherd(home.path(), wt.path(), &["approve", "SC-1"], &[], "");
     assert_eq!(o.status.code(), Some(2));
     assert!(

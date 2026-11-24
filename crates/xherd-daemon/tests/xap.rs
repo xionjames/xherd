@@ -267,9 +267,17 @@ async fn tasks_and_commit_with_real_git() {
     )
     .unwrap();
     xap(&t, "c1", "tasks.sync", json!({})).await.unwrap();
+    let r = xap(&t, "c1b", "tasks.sync", json!({})).await.unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "the tasks already match tasks.md");
     xap(&t, "c2", "task.start", json!({"id": "T01"}))
         .await
         .unwrap();
+    let r = xap(&t, "c2b", "task.start", json!({"id": "T01"}))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "T01 is already in progress");
     // Outside the task's files: held for a human, not refused (R-116).
     xap(
         &t,
@@ -290,6 +298,16 @@ async fn tasks_and_commit_with_real_git() {
     .await
     .unwrap();
     assert!(matches!(get(&t).await.gate, Some(Gate::Commit(c)) if c.needs_human.is_none()));
+    let r = xap(
+        &t,
+        "c4b",
+        "commit.propose",
+        json!({"id": "C01", "subject": "a", "files": ["a.txt"], "tasks": ["T01"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "C01 is already proposed as it is");
 
     std::fs::write(t.wt.path().join("a.txt"), "a").unwrap();
     std::fs::write(t.wt.path().join("b.txt"), "b").unwrap();
@@ -353,6 +371,68 @@ async fn tasks_and_commit_with_real_git() {
     let a = get(&t).await;
     assert_eq!(a.commits[0].sha.as_deref(), Some(good.as_str()));
     assert!(a.gate.is_none());
+    // Recording the same sha again (xherd had already done it) changes nothing.
+    let r = xap(
+        &t,
+        "c9",
+        "commit.done",
+        json!({"id": "C01", "sha": &good[..8]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "C01 is already recorded as done");
+}
+
+#[tokio::test]
+async fn no_change_answers_say_why() {
+    let t = setup().await;
+    let r = xap(&t, "n1", "stage.enter", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], true);
+    assert!(r.get("reason").is_none(), "{r}");
+    let r = xap(&t, "n2", "stage.enter", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "already in stage spec");
+    // The same call id replayed.
+    let r = xap(&t, "n2", "stage.enter", json!({"stage": "spec"}))
+        .await
+        .unwrap();
+    assert_eq!(r["duplicate"], true);
+    assert_eq!(r["reason"], "this call was already applied");
+
+    xap(&t, "n3", "ask", json!({"text": "which db?"}))
+        .await
+        .unwrap();
+    let r = xap(&t, "n4", "ask", json!({"text": "which db?"}))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "this question is already asked");
+
+    xap(&t, "n5", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    let r = xap(&t, "n6", "action.add", add_args("dev", "npm run dev"))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "action dev is already registered as it is");
+    let r = xap(&t, "n7", "action.ls", json!({})).await.unwrap();
+    assert!(r.get("reason").is_none(), "{r}");
+
+    let url = "https://github.com/acme/app/pull/42";
+    xap(&t, "n8", "pr.opened", json!({"url": url}))
+        .await
+        .unwrap();
+    let r = xap(&t, "n9", "pr.opened", json!({"url": url}))
+        .await
+        .unwrap();
+    assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "this pull request is already recorded");
 }
 
 #[tokio::test]
@@ -1683,6 +1763,7 @@ async fn task_done_runs_the_verify_command() {
     .await
     .unwrap();
     assert_eq!(r["changed"], false);
+    assert_eq!(r["reason"], "T01 is already done with this evidence");
 
     // Failing: refused, the task stays doing.
     xap(&t, "v3", "task.start", json!({"id": "T02"}))
