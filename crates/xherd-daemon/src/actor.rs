@@ -212,9 +212,15 @@ pub enum WorkResult {
     },
     /// Every sha on the branch since the base, and the commits among them
     /// no recorded commit matched, oldest first, with their files (R4).
+    /// `unpushed` are the shas missing on the local `origin/<branch>` ref
+    /// (`None`: no such ref); `push_known` is false when git failed reading
+    /// it, so the rows keep their status. `seq` orders overlapping checks.
     BranchCommits {
         on_branch: Vec<String>,
         found: Vec<xherd_core::domain::BranchCommit>,
+        seq: u64,
+        unpushed: Option<Vec<String>>,
+        push_known: bool,
     },
     /// The pane of a running action is dead: its exit status (`None` when a
     /// signal killed it) and what it printed (R11, R13).
@@ -666,6 +672,8 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         auto_resumes: Vec::new(),
         actions_running,
         stopping: BTreeSet::new(),
+        push_seq: 0,
+        push_applied: 0,
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -722,6 +730,11 @@ struct Actor {
     actions_running: bool,
     /// Actions with a stop under way: the screen tick leaves them to it.
     stopping: BTreeSet<String>,
+    /// Branch checks started, and the newest one whose push status was
+    /// applied: a slower, older check never overwrites a newer one (R3).
+    /// In memory only.
+    push_seq: u64,
+    push_applied: u64,
 }
 
 impl Actor {
@@ -1216,8 +1229,10 @@ impl Actor {
     /// List the branch's commits since the job's base (slow: spawned, back
     /// as `WorkResult::BranchCommits`); with the files of those no recorded
     /// commit matches, so `on_branch_commits` can list them (R4). No base, no
-    /// workdir or a git error: nothing is checked.
-    fn check_branch_commits(&self) {
+    /// workdir or a git error: nothing is checked. It always reports back,
+    /// even with no unknown commit, with which of the branch's shas the local
+    /// `origin/<branch>` ref lacks (R1, R2, R3).
+    fn check_branch_commits(&mut self) {
         let base = self
             .job
             .base
@@ -1226,7 +1241,10 @@ impl Actor {
         let (Some(base), Ok(wd)) = (base, self.workdir()) else {
             return;
         };
+        self.push_seq += 1;
+        let seq = self.push_seq;
         let (tx, generation) = (self.tx.clone(), self.job.generation);
+        let branch_name = self.job.branch.clone();
         let (git, recorded) = (self.env.git.clone(), self.job.commits.clone());
         tokio::spawn(async move {
             let branch = match git.branch_commits(&wd, &base).await {
@@ -1250,13 +1268,23 @@ impl Actor {
                     }
                 }
             }
-            if found.is_empty() {
-                return;
-            }
+            let (unpushed, push_known) = match git.unpushed(&wd, &branch_name).await {
+                Ok(u) => (u, true),
+                Err(e) => {
+                    tracing::debug!(error = %e, "unpushed commits not listed");
+                    (None, false)
+                }
+            };
             let on_branch = branch.into_iter().map(|(sha, _)| sha).collect();
             let _ = tx.send(Msg::WorkDone {
                 generation,
-                result: WorkResult::BranchCommits { on_branch, found },
+                result: WorkResult::BranchCommits {
+                    on_branch,
+                    found,
+                    seq,
+                    unpushed,
+                    push_known,
+                },
             });
         });
     }
@@ -1272,7 +1300,34 @@ impl Actor {
         &mut self,
         on_branch: Vec<String>,
         found: Vec<xherd_core::domain::BranchCommit>,
+        seq: u64,
+        unpushed: Option<Vec<String>>,
+        push_known: bool,
     ) {
+        let mut changed = false;
+        if !found.is_empty() {
+            changed = self.settle_found(&on_branch, &found).await;
+        }
+        if push_known && seq > self.push_applied {
+            self.push_applied = seq;
+            changed |= xherd_core::domain::apply_push_status(
+                &mut self.job.commits,
+                &on_branch,
+                unpushed.as_deref(),
+            );
+        }
+        if changed {
+            self.commit(self.job.status).await;
+        }
+    }
+
+    /// The settling of `on_branch_commits`, without the final save: whether
+    /// the job changed.
+    async fn settle_found(
+        &mut self,
+        on_branch: &[String],
+        found: &[xherd_core::domain::BranchCommit],
+    ) -> bool {
         use xherd_core::domain::Settled;
         let memory: Vec<String> = match self.env.store.events_of_kind("memory-accepted").await {
             Ok(events) => events
@@ -1287,12 +1342,12 @@ impl Actor {
         };
         let settled = xherd_core::domain::settle_branch_commits(
             &mut self.job.commits,
-            &on_branch,
-            &found,
+            on_branch,
+            found,
             &memory,
         );
         if settled.is_empty() {
-            return;
+            return false;
         }
         let mut shas = Vec::new();
         for s in settled {
@@ -1325,7 +1380,7 @@ impl Actor {
                 ),
             );
         }
-        self.commit(self.job.status).await;
+        true
     }
 
     /// Poll the pull request of a watching agent through the host plugin when
@@ -4855,8 +4910,15 @@ impl Actor {
                 self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
-            WorkResult::BranchCommits { on_branch, found } => {
-                self.on_branch_commits(on_branch, found).await
+            WorkResult::BranchCommits {
+                on_branch,
+                found,
+                seq,
+                unpushed,
+                push_known,
+            } => {
+                self.on_branch_commits(on_branch, found, seq, unpushed, push_known)
+                    .await
             }
             WorkResult::PrLookup(Ok(None)) => self.git_access_ok().await,
             WorkResult::PrLookup(Ok(Some(url))) => {

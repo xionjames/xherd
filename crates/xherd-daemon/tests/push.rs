@@ -20,6 +20,8 @@ struct T {
     d: Daemon,
     /// The two commits of the branch, oldest first.
     shas: [String; 2],
+    /// The job's id (not its name): reports are routed by it.
+    id: String,
 }
 
 impl T {
@@ -115,7 +117,7 @@ async fn setup() -> T {
     a.base = Some("main".into());
     a.branch = "SC-1".into();
     a.commits = vec![done("C01", &shas[0]), done("C02", &shas[1])];
-    d.create_job(a).await.unwrap();
+    let id = d.create_job(a).await.unwrap().id;
     for _ in 0..200 {
         if d.action("SC-1", UserAction::Get).await.unwrap().status == Status::Running {
             break;
@@ -127,13 +129,14 @@ async fn setup() -> T {
         ws,
         d,
         shas,
+        id,
     }
 }
 
 async fn stop(t: &T, seq: u64) {
     let r = Report {
         id: format!("s{seq}"),
-        job_id: "SC-1".into(),
+        job_id: t.id.clone(),
         event: ReportEvent::Stop,
         payload: json!({"session_id": format!("s-{seq}")}),
         seq,
