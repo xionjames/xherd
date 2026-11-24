@@ -228,16 +228,44 @@ impl Daemon {
                 },
             });
         }
-        for rt in self.pack_runtimes() {
-            out.push(self.pack_check(&rt, rt == default_rt, env).await);
-            out.push(self.pack_files_check(&rt, rt == default_rt, env).await);
+        for pack in self.check_packs() {
+            for rt in self.pack_runtimes(&pack) {
+                let default = rt == default_rt && pack == xherd_flow::BUILTIN;
+                out.push(self.pack_check(&pack, &rt, default, env).await);
+                out.push(self.pack_files_check(&pack, &rt, default, env).await);
+            }
+        }
+        // A plugin whose pack could not be read: stated, never required.
+        for (plugin, error) in self.pack_errors.iter() {
+            out.push(Check {
+                id: format!("plugin-pack:{plugin}"),
+                group: "runtime",
+                label: format!("Flow pack of plugin {plugin} loaded"),
+                required: false,
+                ok: false,
+                detail: error.clone(),
+                installing: false,
+                fix: None,
+            });
         }
         out
     }
 
-    /// Runtimes switched on that the built-in pack has commands for.
-    pub(crate) fn pack_runtimes(&self) -> Vec<String> {
-        let Some(p) = self.packs.get(xherd_flow::BUILTIN) else {
+    /// The built-in pack, then each plugin pack a job can be started on.
+    fn check_packs(&self) -> Vec<String> {
+        let mut v = vec![xherd_flow::BUILTIN.to_string()];
+        v.extend(
+            self.packs
+                .keys()
+                .filter(|n| *n != xherd_flow::BUILTIN && self.pack_selectable(n))
+                .cloned(),
+        );
+        v
+    }
+
+    /// Runtimes switched on that `pack` has commands for.
+    pub(crate) fn pack_runtimes(&self, pack: &str) -> Vec<String> {
+        let Some(p) = self.packs.get(pack) else {
             return Vec::new();
         };
         self.plugins
@@ -251,29 +279,27 @@ impl Daemon {
     /// default runtime (id `pack`), stated for the others (`pack:<runtime>`).
     async fn pack_check(
         &self,
+        pack: &str,
         rt: &str,
         default: bool,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Check {
-        let missing = self
-            .pack_files(xherd_flow::BUILTIN, rt, env)
-            .await
-            .map(|files| {
-                let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
-                (n(FileState::Missing), n(FileState::Outdated))
-            });
+        let missing = self.pack_files(pack, rt, env).await.map(|files| {
+            let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
+            (n(FileState::Missing), n(FileState::Outdated))
+        });
         let (ok, detail) = match missing {
             Ok((0, 0)) => (true, "installed".to_string()),
             Ok((m, o)) => (false, format!("{m} command files missing, {o} out of date")),
             Err(e) => (false, e.message),
         };
         Check {
-            id: match default {
-                true => PACK_CHECK.into(),
-                false => format!("{PACK_CHECK}:{rt}"),
-            },
+            id: check_id(PACK_CHECK, pack, rt, default),
             group: "runtime",
-            label: format!("xherd commands installed for {rt}"),
+            label: match pack == xherd_flow::BUILTIN {
+                true => format!("xherd commands installed for {rt}"),
+                false => format!("{pack} commands installed for {rt}"),
+            },
             required: default,
             ok,
             detail,
@@ -290,29 +316,27 @@ impl Daemon {
     /// `pack-files:<runtime>`).
     async fn pack_files_check(
         &self,
+        pack: &str,
         rt: &str,
         default: bool,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Check {
-        let pending = self
-            .pack_files(xherd_flow::BUILTIN, rt, env)
-            .await
-            .map(|files| {
-                let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
-                (n(FileState::Edited), n(FileState::Obsolete))
-            });
+        let pending = self.pack_files(pack, rt, env).await.map(|files| {
+            let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
+            (n(FileState::Edited), n(FileState::Obsolete))
+        });
         let (ok, detail) = match pending {
             Ok((0, 0)) => (true, "nothing to decide".to_string()),
             Ok((e, o)) => (false, format!("{e} edited files, {o} obsolete files")),
             Err(e) => (false, e.message),
         };
         Check {
-            id: match default {
-                true => PACK_FILES_CHECK.into(),
-                false => format!("{PACK_FILES_CHECK}:{rt}"),
-            },
+            id: check_id(PACK_FILES_CHECK, pack, rt, default),
             group: "runtime",
-            label: format!("xherd command files of {rt} reviewed"),
+            label: match pack == xherd_flow::BUILTIN {
+                true => format!("xherd command files of {rt} reviewed"),
+                false => format!("{pack} command files of {rt} reviewed"),
+            },
             required: default,
             ok,
             detail,
@@ -366,18 +390,35 @@ impl Daemon {
         {
             return self.start_plugin_install(plugin, name).await;
         }
-        let rt = match id.split_once(':') {
-            None if id == PACK_CHECK => Some(self.live_config().default_runtime),
-            Some((PACK_CHECK, rt)) => Some(rt.to_string()),
+        let target = match id.split_once(':') {
+            None if id == PACK_CHECK => Some((None, self.live_config().default_runtime)),
+            // `pack:<pack>/<runtime>` before the plain `pack:<runtime>`.
+            Some((PACK_CHECK, rest)) => match rest.split_once('/') {
+                Some((pack, rt)) => Some((Some(pack.to_string()), rt.to_string())),
+                None => Some((None, rest.to_string())),
+            },
             _ => None,
         };
-        match rt {
-            Some(rt) => self.install(Some(&rt), None, env, false).await.map(|_| ()),
+        match target {
+            Some((pack, rt)) => self
+                .install(Some(&rt), pack.as_deref(), env, false)
+                .await
+                .map(|_| ()),
             None => Err(ActionError {
                 code: "not_fixable",
                 message: format!("check {id} has no automatic fix"),
             }),
         }
+    }
+}
+
+/// Built-in ids: `pack` for the default runtime, else `pack:<runtime>`; a
+/// plugin pack's: `pack:<pack>/<runtime>`.
+fn check_id(base: &str, pack: &str, rt: &str, default: bool) -> String {
+    match (pack == xherd_flow::BUILTIN, default) {
+        (true, true) => base.into(),
+        (true, false) => format!("{base}:{rt}"),
+        (false, _) => format!("{base}:{pack}/{rt}"),
     }
 }
 
