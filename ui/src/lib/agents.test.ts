@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agentFor,
   FORM_DEFAULTS, agentLabel, agentLane, agentLaneOrder, canMarkDone, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
-  profileMarks, slugify, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
+  profileMarks, slugify, stageRuns, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
 } from './agents';
 import type { AgentDef, AgentView, Job } from './types';
 
@@ -214,4 +214,10 @@ describe('agentFor', () => {
   });
   it('has none for a stage without one', () => expect(agentFor(job, 'ship')).toBeUndefined());
   it('uses the current agent for a job with no workflow', () => expect(agentFor(job)).toBe('peter'));
+  it('cuts the plugin prefix of a plugin agent', () => {
+    const p = { agents: { a1: { name: 'acme-sdd-architect', source: 'acme-sdd' } }, stageAgents: { spec: { agent: 'a1', human: false } }, currentAgent: 'a1' } as unknown as Job;
+    expect(agentFor(p, 'spec')).toBe('architect');
+    expect(agentFor(p)).toBe('architect');
+    expect(stageRuns({ ...p, stage: 'spec' }, [{ id: 'spec' }])[0].agent).toBe('architect');
+  });
 });

@@ -8,7 +8,7 @@
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
 
-  type Day = { day: string; tickets: { ticket: string; agentMs: number; userMs: number }[] };
+  type Day = { day: string; tickets: { ticket: string; label?: string; agentMs: number; userMs: number }[] };
   type Metric = { ticket: string; job: string; status: string; cycleMs: number | null; reviewRounds: number; autoApprovals: number; rework: number };
   let data = $state<{ days: Day[]; tickets: Metric[] } | null>(null);
   let days = $state('14');
@@ -48,7 +48,7 @@
           <table class="tbl">
             <tbody>
               {#each d.tickets as t (t.ticket)}
-                <tr><td class="mono">{t.ticket}</td><td class="num r">agent {span(t.agentMs)}</td><td class="num r">you {span(t.userMs)}</td></tr>
+                <tr><td class="mono" title={t.label ? t.ticket : undefined}>{t.label ?? t.ticket}</td><td class="num r">agent {span(t.agentMs)}</td><td class="num r">you {span(t.userMs)}</td></tr>
               {/each}
             </tbody>
           </table>

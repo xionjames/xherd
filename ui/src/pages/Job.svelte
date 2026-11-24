@@ -22,7 +22,7 @@
   import { MODE_HINT, modes } from '../lib/modes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
-  import { agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
+  import { agentLabel, agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
   import ActionPanel from '../panels/Action.svelte';
   import SaveActions from '../components/SaveActions.svelte';
   import { actionOfTab, defaultOpen, groups, headerMarks, headerText, lastResult, needsApproval, running, tabId as actionTab, visible, type GroupKind } from '../lib/actions';
@@ -179,7 +179,7 @@
       <div class="hmeta">
         <div class="hfacts">
           {#if curAgent}
-            <span>agent {#if def}<a href={href(`/agents/${def.name}`)}>{curAgent.name}</a>{:else}{curAgent.name}{/if} <span class="muted">v{curAgent.version}</span>
+            <span>agent {#if def}<a href={href(`/agents/${def.name}`)}>{agentLabel(curAgent.name, curAgent.source)}</a>{:else}{agentLabel(curAgent.name, curAgent.source)}{/if} <span class="muted">v{curAgent.version}</span>
               {#if newer && def}<a class="hint" href={href(`/agents/${def.name}`, { s: 'versions', since: String(curAgent.version) })} title="This job keeps the settings it started with">· agent changed since this job started (now v{def.version})</a>{/if}
               {#if curAgent.fellBack}<span class="hint" title="The agent's runtime was off when the job started"> · fell back to {curAgent.runtime}</span>{/if}
               {#if queuedForAgent}<span class="hint"> · waits for its agent: {def?.liveJobs} of {def?.maxLiveJobs} live jobs</span>{/if}</span>

@@ -288,7 +288,8 @@ export interface StageRun { stage: string; agent?: string; human: boolean; curre
 export function stageRuns(job: Pick<Job, 'agents' | 'stageAgents' | 'currentAgent' | 'stage'>, stages: readonly { id: string }[]): StageRun[] {
   return stages.map((s) => {
     const sa = job.stageAgents?.[s.id];
-    return { stage: s.id, agent: sa ? job.agents?.[sa.agent]?.name : undefined, human: !!sa?.human, current: job.stage === s.id };
+    const a = sa ? job.agents?.[sa.agent] : undefined;
+    return { stage: s.id, agent: a ? agentLabel(a.name, a.source) : undefined, human: !!sa?.human, current: job.stage === s.id };
   });
 }
 
@@ -335,5 +336,6 @@ export function assignmentRows(edit: readonly { stage: string; agent: string; hu
  *  (a job with no workflow has no stages) its current agent. */
 export function agentFor(job: Pick<Job, 'agents' | 'stageAgents' | 'currentAgent'>, stage?: string): string | undefined {
   const sa = stage ? job.stageAgents?.[stage] : undefined;
-  return (sa ? job.agents?.[sa.agent]?.name : undefined) ?? (stage ? undefined : jobAgent(job)?.name);
+  const a = (sa ? job.agents?.[sa.agent] : undefined) ?? (stage ? undefined : jobAgent(job));
+  return a ? agentLabel(a.name, a.source) : undefined;
 }
