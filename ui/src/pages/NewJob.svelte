@@ -21,6 +21,12 @@
   const flows = $derived([...new Set((app.state?.flows ?? []).map((f) => f.flow))]);
   let f = $state({ name: '', ticket: '', repo: '', base: '', flow: 'feature', prompt: '', autonomy: 'ask', mode: '' as PermissionMode | '', runtime: '', model: '' });
   let busy = $state(false);
+  // New project (R2, R8): no repository; the daemon makes a git folder under
+  // the workspace's projects/ (named after the job unless a name is given).
+  let target = $state<'repo' | 'project'>('repo');
+  let projectName = $state('');
+  const isProject = $derived(target === 'project');
+  const projectOk = $derived(projectName.trim() === '' || /^[a-z0-9][a-z0-9-]{0,40}$/.test(projectName.trim()));
 
   // Agent (R23): for a job with no workflow. It fills the fields it sets and marks them
   // "from agent"; each can still be changed for this job only. The last
@@ -102,7 +108,7 @@
     if (!want) { tk = { input: '', data: null, error: null }; useTicketRepo(null); return; }
     tk = { input: want, data: null, error: null };
     try {
-      const d = await post<TicketFound>('/tickets/resolve', repo.data ? { ticket: want, repo: repo.data.path } : { ticket: want });
+      const d = await post<TicketFound>('/tickets/resolve', repo.data && !isProject ? { ticket: want, repo: repo.data.path } : { ticket: want });
       if (tk.input === want) { tk.data = d; useTicketRepo(d.repo); }
     } catch (e) {
       if (tk.input === want) tk.error = e instanceof Error ? e.message : String(e);
@@ -112,6 +118,7 @@
   // their own (#148); `filled` is what we put there last.
   let filled = $state<string | null>(null);
   function useTicketRepo(ticketRepo: string | null) {
+    if (isProject) return;
     const n = nextRepo({ typed: f.repo, filled, ticketRepo });
     filled = n.filled;
     if (n.repo === f.repo) return;
@@ -199,17 +206,22 @@
     return [f.autonomy, rt ? runtimeLabel(rt) : runtime, ...(canModel && model ? [model] : []), mode].join(' · ');
   });
 
-  const ready = $derived(nameFine && !ticketBad && modelOk && input !== '' && !repoBad && (f.flow !== 'none' || f.prompt.trim() !== ''));
+  const sourceOk = $derived(isProject ? projectOk : input !== '' && !repoBad);
+  const ready = $derived(nameFine && !ticketBad && modelOk && sourceOk && (f.flow !== 'none' || f.prompt.trim() !== ''));
 
   async function create(e: SubmitEvent) {
     e.preventDefault();
     busy = true;
-    const r = await resolve();
-    if (!r) { busy = false; return; }
-    const body: Record<string, string> = { repo: r.path, flow: f.flow };
+    const body: Record<string, string> = { flow: f.flow };
+    if (isProject) body.newProject = projectName.trim();
+    else {
+      const r = await resolve();
+      if (!r) { busy = false; return; }
+      body.repo = r.path;
+      if (f.base.trim()) body.base = f.base.trim();
+    }
     if (f.name) body.name = f.name;
     if (ticketIn) body.ticket = ticketIn;
-    if (f.base.trim()) body.base = f.base.trim();
     if (f.prompt.trim()) body.prompt = f.prompt.trim();
     if (own && (!agent || autonomyTouched || from('autonomy'))) body.autonomy = f.autonomy;
     const ov = stageOverrides(stagePick);
@@ -264,6 +276,16 @@
         {:else if tk.data.url}<span class="hint">No issue tracker reads this URL: it is kept as a link.</span>
         {:else}<span class="hint"><span class="mono">{tk.data.key}</span> · no issue tracker reads this key: it names the branch only.</span>{/if}
       {:else}<span class="hint">An issue URL or a key. Its key starts the branch name.</span>{/if}</label>
+    <div class="f">Start from
+      <Seg label="Start from" value={target} onchange={(v) => { target = v; }}
+        options={[{ value: 'repo', label: 'Repository' }, { value: 'project', label: 'New project' }]} /></div>
+    {#if isProject}
+    <label class="f">Project name (optional)
+      <input class="mono" bind:value={projectName} placeholder={f.name || 'the job name'} autocomplete="off"
+        oninput={() => (projectName = projectName.toLowerCase())} />
+      {#if !projectOk}<span class="hint err">Lowercase letters, digits and -, up to 41.</span>
+      {:else}<span class="hint wrap-any">A new git folder, <span class="mono">projects/{projectName.trim() || f.name || 'name'}</span> in the workspace, with one empty commit on <span class="mono">main</span>. No repository is cloned.</span>{/if}</label>
+    {:else}
     <div class="g2">
       <label class="f">Repository: URL or local path
         <input class="mono" bind:value={f.repo} list="known-repos" required={!(tk.input === ticketIn && tk.data?.repo)} onchange={resolve}
@@ -287,6 +309,7 @@
     {#if repo.data?.profile}<span class="hint">Profile <b>{repo.data.profile.name}</b> applies.</span>
     {:else if repo.data}<span class="hint">No profile for this repository, so the global settings apply.
       <a href={href('/settings', { tab: 'profiles', new: repo.data.suggestedMatch })}>Create one</a> for a base branch, test command or sensitive paths.</span>{/if}
+    {/if}
     <label class="f">{f.flow === 'none' ? 'Instructions' : 'Instructions (optional)'}
       <textarea rows="4" bind:value={f.prompt} required={f.flow === 'none'}
         placeholder={f.flow === 'none' ? 'Typed into the agent as its first message' : 'Context for the spec step'}></textarea></label>
@@ -347,7 +370,7 @@
     {/if}
     {#snippet foot()}
       <button type="button" class="btn ghost" onclick={() => history.back()}>Cancel</button>
-      <button class="btn primary" disabled={!ready || busy}>{busy && repo.busy ? 'Getting the repository…' : 'Create job'}</button>
+      <button class="btn primary" disabled={!ready || busy}>{busy && repo.busy && !isProject ? 'Getting the repository…' : 'Create job'}</button>
     {/snippet}
   </Panel>
 </form>
