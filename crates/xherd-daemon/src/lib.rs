@@ -604,15 +604,10 @@ impl Daemon {
             ));
         }
         let local = format!("refs/heads/{}", job.branch);
-        // Without a tracking ref for the branch, what the base on origin lacks.
+        // No tracking ref for the branch counts as nothing to push (R3, R6).
         let pending = match git.unpushed(&repo, &job.branch).await {
             Ok(Some(u)) => u.len(),
-            Ok(None) => {
-                let (_, base) = repo_and_base(&job)?;
-                git.count_commits(&repo, &local, &format!("refs/remotes/origin/{base}"))
-                    .await
-                    .unwrap_or(1)
-            }
+            Ok(None) => 0,
             Err(e) => return Err(action_error("git", e.to_string())),
         };
         if pending == 0 {

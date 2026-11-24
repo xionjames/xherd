@@ -328,6 +328,15 @@ async fn nothing_to_push_is_refused() {
 }
 
 #[tokio::test]
+async fn without_a_tracking_ref_nothing_is_pushed() {
+    let t = setup().await;
+    stopped(&t, 1).await;
+    assert_eq!(refusal(&t).await, "nothing_to_push");
+    assert!(git(&t.bare(), &["branch", "--list", "SC-1"]).is_empty());
+    assert_eq!(push_events(&t).await, 0);
+}
+
+#[tokio::test]
 async fn a_refused_push_leaves_the_job_unchanged() {
     let t = setup().await;
     git(
