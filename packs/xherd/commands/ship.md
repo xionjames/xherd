@@ -36,7 +36,11 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    The user decides later whether to save an agent; skip this when there is
    nothing general to say.
 6. `xherd gate open ship`, then stop and wait for the user.
-7. Approved: push the branch (`git push -u origin HEAD`) and open a **draft**
+7. Approved: check that the repository has a remote with
+   `git remote get-url origin`. With none, do not push or open a pull
+   request: skip to step 9 and tell the user the job page offers to add a
+   remote (and open the pull request) or to finish locally. Otherwise push the
+   branch (`git push -u origin HEAD`) and open a **draft**
    pull request with the host's CLI, using the title and the body of
    `pr.md` without its frontmatter (for GitHub:
    `gh pr create --draft --title "<title>" --body-file <file>`).
