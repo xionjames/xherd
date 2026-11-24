@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentFor,
-  FORM_DEFAULTS, agentLabel, agentLane, agentLaneOrder, canMarkDone, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
+  FORM_DEFAULTS, agentLabel, agentLane, agentLaneOrder, canMarkDone, canShipWithoutOrigin, changedSince, fillFromAgent, fillFromJob, fromForm, pickable,
   profileMarks, slugify, stageRuns, suggestionOpen, toForm, unmark, versionDiff, waitsForAgent, NO_AGENT_LANE,
 } from './agents';
 import type { AgentDef, AgentView, Job } from './types';
@@ -195,6 +195,15 @@ describe('suggestions (R30…R32)', () => {
     expect(canMarkDone({ flow: 'feature', status: 'idle' })).toBe(false);
     expect(canMarkDone({ flow: undefined, status: 'running' })).toBe(false);
     expect(canMarkDone({ flow: undefined, status: 'error' })).toBe(false);
+  });
+
+  it('the no-remote choice is for a stopped job with no gate', () => {
+    expect(canShipWithoutOrigin({ noOrigin: true, status: 'idle' })).toBe(true);
+    expect(canShipWithoutOrigin({ noOrigin: true, status: 'paused' })).toBe(true);
+    expect(canShipWithoutOrigin({ noOrigin: false, status: 'idle' })).toBe(false);
+    expect(canShipWithoutOrigin({ status: 'idle' })).toBe(false);
+    expect(canShipWithoutOrigin({ noOrigin: true, status: 'running' })).toBe(false);
+    expect(canShipWithoutOrigin({ noOrigin: true, status: 'idle', gate: { id: 'ship' } as unknown as Job['gate'] })).toBe(false);
   });
 
   it('fills the form from the job, then from its draft', () => {

@@ -586,3 +586,254 @@ async fn diff_files_shows_a_change_and_is_empty_when_equal() {
     let gone = g.diff_files(&a, &d.path().join("missing")).await.unwrap();
     assert!(gone.contains("-x"), "a missing file is empty: {gone}");
 }
+
+async fn config_identity(g: &Git, dir: &Path) {
+    for args in [
+        &["config", "user.email", "t@example.com"][..],
+        &["config", "user.name", "t"],
+        &["config", "commit.gpgsign", "false"],
+    ] {
+        g.run(dir, args).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn init_and_empty_commit_give_one_commit_on_the_branch() {
+    let d = tempfile::tempdir().unwrap();
+    let g = Git::default();
+    g.init(d.path(), "main").await.unwrap();
+    config_identity(&g, d.path()).await;
+    assert!(g.rev_parse(d.path(), "HEAD").await.is_err(), "no HEAD yet");
+    let sha = g.commit_empty(d.path(), "Start the project").await.unwrap();
+    assert_eq!(g.rev_parse(d.path(), "main").await.unwrap(), sha);
+    assert_eq!(g.current_branch(d.path()).await.as_deref(), Some("main"));
+    assert_eq!(
+        g.run(d.path(), &["rev-list", "--count", "HEAD"])
+            .await
+            .unwrap(),
+        "1"
+    );
+}
+
+#[tokio::test]
+async fn remote_add_remove_and_push_never_forces() {
+    let d = tempfile::tempdir().unwrap();
+    let g = Git::default();
+    let bare = d.path().join("bare.git");
+    std::fs::create_dir(&bare).unwrap();
+    g.run(&bare, &["init", "--quiet", "--bare", "-b", "main"])
+        .await
+        .unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    g.init(&repo, "main").await.unwrap();
+    config_identity(&g, &repo).await;
+    let sha = g.commit_empty(&repo, "one").await.unwrap();
+    let url = bare.to_string_lossy().to_string();
+
+    assert!(g.remote_add(&repo, "origin", "--bad").await.is_err());
+    g.remote_add(&repo, "origin", &url).await.unwrap();
+    assert!(g.has_remote(&repo, "origin").await);
+    g.push_branch(&repo, "origin", "main").await.unwrap();
+    assert_eq!(g.rev_parse(&bare, "main").await.unwrap(), sha);
+
+    // Another repository with its own history: refused, nothing overwritten.
+    let other = d.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    g.init(&other, "main").await.unwrap();
+    config_identity(&g, &other).await;
+    g.commit_empty(&other, "unrelated").await.unwrap();
+    g.remote_add(&other, "origin", &url).await.unwrap();
+    assert!(g.push_branch(&other, "origin", "main").await.is_err());
+    assert_eq!(g.rev_parse(&bare, "main").await.unwrap(), sha);
+
+    g.remote_remove(&other, "origin").await.unwrap();
+    assert!(!g.has_remote(&other, "origin").await);
+}
+
+#[tokio::test]
+async fn merge_branch_fast_forwards_merges_and_aborts_a_conflict() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let g = init_repo(&repo).await;
+
+    // Fast-forward.
+    g.run(&repo, &["checkout", "--quiet", "-b", "ff"])
+        .await
+        .unwrap();
+    std::fs::write(repo.join("b.txt"), "b\n").unwrap();
+    g.run(&repo, &["add", "."]).await.unwrap();
+    g.run(&repo, &["commit", "--quiet", "-m", "b"])
+        .await
+        .unwrap();
+    let tip = g.rev_parse(&repo, "ff").await.unwrap();
+    g.run(&repo, &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    g.merge_branch(&repo, "ff").await.unwrap();
+    assert_eq!(g.rev_parse(&repo, "HEAD").await.unwrap(), tip);
+
+    // Diverged without conflict: a merge commit.
+    g.run(&repo, &["checkout", "--quiet", "-b", "side"])
+        .await
+        .unwrap();
+    std::fs::write(repo.join("c.txt"), "c\n").unwrap();
+    g.run(&repo, &["add", "."]).await.unwrap();
+    g.run(&repo, &["commit", "--quiet", "-m", "c"])
+        .await
+        .unwrap();
+    g.run(&repo, &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    std::fs::write(repo.join("d.txt"), "d\n").unwrap();
+    g.run(&repo, &["add", "."]).await.unwrap();
+    g.run(&repo, &["commit", "--quiet", "-m", "d"])
+        .await
+        .unwrap();
+    g.merge_branch(&repo, "side").await.unwrap();
+    assert!(
+        g.run(&repo, &["rev-parse", "-q", "--verify", "HEAD^2"])
+            .await
+            .is_ok()
+    );
+
+    // Conflict: aborted, tree and HEAD unchanged.
+    g.run(&repo, &["checkout", "--quiet", "-b", "clash"])
+        .await
+        .unwrap();
+    std::fs::write(repo.join("a.txt"), "clash\n").unwrap();
+    g.run(&repo, &["commit", "--quiet", "-am", "clash"])
+        .await
+        .unwrap();
+    g.run(&repo, &["checkout", "--quiet", "main"])
+        .await
+        .unwrap();
+    std::fs::write(repo.join("a.txt"), "main\n").unwrap();
+    g.run(&repo, &["commit", "--quiet", "-am", "main a"])
+        .await
+        .unwrap();
+    let head = g.rev_parse(&repo, "HEAD").await.unwrap();
+    assert!(g.merge_branch(&repo, "clash").await.is_err());
+    assert_eq!(g.rev_parse(&repo, "HEAD").await.unwrap(), head);
+    assert!(!g.merge_in_progress(&repo).await);
+    assert!(g.is_clean(&repo).await.unwrap());
+    assert_eq!(
+        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "main\n"
+    );
+}
+
+#[tokio::test]
+async fn blob_at_reads_files_and_tells_other_entries_apart() {
+    use xherd_git::BlobAt;
+
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let g = init_repo(&repo).await;
+
+    // Bytes that are not UTF-8, one over the 4 MiB exec cap, a symlink,
+    // a submodule entry and a directory.
+    let binary: Vec<u8> = (0..=255u8).cycle().take(300).collect();
+    std::fs::write(repo.join("pic.png"), &binary).unwrap();
+    let big: Vec<u8> = (0..5 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(repo.join("big.bin"), &big).unwrap();
+    std::os::unix::fs::symlink("a.txt", repo.join("link")).unwrap();
+    std::fs::create_dir(repo.join("dir")).unwrap();
+    std::fs::write(repo.join("dir/x.txt"), "x").unwrap();
+    g.run(&repo, &["add", "."]).await.unwrap();
+    let head = g.run(&repo, &["rev-parse", "HEAD"]).await.unwrap();
+    g.run(
+        &repo,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{head},sub"),
+        ],
+    )
+    .await
+    .unwrap();
+    g.run(&repo, &["commit", "--quiet", "-m", "more"])
+        .await
+        .unwrap();
+
+    let limit = 8 * 1024 * 1024;
+    assert_eq!(
+        g.blob_at(&repo, "HEAD", "nope.png", limit).await.unwrap(),
+        BlobAt::Missing
+    );
+    for p in ["link", "sub", "dir"] {
+        assert_eq!(
+            g.blob_at(&repo, "HEAD", p, limit).await.unwrap(),
+            BlobAt::NotFile,
+            "{p}"
+        );
+    }
+    match g.blob_at(&repo, "HEAD", "pic.png", limit).await.unwrap() {
+        BlobAt::Found { oid, bytes } => {
+            assert_eq!(bytes, binary);
+            let want = g.run(&repo, &["rev-parse", "HEAD:pic.png"]).await.unwrap();
+            assert_eq!(oid, want);
+        }
+        other => panic!("{other:?}"),
+    }
+    match g.blob_at(&repo, "HEAD", "big.bin", limit).await.unwrap() {
+        BlobAt::Found { bytes, .. } => assert!(bytes == big),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        g.blob_at(&repo, "HEAD", "big.bin", 1024 * 1024)
+            .await
+            .unwrap(),
+        BlobAt::TooLarge(big.len() as u64)
+    );
+    // The path is literal: a glob matches nothing.
+    assert_eq!(
+        g.blob_at(&repo, "HEAD", "*.png", limit).await.unwrap(),
+        BlobAt::Missing
+    );
+}
+
+#[tokio::test]
+async fn is_clean_sees_modified_and_untracked_files() {
+    let d = tempfile::tempdir().unwrap();
+    let g = init_repo(d.path()).await;
+    assert!(g.is_clean(d.path()).await.unwrap());
+    std::fs::write(d.path().join("new.txt"), "x").unwrap();
+    assert!(!g.is_clean(d.path()).await.unwrap());
+    std::fs::remove_file(d.path().join("new.txt")).unwrap();
+    std::fs::write(d.path().join("a.txt"), "changed\n").unwrap();
+    assert!(!g.is_clean(d.path()).await.unwrap());
+}
+
+#[tokio::test]
+async fn run_bytes_keeps_bytes_and_refuses_output_over_the_limit() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let g = init_repo(&repo).await;
+
+    let bytes = vec![0xff, 0x00, 0xfe, 0x89];
+    let out = g
+        .run_bytes(
+            &repo,
+            &["hash-object", "--stdin", "-w"],
+            1024,
+            Some(bytes.clone()),
+        )
+        .await
+        .unwrap();
+    let oid = String::from_utf8(out).unwrap().trim().to_string();
+    let back = g
+        .run_bytes(&repo, &["cat-file", "blob", &oid], 1024, None)
+        .await
+        .unwrap();
+    assert_eq!(back, bytes);
+    assert!(
+        g.run_bytes(&repo, &["cat-file", "blob", &oid], 3, None)
+            .await
+            .is_err()
+    );
+}

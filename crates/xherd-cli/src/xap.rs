@@ -432,7 +432,11 @@ pub fn run(cmd: XapCmd, json: bool) -> i32 {
                     println!("{text}");
                 } else {
                     let changed = v["result"]["changed"].as_bool() != Some(false);
-                    println!("{name}: {}", if changed { "accepted" } else { "no change" });
+                    match v["result"]["reason"].as_str() {
+                        Some(reason) if !changed => println!("{name}: no change ({reason})"),
+                        _ if changed => println!("{name}: accepted"),
+                        _ => println!("{name}: no change"),
+                    }
                 }
             } else {
                 eprintln!(

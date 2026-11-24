@@ -1070,6 +1070,7 @@ fn new_on(a: &Acme, name: &str, pack: Option<&str>, flow: Option<&str>) -> xherd
         permission_mode: None,
         runtime: None,
         model: None,
+        new_project: None,
     }
 }
 

@@ -882,6 +882,54 @@ async fn diff_source_route() {
     );
 }
 
+/// The image route: bytes with the locked headers, `not_an_image` as 415, the
+/// user only, and unknown query keys refused (R10, R11, R12).
+#[tokio::test]
+async fn image_route() {
+    let (dir, d, _a) = setup().await;
+    let wt = dir.path().join("wt");
+    std::fs::create_dir_all(&wt).unwrap();
+    let png = b"\x89PNG\r\n\x1a\n\x00\xff\x00 not text".to_vec();
+    std::fs::write(wt.join("a.png"), &png).unwrap();
+    std::fs::write(wt.join("a.txt"), "text").unwrap();
+    let mut b = Job::new("SC-3", 3);
+    b.launch = Some(vec!["rt".into()]);
+    b.workdir = Some(wt.to_string_lossy().into_owned());
+    d.create_job(b).await.unwrap();
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+
+    let (s, h, body) = fetch(local.clone(), "/api/v1/jobs/SC-3/image?path=./a.png").await;
+    assert_eq!((s, body), (StatusCode::OK, png));
+    let hv = |n: &str| h.get(n).map(|v| v.to_str().unwrap().to_string());
+    assert_eq!(hv("content-type").as_deref(), Some("image/png"));
+    assert_eq!(
+        hv("content-security-policy").as_deref(),
+        Some("sandbox; default-src 'none'; style-src 'unsafe-inline'")
+    );
+    assert_eq!(hv("x-content-type-options").as_deref(), Some("nosniff"));
+    assert_eq!(hv("cache-control").as_deref(), Some("no-store"));
+    assert_eq!(hv("referrer-policy").as_deref(), Some("no-referrer"));
+    let blob = hv("x-xherd-blob").expect("blob id");
+    assert_eq!(blob.len(), 40);
+    assert!(h.get("access-control-allow-origin").is_none());
+
+    let (s, _, _) = fetch(local.clone(), "/api/v1/jobs/SC-3/image?path=./a.txt").await;
+    assert_eq!(s, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let (s, _, _) = fetch(local.clone(), "/api/v1/jobs/SC-3/image?path=./a.png&x=1").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+
+    // An agent's token is never the user's.
+    let agent_t = mint_token(&d.store, TOKEN_AGENT, Some("x"), &["hooks"], 1)
+        .await
+        .unwrap();
+    let req = get("/api/v1/jobs/SC-3/image?path=./a.png")
+        .header("authorization", format!("Bearer {agent_t}"))
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(local, req).await.0, StatusCode::UNAUTHORIZED);
+}
+
 /// A plugin's secret settings are set from the UI: the value is stored in
 /// secrets.json and never sent back; only declared secrets are accepted.
 #[tokio::test]

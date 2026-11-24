@@ -22,7 +22,8 @@
   import { MODE_HINT, modes } from '../lib/modes';
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
-  import { agentLabel, agentOf, canMarkDone, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
+  import NoOrigin from '../components/NoOrigin.svelte';
+  import { agentLabel, agentOf, canMarkDone, canShipWithoutOrigin, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
   import ActionPanel from '../panels/Action.svelte';
   import SaveActions from '../components/SaveActions.svelte';
   import { actionOfTab, defaultOpen, groups, headerMarks, headerText, lastResult, needsApproval, running, tabId as actionTab, visible, type GroupKind } from '../lib/actions';
@@ -313,7 +314,7 @@
     {:else if openAction}
       {#key `${agent.id}/${openAction}`}<ActionPanel {agent} actionId={openAction} />{/key}
     {:else if Panel}
-      {#key agent.id}<SaveActions {agent} /><Panel {agent} />{/key}
+      {#key agent.id}<SaveActions {agent} />{#if canShipWithoutOrigin(agent)}<NoOrigin {agent} />{/if}<Panel {agent} />{/key}
     {/if}
   </div>
 </div>
