@@ -56,6 +56,8 @@ pub enum FileState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackFile {
+    /// The pack the file belongs to (`xherd` or a plugin's pack).
+    pub pack: String,
     pub runtime: String,
     pub path: String,
     pub state: FileState,
@@ -102,9 +104,16 @@ pub enum Choice {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackChoice {
+    /// Absent means the built-in pack.
+    #[serde(default = "builtin_pack")]
+    pub pack: String,
     pub runtime: String,
     pub path: String,
     pub choice: Choice,
+}
+
+fn builtin_pack() -> String {
+    xherd_flow::BUILTIN.to_string()
 }
 
 fn refuse(code: &'static str, message: impl Into<String>) -> ActionError {
@@ -123,21 +132,37 @@ async fn write(path: &Path, text: &str) -> Result<(), ActionError> {
 }
 
 impl Daemon {
-    /// Every file of the built-in pack for `runtime`, classified, then the
-    /// obsolete ones (recorded, no longer in the pack), by path.
+    /// Every file of `pack` for `runtime`, classified, then the obsolete ones
+    /// (recorded, no longer in the pack), by path. A plugin pack first passes
+    /// the install-path rule (R12), and none of its paths may be recorded
+    /// under another pack.
     pub async fn pack_files(
         &self,
+        name: &str,
         runtime: &str,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<Vec<PackFile>, ActionError> {
-        let name = xherd_flow::BUILTIN;
-        let p = self
-            .packs
-            .get(name)
-            .ok_or_else(|| refuse("unknown_pack", format!("no pack {name}")))?;
+        let unknown = || refuse("unknown_pack", format!("no pack {name}"));
+        let p = self.packs.get(name).ok_or_else(unknown)?;
+        let source = self.pack_sources.get(name).ok_or_else(unknown)?;
+        let files: Vec<(&str, &str)> = source
+            .files
+            .iter()
+            .map(|(n, t)| (n.as_str(), t.as_str()))
+            .collect();
+        if source.plugin.is_some() {
+            let builtin = self
+                .packs
+                .get(xherd_flow::BUILTIN)
+                .ok_or_else(|| refuse("unknown_pack", "no built-in pack"))?;
+            xherd_flow::install::check_plugin_install(p, builtin, &files, env)
+                .map_err(|e| refuse("install", e))?;
+        }
         let plan = p
-            .plan_install(runtime, xherd_flow::install::BUILTIN_FILES, env)
+            .plan_install(runtime, &files, env)
             .map_err(|e| refuse("install", e))?;
+        self.refuse_paths_of_other_packs(name, runtime, &plan)
+            .await?;
         let records = self
             .store
             .installs(runtime, name)
@@ -163,6 +188,7 @@ impl Daemon {
                 rec.and_then(|r| r.declined.as_deref()),
             );
             out.push(PackFile {
+                pack: name.into(),
                 runtime: runtime.into(),
                 path,
                 state,
@@ -177,6 +203,7 @@ impl Daemon {
             }
             let cur = disk(r.path.clone().into()).await;
             out.push(PackFile {
+                pack: name.into(),
                 runtime: runtime.into(),
                 edited: cur.is_some_and(|c| c != r.sha256),
                 path: r.path,
@@ -188,6 +215,33 @@ impl Daemon {
         Ok(out)
     }
 
+    /// A planned path recorded under another pack for this runtime would be
+    /// overwritten by this one: refuse before anything is written.
+    async fn refuse_paths_of_other_packs(
+        &self,
+        name: &str,
+        runtime: &str,
+        plan: &[xherd_flow::install::Planned],
+    ) -> Result<(), ActionError> {
+        let store = |e: xherd_store::StoreError| refuse("store", e.to_string());
+        for (rt, other) in self.store.install_packs().await.map_err(store)? {
+            if rt != runtime || other == name {
+                continue;
+            }
+            let rows = self.store.installs(runtime, &other).await.map_err(store)?;
+            if let Some(f) = plan
+                .iter()
+                .find(|f| rows.iter().any(|r| Path::new(&r.path) == f.path))
+            {
+                return Err(refuse(
+                    "path_taken",
+                    format!("{}: installed by pack {other}", f.path.display()),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// The files that need the user: edited ones (kept, new text beside them)
     /// and obsolete ones, for every runtime of the pack (R5, R6).
     pub async fn pack_review(
@@ -197,7 +251,7 @@ impl Daemon {
         let mut out = Vec::new();
         for rt in self.pack_runtimes() {
             out.extend(
-                self.pack_files(&rt, env)
+                self.pack_files(xherd_flow::BUILTIN, &rt, env)
                     .await?
                     .into_iter()
                     .filter(|f| matches!(f.state, FileState::Edited | FileState::Obsolete)),
@@ -215,13 +269,12 @@ impl Daemon {
         choices: &[PackChoice],
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Result<(), ActionError> {
-        let name = xherd_flow::BUILTIN;
         let review = self.pack_review(env).await?;
         let mut picked = Vec::new();
         for c in choices {
             let f = review
                 .iter()
-                .find(|f| f.runtime == c.runtime && f.path == c.path)
+                .find(|f| f.pack == c.pack && f.runtime == c.runtime && f.path == c.path)
                 .filter(|f| match f.state {
                     FileState::Edited => matches!(c.choice, Choice::UseNew | Choice::KeepMine),
                     _ => matches!(c.choice, Choice::Remove | Choice::Keep),
@@ -236,7 +289,7 @@ impl Daemon {
         }
         let store = |e: xherd_store::StoreError| refuse("store", e.to_string());
         for (f, choice) in picked {
-            let rt = f.runtime.as_str();
+            let (rt, name) = (f.runtime.as_str(), f.pack.as_str());
             let root = self
                 .packs
                 .get(name)
@@ -301,7 +354,7 @@ impl Daemon {
         remove_obsolete: bool,
     ) -> Result<Vec<Installed>, ActionError> {
         let name = pack.unwrap_or(xherd_flow::BUILTIN);
-        let (Some(p), true) = (self.packs.get(name), name == xherd_flow::BUILTIN) else {
+        let (Some(p), true) = (self.packs.get(name), self.pack_selectable(name)) else {
             return Err(refuse("unknown_pack", format!("no pack {name}")));
         };
         let runtimes: Vec<&str> = match runtime {
@@ -323,7 +376,7 @@ impl Daemon {
         let mut out = Vec::new();
         for rt in runtimes {
             let root = p.install_root(rt, env).map_err(|e| refuse("install", e))?;
-            for f in self.pack_files(rt, env).await? {
+            for f in self.pack_files(name, rt, env).await? {
                 let action = match f.state {
                     FileState::Current => InstallAction::Unchanged,
                     FileState::Declined => InstallAction::Declined,

@@ -255,10 +255,13 @@ impl Daemon {
         default: bool,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Check {
-        let missing = self.pack_files(rt, env).await.map(|files| {
-            let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
-            (n(FileState::Missing), n(FileState::Outdated))
-        });
+        let missing = self
+            .pack_files(xherd_flow::BUILTIN, rt, env)
+            .await
+            .map(|files| {
+                let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
+                (n(FileState::Missing), n(FileState::Outdated))
+            });
         let (ok, detail) = match missing {
             Ok((0, 0)) => (true, "installed".to_string()),
             Ok((m, o)) => (false, format!("{m} command files missing, {o} out of date")),
@@ -291,10 +294,13 @@ impl Daemon {
         default: bool,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
     ) -> Check {
-        let pending = self.pack_files(rt, env).await.map(|files| {
-            let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
-            (n(FileState::Edited), n(FileState::Obsolete))
-        });
+        let pending = self
+            .pack_files(xherd_flow::BUILTIN, rt, env)
+            .await
+            .map(|files| {
+                let n = |s: FileState| files.iter().filter(|f| f.state == s).count();
+                (n(FileState::Edited), n(FileState::Obsolete))
+            });
         let (ok, detail) = match pending {
             Ok((0, 0)) => (true, "nothing to decide".to_string()),
             Ok((e, o)) => (false, format!("{e} edited files, {o} obsolete files")),

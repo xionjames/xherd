@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use xherd_core::hash::content_sha256;
 use xherd_core::paths::Paths;
-use xherd_daemon::install::{Choice, InstallAction, PackChoice};
+use xherd_daemon::install::{Choice, FileState, InstallAction, PackChoice};
 use xherd_daemon::*;
 
 /// A first run (no config.json) starts with every plugin off; these tests want
@@ -126,6 +126,7 @@ async fn installs_keeps_edits_and_upgrades() {
 
 fn choice(path: &std::path::Path, c: Choice) -> PackChoice {
     PackChoice {
+        pack: "xherd".into(),
         runtime: "claude-code".into(),
         path: path.to_string_lossy().into_owned(),
         choice: c,
@@ -376,4 +377,136 @@ async fn start_installs_and_upgrades_when_given_an_env() {
         std::fs::metadata(&status).unwrap().modified().unwrap(),
         before
     );
+}
+
+const ACME_PACK: &str = r#"
+name: acme-sdd
+version: 1.2.0
+protocol: 1
+specDir: private
+memoryNote: required
+private: [HANDOFF.md]
+install:
+  claude-code:
+    prefix: "/acme-sdd:"
+    commands: { from: commands/*.md, to: "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md", format: command }
+    args: "$ARGUMENTS"
+commands: { resume: "{prefix}resume", handoff: "{prefix}handoff", status: "{prefix}status", ask: "{prefix}ask {prompt}" }
+flows:
+  feature:
+    start: "{prefix}start {key} {prompt}"
+    stages:
+      - { id: brief, role: spec, class: critical, gate: { docs: [spec.md] }, next: [{ run: "{prefix}design" }] }
+"#;
+
+const ACME_PROMPTS: [&str; 12] = [
+    "rules", "start", "design", "plan", "next", "commit", "review", "ship", "ask", "resume",
+    "handoff", "status",
+];
+
+/// A home with the `acme-sdd` flow plugin in its plugins folder, with `to`
+/// as the claude-code destination of its commands.
+fn home_with_acme(to: &str) -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    home_with_config(&home);
+    let dir = home.path().join("plugins/acme-sdd");
+    std::fs::create_dir_all(dir.join("pack/commands")).unwrap();
+    std::fs::write(
+        dir.join("xherd-plugin.json"),
+        serde_json::json!({
+            "name": "acme-sdd", "kind": "flow", "version": "1.2.3",
+            "data": {"flow": {"pack": "pack"}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let pack = ACME_PACK.replace(
+        "${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md",
+        to,
+    );
+    std::fs::write(dir.join("pack/xherd-flow.yaml"), pack).unwrap();
+    for p in ACME_PROMPTS {
+        std::fs::write(
+            dir.join(format!("pack/commands/{p}.md")),
+            format!("# {p}\n"),
+        )
+        .unwrap();
+    }
+    home
+}
+
+#[tokio::test]
+async fn a_plugin_pack_installs_under_its_own_folder() {
+    let home = home_with_acme("${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md");
+    let user = tempfile::tempdir().unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let dir = user.path().join(".claude/commands/acme-sdd");
+
+    let done = d
+        .install(Some("claude-code"), Some("acme-sdd"), &env, false)
+        .await
+        .unwrap();
+    assert_eq!(done.len(), ACME_PROMPTS.len());
+    assert!(done.iter().all(|f| f.action == InstallAction::Written));
+    assert!(dir.join("start.md").is_file());
+    assert!(!user.path().join(".claude/commands/xherd").exists());
+    // Recorded under the plugin's pack, not the built-in one.
+    let rows = d.store.installs("claude-code", "acme-sdd").await.unwrap();
+    assert_eq!(rows.len(), done.len());
+    assert!(
+        d.store
+            .installs("claude-code", "xherd")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let files = d.pack_files("acme-sdd", "claude-code", &env).await.unwrap();
+    assert!(
+        files
+            .iter()
+            .all(|f| f.pack == "acme-sdd" && f.state == FileState::Current)
+    );
+}
+
+#[tokio::test]
+async fn a_plugin_pack_that_escapes_its_folder_writes_nothing() {
+    let home = home_with_acme("${HOME}/.ssh/{name}.md");
+    let user = tempfile::tempdir().unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+
+    // The start-up load already refused the pack.
+    let e = d
+        .install(Some("claude-code"), Some("acme-sdd"), &env, false)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "unknown_pack");
+    assert!(!user.path().join(".ssh").exists());
+}
+
+#[tokio::test]
+async fn a_path_recorded_under_another_pack_is_refused() {
+    let home = home_with_acme("${CLAUDE_CONFIG_DIR:-~/.claude}/commands/acme-sdd/{name}.md");
+    let user = tempfile::tempdir().unwrap();
+    let o = Options::new(Arc::new(FakeDriver::default()), Arc::new(SystemClock));
+    let d = Daemon::start(Paths::at(home.path()), o).await.unwrap();
+    let h = user.path().to_string_lossy().into_owned();
+    let env = move |k: &str| (k == "HOME").then(|| h.clone());
+    let taken = user.path().join(".claude/commands/acme-sdd/start.md");
+    d.store
+        .put_install("claude-code", "xherd", &taken.to_string_lossy(), "abc")
+        .await
+        .unwrap();
+
+    let e = d
+        .install(Some("claude-code"), Some("acme-sdd"), &env, false)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, "path_taken");
+    assert!(!taken.exists());
 }
