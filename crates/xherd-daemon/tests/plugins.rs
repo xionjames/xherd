@@ -1653,3 +1653,28 @@ async fn remove_of_a_flow_plugin_is_refused_while_a_job_uses_it_then_keeps_the_a
     assert_eq!(agent_named(&t, "acme-sdd-x").await.unwrap().source, None);
     assert_eq!(t.d.store.all_flow_assignments().await.unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn a_finished_job_of_a_removed_pack_still_loads_after_a_restart() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    install_acme(&t, &repo).await;
+    let mut job = xherd_core::Job::new("sdd-1", 1);
+    job.pack = Some("acme-sdd".into());
+    job.status = xherd_core::Status::Done;
+    t.d.store.put_job(&job).await.unwrap();
+    t.d.plugin_remove("acme-sdd", false).await.unwrap();
+
+    let d2 = restarted(&t).await;
+    assert!(!d2.packs.contains_key("acme-sdd"));
+    let a = d2.action("sdd-1", UserAction::Get).await.unwrap();
+    assert_eq!(a.pack.as_deref(), Some("acme-sdd"));
+    assert!(
+        d2.store
+            .list_jobs()
+            .await
+            .unwrap()
+            .iter()
+            .any(|j| j.name == "sdd-1")
+    );
+}
