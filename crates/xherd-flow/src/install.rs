@@ -1,7 +1,8 @@
 //! Rendering a pack's command files for a runtime (design §6.7). Writing them
 //! and keeping user edits is the daemon's job (`xherd install`).
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use crate::Pack;
 
@@ -274,6 +275,83 @@ impl Pack {
     }
 }
 
+/// The pack's own files in `dir`, as `plan_install` wants them: `FORMAT.md`
+/// when present and every file an `install.*.commands`/`agents` `from` glob
+/// matches. Anything that is not a regular file is skipped; a matching file
+/// that is not UTF-8 is an error.
+pub fn read_pack_dir(dir: &Path, pack: &Pack) -> Result<Vec<(String, String)>, String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    if dir.join("FORMAT.md").is_file() {
+        names.insert("FORMAT.md".into());
+    }
+    let globs = pack
+        .install
+        .values()
+        .flat_map(|i| [&i.commands, &i.agents])
+        .flatten()
+        .map(|s| s.from.as_str());
+    for glob in globs {
+        let folder = glob.rsplit_once('/').map_or("", |(d, _)| d);
+        let Ok(entries) = std::fs::read_dir(dir.join(folder)) else {
+            continue;
+        };
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("{glob}: {e}"))?;
+            let file = entry.file_name().to_string_lossy().into_owned();
+            let path = if folder.is_empty() {
+                file
+            } else {
+                format!("{folder}/{file}")
+            };
+            if glob_name(glob, &path).is_some() && entry.file_type().is_ok_and(|t| t.is_file()) {
+                names.insert(path);
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|p| {
+            let text = std::fs::read_to_string(dir.join(&p)).map_err(|e| format!("{p}: {e}"))?;
+            Ok((p, text))
+        })
+        .collect()
+}
+
+/// The command templates of the pack that no file answers: for each runtime
+/// with a `commands` set, `{prefix}<name>` needs the file its `from` glob
+/// names for `<name>`. One line per missing template and file.
+pub fn missing_prompts(pack: &Pack, files: &[(&str, &str)]) -> Vec<String> {
+    let mut templates: Vec<&str> = pack.commands.values().map(String::as_str).collect();
+    for f in pack.flows.values() {
+        templates.push(&f.start);
+        for s in &f.stages {
+            templates.extend(s.command.as_deref());
+            for r in &s.next {
+                templates.push(&r.run);
+                templates.extend(r.auto_approved.as_deref());
+            }
+        }
+    }
+    let mut missing = Vec::new();
+    for t in templates {
+        let Some(name) = t
+            .strip_prefix("{prefix}")
+            .and_then(|r| r.split_whitespace().next())
+        else {
+            missing.push(format!("{t}: does not start with {{prefix}}"));
+            continue;
+        };
+        for set in pack.install.values().filter_map(|i| i.commands.as_ref()) {
+            let file = set.from.replacen('*', name, 1);
+            let line = format!("{t}: no {file}");
+            if !files.iter().any(|(p, _)| *p == file) && !missing.contains(&line) {
+                missing.push(line);
+            }
+        }
+    }
+    missing
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,27 +413,61 @@ mod tests {
     #[test]
     fn every_template_has_a_prompt() {
         let p = crate::builtin();
-        let mut templates: Vec<&str> = p.commands.values().map(String::as_str).collect();
-        for f in p.flows.values() {
-            templates.push(&f.start);
-            for s in &f.stages {
-                for r in &s.next {
-                    templates.push(&r.run);
-                    templates.extend(r.auto_approved.as_deref());
-                }
-            }
-        }
-        for t in templates {
-            let name = t
-                .strip_prefix("{prefix}")
-                .and_then(|r| r.split_whitespace().next())
-                .unwrap_or_else(|| panic!("{t} does not start with {{prefix}}"));
-            let file = format!("commands/{name}.md");
-            assert!(
-                BUILTIN_FILES.iter().any(|(p, _)| *p == file),
-                "{t}: no {file}"
-            );
-        }
+        assert_eq!(missing_prompts(&p, BUILTIN_FILES), Vec::<String>::new());
+    }
+
+    fn mini_pack(next: &str) -> Pack {
+        Pack::parse(&format!(
+            "name: acme\nversion: 1.0.0\nprotocol: 1\ninstall:\n  claude-code:\n    prefix: '/acme:'\n    commands:\n      from: 'commands/*.md'\n      to: '${{HOME}}/.claude/commands/acme/{{name}}.md'\n      format: command\nflows:\n  f:\n    start: '{{prefix}}spec'\n    stages:\n      - id: spec\n        role: spec\n        class: critical\n        gate:\n          docs: [spec.md]\n        next:\n          - run: '{next}'\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn missing_prompts_lists_the_command_without_a_file() {
+        let p = mini_pack("{prefix}plan");
+        let files = [("commands/spec.md", "x")];
+        assert_eq!(
+            missing_prompts(&p, &files),
+            ["{prefix}plan: no commands/plan.md"]
+        );
+        let files = [("commands/spec.md", "x"), ("commands/plan.md", "y")];
+        assert!(missing_prompts(&p, &files).is_empty());
+    }
+
+    #[test]
+    fn read_pack_dir_reads_format_and_matching_files() {
+        let d = &std::env::temp_dir().join(format!("xherd-read-pack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(d);
+        std::fs::create_dir_all(d.join("commands")).unwrap();
+        std::fs::write(d.join("FORMAT.md"), "f").unwrap();
+        std::fs::write(d.join("commands/spec.md"), "s").unwrap();
+        std::fs::write(d.join("commands/notes.txt"), "n").unwrap();
+        std::fs::write(d.join("other.md"), "o").unwrap();
+        std::fs::create_dir(d.join("commands/dir.md")).unwrap();
+        let p = mini_pack("{prefix}spec");
+        let files = read_pack_dir(d, &p).unwrap();
+        assert_eq!(
+            files,
+            [
+                ("FORMAT.md".to_string(), "f".to_string()),
+                ("commands/spec.md".to_string(), "s".to_string())
+            ]
+        );
+        std::fs::write(d.join("commands/bad.md"), [0xff, 0xfe]).unwrap();
+        assert!(read_pack_dir(d, &p).unwrap_err().contains("bad.md"));
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn built_in_files_read_back_from_disk() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/xherd");
+        let files = read_pack_dir(&dir, &crate::builtin()).unwrap();
+        let mut disk: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        disk.sort();
+        let mut embedded: Vec<&str> = BUILTIN_FILES.iter().map(|(p, _)| *p).collect();
+        embedded.sort();
+        assert_eq!(disk, embedded);
     }
 
     #[test]
