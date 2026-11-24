@@ -11,7 +11,14 @@ export interface Line {
 }
 export interface FileDiff {
   path: string;
-  status: 'added' | 'deleted' | 'modified' | 'renamed' | 'binary' | 'too large';
+  status: 'added' | 'deleted' | 'modified' | 'renamed' | 'too large';
+  /** Git says the contents are binary: no lines, the status is kept. */
+  binary?: boolean;
+  /** Before a rename. */
+  oldPath?: string;
+  /** Abbreviated git blob ids of the sides, from the `index` line; absent for a side that does not exist. */
+  oldBlob?: string;
+  newBlob?: string;
   adds: number;
   dels: number;
   lines: Line[];
@@ -46,8 +53,16 @@ export function parseUnified(diff: string): FileDiff[] {
     if (!f) continue;
     if (raw.startsWith('new file mode')) f.status = 'added';
     else if (raw.startsWith('deleted file mode')) f.status = 'deleted';
+    else if (raw.startsWith('rename from ')) f.oldPath = raw.slice(12);
     else if (raw.startsWith('rename to ')) { f.status = 'renamed'; f.path = raw.slice(10); }
-    else if (raw.startsWith('Binary files')) f.status = 'binary';
+    else if (raw.startsWith('Binary files')) f.binary = true;
+    else if (raw.startsWith('index ') && f.lines.length === 0) {
+      const m = raw.match(/^index ([0-9a-f]+)\.\.([0-9a-f]+)/);
+      if (m) {
+        if (!/^0+$/.test(m[1])) f.oldBlob = m[1];
+        if (!/^0+$/.test(m[2])) f.newBlob = m[2];
+      }
+    }
     else if (raw.startsWith('Not shown: ')) { f.status = 'too large'; f.note = raw; }
     else if (raw.startsWith('@@')) {
       const m = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
@@ -60,6 +75,15 @@ export function parseUnified(diff: string): FileDiff[] {
     else if (raw.startsWith(' ')) f.lines.push({ kind: 'c', old: o++, new: n++, text: raw.slice(1) });
   }
   return files;
+}
+
+/** A hash of what a file's diff shows, to tell whether it changed (the "Viewed" mark, expansion).
+ *  A binary file has no lines, so its blob ids count too. */
+export function fingerprint(f: { lines: { kind: string; text: string }[]; binary?: boolean; oldBlob?: string; newBlob?: string }): string {
+  let h = 5381;
+  for (const l of f.lines) for (const c of l.kind + l.text + '\n') h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
+  if (f.binary) for (const c of `${f.oldBlob ?? ''}..${f.newBlob ?? ''}`) h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
+  return String(h);
 }
 
 /** The files whose path contains `q`, ignoring case and surrounding spaces (R16). */

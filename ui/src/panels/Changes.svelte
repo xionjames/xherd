@@ -6,9 +6,11 @@
   import { mdNoteText, type MdNote } from '../lib/notes';
   import { showError } from '../lib/errors.svelte';
   import { route, go } from '../lib/router.svelte';
-  import { parseUnified, expand, matches, sourceLines, STEP, type FileDiff, type Reveal } from '../lib/diff';
-  import DiffLines, { lineKey } from '../components/DiffLines.svelte';
+  import { parseUnified, expand, fingerprint, matches, sourceLines, STEP, type FileDiff, type Reveal } from '../lib/diff';
+  import { previewKind, hasPreview, imageSides, opensOnPreview } from '../lib/images';
+  import DiffLines,{ lineKey } from '../components/DiffLines.svelte';
   import FilePreview from '../components/FilePreview.svelte';
+  import ImageSide from '../components/ImageSide.svelte';
   import FilePath from '../components/FilePath.svelte';
   import Clamp from '../components/Clamp.svelte';
   import Seg from '../components/Seg.svelte';
@@ -57,21 +59,15 @@
   }
   // "Viewed" marks (spec §16): a file's mark holds while its diff is unchanged.
   let viewed = $state<Record<string, string>>({});
-  const fingerprint = (f: { lines: { kind: string; text: string }[] }) => {
-    let h = 5381;
-    for (const l of f.lines) for (const c of l.kind + l.text + '\n') h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
-    return String(h);
-  };
-  const isViewed = (f: { path: string; lines: { kind: string; text: string }[] }) => viewed[f.path] === fingerprint(f);
-  async function toggleViewed(f: { path: string; lines: { kind: string; text: string }[] }) {
+  const isViewed = (f: FileDiff) => viewed[f.path] === fingerprint(f);
+  async function toggleViewed(f: FileDiff) {
     const fp = isViewed(f) ? undefined : fingerprint(f);
     try {
       await post(`/jobs/${id}/viewed`, { path: f.path, ...(fp ? { fingerprint: fp } : {}) });
       const v = { ...viewed };
       if (fp) v[f.path] = fp; else delete v[f.path];
       viewed = v;
-      if (fp) collapsed[f.path] = true;
-    } catch (e) { showError('Could not save the mark', e); }
+      if (fp) collapsed[f.path] = true;    } catch (e) { showError('Could not save the mark', e); }
   }
   $effect(() => {
     const a = id;
@@ -85,7 +81,7 @@
     const e = ex[f.path];
     return e && e.fp === fingerprint(f) && e.q === query ? e : null;
   };
-  const expandable = (f: FileDiff) => (f.status === 'modified' || f.status === 'renamed') && !f.note;
+  const expandable = (f: FileDiff) => (f.status === 'modified' || f.status === 'renamed') && !f.binary && !f.note;
   const shown = (f: FileDiff) => {
     if (!expandable(f)) return f.lines;
     const e = cur(f);
@@ -116,12 +112,10 @@
     e.reveal[gap] = { up: r.up + (side === 'up' ? STEP : 0), down: r.down + (side === 'down' ? STEP : 0) };
   };
   let collapsed = $state<Record<string, boolean>>({});
+  // A non-SVG image marked Viewed starts collapsed, so it loads nothing (R9).
+  const isCollapsed = (f: FileDiff) => collapsed[f.path] ?? (opensOnPreview(f) && isViewed(f));
   let previewing = $state<Record<string, boolean>>({});
-  const previewKind = (p: string) => {
-    const e = p.split('.').pop()?.toLowerCase() ?? '';
-    return e === 'md' || e === 'markdown' ? 'markdown' : e === 'html' || e === 'htm' ? 'html'
-      : ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(e) ? 'image' : null;
-  };
+  const isPreview = (f: FileDiff) => previewing[f.path] ?? opensOnPreview(f);
 
   // Tabs: Uncommitted · All changes (branch against its base) · one commit.
   // Without a `view` in the URL the open gate decides, as before.
@@ -162,8 +156,6 @@
     const i = files.findIndex((f) => f.path === path);
     document.getElementById(`cf-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-  // Only the commit awaiting approval (no sha yet): its files are what is in the worktree.
-  const canPreview = $derived(!!d?.commit && !d.commit.sha);
   // The open proposal's tasks, with what proved each one (title, evidence from the agent).
   const commitTasks = $derived(
     d?.commit && !d.commit.sha
@@ -210,24 +202,34 @@
       {#each files as f, i (f.path)}
         <section class="card" id="cf-{i}">
           <div class="ch">
-            <button class="btn ghost sm icon" aria-label={collapsed[f.path] ? 'Expand' : 'Collapse'} aria-expanded={!collapsed[f.path]} onclick={() => (collapsed[f.path] = !collapsed[f.path])}>
-              {collapsed[f.path] ? '▸' : '▾'}
+            <button class="btn ghost sm icon" aria-label={isCollapsed(f) ? 'Expand' : 'Collapse'} aria-expanded={!isCollapsed(f)} onclick={() => (collapsed[f.path] = !isCollapsed(f))}>
+              {isCollapsed(f) ? '▸' : '▾'}
             </button>
             <span class="fpath"><FilePath path={f.path} /></span>
             {#if f.status !== 'modified'}<span class="pill">{f.status}</span>{/if}
+            {#if f.binary}<span class="pill">binary</span>{/if}
             <span class="grow"></span>
-            {#if canPreview && previewKind(f.path) && f.status !== 'deleted' && !f.note}
-              <button class="btn sm" aria-pressed={!!previewing[f.path]} onclick={() => (previewing[f.path] = !previewing[f.path])}>
-                {previewing[f.path] ? 'Diff' : 'Preview'}
+            {#if hasPreview(f)}
+              <button class="btn sm" aria-pressed={isPreview(f)} onclick={() => (previewing[f.path] = !isPreview(f))}>
+                {isPreview(f) ? 'Diff' : 'Preview'}
               </button>
             {/if}
             <label class="f chk"><input type="checkbox" checked={isViewed(f)} onchange={() => toggleViewed(f)} /> Viewed</label>
             <span class="num adds">+{f.adds}</span><span class="num dels">−{f.dels}</span>
           </div>
-          {#if !collapsed[f.path]}
+          {#if !isCollapsed(f)}
             {@const k = previewKind(f.path)}
-            {#if f.note}<p class="empty cb">{f.note}</p>
-            {:else if previewing[f.path] && k}<FilePreview {id} path={f.path} kind={k} notes={mdNotes[f.path]} onnote={setMd(f.path)} />{:else}<DiffLines lines={shown(f)} notes={notes[f.path]} onnote={setNote(f.path)}
+            {#if isPreview(f) && k === 'image'}
+              {@const s = imageSides(f)}
+              <div class="imgpair">
+                {#if s.before}<ImageSide {id} path={s.before.path} side="old" {query} label="Before" expect={f.oldBlob} quiet={!!f.note} />{/if}
+                {#if s.after === 'too large'}<figure class="imgside"><figcaption class="lbl">After</figcaption><span class="imgph">{f.path} — too large</span></figure>
+                {:else if s.after}<ImageSide {id} path={s.after.path} side="new" {query} label="After" expect={f.newBlob} />{/if}
+              </div>
+            {:else if f.note}<p class="empty cb">{f.note}</p>
+            {:else if isPreview(f) && k && k !== 'image'}<FilePreview {id} path={f.path} kind={k} {query} notes={mdNotes[f.path]} onnote={setMd(f.path)} />
+            {:else if f.binary && !f.lines.length}<p class="empty cb">Binary file: no text diff.</p>
+            {:else}<DiffLines lines={shown(f)} notes={notes[f.path]} onnote={setNote(f.path)}
                 onexpand={expandable(f) ? expandAt(f) : undefined} expandNote={cur(f)?.note} />{/if}
           {/if}
         </section>

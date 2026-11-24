@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { expand, filterFiles, gaps, hunkStart, lineDiff, matches, parseUnified, sourceLines, STEP } from './diff';
+import { expand, filterFiles, fingerprint, gaps, hunkStart, lineDiff, matches, parseUnified, sourceLines, STEP } from './diff';
 
 describe('parseUnified', () => {
   it('reads files, hunks and line numbers', () => {
@@ -32,6 +32,73 @@ describe('parseUnified', () => {
       path: 'heap.hprof', status: 'too large', adds: 0, dels: 0, lines: [],
       note: 'Not shown: heap.hprof is 6.0 GiB, over the 8.0 MiB limit',
     }]);
+  });
+});
+
+describe('parseUnified, binary files', () => {
+  const parse = (...l: string[]) => parseUnified(l.join('\n'))[0];
+
+  it('keeps added and deleted, flags binary and reads the blob ids', () => {
+    expect(parse(
+      'diff --git a/img/a.png b/img/a.png', 'new file mode 100644', 'index 0000000..3f2a9c1',
+      'Binary files /dev/null and b/img/a.png differ',
+    )).toMatchObject({ path: 'img/a.png', status: 'added', binary: true, adds: 0, dels: 0, lines: [], newBlob: '3f2a9c1' });
+    const added = parse(
+      'diff --git a/img/a.png b/img/a.png', 'new file mode 100644', 'index 0000000..3f2a9c1',
+      'Binary files /dev/null and b/img/a.png differ',
+    );
+    expect(added.oldBlob).toBeUndefined();
+    const deleted = parse(
+      'diff --git a/img/a.png b/img/a.png', 'deleted file mode 100644', 'index 3f2a9c1..0000000',
+      'Binary files a/img/a.png and /dev/null differ',
+    );
+    expect(deleted).toMatchObject({ status: 'deleted', binary: true, oldBlob: '3f2a9c1' });
+    expect(deleted.newBlob).toBeUndefined();
+  });
+
+  it('reads both blob ids of a modified one', () => {
+    expect(parse(
+      'diff --git a/a.png b/a.png', 'index 1111111..2222222 100644', 'Binary files a/a.png and b/a.png differ',
+    )).toMatchObject({ status: 'modified', binary: true, oldBlob: '1111111', newBlob: '2222222' });
+  });
+
+  it('keeps the old path of a renamed one, with or without changed bytes', () => {
+    expect(parse(
+      'diff --git a/old.png b/new.png', 'similarity index 90%', 'rename from old.png', 'rename to new.png',
+      'index 1111111..2222222', 'Binary files a/old.png and b/new.png differ',
+    )).toMatchObject({ path: 'new.png', oldPath: 'old.png', status: 'renamed', binary: true, oldBlob: '1111111', newBlob: '2222222' });
+    expect(parse(
+      'diff --git a/old.png b/new.png', 'similarity index 100%', 'rename from old.png', 'rename to new.png',
+    )).toMatchObject({ path: 'new.png', oldPath: 'old.png', status: 'renamed' });
+  });
+
+  it('gives a renamed text file its old path and no binary flag', () => {
+    const f = parse('diff --git a/a.md b/b.md', 'similarity index 90%', 'rename from a.md', 'rename to b.md', '@@ -1 +1 @@', '-x', '+y');
+    expect(f).toMatchObject({ path: 'b.md', oldPath: 'a.md', status: 'renamed', adds: 1, dels: 1 });
+    expect(f.binary).toBeFalsy();
+  });
+});
+
+describe('fingerprint', () => {
+  // The hash the Changes panel used before it moved here.
+  const before = (f: { lines: { kind: string; text: string }[] }) => {
+    let h = 5381;
+    for (const l of f.lines) for (const c of l.kind + l.text + '\n') h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
+    return String(h);
+  };
+
+  it('is unchanged for a text file', () => {
+    const f = parseUnified('diff --git a/a b/a\n@@ -1 +1 @@\n-x\n+y')[0];
+    expect(fingerprint(f)).toBe(before(f));
+  });
+
+  it('changes with the blob ids of a binary file', () => {
+    const png = (o: string, n: string) => parseUnified(
+      `diff --git a/a.png b/a.png\nindex ${o}..${n} 100644\nBinary files a/a.png and b/a.png differ`,
+    )[0];
+    expect(fingerprint(png('1111111', '2222222'))).not.toBe(fingerprint(png('1111111', '3333333')));
+    expect(fingerprint(png('1111111', '2222222'))).not.toBe(fingerprint(png('4444444', '2222222')));
+    expect(fingerprint(png('1111111', '2222222'))).toBe(fingerprint(png('1111111', '2222222')));
   });
 });
 
