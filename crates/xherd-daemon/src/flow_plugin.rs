@@ -232,6 +232,84 @@ fn same_content(a: &AgentDef, b: &AgentDef) -> bool {
 }
 
 impl Daemon {
+    /// R6, R7, R9: store a flow plugin's record, its agents and its default
+    /// assignments in one transaction, under the agents lock. An agent of the
+    /// plugin that is already saved (an earlier install) keeps its id and
+    /// dates and gets a new version only when its content changed; it is
+    /// brought back from the archive, since the assignments name it. A name
+    /// held by another agent is `name_taken` and nothing is written.
+    pub(crate) async fn apply_flow_plugin(
+        &self,
+        record: &xherd_store::PluginRecord,
+        fp: &FlowPlugin,
+    ) -> Result<(), ActionError> {
+        let store = crate::agents::store;
+        let _w = self.agents_write.lock().await;
+        let have = self.store.list_agent_defs().await.map_err(store)?;
+        let now = self.clock.now();
+        let mut defs = Vec::new();
+        for def in &fp.agents {
+            let mut def = def.clone();
+            match have.iter().find(|a| a.name == def.name) {
+                None => {
+                    def.id = xherd_core::new_id();
+                    def.version = 1;
+                    def.created_at = now;
+                    def.updated_at = now;
+                }
+                Some(old) if old.source.as_deref() != def.source.as_deref() => {
+                    return Err(crate::create::refuse(
+                        "name_taken",
+                        format!(
+                            "an agent named {} exists and is not from this plugin",
+                            def.name
+                        ),
+                    ));
+                }
+                Some(old) => {
+                    def.id = old.id.clone();
+                    def.created_at = old.created_at;
+                    if same_content(&def, old) {
+                        def.version = old.version;
+                        def.updated_at = old.updated_at;
+                    } else {
+                        def.version = old.version + 1;
+                        def.updated_at = now;
+                    }
+                }
+            }
+            def.archived_at = None;
+            defs.push(def);
+        }
+        let rows: Vec<(String, Assignment)> = fp
+            .assignments
+            .iter()
+            .map(|(flow, a)| {
+                let id = defs
+                    .iter()
+                    .find(|d| d.name == a.agent_id)
+                    .map(|d| d.id.clone())
+                    .unwrap_or_default();
+                (
+                    flow.clone(),
+                    Assignment {
+                        agent_id: id,
+                        ..a.clone()
+                    },
+                )
+            })
+            .collect();
+        self.store
+            .put_flow_plugin(record, &defs, &fp.pack.name, &rows)
+            .await
+            .map_err(store)?;
+        for d in &defs {
+            self.sup.agent_limit(&d.id, Some(d.max_live_jobs));
+        }
+        self.agents_changed();
+        Ok(())
+    }
+
     pub(crate) async fn flow_context(&self) -> Result<FlowContext, ActionError> {
         let store = crate::agents::store;
         let agents = self.store.list_agent_defs().await.map_err(store)?;

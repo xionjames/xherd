@@ -1224,8 +1224,13 @@ async fn start_installs_every_selectable_pack_and_a_broken_one_does_not_stop_the
 /// A git repository holding the `acme-sdd` flow plugin; `agents` is the text
 /// of its agents file.
 fn acme_repo(agents: &str) -> Repo {
+    flow_repo("acme-sdd", agents)
+}
+
+/// The same plugin under another name (the pack is named like the plugin).
+fn flow_repo(name: &str, agents: &str) -> Repo {
     let m = manifest(
-        "acme-sdd",
+        name,
         "flow",
         json!({"data": {"flow": {"pack": "pack", "agents": "agents.json", "assignments": {
             "feature": {
@@ -1236,10 +1241,11 @@ fn acme_repo(agents: &str) -> Repo {
         .iter()
         .map(|p| (format!("pack/commands/{p}.md"), format!("# {p}\n")))
         .collect();
+    let pack = ACME_PACK.replace("acme-sdd", name);
     let mut files: Vec<(&str, &str)> = vec![
         ("xherd-plugin.json", &m),
         ("agents.json", agents),
-        ("pack/xherd-flow.yaml", ACME_PACK),
+        ("pack/xherd-flow.yaml", &pack),
     ];
     files.extend(prompts.iter().map(|(p, t)| (p.as_str(), t.as_str())));
     Repo::new(&files)
@@ -1325,4 +1331,109 @@ async fn preview_of_a_flow_plugin_refuses_a_broken_pack() {
         refused(&t, &Repo::new(&[("xherd-plugin.json", &m)])).await,
         "bad_manifest"
     );
+}
+
+#[tokio::test]
+async fn install_of_a_flow_plugin_saves_its_agents_and_assignments() {
+    let t = daemon().await;
+    let repo = acme_repo(ACME_AGENTS);
+    let digest = digest_of(&t, &repo).await;
+    let i =
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap();
+    assert_eq!(i.name, "acme-sdd");
+    assert!(t.home.path().join("plugins/acme-sdd/agents.json").exists());
+    assert_eq!(t.d.store.plugin_records().await.unwrap().len(), 1);
+
+    let agents = t.d.store.list_agent_defs().await.unwrap();
+    let mut names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["acme-sdd-analyst", "acme-sdd-architect"]);
+    assert!(
+        agents
+            .iter()
+            .all(|a| a.source.as_deref() == Some("acme-sdd") && a.version == 1 && !a.id.is_empty())
+    );
+    let architect = agents
+        .iter()
+        .find(|a| a.name.ends_with("architect"))
+        .unwrap();
+
+    let rows = t.d.store.all_flow_assignments().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|(pack, flow, _)| pack == "acme-sdd" && flow == "feature")
+    );
+    let design = rows.iter().find(|(_, _, a)| a.stage == "design").unwrap();
+    assert_eq!(design.2.agent_id, architect.id);
+    assert!(design.2.human);
+    assert_eq!(scratch_left(&t), 0);
+}
+
+#[tokio::test]
+async fn install_of_a_flow_plugin_refuses_a_taken_name_and_leaves_nothing() {
+    let t = daemon().await;
+    let hand: xherd_core::agent_def::AgentDef =
+        serde_json::from_value(json!({"name": "acme-sdd-architect", "runtime": "claude-code"}))
+            .unwrap();
+    t.d.create_agent(hand).await.unwrap();
+    let repo = acme_repo(ACME_AGENTS);
+    let digest = digest_of(&t, &repo).await;
+    let e =
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap_err();
+    assert_eq!(e.code, "name_taken");
+    assert!(!t.home.path().join("plugins/acme-sdd").exists());
+    assert!(t.d.store.plugin_records().await.unwrap().is_empty());
+    let agents = t.d.store.list_agent_defs().await.unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].source, None);
+    assert!(t.d.store.all_flow_assignments().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn install_of_a_flow_plugin_with_an_unknown_skill_works_and_the_agent_is_broken() {
+    let t = daemon().await;
+    let agents = r#"{"agents": [
+        {"name": "analyst", "runtime": "claude-code", "skills": ["no-such-skill"]},
+        {"name": "architect", "runtime": "claude-code"}]}"#;
+    let repo = acme_repo(agents);
+    let digest = digest_of(&t, &repo).await;
+    t.d.plugin_install(&repo.url(), None, None, &digest)
+        .await
+        .unwrap();
+    let views = t.d.agents().await.unwrap();
+    let by = |n: &str| views.iter().find(|v| v.def.name == n).unwrap();
+    assert!(by("acme-sdd-analyst").broken.is_some());
+    assert!(by("acme-sdd-architect").broken.is_none());
+}
+
+#[tokio::test]
+async fn two_flow_plugins_with_an_architect_live_side_by_side() {
+    let t = daemon().await;
+    for name in ["acme-sdd", "beta-sdd"] {
+        let repo = flow_repo(name, ACME_AGENTS);
+        let digest = digest_of(&t, &repo).await;
+        t.d.plugin_install(&repo.url(), None, None, &digest)
+            .await
+            .unwrap();
+    }
+    let agents = t.d.store.list_agent_defs().await.unwrap();
+    let mut names: Vec<_> = agents.iter().map(|a| a.name.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "acme-sdd-analyst",
+            "acme-sdd-architect",
+            "beta-sdd-analyst",
+            "beta-sdd-architect"
+        ]
+    );
+    let rows = t.d.store.all_flow_assignments().await.unwrap();
+    assert_eq!(rows.iter().filter(|(p, _, _)| p == "acme-sdd").count(), 2);
+    assert_eq!(rows.iter().filter(|(p, _, _)| p == "beta-sdd").count(), 2);
 }

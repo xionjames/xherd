@@ -12,7 +12,7 @@ use xherd_plugin::manifest::parse_version;
 use xherd_plugin::{Kind, MANIFEST_FILE, Manifest, PluginSource};
 
 use crate::create::refuse as refuse_action;
-use crate::flow_plugin::{FlowContext, FlowPluginView, read_flow_plugin};
+use crate::flow_plugin::{FlowContext, FlowPlugin, FlowPluginView, read_flow_plugin};
 use crate::plugin_dirs::{MAX_BYTES, MAX_DEPTH};
 use crate::repos::{CLONE_TIMEOUT, remove_tree};
 use crate::{ActionError, Daemon};
@@ -475,7 +475,7 @@ impl Daemon {
         let _write = self.plugins_write.lock().await;
         let ctx = self.flow_context().await?;
         let plugins = self.paths.plugins();
-        let (view, found_path, sha) = self
+        let (view, found_path, sha, flow) = self
             .with_fetched(&src, |root, sha| {
                 let (dir, found_path) = match locate(root, src.path.as_deref())? {
                     Found::One(dir, p) => (dir, p),
@@ -486,18 +486,31 @@ impl Daemon {
                         ));
                     }
                 };
-                let view = self.inspect(&dir, &ctx)?;
+                let (view, flow) = self.inspect_full(&dir, &ctx)?;
                 if view.digest != expect_digest {
                     return Err(refuse_action(
                         "changed_since_preview",
                         "the source changed since the preview: preview it again",
                     ));
                 }
-                not_yet(&view)?;
                 if view.replaces == Some("external") {
                     return Err(refuse_action(
                         "plugin_exists",
                         format!("a plugin named {} is already installed", view.name),
+                    ));
+                }
+                if let Some(taken) = view
+                    .flow
+                    .iter()
+                    .flat_map(|f| &f.agents)
+                    .find(|a| a.state == "taken")
+                {
+                    return Err(refuse_action(
+                        "name_taken",
+                        format!(
+                            "an agent named {} exists and is not from this plugin",
+                            taken.saved_name
+                        ),
                     ));
                 }
                 let staging = stage_plugin(&plugins, &view.name, &dir)?;
@@ -505,7 +518,7 @@ impl Daemon {
                     let _ = std::fs::remove_dir_all(&staging);
                     return Err(refuse_action("io", format!("{}: {e}", view.name)));
                 }
-                Ok((view, found_path, sha))
+                Ok((view, found_path, sha, flow))
             })
             .await?;
         let now = self.clock.now();
@@ -528,7 +541,17 @@ impl Daemon {
             }),
         };
         let recorded = async {
-            self.store.upsert_plugin_record(&record).await?;
+            match &flow {
+                Some(fp) => self
+                    .apply_flow_plugin(&record, fp)
+                    .await
+                    .map_err(|e| e.message)?,
+                None => self
+                    .store
+                    .upsert_plugin_record(&record)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            }
             self.store
                 .insert_event(xherd_store::Event {
                     id: xherd_core::new_id(),
@@ -541,6 +564,7 @@ impl Daemon {
                     at: now,
                 })
                 .await
+                .map_err(|e| e.to_string())
         }
         .await;
         if let Err(e) = recorded {
@@ -927,6 +951,15 @@ impl Daemon {
 
     /// Check the plugin folder `dir` and describe it (R3, R5, R5a).
     pub(crate) fn inspect(&self, dir: &Path, ctx: &FlowContext) -> Result<PluginView, ActionError> {
+        self.inspect_full(dir, ctx).map(|(view, _)| view)
+    }
+
+    /// `inspect`, and the flow plugin it read (kind `flow`), for the install.
+    pub(crate) fn inspect_full(
+        &self,
+        dir: &Path,
+        ctx: &FlowContext,
+    ) -> Result<(PluginView, Option<FlowPlugin>), ActionError> {
         let scan = scan(dir)?;
         let json = std::fs::read_to_string(dir.join(MANIFEST_FILE))
             .map_err(|e| refuse_action("bad_manifest", format!("{MANIFEST_FILE}: {e}")))?;
@@ -955,7 +988,7 @@ impl Daemon {
             Some(_) => Some("external"),
             None => on_disk.then_some("external"),
         };
-        let flow = match m.kind {
+        let (flow, read) = match m.kind {
             Kind::Flow => {
                 let bad = |e: String| refuse_action("bad_manifest", e);
                 let fp = read_flow_plugin(dir, &m).map_err(bad)?;
@@ -968,11 +1001,11 @@ impl Daemon {
                         &xherd_core::runner::agent_env,
                     )
                     .map_err(bad)?;
-                Some(view)
+                (Some(view), Some(fp))
             }
-            _ => None,
+            _ => (None, None),
         };
-        Ok(PluginView {
+        let view = PluginView {
             flow,
             runs: runs(&m),
             settings: m
@@ -997,12 +1030,13 @@ impl Daemon {
             bytes: scan.bytes,
             replaces,
             warning: WARNING,
-        })
+        };
+        Ok((view, read))
     }
 }
 
-/// Installing and updating a flow plugin (its agents and assignments) is the
-/// next change: until then the preview shows it and these refuse.
+/// Updating a flow plugin (its agents and assignments) is the next change:
+/// until then the preview shows it and the update refuses.
 fn not_yet(view: &PluginView) -> Result<(), ActionError> {
     if view.flow.is_some() {
         return Err(refuse_action(
