@@ -260,6 +260,7 @@ mod tests {
             tasks: vec![],
             sha: None,
             needs_human: None,
+            pushed: None,
         })
     }
 

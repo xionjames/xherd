@@ -4186,6 +4186,7 @@ impl Actor {
             tasks: vec![],
             sha: Some(sha.clone()),
             needs_human: None,
+            pushed: None,
         });
         self.log(
             None,
