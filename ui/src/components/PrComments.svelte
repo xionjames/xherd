@@ -61,6 +61,9 @@
     void save();
   }
   const open = $derived((round?.comments ?? []).length);
+  // Comments whose reply is posted are done: collapsed at the end, locked.
+  const pending = $derived((round?.comments ?? []).filter((c) => !posted(c)));
+  const finished = $derived((round?.comments ?? []).filter((c) => posted(c)));
 
   // Sending = approving the PR gate: replies are posted, fixes go to the agent.
   const deciding = $derived(prGate(agent.gate));
@@ -88,16 +91,9 @@
 {#if error}
   <div class="card cb"><p class="err">{error}</p></div>
 {/if}
-{#if round && open}
-  <section class="card" aria-label="Pull request comments">
-    <div class="ch">
-      <h2>Comments to decide</h2>
-      <span class="muted">{open} in this round{#if deciding}: check what to do with each, then send the decisions{/if}</span>
-    </div>
-    {#if round.error}<div class="cb"><p class="err">pr-review.md: {round.error}</p></div>{/if}
-    <ul class="list">
-      {#each round.comments as c (c.id)}
+{#snippet item(c: PrComment)}
         {@const v = effective(c)}
+        {@const done = posted(c)}
         <li class="dec {v?.decision ?? 'none'}">
           <div class="row">
             <b>{c.author}</b>
@@ -109,22 +105,45 @@
           <p class="pre wrap-any">{c.body}</p>
           <div class="row">
             <Seg label="Decision for this comment" value={v?.decision ?? ('' as Decision)} onchange={(d) => edit(c, { decision: d })}
-              options={DECISIONS.map((d) => ({ value: d, label: `${GLYPH[d]} ${d}`, tone: TONE[d] }))} />
+              options={DECISIONS.map((d) => ({ value: d, label: `${GLYPH[d]} ${d}`, tone: TONE[d], disabled: done }))} />
             {#if v && !overrides[c.id]}<span class="muted">proposed by the agent</span>{/if}
             {#if !v}<span class="pill gate">no decision yet</span>{/if}
           </div>
           {#if v}
-            <input placeholder="Note (why)" value={v.note ?? ''}
+            <input placeholder="Note (why)" value={v.note ?? ''} disabled={done}
               onchange={(e) => edit(c, { note: e.currentTarget.value })} />
             {#if v.decision !== 'skip'}
               <textarea rows="2"
                 placeholder={v.decision === 'reply' ? 'Reply to post (required)' : 'Reply draft (not posted)'}
-                value={v.reply ?? ''} onchange={(e) => edit(c, { reply: e.currentTarget.value })}></textarea>
+                value={v.reply ?? ''} disabled={done} onchange={(e) => edit(c, { reply: e.currentTarget.value })}></textarea>
             {/if}
             {#if v.decision === 'reply'}<span class="hint">Posted on the pull request when you approve, marked as sent by xherd.</span>{/if}
           {/if}
         </li>
+{/snippet}
+{#if round && open}
+  <section class="card" aria-label="Pull request comments">
+    <div class="ch">
+      <h2>Comments to decide</h2>
+      <span class="muted">{open} in this round{#if deciding}: check what to do with each, then send the decisions{/if}</span>
+    </div>
+    {#if round.error}<div class="cb"><p class="err">pr-review.md: {round.error}</p></div>{/if}
+    <ul class="list">
+      {#each pending as c (c.id)}
+        {@render item(c)}
       {/each}
+      {#if finished.length}
+        <li class="done">
+          <details>
+            <summary>{finished.length} replied, collapsed</summary>
+            <ul class="list">
+              {#each finished as c (c.id)}
+                {@render item(c)}
+              {/each}
+            </ul>
+          </details>
+        </li>
+      {/if}
     </ul>
     {#if deciding}
       <div class="cf">
@@ -139,7 +158,9 @@
 
 <style>
   /* The decision shows on the comment's edge too: fix cobalt, reply green. */
-  .dec { border-left: 3px solid transparent; }
+  .dec { border-left: 3px solid transparent; text-align: left; }
+  .done { padding: 0; }
+  .done summary { padding: 12px var(--pad); cursor: pointer; }
   .dec.fix { border-left-color: var(--accent); }
   .dec.reply { border-left-color: var(--live); }
   .dec.none { border-left-color: var(--gate); }
