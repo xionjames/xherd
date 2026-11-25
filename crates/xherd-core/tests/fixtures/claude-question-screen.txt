@@ -1,0 +1,12 @@
+────────────────────────────────────────────────────────────────────────
+ ☐ Store
+
+Which store should the cache use?
+
+❯ 1. SQLite
+     One file, already a dependency
+  2. Memory
+     Lost at restart
+  3. Type something.
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

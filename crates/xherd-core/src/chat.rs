@@ -243,6 +243,30 @@ pub fn summary(tool: &str, input: &Value) -> String {
     cut(&line.replace('\n', " "), SUMMARY_MAX)
 }
 
+/// Whether the terminal screen shows the question `q`: its text (first 60
+/// characters) and every option label, whitespace folded (R22). The check
+/// before answering with keys; it depends on the TUI, so it lives here with
+/// [`question_keys`].
+pub fn question_on_screen(screen: &str, q: &Question) -> bool {
+    let fold = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let screen = fold(screen);
+    let text = fold(&q.question);
+    let text: String = text.chars().take(60).collect();
+    !text.is_empty()
+        && screen.contains(&text)
+        && q.options.iter().all(|o| screen.contains(&fold(&o.label)))
+}
+
+/// The keys that pick option `index` (0-based) of a question: its number,
+/// `"1"`…`"9"`; none past the ninth.
+pub fn question_keys(index: usize) -> Vec<String> {
+    if index < 9 {
+        vec![(index + 1).to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// The first `max` bytes of `s`, cut at a character boundary.
 fn head(s: &str, max: usize) -> &str {
     let mut end = s.len().min(max);
@@ -513,6 +537,39 @@ mod tests {
     use serde_json::json;
 
     const FIXTURE: &str = include_str!("../tests/fixtures/claude-transcript.jsonl");
+
+    const QUESTION_SCREEN: &str = include_str!("../tests/fixtures/claude-question-screen.txt");
+
+    #[test]
+    fn a_question_is_found_on_the_screen() {
+        let q = store_question();
+        assert!(question_on_screen(QUESTION_SCREEN, &q));
+        // Wrapped lines still match.
+        let wrapped = QUESTION_SCREEN.replace("Which store", "Which\n   store");
+        assert!(question_on_screen(&wrapped, &q));
+    }
+
+    #[test]
+    fn a_question_is_not_on_another_screen() {
+        let q = store_question();
+        assert!(!question_on_screen("$ cargo test\n", &q));
+        assert!(!question_on_screen(
+            &QUESTION_SCREEN.replace("Memory", "Redis"),
+            &q
+        ));
+        let empty = Question {
+            question: " ".into(),
+            ..q
+        };
+        assert!(!question_on_screen(QUESTION_SCREEN, &empty));
+    }
+
+    #[test]
+    fn keys_are_the_option_number() {
+        assert_eq!(question_keys(0), ["1"]);
+        assert_eq!(question_keys(8), ["9"]);
+        assert!(question_keys(9).is_empty());
+    }
 
     fn run(prefix: Option<&str>, text: &str) -> Vec<ChatBody> {
         let mut m = Mapper::new(prefix.map(str::to_string));
