@@ -77,6 +77,10 @@ pub struct Snapshot {
     pub reviewers: Vec<Reviewer>,
     /// The branch the pull request merges into, when the host says.
     pub base: Option<String>,
+    /// The pull request's title and description on the host, when it says.
+    /// Untrusted text.
+    pub title: Option<String>,
+    pub body: Option<String>,
 }
 
 /// The remote-tracking ref of a pull request's base branch: the host's base
@@ -387,6 +391,8 @@ mod tests {
                 .collect(),
             reviewers: Vec::new(),
             base: None,
+            title: None,
+            body: None,
         }
     }
 

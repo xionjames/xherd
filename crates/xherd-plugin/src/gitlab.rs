@@ -113,6 +113,8 @@ pub fn status(mr: &Value, approvals: &Value) -> Value {
         "mergeable": mergeable,
         "base": mr["target_branch"],
         "reviewers": reviewers,
+        "title": mr["title"],
+        "body": mr["description"],
     })
 }
 
@@ -432,6 +434,20 @@ mod tests {
         assert_eq!(
             parse_status(&status(&merged, &Value::Null)).unwrap().state,
             xherd_core::pr::PrState::Merged
+        );
+    }
+
+    #[test]
+    fn a_merge_request_carries_its_title_and_description() {
+        let mr = json!({"state": "opened", "title": "Add x", "description": "Why."});
+        let snap = parse_status(&status(&mr, &Value::Null)).unwrap();
+        assert_eq!(snap.title.as_deref(), Some("Add x"));
+        assert_eq!(snap.body.as_deref(), Some("Why."));
+        // GitLab sends `null` for an empty description: not told.
+        let none = json!({"state": "opened", "title": "t", "description": null});
+        assert_eq!(
+            parse_status(&status(&none, &Value::Null)).unwrap().body,
+            None
         );
     }
 
