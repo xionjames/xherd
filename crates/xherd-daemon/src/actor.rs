@@ -188,6 +188,12 @@ pub enum UserAction {
         answer: PermOption,
         from: AnsweredFrom,
     },
+    /// Answer a waiting question card with option `option` (0-based) (R22).
+    Question {
+        qid: String,
+        option: usize,
+        from: AnsweredFrom,
+    },
     Get,
 }
 
@@ -726,6 +732,7 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         chat: None,
         chat_resumed: false,
         permission_replies: BTreeMap::new(),
+        question_from: BTreeMap::new(),
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -796,6 +803,9 @@ struct Actor {
     /// The hooks waiting for a permission answer, by card id (R19). In memory:
     /// a restart drops them, so the runtime asks in its own prompt.
     permission_replies: BTreeMap<String, oneshot::Sender<Option<PermOption>>>,
+    /// Questions answered with keys, by id: the option's label and where the
+    /// answer came from, until the question's tool result arrives (R22).
+    question_from: BTreeMap<String, (String, AnsweredFrom)>,
 }
 
 /// Most permission requests that wait at once for one job (R19).
@@ -1467,7 +1477,7 @@ impl Actor {
     /// What `chat_poll` read: the complete lines become events, logged and
     /// published (R4, R5). A file shorter than the position was replaced: it
     /// is read again from its start. A full read is followed by another.
-    fn on_chat_read(
+    async fn on_chat_read(
         &mut self,
         session: String,
         file: Option<PathBuf>,
@@ -1529,12 +1539,70 @@ impl Actor {
             }
             f.offset = new_offset;
         }
+        let before = self.job.status;
+        let changed = self.track_questions(&mut bodies);
         self.chat_emit(&session, bodies);
+        if changed {
+            self.commit(before).await;
+        }
         if again {
             self.chat_poll();
         } else if self.chat_leaving() {
             self.chat_finish();
         }
+    }
+
+    /// Questions in the bodies read (R21, R23): one that opens becomes a
+    /// waiting card; one whose result arrived leaves `waiting`, and shows who
+    /// answered it when xherd typed the answer. True when `waiting` changed.
+    fn track_questions(
+        &mut self,
+        bodies: &mut [(xherd_core::chat::ChatBody, Option<u64>)],
+    ) -> bool {
+        use xherd_core::chat::{ChatBody, QUESTION_TOOL, Resolution};
+        use xherd_core::job::{WaitKind, Waiting};
+        let mut changed = false;
+        for (body, _) in bodies {
+            let ChatBody::Question {
+                id,
+                questions,
+                answerable,
+                state,
+            } = body
+            else {
+                continue;
+            };
+            let at = self.job.waiting.iter().position(|w| w.id == *id);
+            match state {
+                Resolution::Waiting if at.is_none() => {
+                    self.job.waiting.push(Waiting {
+                        id: id.clone(),
+                        kind: WaitKind::Question,
+                        since: self.now(),
+                        tool: Some(QUESTION_TOOL.into()),
+                        summary: questions
+                            .first()
+                            .map(|q| q.question.clone())
+                            .unwrap_or_default(),
+                        options: Vec::new(),
+                        questions: questions.clone(),
+                        answerable: *answerable,
+                    });
+                    changed = true;
+                }
+                Resolution::InTerminal => {
+                    if let Some(i) = at {
+                        self.job.waiting.remove(i);
+                        changed = true;
+                    }
+                    if let Some((answer, from)) = self.question_from.remove(id.as_str()) {
+                        *state = Resolution::Answered { answer, from };
+                    }
+                }
+                _ => {}
+            }
+        }
+        changed
     }
 
     /// Logs and publishes bodies as the followed session's events: one append
@@ -2967,6 +3035,10 @@ impl Actor {
                 payload = Some(self.answer_permission(pid, *answer, *from).await?);
                 "user.permission"
             }
+            UserAction::Question { qid, option, from } => {
+                payload = Some(self.answer_question(qid, *option, *from).await?);
+                "user.question"
+            }
             UserAction::Start { port_base } => {
                 self.start(*port_base).await?;
                 return Ok(());
@@ -3585,6 +3657,70 @@ impl Actor {
             });
         }
         Ok(json!({"pid": w.id, "tool": w.tool, "answer": name, "from": from}))
+    }
+
+    /// The user's answer to a question card (R22): the option's number is
+    /// typed, but only once the screen shows that question. It skips `send`'s
+    /// `agent_blocked` refusal on purpose: the keys go into the dialog that
+    /// blocks the agent. The card leaves `waiting` now; its chat event
+    /// resolves when the question's tool result arrives.
+    async fn answer_question(
+        &mut self,
+        qid: &str,
+        option: usize,
+        from: AnsweredFrom,
+    ) -> Result<Value, ActionError> {
+        use xherd_core::chat::{question_keys, question_on_screen};
+        use xherd_core::job::WaitKind;
+        let Some(i) = self
+            .job
+            .waiting
+            .iter()
+            .position(|w| w.id == qid && w.kind == WaitKind::Question)
+        else {
+            return Err(refuse("already_answered", "that question is not waiting"));
+        };
+        let w = &self.job.waiting[i];
+        let (Some(q), true) = (w.questions.first(), w.answerable) else {
+            return Err(refuse(
+                "question_not_answerable",
+                "answer this question in the terminal",
+            ));
+        };
+        let keys = question_keys(option);
+        let Some(label) = q.options.get(option).map(|o| o.label.clone()) else {
+            return Err(refuse("not_offered", "that option does not exist"));
+        };
+        if keys.is_empty() {
+            return Err(refuse("not_offered", "answer this one in the terminal"));
+        }
+        if !self.job.status.is_live() {
+            return Err(refuse(
+                "not_live",
+                format!("{} is {}", self.job.name, self.job.status),
+            ));
+        }
+        let screen = self
+            .env
+            .driver
+            .capture(&self.ctx(), 60)
+            .await
+            .map_err(|e| refuse("driver", e.0))?;
+        if !question_on_screen(&screen, q) {
+            return Err(refuse(
+                "question_not_shown",
+                "the terminal does not show that question: answer there",
+            ));
+        }
+        self.env
+            .driver
+            .send_keys(&self.ctx(), &keys)
+            .await
+            .map_err(|e| refuse("driver", e.0))?;
+        self.job.waiting.remove(i);
+        self.question_from
+            .insert(qid.to_string(), (label.clone(), from));
+        Ok(json!({"qid": qid, "answer": label, "from": from}))
     }
 
     /// Ask (#121, R5–R7): resume an agent that has no session with the
@@ -5565,7 +5701,7 @@ impl Actor {
                 file,
                 offset,
                 read,
-            } => self.on_chat_read(session, file, offset, read),
+            } => self.on_chat_read(session, file, offset, read).await,
             WorkResult::PermissionTimeout { pid } => {
                 self.end_permission(&pid, xherd_core::chat::Resolution::TimedOut)
                     .await
