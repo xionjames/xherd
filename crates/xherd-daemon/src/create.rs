@@ -155,6 +155,74 @@ impl Daemon {
         Ok(def)
     }
 
+    /// One agent of a job, resolved once and kept (R37, R40): the runtime
+    /// (the request's, else its own, else its fallback), autonomy, mode,
+    /// model and the launch line. `new_job` and promote share it.
+    pub(crate) async fn bake_agent(
+        &self,
+        id: &str,
+        def: &AgentDef,
+        runtime_req: Option<&str>,
+        defaults: &xherd_core::resolve::Defaults,
+        profile: Option<&xherd_core::profile::Profile>,
+        requested: &impl Fn(Option<String>) -> xherd_core::resolve::Requested,
+    ) -> Result<(xherd_core::agent_def::JobAgent, Effective), ActionError> {
+        let (runtime, fell_back) = match runtime_req.map(str::trim) {
+            Some(r) if !r.is_empty() => (r.to_string(), false),
+            _ => xherd_core::resolve::usable_runtime(
+                &def.runtime,
+                def.fallback_runtime.as_deref(),
+                |r| self.runtime_terminal(r).is_ok(),
+            )
+            .ok_or_else(|| {
+                refuse(
+                    "agent_broken",
+                    format!(
+                        "agent {}: its runtime and its fallback cannot run",
+                        def.name
+                    ),
+                )
+            })?,
+        };
+        let eff =
+            xherd_core::resolve::effective(defaults, profile, Some(def), &requested(Some(runtime)));
+        if !eff.autonomy.selectable() {
+            return Err(refuse(
+                "autonomy_unavailable",
+                "autonomy never is not available yet (v1.x, R-1209)",
+            ));
+        }
+        let term = self.runtime_terminal(&eff.runtime)?;
+        let mut snap = def.snapshot();
+        snap.runtime = eff.runtime.clone();
+        snap.fell_back = fell_back;
+        snap.autonomy = Some(eff.autonomy);
+        snap.permission_mode = Some(eff.mode);
+        snap.model = eff.model.clone();
+        snap.launch = mode_launch(&term, eff.mode, eff.model.as_deref(), self.sandbox)?;
+        // The skills it lists, not copied yet: the first stage's agent gets
+        // them at creation, the others when the job switches to them (R39).
+        snap.skills = def
+            .skills
+            .iter()
+            .map(|n| SkillCopy {
+                name: n.clone(),
+                sha256: String::new(),
+                installed: false,
+                skipped: None,
+            })
+            .collect();
+        // The memory as it is now; later edits do not reach this job (R28).
+        snap.memory = self
+            .store
+            .agent_memory(id)
+            .await
+            .map_err(|e| refuse("store", e.to_string()))?
+            .map(|(t, _)| t)
+            .filter(|t| !t.trim().is_empty());
+        Ok((snap, eff))
+    }
+
     /// Create an agent (R-001..R-005c). It is saved as `queued` (R-003).
     pub async fn new_job(&self, mut req: NewJob) -> Result<Job, ActionError> {
         // The agent for stages with no assignment (`--agent A`, #141).
@@ -333,64 +401,17 @@ impl Daemon {
         let mut baked: BTreeMap<String, (xherd_core::agent_def::JobAgent, Effective)> =
             BTreeMap::new();
         for (id, def) in &defs {
-            let (runtime, fell_back) = match req.runtime.as_deref().map(str::trim) {
-                Some(r) if !r.is_empty() => (r.to_string(), false),
-                _ => xherd_core::resolve::usable_runtime(
-                    &def.runtime,
-                    def.fallback_runtime.as_deref(),
-                    |r| self.runtime_terminal(r).is_ok(),
+            let pair = self
+                .bake_agent(
+                    id,
+                    def,
+                    req.runtime.as_deref(),
+                    &defaults,
+                    profile.as_ref(),
+                    &requested,
                 )
-                .ok_or_else(|| {
-                    refuse(
-                        "agent_broken",
-                        format!(
-                            "agent {}: its runtime and its fallback cannot run",
-                            def.name
-                        ),
-                    )
-                })?,
-            };
-            let eff = xherd_core::resolve::effective(
-                &defaults,
-                profile.as_ref(),
-                Some(def),
-                &requested(Some(runtime)),
-            );
-            if !eff.autonomy.selectable() {
-                return Err(refuse(
-                    "autonomy_unavailable",
-                    "autonomy never is not available yet (v1.x, R-1209)",
-                ));
-            }
-            let term = self.runtime_terminal(&eff.runtime)?;
-            let mut snap = def.snapshot();
-            snap.runtime = eff.runtime.clone();
-            snap.fell_back = fell_back;
-            snap.autonomy = Some(eff.autonomy);
-            snap.permission_mode = Some(eff.mode);
-            snap.model = eff.model.clone();
-            snap.launch = mode_launch(&term, eff.mode, eff.model.as_deref(), self.sandbox)?;
-            // The skills it lists, not copied yet: the first stage's agent gets
-            // them below, the others when the job switches to them (R39).
-            snap.skills = def
-                .skills
-                .iter()
-                .map(|n| SkillCopy {
-                    name: n.clone(),
-                    sha256: String::new(),
-                    installed: false,
-                    skipped: None,
-                })
-                .collect();
-            // The memory as it is now; later edits do not reach this job (R28).
-            snap.memory = self
-                .store
-                .agent_memory(id)
-                .await
-                .map_err(|e| refuse("store", e.to_string()))?
-                .map(|(t, _)| t)
-                .filter(|t| !t.trim().is_empty());
-            baked.insert(id.clone(), (snap, eff));
+                .await?;
+            baked.insert(id.clone(), pair);
         }
         // One runtime per job until R-025: a stage without an agent counts
         // when the session starts on it.

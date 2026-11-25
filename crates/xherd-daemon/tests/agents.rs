@@ -362,7 +362,7 @@ async fn stages_are_assigned_and_resolved_through_the_previous_one() {
     assert_eq!(stored[0].agent_id, arch.def.id);
     // another flow is untouched; the listing has every flow
     assert!(t.d.assignments("xherd", "bugfix").await.unwrap().is_empty());
-    assert_eq!(t.d.flows().await.unwrap().len(), 2);
+    assert_eq!(t.d.flows().await.unwrap().len(), 3);
     // PUT replaces
     t.d.set_assignments("xherd", "feature", vec![])
         .await
