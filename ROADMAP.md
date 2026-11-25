@@ -147,6 +147,8 @@ by theme; update it together with them.
 - [ ] Dynamic job actions, remaining: actions declared by plugins and flow packs (`runCommand`, R-1105), a Ports panel, and per-state or per-stage visibility. Job actions themselves (registered by the job, saved on repo profiles, run by you) are done, checked above
 - [ ] Mobile access (R-672, T7): bind xherd beyond loopback with HTTPS and device pairing (`xherd pair`, one-time codes, phones with steering rights only, token rotation revokes them), a layout checked on a phone, push notifications beyond the browser's
 - [ ] Windows: native binary and WSL2 guidance
+- [x] Chat view (terminal driver, #202, R-515…R-519): Claude Code jobs open in a chat that follows the session transcript, with permission and question cards (chat, Inbox, strip above the Terminal), a composer, and Appearance in Welcome and Settings → General. Not run against a real Claude Code yet (question keys unverified)
+- [ ] Chat view for opencode and Codex, and a "needs the terminal" card for other TUI states
 - [ ] ACP driver per runtime, selectable per job
 - [ ] Server / Kubernetes deployment; VS Code Remote-SSH entries
 - [ ] Electron desktop app (tray, notifications, built-in host companion)
