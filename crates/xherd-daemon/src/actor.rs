@@ -257,6 +257,10 @@ pub enum WorkResult {
         offset: u64,
         read: Option<(Vec<u8>, u64)>,
     },
+    /// A permission request waited as long as `permissionWaitSec` (R19).
+    PermissionTimeout {
+        pid: String,
+    },
     /// The pane of a running action is dead: its exit status (`None` when a
     /// signal killed it) and what it printed (R11, R13).
     /// `stopped`: the user (or the job's end) stopped it; `restart` carries
@@ -292,6 +296,7 @@ impl WorkResult {
                 | WorkResult::ActionGone { .. }
                 | WorkResult::BranchCommits { .. }
                 | WorkResult::ChatRead { .. }
+                | WorkResult::PermissionTimeout { .. }
         )
     }
 }
@@ -465,6 +470,8 @@ pub struct ActorSettings {
     /// (`maxActionsPerJob`).
     pub job_actions: bool,
     pub max_actions_per_job: usize,
+    /// Longest a permission request waits for an answer (`permissionWaitSec`, R19).
+    pub permission_wait: Duration,
 }
 
 impl ActorSettings {
@@ -496,6 +503,7 @@ impl ActorSettings {
             suggest_agents: c.suggest_agents,
             job_actions: c.job_actions,
             max_actions_per_job: c.max_actions_per_job,
+            permission_wait: Duration::from_secs(c.permission_wait_sec),
             ..base
         }
     }
@@ -642,6 +650,7 @@ impl Default for ActorSettings {
             suggest_agents: true,
             job_actions: true,
             max_actions_per_job: 12,
+            permission_wait: Duration::from_secs(900),
         }
     }
 }
@@ -846,6 +855,7 @@ impl Actor {
 
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Msg>) {
         self.backfill_stages().await;
+        self.lose_permissions().await;
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Report(r, origin, reply) => {
@@ -3376,6 +3386,15 @@ impl Actor {
             answerable: true,
         });
         self.permission_replies.insert(id.clone(), reply);
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
+        let (pid, wait) = (id.clone(), self.env.settings.get().permission_wait);
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::PermissionTimeout { pid },
+            });
+        });
         self.job.fire(Trigger::Blocked, self.now());
         if self.job.status == Status::Blocked {
             self.job.screen_blocked = false;
@@ -3407,6 +3426,105 @@ impl Actor {
             format!("{} waits for permission to use {}", self.job.name, req.tool),
         );
         self.commit(before).await;
+    }
+
+    /// A waiting permission ends with no answer from the user (R19): the hook
+    /// gets `None` (the runtime asks in its own prompt), the card leaves
+    /// `waiting` and its chat event is resolved. With none left, the job stays
+    /// blocked until the next hook shows the runtime moved on.
+    async fn end_permission(&mut self, pid: &str, state: xherd_core::chat::Resolution) {
+        use xherd_core::chat::ChatBody;
+        use xherd_core::job::WaitKind;
+        let Some(i) = self
+            .job
+            .waiting
+            .iter()
+            .position(|w| w.id == pid && w.kind == WaitKind::Permission)
+        else {
+            return;
+        };
+        let before = self.job.status;
+        let w = self.job.waiting.remove(i);
+        if let Some(reply) = self.permission_replies.remove(pid) {
+            let _ = reply.send(None);
+        }
+        if let Some(session) = self.chat.as_ref().map(|f| f.session.clone()) {
+            self.chat_emit(
+                &session,
+                vec![(
+                    ChatBody::Permission {
+                        id: w.id,
+                        tool: w.tool.unwrap_or_default(),
+                        summary: w.summary,
+                        options: w.options,
+                        state,
+                    },
+                    None,
+                )],
+            );
+        }
+        let by_permission = self
+            .job
+            .block_reason
+            .as_deref()
+            .is_some_and(|r| r.ends_with("permission") || r.ends_with("permissions"));
+        if self.job.status == Status::Blocked && by_permission {
+            let n = self
+                .job
+                .waiting
+                .iter()
+                .filter(|w| w.kind == WaitKind::Permission)
+                .count();
+            self.job.block_reason = Some(match n {
+                0 => "permission: answer in the terminal".into(),
+                1 => "permission".into(),
+                n => format!("{n} permissions"),
+            });
+        }
+        self.commit(before).await;
+    }
+
+    /// At the actor's start: the requests still in `waiting` lost their hook
+    /// with the daemon, so the runtime shows its own prompt (R19).
+    async fn lose_permissions(&mut self) {
+        use xherd_core::job::WaitKind;
+        let ids: Vec<String> = self
+            .job
+            .waiting
+            .iter()
+            .filter(|w| w.kind == WaitKind::Permission)
+            .map(|w| w.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        // The follower only exists to append the resolutions to the chat log.
+        let made = self.chat.is_none();
+        if made && let Some(session) = self.job.session.clone() {
+            self.chat = Some(self.new_chat_follow(&session));
+        }
+        for id in ids {
+            self.end_permission(&id, xherd_core::chat::Resolution::Lost)
+                .await;
+        }
+        if made && !self.job.status.is_live() {
+            self.chat = None;
+        }
+    }
+
+    /// Hooks whose request ended (the CLI or the connection broke) leave
+    /// `waiting`: the runtime shows its own prompt (R19).
+    async fn drop_gone_permissions(&mut self) {
+        let gone: Vec<String> = self
+            .permission_replies
+            .iter()
+            .filter(|(_, r)| r.is_closed())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in gone {
+            self.end_permission(&id, xherd_core::chat::Resolution::InTerminal)
+                .await;
+        }
     }
 
     /// The user's answer to a permission card (R20): the hook gets it, the
@@ -5307,6 +5425,7 @@ impl Actor {
                 }
             }
             TickKind::ScreenScan => {
+                self.drop_gone_permissions().await;
                 if let Some(asked) = self.job.pause_requested_at
                     && self.job.status.is_live()
                     && now - asked >= self.env.settings.get().pause_timeout.as_millis() as i64
@@ -5447,6 +5566,10 @@ impl Actor {
                 offset,
                 read,
             } => self.on_chat_read(session, file, offset, read),
+            WorkResult::PermissionTimeout { pid } => {
+                self.end_permission(&pid, xherd_core::chat::Resolution::TimedOut)
+                    .await
+            }
             WorkResult::BranchCommits {
                 on_branch,
                 found,

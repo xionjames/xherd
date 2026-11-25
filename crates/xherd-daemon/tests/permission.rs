@@ -55,12 +55,19 @@ async fn wait_status(d: &Daemon, who: &str, want: Status) {
 
 /// A running job with session `s1`, whose transcript is in a temp folder.
 async fn running() -> T {
+    running_waiting(900).await
+}
+
+/// The same, with `permissionWaitSec` set (below the setting's own minimum).
+async fn running_waiting(wait_sec: u64) -> T {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::at(dir.path());
     paths.ensure().unwrap();
-    xherd_core::config::Config::default()
-        .save(&paths.config())
-        .unwrap();
+    let config = xherd_core::config::Config {
+        permission_wait_sec: wait_sec,
+        ..Default::default()
+    };
+    config.save(&paths.config()).unwrap();
     let projects = dir.path().join("projects");
     std::fs::create_dir_all(projects.join("p")).unwrap();
     let drv = Arc::new(FakeDriver::default());
@@ -242,4 +249,102 @@ async fn a_job_that_is_not_live_gets_no_card() {
     t.d.action("SC-1", UserAction::PauseNow).await.unwrap();
     assert_eq!(request(&t, "Bash", false).await.unwrap(), None);
     assert!(job(&t).await.waiting.is_empty());
+}
+
+fn states(t: &T, pid: &str) -> Vec<Resolution> {
+    ChatLog::new(&t.d.paths, &t.job.id)
+        .replay(0)
+        .into_iter()
+        .filter_map(|e| match e.body {
+            ChatBody::Permission { id, state, .. } if id == pid => Some(state),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_timed_out_request_gets_none_and_the_job_stays_blocked_until_a_hook() {
+    let t = running_waiting(1).await;
+    t.d.sup.tick(TickKind::ScreenScan);
+    let hook = request(&t, "Bash", false);
+    let ids = cards(&t, 1).await;
+    assert_eq!(hook.await.unwrap(), None);
+    let j = job(&t).await;
+    assert!(j.waiting.is_empty());
+    assert_eq!(j.status, Status::Blocked);
+    assert_eq!(
+        j.block_reason.as_deref(),
+        Some("permission: answer in the terminal")
+    );
+    assert_eq!(
+        states(&t, &ids[0]),
+        vec![Resolution::Waiting, Resolution::TimedOut]
+    );
+    let e = answer(&t, &ids[0], PermOption::Allow).await.unwrap_err();
+    assert_eq!(e.code, "already_answered");
+
+    t.d.report(report(&t.job, "r2", ReportEvent::PostToolUse, 2, json!({})))
+        .await;
+    assert_eq!(job(&t).await.status, Status::Running);
+}
+
+#[tokio::test]
+async fn a_dropped_request_leaves_waiting_and_is_resolved_in_the_terminal() {
+    let t = running().await;
+    t.d.sup.tick(TickKind::ScreenScan);
+    let hook = request(&t, "Bash", false);
+    let ids = cards(&t, 1).await;
+    // The CLI's request broke: nobody waits for the answer any more.
+    hook.abort();
+    for _ in 0..200 {
+        t.d.sup.tick(TickKind::ScreenScan);
+        if job(&t).await.waiting.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let j = job(&t).await;
+    assert!(j.waiting.is_empty());
+    assert_eq!(j.status, Status::Blocked);
+    assert_eq!(
+        states(&t, &ids[0]),
+        vec![Resolution::Waiting, Resolution::InTerminal]
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_waits_at_a_restart_is_lost() {
+    let t = running().await;
+    t.d.sup.tick(TickKind::ScreenScan);
+    let _hook = request(&t, "Bash", false);
+    let ids = cards(&t, 1).await;
+
+    let projects = t
+        .transcript
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let d = Daemon::start(t.d.paths.clone(), options(&t.drv, &projects))
+        .await
+        .unwrap();
+    let mut j = d.action("SC-1", UserAction::Get).await.unwrap();
+    for _ in 0..200 {
+        if j.waiting.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        j = d.action("SC-1", UserAction::Get).await.unwrap();
+    }
+    assert!(j.waiting.is_empty());
+    assert_eq!(j.status, Status::Blocked);
+    assert_eq!(
+        j.block_reason.as_deref(),
+        Some("permission: answer in the terminal")
+    );
+    assert_eq!(
+        states(&t, &ids[0]),
+        vec![Resolution::Waiting, Resolution::Lost]
+    );
 }
