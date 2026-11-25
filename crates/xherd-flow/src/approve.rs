@@ -289,6 +289,13 @@ mod tests {
             n(&docs("ship"), &F(false), true),
             Some(("/xherd:ship".into(), 1))
         );
+        // A quick job's approved commit goes to `commit` as well.
+        let mut quick = agent();
+        quick.flow = Some("quick".into());
+        assert_eq!(
+            next_command(&p, &quick, &commit(), &F(false), false).unwrap(),
+            Some(("/xherd:commit C02".into(), 1))
+        );
         assert_eq!(
             n(&Gate::Question { text: "?".into() }, &F(false), false),
             None

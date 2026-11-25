@@ -143,6 +143,14 @@ pub enum UserAction {
     /// A job that stopped without a remote has one now (R9): a new session
     /// with the ship command. `Daemon::set_origin` added and pushed it first.
     ShipAgain,
+    /// Move a quick job to the feature flow (R6, R7): `Daemon::promote`
+    /// resolved the feature stages' agents and fresh checks first (they need
+    /// the store); the actor re-checks the job and applies them.
+    Promote {
+        stage_agents: BTreeMap<String, xherd_core::agent_def::StageAgent>,
+        fresh_checks: BTreeSet<String>,
+        agents: BTreeMap<String, xherd_core::agent_def::JobAgent>,
+    },
     /// End a job that stopped without a remote (R10). `Daemon::finish_local`
     /// merged its branch into the base checkout first.
     FinishLocal,
@@ -325,6 +333,9 @@ pub struct ActionError {
 
 /// Lines of scrollback an action's pane keeps for its log (R13).
 const ACTION_HISTORY_LINES: u32 = 20_000;
+/// The feature start command's prompt for a promoted job (R7).
+const PROMOTE_NOTE: &str = "This job was promoted from the quick flow: .xherd/spec/ticket.md holds what was asked, the commits on the branch are already made and memory.md says what was done. Run git status: uncommitted changes left by a dropped proposal belong in the tasks' files. Delete the stale .xherd/spec/pr.md if there is one.";
+
 /// How long Stop waits after Ctrl-C before killing the session (R11).
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
@@ -2602,7 +2613,17 @@ impl Actor {
             match self.env.git.diff_proposed(&wd, files).await {
                 Ok(diff) => {
                     hits.extend(tw::summary(&tw::scan_diff(&diff)));
-                    hits.extend(tw::size_summary(&diff, max_lines));
+                    // A quick job's hold also says what to do about it (R4).
+                    let quick = self.job.flow.as_deref() == Some(xherd_core::new::FLOW_QUICK);
+                    hits.extend(tw::size_summary(&diff, max_lines).map(|s| {
+                        if quick {
+                            format!(
+                                "{s}; a change this size may need the feature flow: promote the job"
+                            )
+                        } else {
+                            s
+                        }
+                    }));
                     // A file too large to read was not scanned: a human looks.
                     hits.extend(
                         diff.lines()
@@ -3300,6 +3321,14 @@ impl Actor {
                 self.ship_again().await?;
                 "user.ship-again"
             }
+            UserAction::Promote {
+                stage_agents,
+                fresh_checks,
+                agents,
+            } => {
+                self.promote(stage_agents, fresh_checks, agents).await?;
+                "user.promote"
+            }
             UserAction::FinishLocal => {
                 self.require_stopped_without_origin()?;
                 if self.job.status.is_live() {
@@ -3911,6 +3940,111 @@ impl Actor {
         self.job.ask_hold = None;
         self.job.no_origin = false;
         self.job.fire(Trigger::ShipAgain, self.now());
+        Ok(())
+    }
+
+    /// Promote a quick job to the feature flow (R6, R7): its worktree, branch,
+    /// done commits and `memory.md` stay; it restarts at the spec stage in a
+    /// new session. Checked again here: the job may have moved since
+    /// `Daemon::promote` read it.
+    async fn promote(
+        &mut self,
+        stage_agents: &BTreeMap<String, xherd_core::agent_def::StageAgent>,
+        fresh_checks: &BTreeSet<String>,
+        agents: &BTreeMap<String, xherd_core::agent_def::JobAgent>,
+    ) -> Result<(), ActionError> {
+        use xherd_core::new::{FLOW_FEATURE, FLOW_QUICK};
+        let name = self.job.name.clone();
+        let builtin = self.job.pack.as_deref() == Some(xherd_flow::BUILTIN);
+        if !builtin || self.job.flow.as_deref() != Some(FLOW_QUICK) {
+            return Err(refuse(
+                "not_allowed",
+                format!("{name} does not run the quick flow"),
+            ));
+        }
+        if self.job.pr_url.is_some() {
+            return Err(refuse(
+                "has_pr",
+                format!("{name} has a pull request: it stays on the quick flow"),
+            ));
+        }
+        if next_status(self.job.status, Trigger::Promote).is_none() {
+            return Err(refuse(
+                "not_allowed",
+                format!(
+                    "{name} is {}: promote it when it waits for you, idles, is paused or failed",
+                    self.job.status
+                ),
+            ));
+        }
+        if self.job.worktree_removed_at.is_some() {
+            return Err(refuse(
+                "worktree_removed",
+                format!("{name}'s worktree was removed"),
+            ));
+        }
+        if self.job.no_origin {
+            return Err(refuse(
+                "not_allowed",
+                format!("{name} has no remote: finish it locally or give it one"),
+            ));
+        }
+        let Some(pack) = self.env.packs.get(xherd_flow::BUILTIN) else {
+            return Err(refuse("not_allowed", "the built-in pack is not installed"));
+        };
+        let Some(flow) = pack.flow(FLOW_FEATURE) else {
+            return Err(refuse("not_allowed", "the pack has no feature flow"));
+        };
+        let key = self.job.ticket_ref().to_string();
+        let command = pack
+            .command(
+                self.runtime_name(),
+                &flow.start,
+                &[("key", &key), ("prompt", PROMOTE_NOTE), ("commit", "")],
+            )
+            .map_err(|e| refuse("flow", e))?
+            .trim_end()
+            .to_string();
+        let open: Vec<String> = self
+            .job
+            .commits
+            .iter()
+            .filter(|c| matches!(c.status, CommitStatus::Proposed | CommitStatus::Approved))
+            .map(|c| c.id.clone())
+            .collect();
+        for id in open {
+            if let Some(c) = self.job.commits.iter_mut().find(|c| c.id == id) {
+                c.status = CommitStatus::Dropped;
+            }
+            self.log(
+                None,
+                "commit-dropped",
+                Some(json!({"id": id, "reason": "promoted to feature"})),
+            )
+            .await;
+            self.write_commit_progress(&id);
+        }
+        if self.job.status.is_live() {
+            self.end_session().await;
+        }
+        self.job.gate = None;
+        self.job.flow = Some(FLOW_FEATURE.to_string());
+        self.job.stage = Some("spec".to_string());
+        self.job.stage_agents = stage_agents.clone();
+        self.job.fresh_checks = fresh_checks.clone();
+        for (id, a) in agents {
+            self.job
+                .agents
+                .entry(id.clone())
+                .or_insert_with(|| a.clone());
+        }
+        self.job.ask_hold = None;
+        self.job.pause_requested_at = None;
+        self.resume_session = None;
+        self.job.generation += 1;
+        self.job.next_prompt = Some(command);
+        self.write_instructions().await;
+        self.job.fire(Trigger::Promote, self.now());
         Ok(())
     }
 

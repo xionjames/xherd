@@ -2102,6 +2102,170 @@ async fn a_very_large_commit_is_held() {
     );
 }
 
+/// R4: only a quick job's large-diff hold suggests promoting it.
+#[tokio::test]
+async fn a_quick_jobs_large_commit_hold_suggests_promoting() {
+    let t = setup_flow("quick").await;
+    std::fs::write(t.wt.path().join("b.txt"), "b\n".repeat(1100)).unwrap();
+    let why = propose_reason(&t, "q1", &["b.txt"]).await;
+    assert!(
+        why.contains("large diff: 1100 changed lines, limit 1000"),
+        "{why}"
+    );
+    assert!(why.contains("promote the job"), "{why}");
+
+    let t = setup().await;
+    std::fs::write(t.wt.path().join("b.txt"), "b\n".repeat(1100)).unwrap();
+    let why = propose_reason(&t, "q2", &["b.txt"]).await;
+    assert!(!why.contains("promote"), "{why}");
+}
+
+/// R2, R3, R3a: a quick job proposes its commit with no task, the approved
+/// commit is handed on as `commit`, and the job reaches the ship gate with a
+/// `pr.md` and no spec; a change request for code at the ship gate becomes
+/// one more commit.
+#[tokio::test]
+async fn a_quick_job_goes_from_its_commit_to_the_ship_gate() {
+    let t = setup_flow("quick").await;
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    std::fs::write(t.wt.path().join(".git/info/exclude"), ".xherd/\n").unwrap();
+    xap(&t, "q1", "stage.enter", json!({"stage": "implement"}))
+        .await
+        .unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    xap(
+        &t,
+        "q2",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "files": ["a.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::WaitingInput);
+    assert!(matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C01"));
+
+    // Approval commits and hands the agent the commit command, not `next`.
+    act(&t, approve(None)).await.unwrap();
+    let a = get(&t).await;
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:commit C01"));
+    session_start(&t, 2).await;
+
+    // No review stage: the agent goes to ship and drafts `pr.md` without a spec.
+    xap(&t, "q3", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    std::fs::write(t.wt.path().join(".xherd/spec/pr.md"), "# Add a\n").unwrap();
+    xap(&t, "q4", "gate.open", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 3).await;
+    let a = get(&t).await;
+    assert_eq!(a.stage.as_deref(), Some("ship"));
+    assert!(
+        matches!(&a.gate, Some(Gate::Docs { stage, .. }) if stage == "ship"),
+        "{:?}",
+        a.gate
+    );
+    assert!(!t.wt.path().join(".xherd/spec/spec.md").exists());
+
+    // The user asks for more code at the ship gate: it becomes C02.
+    std::fs::write(t.wt.path().join("b.txt"), "b\n").unwrap();
+    xap(
+        &t,
+        "q5",
+        "commit.propose",
+        json!({"id": "C02", "subject": "Add b", "files": ["b.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 4).await;
+    let a = get(&t).await;
+    assert!(matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C02"));
+    act(&t, approve(None)).await.unwrap();
+    assert_eq!(
+        get(&t).await.next_prompt.as_deref(),
+        Some("/xherd:commit C02")
+    );
+}
+
+/// R6, R7: promoting a quick job at its commit gate keeps the branch, the
+/// done commit and the worktree, drops the open proposal, moves the job to
+/// the spec stage of the feature flow and queues a new session whose prompt
+/// is the feature start command with the promotion note.
+#[tokio::test]
+async fn promote_moves_a_quick_job_to_the_feature_flow() {
+    let t = setup_flow("quick").await;
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    std::fs::write(t.wt.path().join(".git/info/exclude"), ".xherd/\n").unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    xap(
+        &t,
+        "p1",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "files": ["a.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    act(&t, approve(None)).await.unwrap();
+    session_start(&t, 2).await;
+    std::fs::write(t.wt.path().join("b.txt"), "b\n").unwrap();
+    xap(
+        &t,
+        "p2",
+        "commit.propose",
+        json!({"id": "C02", "subject": "Add b", "files": ["b.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 3).await;
+    assert_eq!(get(&t).await.status, Status::WaitingInput);
+
+    let a = t.d.promote("SC-1").await.unwrap();
+    assert_eq!(a.flow.as_deref(), Some("feature"));
+    assert_eq!(a.stage.as_deref(), Some("spec"));
+    assert!(a.gate.is_none());
+    assert_eq!(a.status, Status::Queued);
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+    assert_eq!(a.commits[1].status, CommitStatus::Dropped);
+    let prompt = a.next_prompt.unwrap();
+    assert!(prompt.starts_with("/xherd:feature"), "{prompt}");
+    assert!(prompt.contains("promoted from the quick flow"), "{prompt}");
+    let md = std::fs::read_to_string(t.wt.path().join(".xherd/instructions.md")).unwrap();
+    assert!(md.contains("Flow: xherd / feature"), "{md}");
+    // The dropped proposal's changes stay in the worktree.
+    assert!(t.wt.path().join("b.txt").exists());
+}
+
+/// R6: only a quick job that waits, without a pull request, can be promoted.
+#[tokio::test]
+async fn promote_is_refused_outside_its_cases() {
+    let t = setup().await;
+    stop(&t, 1).await;
+    let e = t.d.promote("SC-1").await.unwrap_err();
+    assert_eq!(e.code, "not_allowed", "{e}");
+    assert!(e.message.contains("quick flow"), "{e}");
+
+    let t = setup_flow("quick").await;
+    assert_eq!(get(&t).await.status, Status::Running);
+    let e = t.d.promote("SC-1").await.unwrap_err();
+    assert_eq!(e.code, "not_allowed", "{e}");
+
+    let t = setup_tweaked(json!({"freshSessions": true}), None, None, "quick", |a| {
+        a.pr_url = Some("https://github.com/o/r/pull/1".into())
+    })
+    .await;
+    stop(&t, 1).await;
+    let e = t.d.promote("SC-1").await.unwrap_err();
+    assert_eq!(e.code, "has_pr", "{e}");
+    assert_eq!(get(&t).await.flow.as_deref(), Some("quick"));
+}
+
 #[tokio::test]
 async fn a_file_too_large_to_scan_holds_a_commit() {
     let t = setup().await;

@@ -11,7 +11,10 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    they fall short, and add what you find to the code map.
 3. Write `.xherd/spec/design.md` in the design format. Name real files and
    functions; verify each one exists before you cite it. Put every question
-   for the user in its open questions section, one list item each.
+   for the user in its open questions section, one list item each. Size it to
+   the change: a few lines per section for a small change, no restating the
+   spec or the code, "None." for a section with nothing to say; keep every
+   heading.
 4. Rewrite `.xherd/spec/memory.md`, with the code map for the tasks step.
 5. Fresh-context check. Only when `.xherd/instructions.md` has a "Fresh-context
    check" section that lists `design`; otherwise skip this step. Run a

@@ -70,6 +70,10 @@ local, changes no data model, API, configuration or dependency, touches
 nothing security- or concurrency-sensitive, and has one obvious approach.
 Approving the spec approves the skip.
 
+Size `spec.md` to the change: a few lines per section for a small change, one
+requirement per behaviour, no restating the ticket or the code, "None." for a
+section with nothing to say. The headings stay.
+
 ### spec.md for a bug (flow `bugfix`)
 
 The analysis of a bug fix. It has no design step: it is approved together
@@ -120,7 +124,9 @@ What this fix does not do.
 Frontmatter as above (`stage: design`). Sections: `## Approach`,
 `## Components` (files and modules touched, with what changes),
 `## Data and interfaces`, `## Alternatives considered`, `## Risks`,
-`## Testing`, `## Open questions`, `## Assumptions`.
+`## Testing`, `## Open questions`, `## Assumptions`. Size it to the change as
+`spec.md`: short sections for a small change, "None." where there is nothing
+to say, every heading kept.
 
 ## tasks.md
 

@@ -1890,7 +1890,7 @@ async fn flow_assignment_routes() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    assert_eq!(v["flows"].as_array().unwrap().len(), 2);
+    assert_eq!(v["flows"].as_array().unwrap().len(), 3);
     let url = "/api/v1/flows/xherd/feature/assignments";
     let put = |body| send("PUT", url, Some(body));
     let (s, v) = call(

@@ -115,6 +115,9 @@ pub enum Trigger {
     /// A job that shipped without a remote has one now (R9): a new session
     /// with the ship command.
     ShipAgain,
+    /// User moved a quick job to the feature flow: a new session with the
+    /// feature flow's first command.
+    Promote,
 }
 
 /// The lifecycle table. `None` means the trigger does not apply in that status.
@@ -145,6 +148,7 @@ pub fn next_status(from: Status, trigger: Trigger) -> Option<Status> {
         (T::PrComments, S::Watching) => Some(S::Queued),
         (T::ResolveConflicts, S::Watching | S::Paused | S::Error | S::Idle) => Some(S::Queued),
         (T::ShipAgain, S::Idle | S::Paused) => Some(S::Queued),
+        (T::Promote, S::WaitingInput | S::Idle | S::Paused | S::Error) => Some(S::Queued),
         (T::PrFinished, S::Watching) => Some(S::Done),
         (T::MarkDone, S::Idle | S::WaitingInput | S::Paused | S::Parked) => Some(S::Done),
         (T::SessionLost, s) if s.is_live() => Some(S::Error),
@@ -199,6 +203,10 @@ mod tests {
             (S::Idle, T::ResolveConflicts, S::Queued),
             (S::Idle, T::ShipAgain, S::Queued),
             (S::Paused, T::ShipAgain, S::Queued),
+            (S::WaitingInput, T::Promote, S::Queued),
+            (S::Idle, T::Promote, S::Queued),
+            (S::Paused, T::Promote, S::Queued),
+            (S::Error, T::Promote, S::Queued),
             (S::Watching, T::PrFinished, S::Done),
             (S::Idle, T::MarkDone, S::Done),
             (S::WaitingInput, T::MarkDone, S::Done),

@@ -157,6 +157,8 @@ enum Cmd {
     },
     /// resume a paused, cancelled or failed job.
     Resume { job: String },
+    /// Move a quick job that is waiting, with no pull request, to the feature flow at the spec stage.
+    Promote { job: String },
     /// Cancel a job (ends its session, keeps the worktree unless --remove-worktree).
     Cancel {
         job: String,
@@ -529,6 +531,7 @@ fn main() -> ExitCode {
             2
         }
         Cmd::Resume { job } => action(&job, "resume", None),
+        Cmd::Promote { job } => action(&job, "promote", None),
         Cmd::Cancel {
             job,
             remove_worktree,

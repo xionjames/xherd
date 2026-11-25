@@ -24,7 +24,7 @@
   import ModelInput from '../components/ModelInput.svelte';
   import { canChooseModel, validModel } from '../lib/models';
   import NoOrigin from '../components/NoOrigin.svelte';
-  import { agentLabel, agentOf, canMarkDone, canShipWithoutOrigin, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
+  import { agentLabel, agentOf, canMarkDone, canPromote, canShipWithoutOrigin, changedSince, hasAgents, jobAgent, waitsForAgent } from '../lib/agents';
   import ActionPanel from '../panels/Action.svelte';
   import SaveActions from '../components/SaveActions.svelte';
   import { actionOfTab, defaultOpen, groups, headerMarks, headerText, lastResult, needsApproval, running, tabId as actionTab, visible, type GroupKind } from '../lib/actions';
@@ -238,6 +238,9 @@
         <button class="btn" disabled title="Waiting for the agent to write its handoff note"><Icon name="pause" />Pausing…</button>
       {:else if live}
         <button class="btn" onclick={() => act('pause', 'Could not pause')}><Icon name="pause" />Pause</button>
+      {/if}
+      {#if canPromote(agent)}
+        <button class="btn" title="This change is bigger than a quick one: continue it in the feature flow, at the spec step. The branch and commits are kept." onclick={() => act('promote', 'Could not promote it')}>Promote to feature</button>
       {/if}
       {#if agent.workdir && !removed}
         <div class="anchor">
