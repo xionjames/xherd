@@ -5287,3 +5287,182 @@ async fn reconcile_at_start_loses_and_adopts_action_sessions_and_kills_unknown_o
         "{calls:?}"
     );
 }
+
+const PR_MD: &str = "---\nticket: SC-1\nflow: feature\nstage: ship\ntemplate: xherd\ntitle: \"Add the cache\"\n---\n## Summary\nA cache.\n";
+
+fn pr_view(title: &str, body: &str) -> String {
+    json!({"state": "OPEN", "mergeable": "MERGEABLE", "title": title, "body": body}).to_string()
+}
+
+/// A watching job whose `pr.md` the host agrees with (baselines seeded when
+/// the PR is found), with the fake `gh` folder.
+async fn pr_text_job(watching: bool) -> (T, tempfile::TempDir) {
+    let bin_dir = tempfile::tempdir().unwrap();
+    let d = bin_dir.path();
+    let gh = fake_gh_pr(d, "https://github.com/acme/app/pull/7");
+    std::fs::write(
+        d.join("view.json"),
+        pr_view("Add the cache", "## Summary\nA cache."),
+    )
+    .unwrap();
+    std::fs::write(d.join("checks.json"), "[]").unwrap();
+    let t = setup_config(json!({"pluginSettings": {"github": {"gh": gh}}})).await;
+    // The agent writes pr.md, reports the PR (the baselines are seeded) and
+    // stops at the ship gate; the user approves and the job watches the PR.
+    std::fs::write(t.wt.path().join(".xherd/spec/pr.md"), PR_MD).unwrap();
+    xap(&t, "c1", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    xap(
+        &t,
+        "c0",
+        "pr.opened",
+        json!({"url": "https://github.com/acme/app/pull/7"}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    until(&t, |a| a.status == Status::WaitingInput).await;
+    if !watching {
+        return (t, bin_dir);
+    }
+    act(
+        &t,
+        UserAction::Approve {
+            reason: None,
+            expect: Default::default(),
+            message: None,
+        },
+    )
+    .await
+    .unwrap();
+    until(&t, |a| a.status == Status::Running).await;
+    stop(&t, 2).await;
+    let a = until(&t, |a| a.status == Status::Watching).await;
+    assert_eq!(a.status, Status::Watching);
+    (t, bin_dir)
+}
+
+fn pr_md(t: &T) -> String {
+    std::fs::read_to_string(t.wt.path().join(".xherd/spec/pr.md")).unwrap()
+}
+
+fn pr_notes(
+    rx: &mut tokio::sync::broadcast::Receiver<xherd_daemon::support::Change>,
+) -> Vec<String> {
+    let mut said = Vec::new();
+    while let Ok(c) = rx.try_recv() {
+        if let xherd_daemon::support::Change::Notify { kind, text, .. } = c
+            && kind == "pr"
+        {
+            said.push(text);
+        }
+    }
+    said
+}
+
+/// PR text sync: edits made on the host reach `pr.md` at the next check and
+/// the changed file opens the ship gate again.
+#[tokio::test]
+async fn pr_text_host_edits_are_pulled_into_pr_md() {
+    let (t, bin) = pr_text_job(true).await;
+    // Host and file agree: a check changes nothing.
+    act(&t, UserAction::CheckPr).await.unwrap();
+    until(&t, |a| a.pr_state.is_some()).await;
+    assert_eq!(pr_md(&t), PR_MD);
+
+    // Someone edits the title and the description on the host.
+    std::fs::write(
+        bin.path().join("view.json"),
+        pr_view("Add the cache layer", "## Summary\nA cache, now with TTL."),
+    )
+    .unwrap();
+    act(&t, UserAction::CheckPr).await.unwrap();
+    let text = loop {
+        let text = pr_md(&t);
+        if text != PR_MD {
+            break text;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    let doc = xherd_flow::pr_doc::fields(&text).unwrap();
+    assert_eq!(doc.title.as_deref(), Some("Add the cache layer"));
+    assert_eq!(doc.body.trim_end(), "## Summary\nA cache, now with TTL.");
+    for kept in [
+        "ticket: SC-1",
+        "flow: feature",
+        "stage: ship",
+        "template: xherd",
+    ] {
+        assert!(text.contains(kept), "{kept} kept: {text}");
+    }
+
+    // The new text is not what the user approved: the ship gate would open
+    // again (it is not `already_approved`).
+    let id = t.a.id.clone();
+    let sha = content_sha256(text.as_bytes());
+    let approved = t
+        .d
+        .store
+        .read(move |c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM approvals WHERE job_id = ?1 AND file = 'pr.md' AND sha256 = ?2",
+                [&id, &sha],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(approved, 0);
+}
+
+/// A local edit that was not posted yet is never overwritten: when the host
+/// changed too the user is told once, without the text.
+#[tokio::test]
+async fn pr_text_a_local_edit_wins_and_the_user_is_told_once() {
+    let (t, bin) = pr_text_job(true).await;
+    let mut rx = t.d.hub.subscribe();
+    let local = PR_MD.replace("A cache.", "A cache, edited here.");
+    std::fs::write(t.wt.path().join(".xherd/spec/pr.md"), &local).unwrap();
+    std::fs::write(
+        bin.path().join("view.json"),
+        pr_view("Add the cache", "## Summary\nSecret host edit."),
+    )
+    .unwrap();
+
+    act(&t, UserAction::CheckPr).await.unwrap();
+    until(&t, |a| a.pr_state.is_some()).await;
+    // Wait for the actor to have handled the poll (events carry the verdict).
+    for _ in 0..400 {
+        let events = t.d.store.events(&t.a.id, 100).await.unwrap();
+        if events.iter().any(|e| e.kind == "pr-text-diverged") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(pr_md(&t), local, "the local text is untouched");
+    let said = pr_notes(&mut rx);
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(!said[0].contains("Secret"), "{said:?}");
+
+    // The next poll says nothing more.
+    act(&t, UserAction::CheckPr).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(pr_md(&t), local);
+    assert!(pr_notes(&mut rx).is_empty());
+}
+
+/// Only a watching job gets host edits: a paused one keeps `pr.md` as it is.
+#[tokio::test]
+async fn pr_text_a_job_that_is_not_watching_keeps_pr_md() {
+    let (t, bin) = pr_text_job(false).await;
+    std::fs::write(
+        bin.path().join("view.json"),
+        pr_view("Another title", "## Summary\nAnother body."),
+    )
+    .unwrap();
+    act(&t, UserAction::CheckPr).await.unwrap();
+    until(&t, |a| a.pr_state.is_some()).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(pr_md(&t), PR_MD);
+}
