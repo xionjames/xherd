@@ -40,6 +40,18 @@ describe('stageLanes', () => {
     ]);
   });
 
+  it('a quick job gets a lane with its Change column', () => {
+    const quick: FlowInfo = { pack: 'xherd', flow: 'quick', stages: [st('implement', 'implement', 'Change'), st('ship', 'ship')] };
+    const lanes = stageLanes([
+      a({ pack: 'xherd', flow: 'quick', stage: 'implement' }),
+      a({ pack: 'xherd', flow: 'feature', stage: 'spec' }),
+    ], [feature, bugfix, quick]);
+    expect(shape(lanes)).toEqual([
+      { label: 'Feature', cols: ['Spec:1', 'Tasks:0', 'Build:0', 'Watching PR:0', 'Finished:0'] },
+      { label: 'Quick', cols: ['Change:1', 'Ship:0', 'Watching PR:0', 'Finished:0'] },
+    ]);
+  });
+
   it('a workflow without shown agents has no lane', () => {
     expect(stageLanes([a({ pack: 'xherd', flow: 'feature', stage: 'spec' })], flows).map((l) => l.key)).toEqual(['xherd/feature']);
     expect(stageLanes([], flows)).toEqual([]);

@@ -263,6 +263,12 @@ export const canMarkDone = (job: Pick<Job, 'flow' | 'status'>): boolean =>
 export const canShipWithoutOrigin = (job: Pick<Job, 'noOrigin' | 'gate' | 'status'>): boolean =>
   !!job.noOrigin && !job.gate && ['idle', 'paused'].includes(job.status);
 
+/** A waiting quick job with no pull request and no worktree removed can move
+ *  to the feature flow at the spec stage (R5, R6). Mirrors `Daemon::promote`. */
+export const canPromote = (job: Pick<Job, 'pack' | 'flow' | 'status' | 'prUrl' | 'noOrigin' | 'worktreeRemovedAt'>): boolean =>
+  job.pack === 'xherd' && job.flow === 'quick' && !job.prUrl && !job.noOrigin && job.worktreeRemovedAt == null
+  && ['idle', 'waiting-input', 'paused', 'error'].includes(job.status);
+
 /** The "Save as agent" form, pre-filled from what the job ran with (R31): the
  *  effective settings, a name and description from the repository and the flow,
  *  and the job's own draft (name, description, instructions) over them. */
