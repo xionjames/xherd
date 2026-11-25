@@ -273,6 +273,25 @@ impl Pack {
         }
         Ok(out)
     }
+
+    /// The slash commands `runtime` gets from the pack: `{prefix}{name}` for
+    /// every file its `commands` set installs, sorted (R12). Unknown runtime:
+    /// none.
+    pub fn slash_commands(&self, runtime: &str, files: &[(&str, &str)]) -> Vec<String> {
+        let Some(inst) = self.install.get(runtime) else {
+            return Vec::new();
+        };
+        let Some(set) = &inst.commands else {
+            return Vec::new();
+        };
+        let mut out: Vec<String> = files
+            .iter()
+            .filter_map(|(path, _)| glob_name(&set.from, path))
+            .map(|name| format!("{}{name}", inst.prefix))
+            .collect();
+        out.sort();
+        out
+    }
 }
 
 /// The pack's own files in `dir`, as `plan_install` wants them: `FORMAT.md`
@@ -516,6 +535,21 @@ mod tests {
             .unwrap();
         assert!(feature.text.contains("`$ARGUMENTS`"));
         assert!(p.plan_install("aider", BUILTIN_FILES, &env("/h")).is_err());
+    }
+
+    #[test]
+    fn slash_commands_are_prefixed_and_sorted() {
+        let p = crate::builtin();
+        let cc = p.slash_commands("claude-code", BUILTIN_FILES);
+        assert!(cc.contains(&"/xherd:next".to_string()));
+        assert!(cc.contains(&"/xherd:feature".to_string()));
+        assert!(!cc.iter().any(|c| c.contains("FORMAT")));
+        let mut sorted = cc.clone();
+        sorted.sort();
+        assert_eq!(cc, sorted);
+        let oc = p.slash_commands("opencode", BUILTIN_FILES);
+        assert!(oc.contains(&"/xherd/next".to_string()));
+        assert!(p.slash_commands("aider", BUILTIN_FILES).is_empty());
     }
 
     /// Every command the manifest can send exists as a command file.
