@@ -466,6 +466,7 @@ then stop and wait. If it exits with code 2, fix what it says and run it again.
 | R-306 | PR decisions: the user decides resolve/skip (with a note) per comment; xherd writes the decisions and sends the apply command. Replies: approved replies are posted by the host plugin (with the marker), or by the job for hosts without a reply command. |
 | R-307 | Merged or closed: follow-up task done, stage `done`, status `done`, `pr.merged` hooks run. |
 | R-308 | Ticket updates happen only when the user accepts them. Once the pull request is open, xherd offers a short summary of the work (built from finished tasks, commits and the PR, independent of the pack), the user reads and edits it, and only their click posts it through the tracker plugin. `pr.md` is the pull request's body and holds nothing for the ticket. Status transitions and opt-in stage hooks are not built. |
+| R-309 | While a job watches an open PR, each poll reads the PR's title and description and pulls host edits into `pr.md` (`title:` key and body). Per field a baseline hash tells a host edit from a local one: host-only changes are written, un-posted local changes are kept (with one notification, without text, when both changed), an empty or unreadable host value is never written. The write does not approve anything: the ship gate re-opens on the new content. |
 
 ## 10. Plugins
 

@@ -65,7 +65,7 @@ A host plugin answers these commands; the built-in `github` plugin implements th
 | Command | Input | Answer |
 |---|---|---|
 | `pr-for-branch` | `{branch, worktree}` | `{url}` or `null` |
-| `pr-status`, `pr-checks` | the PR | `pr-status`: `{state, mergeable?, base?, reviewers?: [{name, state}]}` (review state `pending`, `approved`, `changes-requested`, `commented` or `dismissed`); `pr-checks`: `[{name, bucket, workflow?, link?}]`. The parsers are `parse_status` and `parse_checks` in `crates/xherd-plugin/src/host.rs`. When `mergeable` is missing or unknown, xherd fetches `origin` in the worktree and tries the merge into `origin/<base>` itself (`git merge-tree`, nothing in the worktree changes) |
+| `pr-status`, `pr-checks` | the PR | `pr-status`: `{state, mergeable?, base?, title?, body?, reviewers?: [{name, state}]}` (`title` and `body` are the PR's current title and description; when present xherd pulls host edits into the job's `pr.md` while the job is watching, and a missing, `null` or empty value is ignored; review state `pending`, `approved`, `changes-requested`, `commented` or `dismissed`); `pr-checks`: `[{name, bucket, workflow?, link?}]`. The parsers are `parse_status` and `parse_checks` in `crates/xherd-plugin/src/host.rs`. When `mergeable` is missing or unknown, xherd fetches `origin` in the worktree and tries the merge into `origin/<base>` itself (`git merge-tree`, nothing in the worktree changes) |
 | `pr-comments` | the PR | Comments with ids of the form `<kind>:<id>` |
 | `pr-reply` | a comment and text | Posts the reply. xherd appends its marker so its own replies are recognised |
 | `pr-template` | the worktree | The repository's pull request templates |
