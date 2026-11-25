@@ -425,6 +425,12 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    if args.get(1).map(String::as_str) == Some("permission-request") {
+        std::panic::set_hook(Box::new(|_| {}));
+        let _ = std::panic::catch_unwind(report::permission_request);
+        return ExitCode::SUCCESS;
+    }
+
     let cli = match Cli::try_parse_from(argv_without_job_word(args)) {
         Ok(c) => c,
         Err(e) => {
