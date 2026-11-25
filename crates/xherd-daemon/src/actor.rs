@@ -2602,7 +2602,17 @@ impl Actor {
             match self.env.git.diff_proposed(&wd, files).await {
                 Ok(diff) => {
                     hits.extend(tw::summary(&tw::scan_diff(&diff)));
-                    hits.extend(tw::size_summary(&diff, max_lines));
+                    // A quick job's hold also says what to do about it (R4).
+                    let quick = self.job.flow.as_deref() == Some(xherd_core::new::FLOW_QUICK);
+                    hits.extend(tw::size_summary(&diff, max_lines).map(|s| {
+                        if quick {
+                            format!(
+                                "{s}; a change this size may need the feature flow: promote the job"
+                            )
+                        } else {
+                            s
+                        }
+                    }));
                     // A file too large to read was not scanned: a human looks.
                     hits.extend(
                         diff.lines()

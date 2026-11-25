@@ -2102,6 +2102,24 @@ async fn a_very_large_commit_is_held() {
     );
 }
 
+/// R4: only a quick job's large-diff hold suggests promoting it.
+#[tokio::test]
+async fn a_quick_jobs_large_commit_hold_suggests_promoting() {
+    let t = setup_flow("quick").await;
+    std::fs::write(t.wt.path().join("b.txt"), "b\n".repeat(1100)).unwrap();
+    let why = propose_reason(&t, "q1", &["b.txt"]).await;
+    assert!(
+        why.contains("large diff: 1100 changed lines, limit 1000"),
+        "{why}"
+    );
+    assert!(why.contains("promote the job"), "{why}");
+
+    let t = setup().await;
+    std::fs::write(t.wt.path().join("b.txt"), "b\n".repeat(1100)).unwrap();
+    let why = propose_reason(&t, "q2", &["b.txt"]).await;
+    assert!(!why.contains("promote"), "{why}");
+}
+
 #[tokio::test]
 async fn a_file_too_large_to_scan_holds_a_commit() {
     let t = setup().await;
