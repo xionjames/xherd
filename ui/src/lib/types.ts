@@ -247,6 +247,8 @@ export interface Job {
   actionsCardDismissed?: boolean;
   /** First port of the job's block (`XHERD_PORT_BASE`). */
   portBase?: number;
+  /** Permission requests and questions waiting for an answer (#202). */
+  waiting?: Waiting[];
 }
 
 /** What an action is; `cwd` is relative to the worktree, `''` is the root. */
@@ -291,6 +293,9 @@ export interface PluginInfo {
   login: boolean;
   /** A runtime plugin that takes a model; its suggestions come from `GET /runtimes/{name}/models`. */
   chooseModel?: boolean;
+  /** A runtime with a chat view (#202), and its slash commands by pack name. */
+  chat?: boolean;
+  slashCommands?: Record<string, string[]>;
   /** A Herd view plugin: its page, served at `/api/v1/plugins/{name}/view/{entry}`. */
   view?: { entry: string };
   /** Where an installed external plugin came from; absent for built-ins and plugins copied by hand. */
@@ -596,3 +601,51 @@ export interface FlowStageView {
 export interface FlowView { pack: string; flow: string; stages: FlowStageView[]; source?: string | null }
 /** A row of `PUT /flows/{pack}/{flow}/assignments`. */
 export interface AssignmentRow { stage: string; agentId: string; human: boolean }
+
+// Chat view (#202): mirrors `xherd_core::chat` and `Job.waiting`.
+
+export type ToolStatus = 'running' | 'ok' | 'error';
+export type PlanStatus = 'pending' | 'in-progress' | 'completed';
+export type PermOption = 'allow' | 'allow-always' | 'deny';
+export type AnsweredFrom = 'chat' | 'inbox' | 'terminal';
+
+/** How a permission or question card ended. */
+export type Resolution =
+  | { state: 'waiting' }
+  | { state: 'answered'; answer: string; from: AnsweredFrom }
+  | { state: 'in-terminal' }
+  | { state: 'timed-out' }
+  | { state: 'lost' };
+
+export interface QuestionOption { label: string; description: string }
+export interface ChatQuestion { question: string; header: string; multiSelect: boolean; options: QuestionOption[] }
+export interface PlanItem { text: string; status: PlanStatus }
+
+export type ChatBody =
+  | { kind: 'user'; text: string; source: 'user' | 'xherd' }
+  | { kind: 'assistant'; text: string }
+  | { kind: 'tool'; id: string; name: string; summary: string; status: ToolStatus; result?: string; path?: string }
+  | { kind: 'plan'; items: PlanItem[] }
+  | { kind: 'status'; state: 'working' | 'idle' | 'blocked' }
+  | { kind: 'notice'; notice: 'new-session' | 'resume' | 'ask' | 'compaction'; text: string }
+  | ({ kind: 'permission'; id: string; tool: string; summary: string; options: PermOption[] } & Resolution)
+  | ({ kind: 'question'; id: string; questions: ChatQuestion[]; answerable: boolean } & Resolution)
+  | { kind: 'unknown'; raw: string };
+
+/** One entry of a job's chat log (`/ws/chat/{id}`). */
+export type ChatEvent = { seq: number; at: number; session?: string } & ChatBody;
+
+/** A permission request or question waiting for an answer (`Job.waiting`). */
+export interface Waiting {
+  id: string;
+  kind: 'permission' | 'question';
+  since: number;
+  tool?: string;
+  summary: string;
+  options?: PermOption[];
+  questions?: ChatQuestion[];
+  answerable: boolean;
+}
+
+/** `ui.jobView` in the config, and a job's own choice in the browser. */
+export type JobView = 'chat' | 'terminal';
