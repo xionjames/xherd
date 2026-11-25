@@ -672,6 +672,133 @@ impl Daemon {
         }
     }
 
+    /// Move a quick job to the feature flow (R6, R7, R8). The feature stages'
+    /// agents and fresh-context checks are resolved here as at creation (they
+    /// need the store); the actor checks the job again and applies them.
+    pub async fn promote(&self, who: &str) -> Result<Job, ActionError> {
+        use xherd_core::new::{FLOW_FEATURE, FLOW_QUICK};
+        let job = self.action(who, UserAction::Get).await?;
+        if job.pack.as_deref() != Some(xherd_flow::BUILTIN)
+            || job.flow.as_deref() != Some(FLOW_QUICK)
+        {
+            return Err(action_error(
+                "not_allowed",
+                format!("{} does not run the quick flow", job.name),
+            ));
+        }
+        let pack = self
+            .packs
+            .get(xherd_flow::BUILTIN)
+            .and_then(|p| p.flow(FLOW_FEATURE).map(|f| (p, f)));
+        let Some((_, flow)) = pack else {
+            return Err(action_error(
+                "not_allowed",
+                "the pack has no feature flow".into(),
+            ));
+        };
+        let stage_ids: Vec<&str> = flow.stages.iter().map(|s| s.id.as_str()).collect();
+        let store = |e: xherd_store::StoreError| action_error("store", e.to_string());
+        let assignments: Vec<xherd_core::resolve::Assignment> = self
+            .store
+            .flow_assignments(xherd_flow::BUILTIN, FLOW_FEATURE)
+            .await
+            .map_err(store)?
+            .into_iter()
+            .filter(|a| stage_ids.contains(&a.stage.as_str()))
+            .collect();
+        let fresh_checks: std::collections::BTreeSet<String> = self
+            .store
+            .flow_fresh_checks(xherd_flow::BUILTIN, FLOW_FEATURE)
+            .await
+            .map_err(store)?
+            .into_iter()
+            .filter(|id| {
+                flow.stages
+                    .iter()
+                    .any(|s| s.id == *id && s.fresh_check_eligible())
+            })
+            .collect();
+        let per_stage = xherd_core::resolve::stage_agents(
+            &stage_ids,
+            &assignments,
+            &BTreeMap::new(),
+            job.default_agent.as_deref(),
+        );
+        let mut stage_agents = BTreeMap::new();
+        for (stage, id) in stage_ids.iter().zip(&per_stage) {
+            if let Some(id) = id {
+                let human = assignments
+                    .iter()
+                    .find(|a| a.stage == *stage)
+                    .is_some_and(|a| a.human);
+                stage_agents.insert(
+                    stage.to_string(),
+                    xherd_core::agent_def::StageAgent {
+                        agent: id.clone(),
+                        human,
+                    },
+                );
+            }
+        }
+        // Agents the job does not hold yet, resolved on the job's runtime
+        // (one runtime per job).
+        let cfg = self.live_config();
+        let defaults = xherd_core::resolve::Defaults {
+            runtime: cfg.default_runtime.clone(),
+            autonomy: cfg.autonomy,
+            mode: cfg.permission_mode,
+            models: cfg.runtime_models.clone(),
+        };
+        let profile = match job.repo.as_deref() {
+            Some(repo) => self.profile_for_repo(std::path::Path::new(repo)).await,
+            None => None,
+        };
+        let requested = |runtime: Option<String>| xherd_core::resolve::Requested {
+            runtime,
+            model: None,
+            autonomy: None,
+            mode: None,
+            base: job.base.clone(),
+            flow: Some(FLOW_FEATURE.to_string()),
+        };
+        let mut agents = BTreeMap::new();
+        for id in per_stage.iter().flatten() {
+            if job.agents.contains_key(id) || agents.contains_key(id) {
+                continue;
+            }
+            let def = self.usable_agent(id).await?;
+            let (snap, eff) = self
+                .bake_agent(
+                    id,
+                    &def,
+                    job.runtime.as_deref(),
+                    &defaults,
+                    profile.as_ref(),
+                    &requested,
+                )
+                .await?;
+            if job.runtime.as_deref().is_some_and(|r| r != eff.runtime) {
+                return Err(action_error(
+                    "mixed_runtime",
+                    format!(
+                        "agent {} runs on {}: a job keeps one runtime",
+                        def.name, eff.runtime
+                    ),
+                ));
+            }
+            agents.insert(id.clone(), snap);
+        }
+        self.action(
+            who,
+            UserAction::Promote {
+                stage_agents,
+                fresh_checks,
+                agents,
+            },
+        )
+        .await
+    }
+
     /// The job, when it is not running, else `not_stopped` (R5, R6).
     async fn not_running(&self, who: &str) -> Result<Job, ActionError> {
         let job = self.action(who, UserAction::Get).await?;

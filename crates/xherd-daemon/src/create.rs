@@ -141,7 +141,7 @@ pub(crate) async fn remove_project_leftovers(workspace: &Path) {
 impl Daemon {
     /// A saved agent a job may start from: it exists, is not archived and
     /// its runtime (or its fallback) can run now (R15, R36).
-    async fn usable_agent(&self, key: &str) -> Result<AgentDef, ActionError> {
+    pub(crate) async fn usable_agent(&self, key: &str) -> Result<AgentDef, ActionError> {
         let def = self.agent_def(key).await?;
         if def.archived_at.is_some() {
             return Err(refuse(

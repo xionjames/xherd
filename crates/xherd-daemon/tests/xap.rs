@@ -2192,6 +2192,80 @@ async fn a_quick_job_goes_from_its_commit_to_the_ship_gate() {
     );
 }
 
+/// R6, R7: promoting a quick job at its commit gate keeps the branch, the
+/// done commit and the worktree, drops the open proposal, moves the job to
+/// the spec stage of the feature flow and queues a new session whose prompt
+/// is the feature start command with the promotion note.
+#[tokio::test]
+async fn promote_moves_a_quick_job_to_the_feature_flow() {
+    let t = setup_flow("quick").await;
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    std::fs::write(t.wt.path().join(".git/info/exclude"), ".xherd/\n").unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    xap(
+        &t,
+        "p1",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "files": ["a.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    act(&t, approve(None)).await.unwrap();
+    session_start(&t, 2).await;
+    std::fs::write(t.wt.path().join("b.txt"), "b\n").unwrap();
+    xap(
+        &t,
+        "p2",
+        "commit.propose",
+        json!({"id": "C02", "subject": "Add b", "files": ["b.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 3).await;
+    assert_eq!(get(&t).await.status, Status::WaitingInput);
+
+    let a = t.d.promote("SC-1").await.unwrap();
+    assert_eq!(a.flow.as_deref(), Some("feature"));
+    assert_eq!(a.stage.as_deref(), Some("spec"));
+    assert!(a.gate.is_none());
+    assert_eq!(a.status, Status::Queued);
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+    assert_eq!(a.commits[1].status, CommitStatus::Dropped);
+    let prompt = a.next_prompt.unwrap();
+    assert!(prompt.starts_with("/xherd:feature"), "{prompt}");
+    assert!(prompt.contains("promoted from the quick flow"), "{prompt}");
+    let md = std::fs::read_to_string(t.wt.path().join(".xherd/instructions.md")).unwrap();
+    assert!(md.contains("Flow: xherd / feature"), "{md}");
+    // The dropped proposal's changes stay in the worktree.
+    assert!(t.wt.path().join("b.txt").exists());
+}
+
+/// R6: only a quick job that waits, without a pull request, can be promoted.
+#[tokio::test]
+async fn promote_is_refused_outside_its_cases() {
+    let t = setup().await;
+    stop(&t, 1).await;
+    let e = t.d.promote("SC-1").await.unwrap_err();
+    assert_eq!(e.code, "not_allowed", "{e}");
+    assert!(e.message.contains("quick flow"), "{e}");
+
+    let t = setup_flow("quick").await;
+    assert_eq!(get(&t).await.status, Status::Running);
+    let e = t.d.promote("SC-1").await.unwrap_err();
+    assert_eq!(e.code, "not_allowed", "{e}");
+
+    let t = setup_tweaked(json!({"freshSessions": true}), None, None, "quick", |a| {
+        a.pr_url = Some("https://github.com/o/r/pull/1".into())
+    })
+    .await;
+    stop(&t, 1).await;
+    let e = t.d.promote("SC-1").await.unwrap_err();
+    assert_eq!(e.code, "has_pr", "{e}");
+    assert_eq!(get(&t).await.flow.as_deref(), Some("quick"));
+}
+
 #[tokio::test]
 async fn a_file_too_large_to_scan_holds_a_commit() {
     let t = setup().await;
