@@ -101,6 +101,95 @@ pub fn base_ref(host: Option<&str>, agent: Option<&str>) -> Option<String> {
     })
 }
 
+/// A pull request description as compared by `TextSync`: line endings as LF
+/// and trailing whitespace dropped, nothing else.
+pub fn norm_body(s: &str) -> String {
+    s.replace("\r\n", "\n").trim_end().to_string()
+}
+
+/// A pull request title as compared by `TextSync`: trimmed at both ends.
+pub fn norm_title(s: &str) -> String {
+    s.trim().to_string()
+}
+
+/// What `TextSync::sync` found for one text field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sync {
+    /// Nothing to do.
+    Nothing,
+    /// The local text and the host's agree; the baseline follows.
+    Baseline,
+    /// The host's text changed and the local one did not: write it locally.
+    Write(String),
+    /// Both changed (or the host's is empty): tell the user, once.
+    Diverged,
+}
+
+/// Per-field memory of the PR text sync: hashes (`content_sha256`) of the
+/// normalised text, never the text itself (host text is untrusted).
+/// `baseline` is the value both sides last agreed on; `notified` the host
+/// value a divergence was already reported for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSync {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notified: Option<String>,
+}
+
+fn text_hash(s: &str) -> String {
+    crate::hash::content_sha256(s.as_bytes())
+}
+
+impl TextSync {
+    pub fn is_empty(&self) -> bool {
+        self.baseline.is_none() && self.notified.is_none()
+    }
+
+    /// The local text is what the host has now (after a post): it becomes the
+    /// baseline.
+    pub fn seed(&mut self, local: &str) {
+        self.baseline = Some(text_hash(local));
+        self.notified = None;
+    }
+
+    /// Compare the host's text with the local one (both already normalised).
+    /// `local: None` means the document has no such field, which counts as
+    /// unchanged since the baseline. The table is in design.md.
+    pub fn sync(&mut self, host: Option<&str>, local: Option<&str>) -> Sync {
+        let Some(host) = host else {
+            return Sync::Nothing;
+        };
+        let h = text_hash(host);
+        let Some(b) = self.baseline.clone() else {
+            self.baseline = Some(h);
+            self.notified = None;
+            return Sync::Nothing;
+        };
+        let l = local.map_or_else(|| b.clone(), text_hash);
+        if h == l {
+            self.baseline = Some(h);
+            self.notified = None;
+            return Sync::Baseline;
+        }
+        if l == b {
+            if !host.is_empty() {
+                self.baseline = Some(h);
+                self.notified = None;
+                return Sync::Write(host.to_string());
+            }
+        } else if h == b {
+            return Sync::Nothing;
+        }
+        if self.notified.as_deref() == Some(h.as_str()) {
+            return Sync::Nothing;
+        }
+        self.notified = Some(h);
+        Sync::Diverged
+    }
+}
+
 /// Hidden marker xherd puts in the comments it posts, so it never reads its
 /// own replies as new comments (R-304).
 pub const MARKER: &str = "<!-- xherd -->";
@@ -451,6 +540,121 @@ mod tests {
         ];
         let e = decide(&comments, &bad, &BTreeMap::new()).unwrap_err();
         assert!(e.contains("no reply text"), "{e}");
+    }
+
+    fn seeded(base: &str) -> TextSync {
+        let mut t = TextSync::default();
+        t.seed(base);
+        t
+    }
+
+    #[test]
+    fn text_sync_host_unknown_does_nothing() {
+        let mut t = seeded("a");
+        assert_eq!(t.sync(None, Some("b")), Sync::Nothing);
+        assert_eq!(t, seeded("a"));
+    }
+
+    #[test]
+    fn text_sync_without_baseline_takes_the_host_value() {
+        let mut t = TextSync::default();
+        assert_eq!(t.sync(Some("h"), Some("l")), Sync::Nothing);
+        assert_eq!(t, seeded("h"));
+    }
+
+    #[test]
+    fn text_sync_equal_texts_move_the_baseline() {
+        let mut t = seeded("old");
+        t.notified = Some("x".into());
+        assert_eq!(t.sync(Some("new"), Some("new")), Sync::Baseline);
+        assert_eq!(t, seeded("new"));
+    }
+
+    #[test]
+    fn text_sync_unchanged_is_nothing() {
+        let mut t = seeded("a");
+        assert_eq!(t.sync(Some("a"), Some("a")), Sync::Baseline);
+        assert_eq!(t.sync(Some("a"), None), Sync::Baseline);
+    }
+
+    #[test]
+    fn text_sync_host_edit_is_written_locally() {
+        let mut t = seeded("a");
+        assert_eq!(t.sync(Some("h"), Some("a")), Sync::Write("h".into()));
+        assert_eq!(t, seeded("h"));
+        // A missing local field counts as unchanged.
+        let mut t = seeded("a");
+        assert_eq!(t.sync(Some("h"), None), Sync::Write("h".into()));
+    }
+
+    #[test]
+    fn text_sync_empty_host_value_notifies_once_and_is_never_written() {
+        let mut t = seeded("a");
+        assert_eq!(t.sync(Some(""), Some("a")), Sync::Diverged);
+        assert_eq!(t.sync(Some(""), Some("a")), Sync::Nothing);
+        assert_eq!(t.baseline, seeded("a").baseline);
+    }
+
+    #[test]
+    fn text_sync_both_changed_notifies_once_per_host_value() {
+        let mut t = seeded("a");
+        assert_eq!(t.sync(Some("h"), Some("l")), Sync::Diverged);
+        assert_eq!(t.sync(Some("h"), Some("l")), Sync::Nothing);
+        assert_eq!(t.sync(Some("h2"), Some("l")), Sync::Diverged);
+        // The local edit is untouched: the baseline stays.
+        assert_eq!(t.baseline, seeded("a").baseline);
+    }
+
+    #[test]
+    fn text_sync_local_edit_alone_is_nothing() {
+        let mut t = seeded("a");
+        assert_eq!(t.sync(Some("a"), Some("l")), Sync::Nothing);
+        assert_eq!(t, seeded("a"));
+    }
+
+    #[test]
+    fn text_sync_host_edit_after_a_divergence_is_written_once_local_is_back() {
+        let mut t = seeded("a");
+        assert_eq!(t.sync(Some("h"), Some("l")), Sync::Diverged);
+        t.seed("l"); // the agent posted its text
+        assert_eq!(t.sync(Some("h"), Some("l")), Sync::Write("h".into()));
+        assert_eq!(t.notified, None);
+    }
+
+    #[test]
+    fn normalisation_is_crlf_and_trailing_whitespace_only() {
+        assert_eq!(norm_body("a\r\nb  \r\n\r\n"), "a\nb");
+        assert_eq!(norm_body("  a\n\n\nb\n"), "  a\n\n\nb");
+        assert_eq!(norm_title("  Add x \n"), "Add x");
+        let mut t = seeded(&norm_body("a\nb\n"));
+        assert_eq!(
+            t.sync(Some(&norm_body("a\r\nb\r\n")), Some(&norm_body("a\nb"))),
+            Sync::Baseline
+        );
+    }
+
+    #[test]
+    fn text_sync_json_omits_empty_and_reads_old_jobs() {
+        assert_eq!(serde_json::to_string(&TextSync::default()).unwrap(), "{}");
+        assert!(serde_json::from_str::<TextSync>("{}").unwrap().is_empty());
+        let t = seeded("a");
+        let back: TextSync = serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
+        assert_eq!(back, t);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn text_sync_never_writes_over_a_local_edit(
+            base in "[a-z]{0,6}", local in "[a-z]{0,6}", host in "[a-z]{0,6}",
+        ) {
+            proptest::prop_assume!(base != local);
+            let mut t = seeded(&base);
+            let r = t.sync(Some(&host), Some(&local));
+            proptest::prop_assert!(!matches!(r, Sync::Write(_)));
+            // The same call again is never a second divergence.
+            let again = t.sync(Some(&host), Some(&local));
+            proptest::prop_assert!(again != Sync::Diverged);
+        }
     }
 
     #[test]
