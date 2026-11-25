@@ -32,6 +32,9 @@ pub trait Driver: Send + Sync + 'static {
     /// Type text and press Enter `enters` times (R-020).
     async fn send(&self, a: &JobCtx, text: &str, enters: u32) -> Result<()>;
     async fn interrupt(&self, a: &JobCtx) -> Result<()>;
+    /// Press each key in order in the agent's window (tmux key names: `1`,
+    /// `Enter`, `Escape`). Used to answer a question on the screen (R22).
+    async fn send_keys(&self, a: &JobCtx, keys: &[String]) -> Result<()>;
     /// End the session. Not an error when it is already gone.
     async fn stop(&self, a: &JobCtx) -> Result<()>;
     /// Names of sessions that are alive (reconcile, R-011).
@@ -102,6 +105,16 @@ impl Driver for TerminalDriver {
             .send_key(&a.name, Some(AGENT_WINDOW), "C-c")
             .await
             .map_err(err)
+    }
+
+    async fn send_keys(&self, a: &JobCtx, keys: &[String]) -> Result<()> {
+        for key in keys {
+            self.tmux
+                .send_key(&a.name, Some(AGENT_WINDOW), key)
+                .await
+                .map_err(err)?;
+        }
+        Ok(())
     }
 
     async fn stop(&self, a: &JobCtx) -> Result<()> {
@@ -206,6 +219,10 @@ impl Driver for FakeDriver {
         self.log(format!("interrupt {}", a.name));
         Ok(())
     }
+    async fn send_keys(&self, a: &JobCtx, keys: &[String]) -> Result<()> {
+        self.log(format!("send-keys {} {}", a.name, keys.join(" ")));
+        Ok(())
+    }
     async fn stop(&self, a: &JobCtx) -> Result<()> {
         self.log(format!("stop {}", a.name));
         self.alive.lock().unwrap().remove(&a.name);
@@ -286,6 +303,15 @@ mod tests {
             workdir: PathBuf::from("/w"),
             env: vec![],
         }
+    }
+
+    #[tokio::test]
+    async fn fake_records_the_keys_in_order() {
+        let d = FakeDriver::default();
+        d.send_keys(&ctx(), &["2".to_string(), "Enter".into()])
+            .await
+            .unwrap();
+        assert_eq!(d.calls(), vec!["send-keys xherd-a 2 Enter".to_string()]);
     }
 
     #[tokio::test]
