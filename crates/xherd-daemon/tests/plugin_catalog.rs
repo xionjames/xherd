@@ -167,3 +167,146 @@ async fn a_second_call_within_a_day_does_not_fetch_and_a_later_one_does() {
     assert_eq!(t.calls().len(), 4, "a day later both sources are fetched");
     assert_eq!(t.cache()["sources"]["github"]["fetchedAt"], START + DAY);
 }
+
+impl T {
+    /// Replace `pluginCatalogs` in the saved config (it is read live).
+    fn set_sources(&self, sources: &[&str]) {
+        let p = Paths::at(self.home.path()).config();
+        let (mut cfg, _) = xherd_core::config::Config::load(&p).unwrap();
+        cfg.plugin_catalogs = sources.iter().map(|s| s.to_string()).collect();
+        cfg.save(&p).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_changed_source_list_fetches_only_the_new_source_and_drops_the_old() {
+    let t = daemon_with(&["github"], |_| {}).await;
+    t.serve(GITHUB, 200, &github_body());
+    t.serve(INDEX, 200, &index_body());
+    t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 1);
+
+    t.set_sources(&["github", INDEX]);
+    let c = t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 2, "only the new source is fetched");
+    assert!(t.calls()[1].ends_with(INDEX));
+    assert_eq!(c.entries.len(), 2);
+
+    t.set_sources(&[INDEX]);
+    let c = t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 2, "removing a source fetches nothing");
+    assert_eq!(c.entries.len(), 1);
+    assert_eq!(c.sources.len(), 1);
+    let cache = t.cache();
+    assert!(cache["sources"].get("github").is_none());
+    assert!(cache["sources"].get(INDEX).is_some());
+}
+
+#[tokio::test]
+async fn a_failing_source_keeps_its_old_entries_and_is_retried_after_15_minutes() {
+    let t = daemon_with(&["github"], |_| {}).await;
+    t.serve(GITHUB, 200, &github_body());
+    t.d.plugin_catalog(None, false).await.unwrap();
+
+    t.clock.advance(DAY);
+    t.serve(GITHUB, 500, "");
+    let c = t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 2);
+    assert_eq!(c.entries.len(), 1, "the old entries stay");
+    assert_eq!(
+        c.sources[0].fetched_at,
+        Some(START),
+        "the old fetchedAt stays"
+    );
+    assert!(c.sources[0].error.is_some());
+
+    t.clock.advance(15 * 60 * 1000 - 1);
+    t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 2, "not yet");
+
+    t.serve(GITHUB, 200, &github_body());
+    t.clock.advance(1);
+    let c = t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 3, "retried after 15 minutes");
+    assert!(c.sources[0].error.is_none());
+    assert_eq!(c.sources[0].fetched_at, Some(START + DAY + 15 * 60 * 1000));
+}
+
+#[tokio::test]
+async fn skipped_index_entries_are_counted() {
+    let t = daemon_with(&[INDEX], |_| {}).await;
+    t.serve(INDEX, 200, &index_body());
+    let c = t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(c.entries.len(), 1);
+    assert_eq!(c.sources[0].skipped, 1);
+    assert_eq!(t.cache()["sources"][INDEX]["skipped"], 1);
+}
+
+#[tokio::test]
+async fn refresh_fetches_every_source_even_when_fresh() {
+    let t = daemon_with(&["github", INDEX], |_| {}).await;
+    t.serve(GITHUB, 200, &github_body());
+    t.serve(INDEX, 200, &index_body());
+    t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 2);
+    t.clock.advance(1);
+    t.d.plugin_catalog(None, true).await.unwrap();
+    assert_eq!(t.calls().len(), 4);
+}
+
+#[tokio::test]
+async fn two_concurrent_refreshes_make_one_call_per_source() {
+    let t = daemon_with(&["github", INDEX], |_| {}).await;
+    t.serve(GITHUB, 200, &github_body());
+    t.serve(INDEX, 200, &index_body());
+    t.d.plugin_catalog(None, false).await.unwrap();
+    t.clock.advance(1);
+    let (a, b) = tokio::join!(
+        t.d.plugin_catalog(None, true),
+        t.d.plugin_catalog(None, true)
+    );
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(t.calls().len(), 4, "2 first fetches + one refresh each");
+}
+
+#[tokio::test]
+async fn every_call_has_the_safety_flags_and_no_authorization() {
+    let t = daemon_with(&["github", INDEX], |_| {}).await;
+    t.serve(GITHUB, 200, &github_body());
+    t.serve(INDEX, 200, &index_body());
+    t.d.plugin_catalog(None, false).await.unwrap();
+    let calls = t.calls();
+    assert_eq!(calls.len(), 2);
+    for line in calls {
+        assert!(line.starts_with("-q "), "-q first: {line}");
+        assert!(line.contains("--proto =https"), "{line}");
+        assert!(line.contains("--proto-redir =https"), "{line}");
+        assert!(line.contains("--max-redirs 5"), "{line}");
+        assert!(line.contains("--max-filesize 1048576"), "{line}");
+        assert!(line.contains("--max-time 15"), "{line}");
+        assert!(!line.to_lowercase().contains("authorization"), "{line}");
+    }
+}
+
+#[tokio::test]
+async fn an_invalid_configured_source_is_that_sources_error_and_never_fetched() {
+    let t = daemon_with(&["github", "http://example.org/index.json"], |_| {}).await;
+    t.serve(GITHUB, 200, &github_body());
+    let c = t.d.plugin_catalog(None, false).await.unwrap();
+    assert_eq!(t.calls().len(), 1);
+    assert_eq!(c.entries.len(), 1);
+    assert_eq!(c.sources.len(), 2);
+    assert!(c.sources[0].error.is_none());
+    assert_eq!(c.sources[1].source, "http://example.org/index.json");
+    assert!(c.sources[1].error.is_some());
+}
+
+#[tokio::test]
+async fn install_off_refuses_before_any_curl_call() {
+    let t = daemon_with(&["github"], |o| o.plugin_install = false).await;
+    t.serve(GITHUB, 200, &github_body());
+    let e = t.d.plugin_catalog(None, true).await.unwrap_err();
+    assert!(format!("{e:?}").contains("plugin_install_off"), "{e:?}");
+    assert!(t.calls().is_empty());
+}
