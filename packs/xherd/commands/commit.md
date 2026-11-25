@@ -28,5 +28,9 @@ user left it). You record it, or fix it when git refused.
 5. If `HEAD` is a merge commit (`git rev-parse -q --verify HEAD^2` succeeds),
    it merged the base branch: continue with step 9 of `{{path:conflicts}}`
    (push and stop) instead.
-6. Otherwise continue: follow the command in `{{path:next}}` (next task, or
+6. If `.xherd/instructions.md` has the line `Flow: xherd / quick`, there are
+   no tasks or review. If `.xherd/spec/memory.md` records a pull request URL,
+   it is already open: push the branch (`git push`, never a force-push), note
+   it in `memory.md` and stop. Otherwise follow the command in `{{path:ship}}`.
+7. Otherwise continue: follow the command in `{{path:next}}` (next task, or
    the review when every task is done).

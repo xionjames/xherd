@@ -8,8 +8,10 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
 1. `xherd stage enter implement`
 2. Read `.xherd/spec/memory.md` and `.xherd/spec/tasks.md`. The next task is the first one with status
    `todo` whose `depends` are all `done`.
-3. If no task is left to do (all `done`), follow the review command in
-   `{{path:review}}` instead and stop here.
+3. If `.xherd/instructions.md` has the line `Flow: xherd / quick`, there is no
+   `tasks.md`: follow `{{path:ship}}` instead and stop here. If no task is left
+   to do (all `done`), follow the review command in `{{path:review}}` instead
+   and stop here.
 4. If tasks remain but none is ready (blocked ones), say why with
    `xherd ask "T03 waits for T02, which is blocked: how should I proceed?"`
    and stop.

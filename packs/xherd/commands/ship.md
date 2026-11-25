@@ -21,7 +21,10 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    templates, pick the fitting one and name its `path` in the frontmatter.
 4. Write `.xherd/spec/pr.md` in the pr format: the template's headings first,
    the essentials (summary, requirements covered, key decisions, testing,
-   assumptions) placed in them. For a bug fix (`flow: bugfix` in `spec.md`),
+   assumptions) placed in them. In a quick job (`Flow: xherd / quick` in
+   `.xherd/instructions.md`) there is no `spec.md` or `tasks.md`: write the
+   summary from the commits (`git log` since the base), `ticket.md` and
+   `memory.md`, with "Not applicable" for the requirements. For a bug fix (`flow: bugfix` in `spec.md`),
    name the reproduction test and how it failed before the fix (from the
    evidence of `T01` in `tasks.md`). It becomes the pull request's body, so it
    holds only what belongs there; do not update the ticket yourself: xherd
@@ -46,4 +49,4 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    `gh pr create --draft --title "<title>" --body-file <file>`).
 8. Report it: `xherd pr opened --url https://github.com/acme/app/pull/42`
    (with the real URL).
-9. Update `memory.md` and stop.
+9. Update `memory.md` (write the pull request URL in its State section) and stop.

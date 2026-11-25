@@ -9,7 +9,11 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
    holds the final decision for every comment: the user's, or your proposal
    where they left it. Do only what it says. `note` is the user's or your
    reason; `posted: true` means xherd already posted that reply.
-2. For each comment decided `fix`, add a task to `.xherd/spec/tasks.md` with
+2. In a quick job (`Flow: xherd / quick` in `.xherd/instructions.md`) there is
+   no `tasks.md`: make each `fix` change directly, run the relevant tests,
+   and propose the commit as `{{path:quick}}` step 6 says (the next unused
+   `Cnn`, no `tasks`); once it is recorded, push (step 4) and continue at
+   step 5. Otherwise, for each comment decided `fix`, add a task to `.xherd/spec/tasks.md` with
    `source: pr`, the files it changes and a `verify` command when one fits,
    then run `xherd tasks sync`.
 3. Implement those tasks one by one as `{{path:next}}` describes, each with
