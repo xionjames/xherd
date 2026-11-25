@@ -13,8 +13,9 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
 1. Mark the stage: `xherd stage enter spec`.
 2. If there is a ticket, read it with the tracker tools you have (MCP server
    or CLI). If there is none, or you have no tools for it, use the
-   description given above. Write
-   `.xherd/spec/ticket.md` (create the folder if needed).
+   description given above. If `.xherd/spec/ticket.md` already exists (a job
+   promoted from the quick flow), read it and keep it, adding only what the
+   tracker has newer; otherwise write it (create the folder if needed).
 3. Explore the code that the change touches. Do not change any code yet.
 4. Write `.xherd/spec/spec.md` in the spec format: problem, numbered
    requirements, acceptance, out of scope, the design decision, open
