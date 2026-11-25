@@ -202,6 +202,7 @@ pub fn router(d: Daemon) -> Router {
         )
         .route("/api/v1/view-kit/{file}", get(view::kit_file))
         .route("/api/v1/plugins", get(plugins_list))
+        .route("/api/v1/plugins/catalog", get(plugin_catalog))
         .route("/api/v1/plugins/preview", post(plugin_preview))
         .route("/api/v1/plugins/install", post(plugin_install))
         .route(
@@ -1214,6 +1215,24 @@ async fn plugins_list(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>
         "restartNeeded": d.plugin_changes(),
         "installEnabled": d.plugin_install,
     })))
+}
+
+#[derive(Deserialize)]
+struct CatalogQuery {
+    q: Option<String>,
+    /// `1` or `true`: fetch every source again.
+    refresh: Option<String>,
+}
+
+/// The plugins found in the configured catalogues, filtered by `q` (R5, R8).
+async fn plugin_catalog(
+    _: User,
+    State(d): State<Daemon>,
+    Query(q): Query<CatalogQuery>,
+) -> ApiResult<Json<Value>> {
+    let refresh = matches!(q.refresh.as_deref(), Some("1" | "true"));
+    let c = d.plugin_catalog(q.q.as_deref(), refresh).await?;
+    Ok(Json(serde_json::to_value(c).map_err(ApiError::internal)?))
 }
 
 #[derive(Deserialize)]
