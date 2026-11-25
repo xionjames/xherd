@@ -197,7 +197,7 @@ impl Host {
                         "view",
                         url,
                         "--json",
-                        "state,mergeable,mergeStateStatus,baseRefName,reviewRequests,latestReviews",
+                        "state,mergeable,mergeStateStatus,baseRefName,reviewRequests,latestReviews,title,body",
                     ],
                 )
                 .await?;
@@ -440,12 +440,14 @@ impl Host {
     }
 }
 
-/// `{state, mergeable?, base?, reviewers?}` of `pr-status`, as a snapshot
-/// without checks. State is `open`, `merged` or `closed` in any case;
-/// `mergeable` is a bool or text (`MERGEABLE`, `CONFLICTING`, `yes`, `no`…)
-/// and unknown when absent or not recognised. `reviewers` is
-/// `[{name, state}]`, state one of `pending`, `approved`,
-/// `changes-requested`, `commented`, `dismissed` (any case, `_` for `-`).
+/// `{state, mergeable?, base?, reviewers?, title?, body?}` of `pr-status`, as
+/// a snapshot without checks. `title` and `body` are the pull request's text
+/// on the host; absent, `null` or not a string means the host did not say.
+/// State is `open`, `merged` or `closed` in any case; `mergeable` is a bool or
+/// text (`MERGEABLE`, `CONFLICTING`, `yes`, `no`…) and unknown when absent or
+/// not recognised. `reviewers` is `[{name, state}]`, state one of `pending`,
+/// `approved`, `changes-requested`, `commented`, `dismissed` (any case, `_`
+/// for `-`).
 pub fn parse_status(v: &Value) -> Result<Snapshot, String> {
     let state = match v["state"].as_str().map(str::to_ascii_lowercase).as_deref() {
         Some("open") => PrState::Open,
@@ -491,19 +493,23 @@ pub fn parse_status(v: &Value) -> Result<Snapshot, String> {
             .collect::<Result<_, String>>()?,
         _ => return Err("reviewers is not a list".into()),
     };
+    // Text fields: anything but a string is "not told".
+    let text = |k: &str| v[k].as_str().map(str::to_string);
     Ok(Snapshot {
         state,
         mergeable,
         checks: Vec::new(),
         reviewers,
         base,
+        title: text("title"),
+        body: text("body"),
     })
 }
 
 /// `gh pr view --json state,mergeable,mergeStateStatus,baseRefName,
-/// reviewRequests,latestReviews` in the `pr-status` shape. A reviewer asked
-/// again after reviewing is `pending`; a merge state of `DIRTY` stands in
-/// for a `mergeable` GitHub has not computed yet.
+/// reviewRequests,latestReviews,title,body` in the `pr-status` shape. A
+/// reviewer asked again after reviewing is `pending`; a merge state of `DIRTY`
+/// stands in for a `mergeable` GitHub has not computed yet.
 fn github_status(v: &Value) -> Value {
     let mut reviewers: Vec<Value> = Vec::new();
     let requested = v["reviewRequests"].as_array().into_iter().flatten();
@@ -533,6 +539,8 @@ fn github_status(v: &Value) -> Value {
         "mergeable": mergeable,
         "base": v["baseRefName"],
         "reviewers": reviewers,
+        "title": v["title"],
+        "body": v["body"],
     })
 }
 
@@ -805,10 +813,41 @@ mod tests {
         );
         let plain =
             json!({"state": "OPEN", "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"});
+        let p = parse_status(&github_status(&plain)).unwrap();
+        assert_eq!(p.mergeable, Mergeable::Yes);
+        assert_eq!((p.title, p.body), (None, None), "gh JSON without the text");
+    }
+
+    #[test]
+    fn gh_view_carries_the_title_and_body() {
+        let v = json!({"state": "OPEN", "title": "Add x", "body": "Why.\r\n\r\nHow."});
+        let s = parse_status(&github_status(&v)).unwrap();
+        assert_eq!(s.title.as_deref(), Some("Add x"));
+        assert_eq!(s.body.as_deref(), Some("Why.\r\n\r\nHow."));
+        // An empty description is told as empty, not as unknown.
+        let empty = json!({"state": "OPEN", "title": "t", "body": ""});
         assert_eq!(
-            parse_status(&github_status(&plain)).unwrap().mergeable,
-            Mergeable::Yes
+            parse_status(&github_status(&empty))
+                .unwrap()
+                .body
+                .as_deref(),
+            Some("")
         );
+    }
+
+    #[test]
+    fn plugin_status_text_is_optional() {
+        let with = parse_status(&json!({"state": "open", "title": "T", "body": "B"})).unwrap();
+        assert_eq!(
+            (with.title.as_deref(), with.body.as_deref()),
+            (Some("T"), Some("B"))
+        );
+        let without = parse_status(&json!({"state": "open"})).unwrap();
+        assert_eq!((without.title, without.body), (None, None));
+        let null = parse_status(&json!({"state": "open", "title": null, "body": null})).unwrap();
+        assert_eq!((null.title, null.body), (None, None));
+        let other = parse_status(&json!({"state": "open", "title": 7, "body": ["x"]})).unwrap();
+        assert_eq!((other.title, other.body), (None, None));
     }
 
     #[test]

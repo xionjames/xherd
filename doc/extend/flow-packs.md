@@ -58,6 +58,8 @@ Each file in `commands/` becomes a runtime command (`/xherd:design`, …). Conve
 
 `packs/xherd/FORMAT.md` documents the document formats (`tasks.md`, `commits.md`, `review.md`, `pr-review.md`, `memory.md`) that the daemon's parsers read.
 
+`pr.md` is the one gate document the daemon also rewrites: its `title:` frontmatter key is the pull request's title and the rest of the body is its description. While a job watches an open PR, xherd copies host edits of either into `pr.md` (keeping the other frontmatter keys and an un-posted local edit untouched), so the ship command must post the title and body from the files and update an existing PR instead of opening a second one. When `pr.md` has no `title:` key, xherd adds one at the first host edit of the title.
+
 ## Installing
 
 `xherd install` renders the pack's commands for each runtime (`{{prefix}}`, `{{args}}`, `{{dir}}`, `{{path:NAME}}` = where command NAME is installed for that runtime, `{{xap}}`, `{{format}}`) and writes them where the runtime reads commands. Format `command` writes each file as it is; `skill` (Codex) writes `<folder>/SKILL.md` with only `name` (the folder) and `description` in its frontmatter, plus `agents/openai.yaml` that keeps the skill from being used unless it is called by name. Hashes of what was written are kept, so a file you edited is left alone and the new version is written beside it with a `.xherd-new` suffix.

@@ -1943,6 +1943,9 @@ impl Actor {
         use xherd_core::pr::{Event, PrState};
         let before = self.job.status;
         let name = self.job.name.clone();
+        if before == Status::Watching && snap.state == PrState::Open {
+            self.sync_pr_text(&snap).await;
+        }
         for e in self.job.apply_pr(&snap) {
             let text = match e {
                 Event::Finished(state) => {
@@ -1973,6 +1976,144 @@ impl Actor {
             }
         }
         self.commit(before).await;
+    }
+
+    /// `.xherd/spec/pr.md` of this job.
+    fn pr_doc_path(&self) -> Option<PathBuf> {
+        let wd = self.workdir().ok()?;
+        Some(wd.join(xherd_flow::xap::SPEC_DIR).join("pr.md"))
+    }
+
+    /// Pull edits made on the host to the PR title and description into
+    /// `pr.md` while the job watches an open PR (PR text sync). A local
+    /// edit never gets overwritten: when both sides changed the user is told
+    /// once. Events and notifications never carry the (untrusted) text.
+    async fn sync_pr_text(&mut self, snap: &xherd_core::pr::Snapshot) {
+        use xherd_core::pr::{Sync, norm_body, norm_title};
+        let Some(path) = self.pr_doc_path() else {
+            return;
+        };
+        let Ok(Some(bytes)) = xherd_core::runner::read_file(&path).await else {
+            return;
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            return;
+        };
+        let Some(doc) = xherd_flow::pr_doc::fields(&text) else {
+            return;
+        };
+        let before = (
+            self.job.pr_title_sync.clone(),
+            self.job.pr_body_sync.clone(),
+        );
+        // A title with a line break cannot be one `title:` line: not known.
+        let host_title = snap
+            .title
+            .as_deref()
+            .filter(|t| !t.contains(['\n', '\r']))
+            .map(norm_title);
+        let host_body = snap.body.as_deref().map(norm_body);
+        let local_title = doc.title.as_deref().map(norm_title);
+        let local_body = norm_body(&doc.body);
+        let results = [
+            (
+                "title",
+                self.job
+                    .pr_title_sync
+                    .sync(host_title.as_deref(), local_title.as_deref()),
+            ),
+            (
+                "body",
+                self.job
+                    .pr_body_sync
+                    .sync(host_body.as_deref(), Some(&local_body)),
+            ),
+        ];
+        let mut new_text = Some(text.clone());
+        let mut pulled = Vec::new();
+        for (field, result) in results {
+            match result {
+                Sync::Write(v) => {
+                    new_text = new_text.and_then(|t| match field {
+                        "title" => xherd_flow::pr_doc::with_title(&t, &v),
+                        _ => xherd_flow::pr_doc::with_body(&t, &v),
+                    });
+                    pulled.push(field);
+                }
+                Sync::Diverged => {
+                    self.log(None, "pr-text-diverged", Some(json!({"field": field})))
+                        .await;
+                    let what = if field == "title" {
+                        "title"
+                    } else {
+                        "description"
+                    };
+                    self.notify(
+                        "pr",
+                        format!(
+                            "{}: the PR {what} was edited on the host and in pr.md; \
+                             the next post replaces the host's edit",
+                            self.job.name
+                        ),
+                    );
+                }
+                Sync::Nothing | Sync::Baseline => {}
+            }
+        }
+        if pulled.is_empty() {
+            return;
+        }
+        let written = match new_text {
+            Some(t) => xherd_core::runner::write_file(&path, t.as_bytes(), None)
+                .await
+                .map_err(|e| e.to_string()),
+            None => Err("pr.md would not read back".to_string()),
+        };
+        match written {
+            Ok(()) => {
+                for field in pulled {
+                    self.log(None, "pr-text-pulled", Some(json!({"field": field})))
+                        .await;
+                }
+            }
+            Err(e) => {
+                // Not pulled: the next poll tries again.
+                (self.job.pr_title_sync, self.job.pr_body_sync) = before;
+                tracing::warn!(agent = %self.job.name, error = %e, "pr.md not updated from the host");
+                self.log(None, "pr-text-write-failed", Some(json!({"error": e})))
+                    .await;
+            }
+        }
+    }
+
+    /// The text of `pr.md` is what the host has now (the agent just posted
+    /// it, or the PR was found): remember it as what both sides agree on.
+    /// A `pr.md` without `title:` leaves the title baseline unknown. Returns
+    /// whether the job changed.
+    async fn seed_pr_baselines(&mut self) -> bool {
+        use xherd_core::pr::{TextSync, norm_body, norm_title};
+        let Some(path) = self.pr_doc_path() else {
+            return false;
+        };
+        let Ok(Some(bytes)) = xherd_core::runner::read_file(&path).await else {
+            return false;
+        };
+        let Some(doc) = String::from_utf8(bytes)
+            .ok()
+            .and_then(|t| xherd_flow::pr_doc::fields(&t))
+        else {
+            return false;
+        };
+        let (title, body) = (
+            self.job.pr_title_sync.clone(),
+            self.job.pr_body_sync.clone(),
+        );
+        self.job.pr_title_sync = TextSync::default();
+        if let Some(t) = &doc.title {
+            self.job.pr_title_sync.seed(&norm_title(t));
+        }
+        self.job.pr_body_sync.seed(&norm_body(&doc.body));
+        self.job.pr_title_sync != title || self.job.pr_body_sync != body
     }
 
     /// New comments on the pull request (R-304): save them for the agent in
@@ -2297,6 +2438,7 @@ impl Actor {
         )
         .await;
         self.write_progress(&call.cmd);
+        let seeded = matches!(call.cmd, XapCmd::PrOpened { .. }) && self.seed_pr_baselines().await;
         if let XapCmd::StageEnter { stage, .. } = &call.cmd
             && self.stage_role(pack, stage) == Some(xherd_core::domain::Role::Ship)
         {
@@ -2309,7 +2451,7 @@ impl Actor {
             self.log(None, "ask-hold-ended", Some(json!({"by": call.cmd.name()})))
                 .await;
         }
-        if changed || hold_ended {
+        if changed || hold_ended || seeded {
             self.commit(before).await;
         }
         let reason = (!changed)
@@ -5859,6 +6001,7 @@ impl Actor {
                 self.git_access_ok().await;
                 let before = self.job.status;
                 self.job.pr_url = Some(url.clone());
+                self.seed_pr_baselines().await;
                 self.log(None, "pr-found", Some(json!({"url": url}))).await;
                 self.commit(before).await;
                 self.after_ship().await;
