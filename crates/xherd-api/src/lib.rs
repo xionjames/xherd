@@ -499,6 +499,11 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
     let mut config = serde_json::to_value(&*d.config).map_err(ApiError::internal)?;
     if let Some(c) = config.as_object_mut() {
         c.remove("userToken");
+        // `d.config` is the config at daemon start; `ui` applies live, so show
+        // the saved value or the job page keeps the old view until a restart.
+        if let Ok(saved) = d.saved_config() {
+            c.insert("ui".into(), json!(saved.ui));
+        }
     }
     let plugins: Vec<Value> = d
         .plugins

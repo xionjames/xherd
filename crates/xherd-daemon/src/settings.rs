@@ -454,7 +454,7 @@ fn shown(c: &Config) -> Value {
 }
 
 impl Daemon {
-    fn saved_config(&self) -> Result<Config, ActionError> {
+    pub fn saved_config(&self) -> Result<Config, ActionError> {
         Config::load(&self.paths.config())
             .map(|(c, _)| c)
             .map_err(|e| ActionError {
