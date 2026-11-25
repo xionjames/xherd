@@ -313,6 +313,44 @@ pub struct Job {
     /// the job page offers to add one or to finish locally.
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_origin: bool,
+    /// Permission requests and questions that wait for the user (#202, R23):
+    /// what the Inbox and the cards render without the chat socket.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting: Vec<Waiting>,
+}
+
+/// What a waiting card is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WaitKind {
+    Permission,
+    Question,
+}
+
+/// A permission request or a question waiting for an answer (#202, R19, R23).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Waiting {
+    pub id: String,
+    pub kind: WaitKind,
+    pub since: Millis,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<crate::chat::PermOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub questions: Vec<crate::chat::Question>,
+    #[serde(default)]
+    pub answerable: bool,
+}
+
+impl Job {
+    /// A permission request waits: reports from the runtime must not unblock
+    /// the job until the last one is answered (R19).
+    pub fn permission_waiting(&self) -> bool {
+        self.waiting.iter().any(|w| w.kind == WaitKind::Permission)
+    }
 }
 
 impl Job {
@@ -382,6 +420,7 @@ impl Job {
             actions_card_dismissed: false,
             port_base: None,
             no_origin: false,
+            waiting: Vec::new(),
             review_rounds: 0,
             pr_state: None,
             pr_comments_seen: Vec::new(),
