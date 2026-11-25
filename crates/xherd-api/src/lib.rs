@@ -15,11 +15,13 @@ use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use xherd_core::chat::{AnsweredFrom, PermOption};
 use xherd_core::report::Report;
 use xherd_core::xap::XapCall;
 use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_JOB, TOKEN_USER};
-use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
+use xherd_daemon::{ActionError, Daemon, PermRequest, UserAction, hash_token};
 
+mod chat;
 mod term;
 mod ui;
 mod view;
@@ -46,6 +48,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/healthz", get(healthz))
         .route("/api/v1/ws", get(ws::state_stream))
         .route("/api/v1/ws/term/{id}", get(term::terminal))
+        .route("/api/v1/ws/chat/{id}", get(chat::chat))
         .route("/api/v1/ws/setup/{id}", get(term::setup_terminal))
         .route("/api/v1/state", get(state))
         .route("/api/v1/backups", get(backups).post(new_backup))
@@ -114,6 +117,11 @@ pub fn router(d: Daemon) -> Router {
                 .post(upload)
                 .layer(DefaultBodyLimit::disable()),
         )
+        .route(
+            "/api/v1/jobs/{id}/permissions/{pid}",
+            post(permission_answer),
+        )
+        .route("/api/v1/jobs/{id}/questions/{qid}", post(question_answer))
         .route("/api/v1/jobs/{id}/{action}", post(agent_action))
         .route("/api/v1/open-in", get(open_in_view))
         .route(
@@ -226,6 +234,7 @@ pub fn router(d: Daemon) -> Router {
         )
         .route("/api/v1/git/credential", post(git_credential))
         .route("/api/v1/hooks", post(hooks))
+        .route("/api/v1/hooks/permission", post(hooks_permission))
         .route("/api/v1/xap", post(xap))
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(tower_http::trace::TraceLayer::new_for_http())
@@ -284,7 +293,8 @@ impl From<ActionError> for ApiError {
             | "bad_memory" | "unknown_skill" | "bad_fallback" | "bad_assignment"
             | "mixed_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_agent" | "no_such_skill" | "action_unknown" => StatusCode::NOT_FOUND,
-            "bad_path" | "bad_config" | "bad_catalog_url" => StatusCode::BAD_REQUEST,
+            "chat_unsupported" => StatusCode::CONFLICT,
+            "bad_path" | "bad_config" | "bad_catalog_url" | "bad_answer" => StatusCode::BAD_REQUEST,
             "plugin_install_off" => StatusCode::FORBIDDEN,
             "unknown_plugin" => StatusCode::NOT_FOUND,
             "bad_plugin_source"
@@ -523,6 +533,14 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
             {
                 info["view"] = json!({"entry": entry});
             }
+            if p.manifest.kind == xherd_plugin::Kind::Runtime {
+                let chat = xherd_plugin::runtime::Terminal::of(&p.manifest)
+                    .is_ok_and(|t| t.chat.is_some());
+                info["chat"] = json!(chat);
+                if chat {
+                    info["slashCommands"] = slash_commands(&d, p.name());
+                }
+            }
             info
         })
         .collect();
@@ -539,6 +557,25 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "flows": flows(&d),
         "sandbox": d.sandbox,
     })))
+}
+
+/// The composer's slash menu for a runtime, by pack: what `xherd install`
+/// writes for it, plus the runtime's own `/compact` and `/clear` (R12).
+fn slash_commands(d: &Daemon, runtime: &str) -> Value {
+    let mut by_pack = serde_json::Map::new();
+    for (name, pack) in d.packs.iter() {
+        let files: Vec<(&str, &str)> = d.pack_sources.get(name).map_or_else(Vec::new, |s| {
+            s.files
+                .iter()
+                .map(|(p, t)| (p.as_str(), t.as_str()))
+                .collect()
+        });
+        let mut list = pack.slash_commands(runtime, &files);
+        list.push("/compact".into());
+        list.push("/clear".into());
+        by_pack.insert(name.clone(), json!(list));
+    }
+    Value::Object(by_pack)
 }
 
 /// Every pack flow with its stages, for progress lines.
@@ -2111,6 +2148,117 @@ async fn hooks(
             "no such job",
         )),
     }
+}
+
+/// What the runtime's permission hook sends through `xherd permission-request` (R18).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionBody {
+    job_id: String,
+    #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
+    tool_input: Value,
+    #[serde(default)]
+    suggestions: bool,
+}
+
+/// `POST /api/v1/hooks/permission`: held until the user answers (R19):
+/// `{"answer": "allow" | "allow-always" | "deny" | null}`. `null` is "xherd
+/// does not decide". Dropping the request (the CLI gave up) is enough for the
+/// actor to notice.
+async fn hooks_permission(
+    auth: AgentAuth,
+    State(d): State<Daemon>,
+    Json(b): Json<PermissionBody>,
+) -> ApiResult<Json<Value>> {
+    auth.require(SCOPE_HOOKS)?;
+    if b.job_id != auth.job_id {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "wrong_job",
+            "token belongs to another job",
+        ));
+    }
+    let req = PermRequest {
+        tool: b.tool_name,
+        input: b.tool_input,
+        suggestions: b.suggestions,
+    };
+    let answer = d.permission_request(&b.job_id, req).await;
+    Ok(Json(json!({"answer": answer})))
+}
+
+fn answered_from(from: &str) -> ApiResult<AnsweredFrom> {
+    match from {
+        "chat" => Ok(AnsweredFrom::Chat),
+        "inbox" => Ok(AnsweredFrom::Inbox),
+        "terminal" => Ok(AnsweredFrom::Terminal),
+        other => Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_answer",
+            format!("from must be chat, inbox or terminal, not {other:?}"),
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+struct PermissionAnswerBody {
+    answer: String,
+    from: String,
+}
+
+/// `POST /api/v1/jobs/{id}/permissions/{pid}` (R20).
+async fn permission_answer(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, pid)): Path<(String, String)>,
+    Json(b): Json<PermissionAnswerBody>,
+) -> ApiResult<Json<Value>> {
+    let answer = match b.answer.as_str() {
+        "allow" => PermOption::Allow,
+        "allow-always" => PermOption::AllowAlways,
+        "deny" => PermOption::Deny,
+        other => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "bad_answer",
+                format!("answer must be allow, allow-always or deny, not {other:?}"),
+            ));
+        }
+    };
+    let from = answered_from(&b.from)?;
+    let job = d
+        .action(&id, UserAction::Permission { pid, answer, from })
+        .await?;
+    Ok(Json(json!({"job": job})))
+}
+
+#[derive(Deserialize)]
+struct QuestionAnswerBody {
+    option: usize,
+    from: String,
+}
+
+/// `POST /api/v1/jobs/{id}/questions/{qid}` (R22): `option` is the 0-based index.
+async fn question_answer(
+    _: User,
+    State(d): State<Daemon>,
+    Path((id, qid)): Path<(String, String)>,
+    Json(b): Json<QuestionAnswerBody>,
+) -> ApiResult<Json<Value>> {
+    let from = answered_from(&b.from)?;
+    let job = d
+        .action(
+            &id,
+            UserAction::Question {
+                qid,
+                option: b.option,
+                from,
+            },
+        )
+        .await?;
+    Ok(Json(json!({"job": job})))
 }
 
 /// `POST /api/v1/xap` (xap.md §8): `200 {ok, result}` or `{ok: false, code, message}`.

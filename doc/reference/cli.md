@@ -116,6 +116,7 @@ These are not for daily use; they are what Claude Code and the jobs call.
 | Command | Does |
 |---|---|
 | `xherd hook <event>` | Runtime hook; reads the hook JSON on stdin. Silent, always exits 0 |
+| `xherd permission-request` | The runtime's blocking permission hook (Claude Code's `PermissionRequest`); reads the hook JSON on stdin, waits for your answer in xherd and prints the runtime's decision. Prints nothing and exits 0 when there is no token, no answer, an error or a timeout, so the runtime asks in the terminal: never a silent allow |
 | `xherd report …` | Push status for jobs or wrappers without hooks |
 | `xherd stage enter`, `gate open`, `ask`, `tasks sync`, `task start\|done\|block`, `commit propose\|done\|drop`, `pr opened`, `handoff written`, `issue add`, `action add\|rm\|ls\|log`, `memory propose`, `agent memory propose`, `agent propose` | The agent protocol, XAP. See the [XAP reference](xap.md) |
 | `xherd toolchain exec -- <argv>` | Provide the tools `.xherd/toolchain.json` lists, then run the command with them on `PATH`. The daemon starts jobs this way |

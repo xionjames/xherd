@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
+use xherd_core::chat::{AnsweredFrom, PermOption};
 use xherd_core::config::Config;
 use xherd_core::domain::{Commit, CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
@@ -34,6 +35,10 @@ pub enum Msg {
     User(UserAction, oneshot::Sender<Result<Job, ActionError>>),
     Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
+    /// A tool's permission request from the runtime's hook (R19): the answer
+    /// goes back on the channel, `None` when xherd does not decide (the
+    /// runtime then asks in its own prompt).
+    Permission(PermRequest, oneshot::Sender<Option<PermOption>>),
     /// At the daemon's start: the terminal sessions that are not any job's
     /// own, so the job can kill the action sessions it does not know (R12).
     Sessions(Arc<Vec<String>>),
@@ -41,6 +46,15 @@ pub enum Msg {
         generation: u64,
         result: WorkResult,
     },
+}
+
+/// What the runtime's permission hook sends (R19).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermRequest {
+    pub tool: String,
+    pub input: Value,
+    /// The request carries `permission_suggestions`, so `allow-always` can be offered.
+    pub suggestions: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +182,18 @@ pub enum UserAction {
     },
     /// Hide the "Save actions to repo profile" card for this job (R23).
     ActionsCardDismiss,
+    /// Answer a waiting permission card (R20).
+    Permission {
+        pid: String,
+        answer: PermOption,
+        from: AnsweredFrom,
+    },
+    /// Answer a waiting question card with option `option` (0-based) (R22).
+    Question {
+        qid: String,
+        option: usize,
+        from: AnsweredFrom,
+    },
     Get,
 }
 
@@ -228,6 +254,19 @@ pub enum WorkResult {
         unpushed: Option<Vec<String>>,
         push_known: bool,
     },
+    /// A range of the session's transcript (R4): the file found (kept for the
+    /// next reads), the offset it was read from, and what came back (`None`:
+    /// no file yet) with the file's length.
+    ChatRead {
+        session: String,
+        file: Option<PathBuf>,
+        offset: u64,
+        read: Option<(Vec<u8>, u64)>,
+    },
+    /// A permission request waited as long as `permissionWaitSec` (R19).
+    PermissionTimeout {
+        pid: String,
+    },
     /// The pane of a running action is dead: its exit status (`None` when a
     /// signal killed it) and what it printed (R11, R13).
     /// `stopped`: the user (or the job's end) stopped it; `restart` carries
@@ -252,14 +291,18 @@ pub enum WorkResult {
 impl WorkResult {
     /// Results that stay valid when the agent's generation moved on: results
     /// about actions (hand-on, resume), since an action outlives the session,
-    /// and the branch check (R4), which the stop that starts it often ends.
-    fn about_action(&self) -> bool {
+    /// the branch check (R4), which the stop that starts it often ends, and
+    /// the transcript read (R4): its offset is checked against the follower,
+    /// not the generation.
+    fn outlives_generation(&self) -> bool {
         matches!(
             self,
             WorkResult::ActionEnded { .. }
                 | WorkResult::ActionAlive { .. }
                 | WorkResult::ActionGone { .. }
                 | WorkResult::BranchCommits { .. }
+                | WorkResult::ChatRead { .. }
+                | WorkResult::PermissionTimeout { .. }
         )
     }
 }
@@ -433,6 +476,8 @@ pub struct ActorSettings {
     /// (`maxActionsPerJob`).
     pub job_actions: bool,
     pub max_actions_per_job: usize,
+    /// Longest a permission request waits for an answer (`permissionWaitSec`, R19).
+    pub permission_wait: Duration,
 }
 
 impl ActorSettings {
@@ -464,6 +509,7 @@ impl ActorSettings {
             suggest_agents: c.suggest_agents,
             job_actions: c.job_actions,
             max_actions_per_job: c.max_actions_per_job,
+            permission_wait: Duration::from_secs(c.permission_wait_sec),
             ..base
         }
     }
@@ -610,6 +656,7 @@ impl Default for ActorSettings {
             suggest_agents: true,
             job_actions: true,
             max_actions_per_job: 12,
+            permission_wait: Duration::from_secs(900),
         }
     }
 }
@@ -642,6 +689,8 @@ pub struct Env {
     pub skills: std::path::PathBuf,
     /// The data root: action logs live under it (R13).
     pub paths: xherd_core::paths::Paths,
+    /// One channel per job for the chat clients (R5).
+    pub chat: Arc<crate::chat::ChatHubs>,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -680,6 +729,10 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         stopping: BTreeSet::new(),
         push_seq: 0,
         push_applied: 0,
+        chat: None,
+        chat_resumed: false,
+        permission_replies: BTreeMap::new(),
+        question_from: BTreeMap::new(),
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -741,6 +794,45 @@ struct Actor {
     /// In memory only.
     push_seq: u64,
     push_applied: u64,
+    /// The Chat view's follower of the session's transcript (R4). In memory;
+    /// rebuilt from the chat log after a restart.
+    chat: Option<ChatFollow>,
+    /// The session being followed was started by a runtime resume: the notice
+    /// of its switch says so (R4).
+    chat_resumed: bool,
+    /// The hooks waiting for a permission answer, by card id (R19). In memory:
+    /// a restart drops them, so the runtime asks in its own prompt.
+    permission_replies: BTreeMap<String, oneshot::Sender<Option<PermOption>>>,
+    /// Questions answered with keys, by id: the option's label and where the
+    /// answer came from, until the question's tool result arrives (R22).
+    question_from: BTreeMap<String, (String, AnsweredFrom)>,
+}
+
+/// Most permission requests that wait at once for one job (R19).
+const PERMISSIONS_MAX: usize = 16;
+
+/// Most bytes of the transcript one read takes.
+const CHAT_READ_MAX: usize = 1024 * 1024;
+/// A transcript line longer than this is dropped (and counted unknown).
+const CHAT_LINE_MAX: usize = 16 * 1024 * 1024;
+
+/// Where the follower is in one session's transcript.
+struct ChatFollow {
+    session: String,
+    /// The transcript, once found.
+    file: Option<PathBuf>,
+    /// The next byte to read.
+    offset: u64,
+    /// The bytes before `offset` that did not end a line yet.
+    partial: Vec<u8>,
+    /// A read is in flight: one at a time.
+    reading: bool,
+    /// The session changed or the job left the live states: read to the end
+    /// of the file, then switch (or stop).
+    leaving: bool,
+    mapper: xherd_core::chat::Mapper,
+    log: crate::chat::ChatLog,
+    state: crate::chat::State,
 }
 
 impl Actor {
@@ -773,6 +865,7 @@ impl Actor {
 
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Msg>) {
         self.backfill_stages().await;
+        self.lose_permissions().await;
         while let Some(msg) = rx.recv().await {
             match msg {
                 Msg::Report(r, origin, reply) => {
@@ -789,9 +882,10 @@ impl Actor {
                     let _ = reply.send(self.on_xap(call).await);
                 }
                 Msg::Tick(t) => self.on_tick(t).await,
+                Msg::Permission(req, reply) => self.on_permission(req, reply).await,
                 Msg::Sessions(alive) => self.kill_unknown_actions(&alive),
                 Msg::WorkDone { generation, result } => {
-                    if generation != self.job.generation && !result.about_action() {
+                    if generation != self.job.generation && !result.outlives_generation() {
                         tracing::debug!(agent = %self.job.name, "dropping stale async result");
                         continue;
                     }
@@ -1068,6 +1162,10 @@ impl Actor {
                 id: self.job.id.clone(),
                 to: self.job.status,
             });
+            // No tick or hook reads the transcript any more: read what is left (R4).
+            if before.is_live() && !self.job.status.is_live() {
+                self.chat_poll();
+            }
         }
     }
 
@@ -1182,6 +1280,15 @@ impl Actor {
         if result == ReportResult::Applied && r.event == ReportEvent::SessionStart {
             self.resume_unconfirmed = false;
         }
+        // The runtime wrote to its transcript: read it now, not at the tick.
+        if result == ReportResult::Applied
+            && matches!(
+                r.event,
+                ReportEvent::PostToolUse | ReportEvent::UserPromptSubmit | ReportEvent::Stop
+            )
+        {
+            self.chat_poll();
+        }
         if result == ReportResult::Applied
             && r.event == ReportEvent::SessionStart
             && self.job.next_prompt.is_some()
@@ -1230,6 +1337,348 @@ impl Actor {
                 result: WorkResult::Usage { session, tokens },
             });
         });
+    }
+
+    /// Reads what the runtime appended to the session's transcript, for the
+    /// Chat view (R4). A no-op without a live session or a runtime with
+    /// `chat`; one read at a time, slow work spawned and back as
+    /// `WorkResult::ChatRead`.
+    fn chat_poll(&mut self) {
+        let live = self.job.status.is_live();
+        let Some(resume) = self
+            .runtime_kit()
+            .filter(|k| k.terminal.as_ref().is_some_and(|t| t.chat.is_some()))
+            .and_then(|k| k.resume.clone())
+        else {
+            return;
+        };
+        if self.chat.is_none() {
+            let (true, Some(session)) = (live, self.job.session.clone()) else {
+                return;
+            };
+            self.chat = Some(self.new_chat_follow(&session));
+        }
+        // A session change or the end of the live states: the followed file
+        // is read to its end first (no tick or hook comes after that).
+        let leaving = self.chat_leaving();
+        let Some(f) = self.chat.as_mut() else {
+            return;
+        };
+        f.leaving = leaving;
+        if f.reading {
+            return;
+        }
+        f.reading = true;
+        let session = f.session.clone();
+        let (file, offset) = (f.file.clone(), f.offset);
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
+        tokio::spawn(async move {
+            let env = xherd_core::runner::agent_env;
+            let file = match file {
+                Some(f) => Some(f),
+                None => resume.transcript_file(&session, &env).await,
+            };
+            let read = match &file {
+                Some(path) => xherd_core::runner::read_from(path, offset, CHAT_READ_MAX)
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::ChatRead {
+                    session,
+                    file,
+                    offset,
+                    read,
+                },
+            });
+        });
+    }
+
+    /// The follower's file is to be read to its end and left: the job is no
+    /// longer live, or its session is another one (R4).
+    fn chat_leaving(&self) -> bool {
+        !self.job.status.is_live()
+            || self
+                .job
+                .session
+                .as_deref()
+                .is_some_and(|s| self.chat.as_ref().is_some_and(|f| f.session != s))
+    }
+
+    /// The follower of `session`, resumed from the chat log: the position is
+    /// the larger of `state.json` and the end of the last logged line of the
+    /// session, so a crash between the append and the state save neither
+    /// repeats nor skips lines; the mapper knows the tools and questions
+    /// already logged, so their results still update them (R5).
+    fn new_chat_follow(&self, session: &str) -> ChatFollow {
+        use xherd_core::chat::{ChatBody, Mapper, ToolMeta};
+        let log = crate::chat::ChatLog::new(&self.env.paths, &self.job.id);
+        let state = log.load_state();
+        let logged = log.replay(0);
+        let prefix = self
+            .job
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))
+            .and_then(|p| p.install.get(self.runtime_name()))
+            .map(|i| i.prefix.clone());
+        let mut mapper = Mapper::new(prefix);
+        for e in &logged {
+            match &e.body {
+                ChatBody::Tool {
+                    id,
+                    name,
+                    summary,
+                    path,
+                    ..
+                } => {
+                    let meta = ToolMeta {
+                        name: name.clone(),
+                        summary: summary.clone(),
+                        path: path.clone(),
+                    };
+                    mapper.tools.insert(id.clone(), meta);
+                }
+                ChatBody::Question { id, questions, .. } => {
+                    mapper.questions.insert(id.clone(), questions.clone());
+                }
+                _ => {}
+            }
+        }
+        let logged_end = logged.iter().rev().find_map(|e| {
+            (e.session.as_deref() == Some(session))
+                .then_some(e.end)
+                .flatten()
+        });
+        let offset = state
+            .positions
+            .get(session)
+            .copied()
+            .into_iter()
+            .chain(logged_end)
+            .max()
+            .unwrap_or(0);
+        ChatFollow {
+            session: session.to_string(),
+            file: None,
+            offset,
+            partial: Vec::new(),
+            reading: false,
+            leaving: false,
+            mapper,
+            log,
+            state,
+        }
+    }
+
+    /// What `chat_poll` read: the complete lines become events, logged and
+    /// published (R4, R5). A file shorter than the position was replaced: it
+    /// is read again from its start. A full read is followed by another.
+    async fn on_chat_read(
+        &mut self,
+        session: String,
+        file: Option<PathBuf>,
+        offset: u64,
+        read: Option<(Vec<u8>, u64)>,
+    ) {
+        use xherd_core::chat::{ChatBody, NoticeKind};
+        let Some(f) = self
+            .chat
+            .as_mut()
+            .filter(|f| f.session == session && f.offset == offset)
+        else {
+            return;
+        };
+        f.reading = false;
+        if f.file.is_none() {
+            f.file = file;
+        }
+        let Some((bytes, len)) = read else {
+            // No transcript to read: nothing is left to drain.
+            if self.chat_leaving() {
+                self.chat_finish();
+            }
+            return;
+        };
+        let mut bodies: Vec<(ChatBody, Option<u64>)> = Vec::new();
+        let again;
+        if len < f.offset {
+            f.offset = 0;
+            f.partial.clear();
+            bodies.push((
+                ChatBody::Notice {
+                    notice: NoticeKind::NewSession,
+                    text: "The transcript was replaced".into(),
+                },
+                None,
+            ));
+            again = true;
+        } else {
+            again = bytes.len() >= CHAT_READ_MAX;
+            let new_offset = f.offset + bytes.len() as u64;
+            let mut buf = std::mem::take(&mut f.partial);
+            buf.extend_from_slice(&bytes);
+            let start = new_offset - buf.len() as u64;
+            let mut from = 0;
+            while let Some(nl) = buf[from..].iter().position(|b| *b == b'\n') {
+                let end = start + (from + nl + 1) as u64;
+                let text = String::from_utf8_lossy(&buf[from..from + nl]).into_owned();
+                from += nl + 1;
+                if text.trim().is_empty() {
+                    continue;
+                }
+                bodies.extend(f.mapper.line(&text).into_iter().map(|b| (b, Some(end))));
+            }
+            if buf.len() - from > CHAT_LINE_MAX {
+                f.state.unknown += 1;
+            } else {
+                f.partial = buf[from..].to_vec();
+            }
+            f.offset = new_offset;
+        }
+        let before = self.job.status;
+        let changed = self.track_questions(&mut bodies);
+        self.chat_emit(&session, bodies);
+        if changed {
+            self.commit(before).await;
+        }
+        if again {
+            self.chat_poll();
+        } else if self.chat_leaving() {
+            self.chat_finish();
+        }
+    }
+
+    /// Questions in the bodies read (R21, R23): one that opens becomes a
+    /// waiting card; one whose result arrived leaves `waiting`, and shows who
+    /// answered it when xherd typed the answer. True when `waiting` changed.
+    fn track_questions(
+        &mut self,
+        bodies: &mut [(xherd_core::chat::ChatBody, Option<u64>)],
+    ) -> bool {
+        use xherd_core::chat::{ChatBody, QUESTION_TOOL, Resolution};
+        use xherd_core::job::{WaitKind, Waiting};
+        let mut changed = false;
+        for (body, _) in bodies {
+            let ChatBody::Question {
+                id,
+                questions,
+                answerable,
+                state,
+            } = body
+            else {
+                continue;
+            };
+            let at = self.job.waiting.iter().position(|w| w.id == *id);
+            match state {
+                Resolution::Waiting if at.is_none() => {
+                    self.job.waiting.push(Waiting {
+                        id: id.clone(),
+                        kind: WaitKind::Question,
+                        since: self.now(),
+                        tool: Some(QUESTION_TOOL.into()),
+                        summary: questions
+                            .first()
+                            .map(|q| q.question.clone())
+                            .unwrap_or_default(),
+                        options: Vec::new(),
+                        questions: questions.clone(),
+                        answerable: *answerable,
+                    });
+                    changed = true;
+                }
+                Resolution::InTerminal => {
+                    if let Some(i) = at {
+                        self.job.waiting.remove(i);
+                        changed = true;
+                    }
+                    if let Some((answer, from)) = self.question_from.remove(id.as_str()) {
+                        *state = Resolution::Answered { answer, from };
+                    }
+                }
+                _ => {}
+            }
+        }
+        changed
+    }
+
+    /// Logs and publishes bodies as the followed session's events: one append
+    /// and one state save for the batch (R4, R5).
+    fn chat_emit(&mut self, session: &str, bodies: Vec<(xherd_core::chat::ChatBody, Option<u64>)>) {
+        use xherd_core::chat::{ChatBody, ChatEvent};
+        let now = self.now();
+        let job_id = self.job.id.clone();
+        let Some(f) = self.chat.as_mut() else {
+            return;
+        };
+        let unknown_before = f.state.unknown;
+        let mut events = Vec::new();
+        for (body, end) in bodies {
+            if matches!(body, ChatBody::Unknown { .. }) {
+                f.state.unknown += 1;
+            }
+            f.state.seq += 1;
+            events.push(ChatEvent {
+                seq: f.state.seq,
+                at: now,
+                session: Some(session.to_string()),
+                end,
+                body,
+            });
+        }
+        f.state.positions.insert(session.to_string(), f.offset);
+        match f.log.append(&events) {
+            Ok(dropped) => f.mapper.forget(dropped.iter().map(String::as_str)),
+            Err(e) => tracing::warn!(job = %job_id, error = %e, "chat log not written"),
+        }
+        if let Err(e) = f.log.save_state(&f.state) {
+            tracing::warn!(job = %job_id, error = %e, "chat state not saved");
+        }
+        let unknown = f.state.unknown;
+        for e in events {
+            if !matches!(e.body, ChatBody::Unknown { .. }) {
+                self.env
+                    .chat
+                    .publish(&job_id, crate::chat::ChatMsg::Event(e));
+            }
+        }
+        if unknown != unknown_before {
+            self.env
+                .chat
+                .publish(&job_id, crate::chat::ChatMsg::Unknown(unknown));
+        }
+    }
+
+    /// The followed file was read to its end and is left: the follower stops
+    /// (the job is no longer live) or moves to the job's new session, with a
+    /// notice saying why (an Ask, a runtime resume, a new session) (R4).
+    fn chat_finish(&mut self) {
+        use xherd_core::chat::{ChatBody, NoticeKind};
+        self.chat = None;
+        let (true, Some(session)) = (self.job.status.is_live(), self.job.session.clone()) else {
+            // No transcript line will ever close a question now (R23).
+            self.job
+                .waiting
+                .retain(|w| w.kind != xherd_core::job::WaitKind::Question);
+            return;
+        };
+        let (notice, text) = if self.job.ask_hold.is_some() {
+            (NoticeKind::Ask, "A question is answered in a new session")
+        } else if std::mem::take(&mut self.chat_resumed) {
+            (NoticeKind::Resume, "The session was resumed")
+        } else {
+            (NoticeKind::NewSession, "A new session started")
+        };
+        self.chat = Some(self.new_chat_follow(&session));
+        let body = ChatBody::Notice {
+            notice,
+            text: text.into(),
+        };
+        self.chat_emit(&session, vec![(body, None)]);
+        self.chat_poll();
     }
 
     /// List the branch's commits since the job's base (slow: spawned, back
@@ -2586,6 +3035,14 @@ impl Actor {
         let mut payload = None;
         let kind = match &action {
             UserAction::Get => return Ok(()),
+            UserAction::Permission { pid, answer, from } => {
+                payload = Some(self.answer_permission(pid, *answer, *from).await?);
+                "user.permission"
+            }
+            UserAction::Question { qid, option, from } => {
+                payload = Some(self.answer_question(qid, *option, *from).await?);
+                "user.question"
+            }
             UserAction::Start { port_base } => {
                 self.start(*port_base).await?;
                 return Ok(());
@@ -2691,7 +3148,8 @@ impl Actor {
                 if self.job.status == Status::Parked {
                     self.unpark_with(text.clone()).await;
                 } else {
-                    self.send(text, 1).await?;
+                    let enters = self.enters_for(text);
+                    self.send(text, enters).await?;
                 }
                 self.keep_note(text).await;
                 // A message while a question is open is its answer (xap.md `ask`).
@@ -2954,6 +3412,319 @@ impl Actor {
         self.log(None, kind, payload).await;
         self.commit(before).await;
         Ok(())
+    }
+
+    /// A permission request from the runtime's hook (R19): a card waits, the
+    /// job is blocked until the last one is answered.
+    async fn on_permission(
+        &mut self,
+        req: PermRequest,
+        reply: oneshot::Sender<Option<PermOption>>,
+    ) {
+        use xherd_core::chat::{ChatBody, Resolution};
+        use xherd_core::job::{WaitKind, Waiting};
+        let runtime = self
+            .job
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let has_chat = self
+            .env
+            .runtimes
+            .get(runtime)
+            .and_then(|k| k.terminal.as_ref())
+            .is_some_and(|t| t.chat.is_some());
+        let waiting = self.permission_replies.len();
+        if req.tool == xherd_core::chat::QUESTION_TOOL
+            || !self.job.status.is_live()
+            || !has_chat
+            || waiting >= PERMISSIONS_MAX
+        {
+            let _ = reply.send(None);
+            return;
+        }
+        let before = self.job.status;
+        let id = format!("p_{}", xherd_core::new_id());
+        let mut options = vec![PermOption::Allow];
+        if req.suggestions {
+            options.push(PermOption::AllowAlways);
+        }
+        options.push(PermOption::Deny);
+        let summary = xherd_core::chat::summary(&req.tool, &req.input);
+        self.job.waiting.push(Waiting {
+            id: id.clone(),
+            kind: WaitKind::Permission,
+            since: self.now(),
+            tool: Some(req.tool.clone()),
+            summary: summary.clone(),
+            options: options.clone(),
+            questions: Vec::new(),
+            answerable: true,
+        });
+        self.permission_replies.insert(id.clone(), reply);
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
+        let (pid, wait) = (id.clone(), self.env.settings.get().permission_wait);
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::PermissionTimeout { pid },
+            });
+        });
+        self.job.fire(Trigger::Blocked, self.now());
+        if self.job.status == Status::Blocked {
+            self.job.screen_blocked = false;
+            let n = self.permission_replies.len();
+            self.job.block_reason = Some(if n == 1 {
+                "permission".into()
+            } else {
+                format!("{n} permissions")
+            });
+        }
+        if let Some(session) = self.chat.as_ref().map(|f| f.session.clone()) {
+            self.chat_emit(
+                &session,
+                vec![(
+                    ChatBody::Permission {
+                        id,
+                        tool: req.tool.clone(),
+                        summary,
+                        options,
+                        state: Resolution::Waiting,
+                    },
+                    None,
+                )],
+            );
+        }
+        // Never the command or paths: only which tool asks.
+        self.notify(
+            "blocked",
+            format!("{} waits for permission to use {}", self.job.name, req.tool),
+        );
+        self.commit(before).await;
+    }
+
+    /// A waiting permission ends with no answer from the user (R19): the hook
+    /// gets `None` (the runtime asks in its own prompt), the card leaves
+    /// `waiting` and its chat event is resolved. With none left, the job stays
+    /// blocked until the next hook shows the runtime moved on.
+    async fn end_permission(&mut self, pid: &str, state: xherd_core::chat::Resolution) {
+        use xherd_core::chat::ChatBody;
+        use xherd_core::job::WaitKind;
+        let Some(i) = self
+            .job
+            .waiting
+            .iter()
+            .position(|w| w.id == pid && w.kind == WaitKind::Permission)
+        else {
+            return;
+        };
+        let before = self.job.status;
+        let w = self.job.waiting.remove(i);
+        if let Some(reply) = self.permission_replies.remove(pid) {
+            let _ = reply.send(None);
+        }
+        if let Some(session) = self.chat.as_ref().map(|f| f.session.clone()) {
+            self.chat_emit(
+                &session,
+                vec![(
+                    ChatBody::Permission {
+                        id: w.id,
+                        tool: w.tool.unwrap_or_default(),
+                        summary: w.summary,
+                        options: w.options,
+                        state,
+                    },
+                    None,
+                )],
+            );
+        }
+        let by_permission = self
+            .job
+            .block_reason
+            .as_deref()
+            .is_some_and(|r| r.ends_with("permission") || r.ends_with("permissions"));
+        if self.job.status == Status::Blocked && by_permission {
+            let n = self
+                .job
+                .waiting
+                .iter()
+                .filter(|w| w.kind == WaitKind::Permission)
+                .count();
+            self.job.block_reason = Some(match n {
+                0 => "permission: answer in the terminal".into(),
+                1 => "permission".into(),
+                n => format!("{n} permissions"),
+            });
+        }
+        self.commit(before).await;
+    }
+
+    /// At the actor's start: the requests still in `waiting` lost their hook
+    /// with the daemon, so the runtime shows its own prompt (R19).
+    async fn lose_permissions(&mut self) {
+        use xherd_core::job::WaitKind;
+        let ids: Vec<String> = self
+            .job
+            .waiting
+            .iter()
+            .filter(|w| w.kind == WaitKind::Permission)
+            .map(|w| w.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        // The follower only exists to append the resolutions to the chat log.
+        let made = self.chat.is_none();
+        if made && let Some(session) = self.job.session.clone() {
+            self.chat = Some(self.new_chat_follow(&session));
+        }
+        for id in ids {
+            self.end_permission(&id, xherd_core::chat::Resolution::Lost)
+                .await;
+        }
+        if made && !self.job.status.is_live() {
+            self.chat = None;
+        }
+    }
+
+    /// Hooks whose request ended (the CLI or the connection broke) leave
+    /// `waiting`: the runtime shows its own prompt (R19).
+    async fn drop_gone_permissions(&mut self) {
+        let gone: Vec<String> = self
+            .permission_replies
+            .iter()
+            .filter(|(_, r)| r.is_closed())
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in gone {
+            self.end_permission(&id, xherd_core::chat::Resolution::InTerminal)
+                .await;
+        }
+    }
+
+    /// The user's answer to a permission card (R20): the hook gets it, the
+    /// card leaves `waiting`, and the job runs again once none is left.
+    async fn answer_permission(
+        &mut self,
+        pid: &str,
+        answer: PermOption,
+        from: AnsweredFrom,
+    ) -> Result<Value, ActionError> {
+        use xherd_core::chat::{ChatBody, Resolution};
+        let Some(i) = self.job.waiting.iter().position(|w| w.id == pid) else {
+            return Err(refuse("already_answered", "that permission is not waiting"));
+        };
+        if !self.job.waiting[i].options.contains(&answer) {
+            return Err(refuse("not_offered", "that answer is not offered here"));
+        }
+        let w = self.job.waiting.remove(i);
+        if let Some(reply) = self.permission_replies.remove(pid) {
+            let _ = reply.send(Some(answer));
+        }
+        let name = match answer {
+            PermOption::Allow => "allow",
+            PermOption::AllowAlways => "allow-always",
+            PermOption::Deny => "deny",
+        };
+        if let Some(session) = self.chat.as_ref().map(|f| f.session.clone()) {
+            self.chat_emit(
+                &session,
+                vec![(
+                    ChatBody::Permission {
+                        id: w.id.clone(),
+                        tool: w.tool.clone().unwrap_or_default(),
+                        summary: w.summary.clone(),
+                        options: w.options.clone(),
+                        state: Resolution::Answered {
+                            answer: name.into(),
+                            from,
+                        },
+                    },
+                    None,
+                )],
+            );
+        }
+        let by_permission = self
+            .job
+            .block_reason
+            .as_deref()
+            .is_some_and(|r| r.ends_with("permission") || r.ends_with("permissions"));
+        if !self.job.permission_waiting() && self.job.status == Status::Blocked && by_permission {
+            self.job.fire(Trigger::Working, self.now());
+        } else if by_permission && self.job.status == Status::Blocked {
+            let n = self.permission_replies.len();
+            self.job.block_reason = Some(if n == 1 {
+                "permission".into()
+            } else {
+                format!("{n} permissions")
+            });
+        }
+        Ok(json!({"pid": w.id, "tool": w.tool, "answer": name, "from": from}))
+    }
+
+    /// The user's answer to a question card (R22): the option's number is
+    /// typed, but only once the screen shows that question. It skips `send`'s
+    /// `agent_blocked` refusal on purpose: the keys go into the dialog that
+    /// blocks the agent. The card leaves `waiting` now; its chat event
+    /// resolves when the question's tool result arrives.
+    async fn answer_question(
+        &mut self,
+        qid: &str,
+        option: usize,
+        from: AnsweredFrom,
+    ) -> Result<Value, ActionError> {
+        use xherd_core::chat::{question_keys, question_on_screen};
+        use xherd_core::job::WaitKind;
+        let Some(i) = self
+            .job
+            .waiting
+            .iter()
+            .position(|w| w.id == qid && w.kind == WaitKind::Question)
+        else {
+            return Err(refuse("already_answered", "that question is not waiting"));
+        };
+        let w = &self.job.waiting[i];
+        let (Some(q), true) = (w.questions.first(), w.answerable) else {
+            return Err(refuse(
+                "question_not_answerable",
+                "answer this question in the terminal",
+            ));
+        };
+        let keys = question_keys(option);
+        let Some(label) = q.options.get(option).map(|o| o.label.clone()) else {
+            return Err(refuse("not_offered", "that option does not exist"));
+        };
+        if keys.is_empty() {
+            return Err(refuse("not_offered", "answer this one in the terminal"));
+        }
+        if !self.job.status.is_live() {
+            return Err(refuse(
+                "not_live",
+                format!("{} is {}", self.job.name, self.job.status),
+            ));
+        }
+        let screen = self
+            .env
+            .driver
+            .capture(&self.ctx(), 60)
+            .await
+            .map_err(|e| refuse("driver", e.0))?;
+        if !question_on_screen(&screen, q) {
+            return Err(refuse(
+                "question_not_shown",
+                "the terminal does not show that question: answer there",
+            ));
+        }
+        self.env
+            .driver
+            .send_keys(&self.ctx(), &keys)
+            .await
+            .map_err(|e| refuse("driver", e.0))?;
+        self.job.waiting.remove(i);
+        self.question_from
+            .insert(qid.to_string(), (label.clone(), from));
+        Ok(json!({"qid": qid, "answer": label, "from": from}))
     }
 
     /// Ask (#121, R5–R7): resume an agent that has no session with the
@@ -3230,6 +4001,7 @@ impl Actor {
             (Some(id), Some(r)) => match r.argv(&id, &xherd_core::runner::agent_env).await {
                 Some(extra) => {
                     self.resume_unconfirmed = true;
+                    self.chat_resumed = true;
                     // A continued session takes its prompt from `promptEnv`
                     // or the resume `promptArgs` when the runtime has them,
                     // else it is typed.
@@ -4793,6 +5565,7 @@ impl Actor {
                 }
             }
             TickKind::ScreenScan => {
+                self.drop_gone_permissions().await;
                 if let Some(asked) = self.job.pause_requested_at
                     && self.job.status.is_live()
                     && now - asked >= self.env.settings.get().pause_timeout.as_millis() as i64
@@ -4822,6 +5595,7 @@ impl Actor {
                         }
                     });
                 }
+                self.chat_poll();
                 self.check_actions();
             }
             TickKind::PrPoll => self.poll_pr(),
@@ -4926,6 +5700,16 @@ impl Actor {
                 self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
+            WorkResult::ChatRead {
+                session,
+                file,
+                offset,
+                read,
+            } => self.on_chat_read(session, file, offset, read).await,
+            WorkResult::PermissionTimeout { pid } => {
+                self.end_permission(&pid, xherd_core::chat::Resolution::TimedOut)
+                    .await
+            }
             WorkResult::BranchCommits {
                 on_branch,
                 found,

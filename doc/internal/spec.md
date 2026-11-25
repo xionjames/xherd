@@ -492,6 +492,16 @@ Host commands: `pr-for-branch {branch} → {url|null}`, `pr-status {url} → {st
 | R-513 | `terminal`: live terminal in the browser; the user can type into it. |
 | R-514 | `acp`: xherd is the ACP client; prompts are exact messages; the UI shows a transcript; permission requests become `blocked` with Allow / Allow always / Deny (also on phones); "Take over in terminal" resumes the session with the terminal driver where the runtime allows it. |
 
+The terminal driver also has a **chat view** (#202), a second reader of the same live session, not the ACP transcript of R-514. It is offered for a runtime whose `data.terminal.chat` is declared (Claude Code first).
+
+| ID | Requirement |
+|---|---|
+| R-515 | `data.terminal.chat` (`source: transcript`, `format: claude-jsonl`, `testedVersions`) declares that a runtime's session transcript can be followed. The job's actor reads it incrementally (3 s tick and after `post-tool-use`, `user-prompt-submit`, `stop`) and maps it to chat events: user and xherd messages, assistant text, tool calls with their result, the latest plan, notices (new session, resume, ask, compaction). Unknown lines are counted, never shown. |
+| R-516 | Events are kept in a per-job log that survives daemon restarts and is replayed on `/api/v1/ws/chat/{id}` (reconnects ask from the last `seq`). Following stops after the session ends. Input is the existing `send` action; nothing else is typed into the session by the chat. |
+| R-517 | A runtime's `PermissionRequest` hook calls a blocking `xherd permission-request`; the request waits in the job (`Job.waiting`) and the job is `blocked` until it is answered (Allow, Allow always where the runtime can apply it, Deny), times out (`permissionWaitSec`) or is answered in the terminal. First answer wins; where it came from (`chat`, `inbox`, `terminal`) is recorded. |
+| R-518 | An `AskUserQuestion` call seen in the transcript is a question card. Buttons are offered only for one single-select question, and an answer is typed as keys only after a screen check shows that question; otherwise the card points to the terminal. |
+| R-519 | `ui.jobView` (`chat` or `terminal`) chooses which view a job opens in; a new config starts with `chat`, an existing one keeps `terminal`. Each job remembers its own choice in the browser. Waiting cards also appear in the Inbox. |
+
 ### 10.3 Models and effort per step
 
 | ID | Requirement |
@@ -638,6 +648,7 @@ The host machine; git and model credentials; plugin secrets; the integrity of re
 | T9 | **Secret leakage** in logs, hook output, PR text or specs | Redaction of known secrets in every captured output; secrets passed only on stdin; secret tripwire; secrets never in `instructions.md`. |
 | T10 | **Supply chain** of the image and binary | Pinned versions of bundled CLIs, signed releases and images, SBOM (§14.4). |
 | T11 | **A job smuggles a command into the user's session** (registers `curl … | sh` as an action, or changes an approved one) | Registering runs nothing; the first run needs the user's approval of the exact command and cwd (hash, R-611) and a change asks again; autonomy never approves; the coding agent has no call to run, stop or approve; actions get the job's environment without its token; cwd must stay inside the worktree; the full command is always shown. Limit: once approved, the command runs with the user's rights like any command typed in a shell (in Docker, as the agents' user). |
+| T12 | **Transcript text as untrusted input** (the chat view shows what the model and tools wrote, including fetched pages and file contents; a permission or question card is built from a tool call the model chose) | Assistant text goes through the sanitised Markdown renderer as external content; tool results are shown as plain excerpts; cards state the tool and a one-line summary taken from the call, never text from a result; the answer route accepts only the listed options, only for a request that still waits; autonomy never answers; a question's keys are typed only after the screen shows that question (R-518). |
 
 ### 13.3 Requirements
 
@@ -782,7 +793,7 @@ Memory has three levels: `memory.md` (one job, carried between its steps), the s
 
 ### 17.3 Phones
 
-Phones (LAN with a token link or QR code, optional HTTPS with a local CA) get **steering rights**: view everything except settings and terminals; approve, request changes, answer, decide PR comments, approve replies, pause, resume, add notes, handle TODOs, answer ACP permission prompts. No terminals, commands, settings, plugin installs or new jobs.
+Phones (LAN with a token link or QR code, optional HTTPS with a local CA) get **steering rights**: view everything except settings and terminals; approve, request changes, answer, decide PR comments, approve replies, pause, resume, add notes, handle TODOs, answer ACP permission prompts and, in the chat view, permission requests and questions (R-517, R-518). No terminals, commands, settings, plugin installs or new jobs.
 
 ## 18. CLI
 

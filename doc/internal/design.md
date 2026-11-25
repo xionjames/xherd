@@ -217,6 +217,19 @@ ACP specifics:
 
 With the container runner, tmux still runs in the daemon's container and the pane runs `docker exec -it <job-ctr> <runtime argv>`, so attach, respawn and screen capture are unchanged.
 
+### 4.3 Chat view (#202, spec R-515…R-519)
+
+The chat is a second reader of the terminal driver's session; nothing new talks to Claude Code except one hook.
+
+- **Chat source**: `data.terminal.chat` in the runtime manifest (`source: transcript`, `format: claude-jsonl`, `testedVersions`). It needs `resume.transcripts` and `resume.file`, which is how the follower finds the file.
+- **Mapper**: `xherd_core::chat::Mapper` is pure (no IO, no clock): one transcript line in, `ChatBody` values out (`user`, `assistant`, `tool`, `plan`, `notice`, `permission`, `question`, `unknown`). A `tool_result` updates a tool already in the log and is dropped when unknown. Sidechain, meta and thinking lines are skipped.
+- **Follower**: owned by the job actor, because its lifecycle follows `job.session` and status and it writes `Job.waiting`. On the 3 s screen tick and after the hooks that mean "something was written" it spawns `runner::read_from(file, offset, 1 MiB)` (as the agents' user); the result returns as `WorkResult::ChatRead` and is exempt from the generation check. Partial last lines wait for the next read. A session change drains the old file first; leaving the live states drains once more, then the follower stops.
+- **Event log**: `<data>/chat/<job>/events.jsonl` (events with `seq`) and `state.json` (last `seq`, offsets per session), written with `write_atomic`. Past 4 MiB the log is folded (last event per tool / permission / question id, latest plan) and the newest 2 MiB kept. After a restart reading resumes from the later of the saved offset and the end of the last logged event, so nothing repeats or is skipped. Live events go through one broadcast channel per job (`Env.chat`), not the global `Change` hub.
+- **`/ws/chat/{id}`**: subscribes first, then sends the replay (`seq > after`), `replayed`, the current status and live events, with no gap and no duplicate. `unknown` bodies are never sent.
+- **Permission round trip**: Claude Code's `PermissionRequest` hook runs `xherd permission-request` (hook timeout 3660 s, above the longest wait). The CLI POSTs the call to `/hooks/permission` and holds the request; the actor stores a `Waiting` entry, blocks the job (`block_reason` `permission`) and keeps a oneshot. `POST /jobs/{id}/permissions/{pid}` (UI, Inbox or the strip above the Terminal) answers it and the CLI prints the decision JSON (`allow`, `allow` with the request's own suggestions, `deny`). On timeout, a dropped request or a daemon restart the CLI prints nothing, so Claude Code shows its own prompt; the card reads "answer in the terminal" and the next `post-tool-use`, `user-prompt-submit` or `stop` clears the block.
+- **Questions**: an `AskUserQuestion` tool call becomes a `question` event and a `Waiting` entry. An answer is checked against the screen (`question_on_screen`) and typed as the option's number (`question_keys`); the two functions live together because they depend on the TUI.
+- **UI**: `ChatView`, `ChatComposer`, `WaitingCard`, the Chat / Terminal switch in `panels/Terminal.svelte`, and `AppearanceSettings` (Welcome step 1, Settings → General) for `ui.jobView`.
+
 ## 5. Job lifecycle details
 
 - **Gate detection** on stop: the declared gate (last accepted `gate.open` not yet approved) or the open commit proposal; else, if the pack's parser reports an unapproved gate document, an inferred gate (`gate-inferred`).
@@ -796,6 +809,7 @@ Tick an item when it is done (tests green on the milestone branch); tick the mil
   - [ ] `never` autonomy
 - [ ] **Later**
   - [ ] ACP driver
+  - [x] Chat view (terminal driver, #202, §4.3): transcript follower, event log, `/ws/chat`, permission hook round trip, question cards, Appearance settings. Not run against a real Claude Code yet; question keys unverified
   - [ ] Server/Kubernetes
   - [ ] Electron app
   - [ ] Panel plugins

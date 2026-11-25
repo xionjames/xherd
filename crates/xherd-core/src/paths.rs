@@ -99,6 +99,11 @@ impl Paths {
             .join(job_id)
             .join(format!("{action_id}.log"))
     }
+    /// A job's chat log folder (R5), written by the daemon:
+    /// `chat/<job id>/` holds `events.jsonl` and `state.json`.
+    pub fn chat_dir(&self, job_id: &str) -> PathBuf {
+        self.root.join("chat").join(job_id)
+    }
     pub fn plugin_config(&self, name: &str) -> PathBuf {
         self.root.join("plugin-config").join(name)
     }
@@ -154,6 +159,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8], mode: Option<u32>) -> std::io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_dir_is_per_job() {
+        assert_eq!(Paths::at("/x").chat_dir("j1"), PathBuf::from("/x/chat/j1"));
+    }
 
     #[test]
     fn action_log_is_per_job_and_action() {

@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::paths::write_atomic;
 
-pub const CONFIG_SCHEMA_VERSION: u32 = 4;
+pub const CONFIG_SCHEMA_VERSION: u32 = 5;
 
 /// The runtime of agents created before they named one, and the default
 /// `defaultRuntime`.
@@ -153,6 +153,11 @@ pub struct Config {
     pub upload_max_bytes: u64,
     pub upload_max_job_bytes: u64,
     pub upload_max_files: usize,
+    /// How the job page opens (#202, R13). Live.
+    pub ui: UiSettings,
+    /// Seconds a permission request waits for an answer before the runtime's
+    /// own prompt takes over (#202, R19); 30–3600. Live.
+    pub permission_wait_sec: u64,
     /// Git access per host (R-685). Tokens live in `secrets.json` under `git`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub git_hosts: Vec<GitHost>,
@@ -195,6 +200,8 @@ impl Default for Config {
             upload_max_bytes: 25 * 1024 * 1024,
             upload_max_job_bytes: 250 * 1024 * 1024,
             upload_max_files: 200,
+            ui: UiSettings::default(),
+            permission_wait_sec: 900,
             max_session_minutes: 0,
             pr_poll_minutes: 5,
             max_review_loops: 3,
@@ -212,6 +219,22 @@ impl Default for Config {
             extra: Map::new(),
         }
     }
+}
+
+/// Settings → Appearance (#202, R13).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UiSettings {
+    pub job_view: JobView,
+}
+
+/// What the job page shows first: the chat or the terminal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum JobView {
+    #[default]
+    Chat,
+    Terminal,
 }
 
 /// Settings → Open in (R-706, R-707): entries left out of the menu, the
@@ -323,7 +346,17 @@ const MIGRATIONS: &[Migration] = &[
     git_hosts_to_providers,
     open_in_commands_to_links,
     agent_keys_to_job_keys,
+    job_view_terminal_for_old_files,
 ];
+
+/// 4 → 5 (#202, R13): a config from before the chat view keeps the Terminal;
+/// only files created by this version default to `chat`.
+fn job_view_terminal_for_old_files(m: &mut Map<String, Value>) {
+    let ui = m.entry("ui").or_insert_with(|| Value::Object(Map::new()));
+    if let Value::Object(o) = ui {
+        o.entry("jobView").or_insert_with(|| "terminal".into());
+    }
+}
 
 /// 3 → 4 (#141): `maxConcurrentAgents` and `agentTokenBudget` become
 /// `maxConcurrentJobs` and `jobTokenBudget`; a new key already present wins,
@@ -439,6 +472,8 @@ impl Config {
         self.upload_max_bytes = s.upload_max_bytes;
         self.upload_max_job_bytes = s.upload_max_job_bytes;
         self.upload_max_files = s.upload_max_files;
+        self.ui = s.ui;
+        self.permission_wait_sec = s.permission_wait_sec;
         self.git_hosts = s.git_hosts;
         self.user_token = s.user_token;
     }
@@ -660,7 +695,7 @@ mod tests {
         assert!(v["openIn"].get("commands").is_none());
         assert_eq!(
             (v["schemaVersion"].as_u64(), v["futureThing"].as_u64()),
-            (Some(4), Some(1))
+            (Some(5), Some(1))
         );
     }
 
@@ -706,6 +741,40 @@ mod tests {
             ),
             (1, 2, 3)
         );
+    }
+
+    /// #202 R13: a new file reads `chat`, an older one `terminal`; a chosen
+    /// value survives; both keys are live.
+    #[test]
+    fn job_view_defaults_by_file_age_and_is_live() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("config.json");
+        let (c, _) = Config::load(&f).unwrap();
+        assert_eq!((c.ui.job_view, c.permission_wait_sec), (JobView::Chat, 900));
+        std::fs::write(&f, r#"{"schemaVersion": 4, "port": 5000}"#).unwrap();
+        let (c, migrated) = Config::load(&f).unwrap();
+        assert!(migrated);
+        assert_eq!(c.ui.job_view, JobView::Terminal);
+        c.save(&f).unwrap();
+        let (c, migrated) = Config::load(&f).unwrap();
+        assert!(!migrated);
+        assert_eq!(c.ui.job_view, JobView::Terminal);
+        std::fs::write(
+            &f,
+            r#"{"schemaVersion": 4, "ui": {"jobView": "chat"}, "permissionWaitSec": 60}"#,
+        )
+        .unwrap();
+        let (saved, _) = Config::load(&f).unwrap();
+        assert_eq!(saved.ui.job_view, JobView::Chat);
+        let mut running = Config::default();
+        running.ui.job_view = JobView::Terminal;
+        running.apply_live_from(&saved);
+        assert_eq!(
+            (running.ui.job_view, running.permission_wait_sec),
+            (JobView::Chat, 60)
+        );
+        let v = serde_json::to_value(&saved).unwrap();
+        assert_eq!(v["ui"]["jobView"], "chat");
     }
 
     /// R30: defaults, camelCase keys, and both keys are live.

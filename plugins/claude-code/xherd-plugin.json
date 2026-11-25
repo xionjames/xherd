@@ -59,8 +59,16 @@
           "UserPromptSubmit": "user-prompt-submit",
           "PostToolUse": "post-tool-use",
           "Notification": "notification",
+          "PermissionRequest": "permission-request",
           "Stop": "stop"
         }
+      },
+      "chat": {
+        "source": "transcript",
+        "format": "claude-jsonl",
+        "testedVersions": [
+          "2.1.331"
+        ]
       },
       "trust": {
         "file": "${CLAUDE_CONFIG_DIR:-~}/.claude.json",

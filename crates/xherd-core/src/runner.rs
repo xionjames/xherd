@@ -54,6 +54,12 @@ enum Request {
     ReadFile {
         path: PathBuf,
     },
+    /// Read at most `max` bytes from `offset`; a missing file is not an error.
+    ReadFrom {
+        path: PathBuf,
+        offset: u64,
+        max: usize,
+    },
     /// Write a file atomically, creating its folder.
     WriteFile {
         path: PathBuf,
@@ -111,6 +117,11 @@ enum Reply {
     /// A file read: `None` when it does not exist.
     File {
         data: Option<String>,
+    },
+    /// A ranged read: the bytes and the file's length, `None` when missing.
+    Range {
+        data: Option<String>,
+        len: u64,
     },
     /// A search: the path found, if any.
     Found {
@@ -229,9 +240,13 @@ pub async fn exec(socket: &Path, cmd: Cmd) -> Result<Output, ExecError> {
             },
         }),
         Reply::Refused { message } | Reply::IoFailed { message } => Err(ExecError::Runner(message)),
-        Reply::Pong | Reply::File { .. } | Reply::Found { .. } | Reply::Done => Err(
-            ExecError::Runner(format!("unexpected answer for {program}")),
-        ),
+        Reply::Pong
+        | Reply::File { .. }
+        | Reply::Range { .. }
+        | Reply::Found { .. }
+        | Reply::Done => Err(ExecError::Runner(format!(
+            "unexpected answer for {program}"
+        ))),
     }
 }
 
@@ -317,6 +332,50 @@ pub async fn read_file(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
         Reply::File { data: Some(d) } => hex::decode(d).map(Some).map_err(std::io::Error::other),
         other => Err(file_error(other)),
     }
+}
+
+/// Read at most `max` bytes of a file starting at `offset`, as the agent
+/// user, with the file's length (`None` if it does not exist). An offset past
+/// the end gives no bytes. Without a runner it is read in place.
+pub async fn read_from(
+    path: &Path,
+    offset: u64,
+    max: usize,
+) -> std::io::Result<Option<(Vec<u8>, u64)>> {
+    let Some(sock) = runner_socket() else {
+        return read_range(path, offset, max);
+    };
+    let req = Request::ReadFrom {
+        path: path.into(),
+        offset,
+        max,
+    };
+    match roundtrip(sock, &req, Duration::from_secs(30))
+        .await
+        .map_err(std::io::Error::other)?
+    {
+        Reply::Range { data: None, .. } => Ok(None),
+        Reply::Range { data: Some(d), len } => hex::decode(d)
+            .map(|b| Some((b, len)))
+            .map_err(std::io::Error::other),
+        other => Err(file_error(other)),
+    }
+}
+
+fn read_range(path: &Path, offset: u64, max: usize) -> std::io::Result<Option<(Vec<u8>, u64)>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let len = f.metadata()?.len();
+    let mut buf = Vec::new();
+    if offset < len {
+        f.seek(SeekFrom::Start(offset))?;
+        f.take(max as u64).read_to_end(&mut buf)?;
+    }
+    Ok(Some((buf, len)))
 }
 
 /// Write a file atomically as the agent user. Without a runner it is
@@ -478,6 +537,16 @@ async fn handle(req: Request) -> Reply {
                 data: Some(hex::encode(b)),
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Reply::File { data: None },
+            Err(e) => Reply::IoFailed {
+                message: format!("{}: {e}", path.display()),
+            },
+        },
+        Request::ReadFrom { path, offset, max } => match read_range(&path, offset, max) {
+            Ok(None) => Reply::Range { data: None, len: 0 },
+            Ok(Some((b, len))) => Reply::Range {
+                data: Some(hex::encode(b)),
+                len,
+            },
             Err(e) => Reply::IoFailed {
                 message: format!("{}: {e}", path.display()),
             },
@@ -960,6 +1029,51 @@ mod tests {
         assert_eq!(read_file(&f).await.unwrap().as_deref(), Some(&b"hi"[..]));
         mkdir(&dir.path().join("m/k"), 0o755).await.unwrap();
         assert!(dir.path().join("m/k").is_dir());
+    }
+
+    #[tokio::test]
+    async fn without_a_runner_read_from_reads_a_range_and_the_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("t.jsonl");
+        assert_eq!(read_from(&f, 0, 10).await.unwrap(), None);
+        write_file(&f, b"0123456789", None).await.unwrap();
+        assert_eq!(
+            read_from(&f, 0, 4).await.unwrap(),
+            Some((b"0123".to_vec(), 10))
+        );
+        assert_eq!(
+            read_from(&f, 6, 100).await.unwrap(),
+            Some((b"6789".to_vec(), 10))
+        );
+        assert_eq!(read_from(&f, 10, 5).await.unwrap(), Some((vec![], 10)));
+        assert_eq!(read_from(&f, 99, 5).await.unwrap(), Some((vec![], 10)));
+    }
+
+    #[tokio::test]
+    async fn the_runner_serves_read_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("t.txt");
+        std::fs::write(&f, b"abcdef").unwrap();
+        let Reply::Range { data, len } = handle(Request::ReadFrom {
+            path: f.clone(),
+            offset: 2,
+            max: 3,
+        })
+        .await
+        else {
+            panic!("not a range");
+        };
+        assert_eq!(hex::decode(data.unwrap()).unwrap(), b"cde");
+        assert_eq!(len, 6);
+        assert!(matches!(
+            handle(Request::ReadFrom {
+                path: dir.path().join("none"),
+                offset: 0,
+                max: 1
+            })
+            .await,
+            Reply::Range { data: None, .. }
+        ));
     }
 
     #[tokio::test]

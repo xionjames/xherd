@@ -2497,3 +2497,278 @@ async fn approvals_of_finished_jobs_are_seen() {
     assert!(seen(&v, &ids[2]));
     assert!(!seen(&v, &ids[3]));
 }
+
+fn assistant(seq: u64, text: &str) -> xherd_core::chat::ChatEvent {
+    xherd_core::chat::ChatEvent {
+        seq,
+        at: seq as i64,
+        session: None,
+        end: None,
+        body: xherd_core::chat::ChatBody::Assistant { text: text.into() },
+    }
+}
+
+/// R6: the replay (from `after`), `replayed`, the status, then live events
+/// without a duplicate of what the replay held; a runtime without `chat`
+/// is refused before the upgrade.
+#[tokio::test]
+async fn chat_websocket_replays_then_streams() {
+    use futures_util::StreamExt;
+    use xherd_daemon::chat::{ChatLog, ChatMsg};
+    let (_dir, d, a) = setup().await;
+    ChatLog::new(&d.paths, &a.id)
+        .append(&[assistant(1, "one"), assistant(2, "two")])
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(xherd_api::serve(
+        d.clone(),
+        listener,
+        std::future::pending(),
+    ));
+    async fn next(
+        ws: &mut (
+                 impl futures_util::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin
+             ),
+    ) -> Value {
+        let m = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(m.to_text().unwrap()).unwrap()
+    }
+
+    let url = format!("ws://127.0.0.1:{port}/api/v1/ws/chat/SC-1?after=1");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    assert_eq!(next(&mut ws).await, json!({"type": "hello", "unknown": 0}));
+    let v = next(&mut ws).await;
+    assert_eq!(v["type"], "event");
+    assert_eq!(v["event"]["seq"], 2);
+    assert_eq!(v["event"]["text"], "two");
+    assert_eq!(next(&mut ws).await, json!({"type": "replayed"}));
+    assert_eq!(
+        next(&mut ws).await,
+        json!({"type": "status", "status": "running"})
+    );
+    // A live event the replay already held is not sent twice.
+    d.chat.publish(&a.id, ChatMsg::Event(assistant(2, "two")));
+    d.chat.publish(&a.id, ChatMsg::Event(assistant(3, "three")));
+    d.chat.publish(&a.id, ChatMsg::Unknown(4));
+    let v = next(&mut ws).await;
+    assert_eq!(v["event"]["seq"], 3);
+    assert_eq!(next(&mut ws).await, json!({"type": "unknown", "count": 4}));
+    // The status follows the job.
+    d.action("SC-1", UserAction::Pause).await.unwrap();
+    loop {
+        let v = next(&mut ws).await;
+        if v["type"] == "status" && v["status"] != "running" {
+            break;
+        }
+    }
+    drop(ws);
+
+    // No `after`: everything.
+    let url = format!("ws://127.0.0.1:{port}/api/v1/ws/chat/SC-1");
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+    next(&mut ws).await;
+    assert_eq!(next(&mut ws).await["event"]["seq"], 1);
+    drop(ws);
+
+    // A runtime without a chat view, and an unknown job: refused up front.
+    let mut o = Job::new("OC-1", 2);
+    o.launch = Some(vec!["rt".into()]);
+    o.runtime = Some("opencode".into());
+    d.create_job(o).await.unwrap();
+    for (name, want) in [("OC-1", 409), ("NOPE-1", 404)] {
+        let url = format!("ws://127.0.0.1:{port}/api/v1/ws/chat/{name}");
+        match tokio_tungstenite::connect_async(url).await {
+            Err(tokio_tungstenite::tungstenite::Error::Http(r)) => {
+                assert_eq!(r.status().as_u16(), want, "{name}");
+            }
+            other => panic!("{name}: expected a refusal, got {other:?}"),
+        }
+    }
+}
+
+/// R12: the runtime view says whether the runtime has a chat and lists the
+/// slash commands per pack.
+#[tokio::test]
+async fn runtime_view_has_chat_and_slash_commands() {
+    let (_dir, d, _a) = setup().await;
+    let local = xherd_api::router(d.clone())
+        .layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 5555))));
+    let (s, v) = call(local, get("/api/v1/state").body(Body::empty()).unwrap()).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let plugins = v["plugins"].as_array().unwrap();
+    let cc = plugins.iter().find(|p| p["name"] == "claude-code").unwrap();
+    assert_eq!(cc["chat"], true);
+    let list: Vec<&str> = cc["slashCommands"]["xherd"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert!(list.contains(&"/xherd:next"), "{list:?}");
+    assert!(list.ends_with(&["/compact", "/clear"]), "{list:?}");
+    let oc = plugins.iter().find(|p| p["name"] == "opencode").unwrap();
+    assert_eq!(oc["chat"], false);
+    assert!(oc.get("slashCommands").is_none());
+}
+
+/// R18, R20, R22: the permission hook's request is held until the user's
+/// answer; the answer routes check their input and the first answer wins.
+#[tokio::test]
+async fn permission_and_question_routes() {
+    use xherd_core::report::{Report, ReportEvent};
+    let (_dir, d, a) = setup().await;
+    d.report(Report {
+        id: "r1".into(),
+        job_id: a.id.clone(),
+        event: ReportEvent::SessionStart,
+        payload: json!({"session_id": "s1"}),
+        seq: 1,
+        at: 0,
+    })
+    .await;
+    let app =
+        xherd_api::router(d.clone()).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let mint = |job: String, scopes: &'static [&'static str]| {
+        let d = d.clone();
+        async move {
+            mint_token(&d.store, TOKEN_AGENT, Some(&job), scopes, 1)
+                .await
+                .unwrap()
+        }
+    };
+    let token = mint(a.id.clone(), &[SCOPE_HOOKS]).await;
+    let other = mint("someone-else".into(), &[SCOPE_HOOKS]).await;
+    let xap_only = mint(a.id.clone(), &[SCOPE_XAP]).await;
+    let hook = |tok: &str| {
+        Request::post("/api/v1/hooks/permission")
+            .header("authorization", format!("Bearer {tok}"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"jobId": a.id, "sessionId": "s1", "toolName": "Bash",
+                       "toolInput": {"command": "ls"}, "suggestions": false})
+                .to_string(),
+            ))
+            .unwrap()
+    };
+    // Wrong job, wrong scope, no token.
+    assert_eq!(
+        call(app.clone(), hook(&other)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(app.clone(), hook(&xap_only)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(app.clone(), hook("nope")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // The request is held until an answer arrives.
+    let held = tokio::spawn(call(app.clone(), hook(&token)));
+    let pid = {
+        let mut found = None;
+        for _ in 0..400 {
+            let j = d.action("SC-1", UserAction::Get).await.unwrap();
+            if let Some(w) = j.waiting.first() {
+                found = Some(w.id.clone());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        found.expect("a card")
+    };
+    assert!(!held.is_finished());
+    let post = |path: String, body: Value| {
+        Request::post(path)
+            .header("host", "127.0.0.1:4740")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let url = format!("/api/v1/jobs/SC-1/permissions/{pid}");
+    for bad in [
+        json!({"answer": "maybe", "from": "chat"}),
+        json!({"answer": "allow", "from": "phone"}),
+    ] {
+        let (s, v) = call(app.clone(), post(url.clone(), bad)).await;
+        assert_eq!(
+            (s, v["code"].clone()),
+            (StatusCode::BAD_REQUEST, json!("bad_answer"))
+        );
+    }
+    // `allow-always` is not offered without suggestions.
+    let (s, v) = call(
+        app.clone(),
+        post(
+            url.clone(),
+            json!({"answer": "allow-always", "from": "chat"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("not_offered"))
+    );
+    let (s, v) = call(
+        app.clone(),
+        post(url.clone(), json!({"answer": "deny", "from": "inbox"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["job"]["waiting"].as_array().is_none_or(|w| w.is_empty()));
+    let (s, v) = held.await.unwrap();
+    assert_eq!((s, v), (StatusCode::OK, json!({"answer": "deny"})));
+    // The first answer wins.
+    let (s, v) = call(
+        app.clone(),
+        post(url, json!({"answer": "allow", "from": "chat"})),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::CONFLICT, json!("already_answered"))
+    );
+
+    // A question nobody asked.
+    let (s, v) = call(
+        app.clone(),
+        post(
+            "/api/v1/jobs/SC-1/questions/q9".into(),
+            json!({"option": 0, "from": "chat"}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let (s, v) = call(
+        app.clone(),
+        post(
+            "/api/v1/jobs/SC-1/questions/q9".into(),
+            json!({"option": 0, "from": "phone"}),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::BAD_REQUEST, json!("bad_answer"))
+    );
+    let (s, _) = call(
+        app,
+        post(
+            "/api/v1/jobs/NOPE-1/permissions/p1".into(),
+            json!({"answer": "allow", "from": "chat"}),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}

@@ -699,3 +699,147 @@ async fn plugin_install_with_several_plugins_asks_for_a_path() {
     assert_eq!(o.status.code(), Some(0), "{o:?}");
     assert!(String::from_utf8_lossy(&o.stdout).contains("beta 1.0.0"));
 }
+
+/// One-shot HTTP server on a free port: answers the first request with
+/// `status` and `body`, and returns the request (head and body) it got.
+fn canned_server(status: &str, body: &str) -> (String, std::thread::JoinHandle<String>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let reply = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let h = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = s.read(&mut buf).unwrap_or(0);
+            got.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&got).into_owned();
+            if let Some((head, rest)) = text.split_once("\r\n\r\n") {
+                let len = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                if rest.len() >= len {
+                    break;
+                }
+            }
+            if n == 0 {
+                break;
+            }
+        }
+        s.write_all(reply.as_bytes()).unwrap();
+        String::from_utf8_lossy(&got).into_owned()
+    });
+    (url, h)
+}
+
+const PERM_INPUT: &str = r#"{"session_id":"s1","tool_name":"Bash","tool_input":{"command":"rm -rf target"},"permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"rm:*"}],"behavior":"allow","destination":"localSettings"}]}"#;
+
+#[test]
+fn permission_request_prints_the_decision() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = tempfile::tempdir().unwrap();
+    std::fs::create_dir(wt.path().join(".xherd")).unwrap();
+    std::fs::write(wt.path().join(".xherd/job.json"), r#"{"id":"J1"}"#).unwrap();
+    let run = |status: &str, reply: &str, input: &str| {
+        let (url, h) = canned_server(status, reply);
+        let env = [("XHERD_URL", url.as_str()), ("XHERD_JOB_TOKEN", "xh_t")];
+        let o = xherd(home.path(), wt.path(), &["permission-request"], &env, input);
+        assert!(o.status.success() && o.stderr.is_empty(), "{o:?}");
+        (String::from_utf8(o.stdout).unwrap(), h.join().unwrap())
+    };
+    let decision = |out: &str| -> serde_json::Value {
+        let v: serde_json::Value = serde_json::from_str(out).unwrap();
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
+        v["hookSpecificOutput"]["decision"].clone()
+    };
+
+    let (out, req) = run("200 OK", r#"{"answer":"allow"}"#, PERM_INPUT);
+    assert_eq!(decision(&out), serde_json::json!({"behavior": "allow"}));
+    assert!(req.starts_with("POST /api/v1/hooks/permission "), "{req}");
+    assert!(req.to_lowercase().contains("authorization: bearer xh_t"));
+    let body: serde_json::Value =
+        serde_json::from_str(req.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"jobId": "J1", "sessionId": "s1", "toolName": "Bash",
+            "toolInput": {"command": "rm -rf target"}, "suggestions": true})
+    );
+
+    let (out, _) = run("200 OK", r#"{"answer":"allow-always"}"#, PERM_INPUT);
+    let want: serde_json::Value =
+        serde_json::from_str::<serde_json::Value>(PERM_INPUT).unwrap()["permission_suggestions"]
+            .clone();
+    assert_eq!(
+        decision(&out),
+        serde_json::json!({"behavior": "allow", "updatedPermissions": want})
+    );
+
+    let (out, _) = run("200 OK", r#"{"answer":"deny"}"#, PERM_INPUT);
+    assert_eq!(
+        decision(&out),
+        serde_json::json!({"behavior": "deny", "message": "Denied in xherd."})
+    );
+
+    // Nothing printed: no answer, an error status, a bad body, and
+    // allow-always when the request had no suggestions to pass back.
+    let plain = r#"{"session_id":"s1","tool_name":"Bash","tool_input":{}}"#;
+    for (status, reply, input) in [
+        ("200 OK", r#"{"answer":null}"#, PERM_INPUT),
+        ("403 Forbidden", r#"{"error":"wrong_job"}"#, PERM_INPUT),
+        ("200 OK", "not json", PERM_INPUT),
+        ("200 OK", r#"{"answer":"allow-always"}"#, plain),
+        ("200 OK", r#"{"answer":"maybe"}"#, PERM_INPUT),
+    ] {
+        let (out, _) = run(status, reply, input);
+        assert!(out.is_empty(), "{status} {reply}: {out}");
+    }
+}
+
+#[test]
+fn permission_request_is_silent_without_token_or_daemon() {
+    let home = tempfile::tempdir().unwrap();
+    let wt = tempfile::tempdir().unwrap();
+    // Not under xherd, or no token: nothing printed, exit 0.
+    let o = xherd(
+        home.path(),
+        wt.path(),
+        &["permission-request"],
+        &[],
+        PERM_INPUT,
+    );
+    assert!(o.status.success() && o.stdout.is_empty() && o.stderr.is_empty());
+    std::fs::create_dir(wt.path().join(".xherd")).unwrap();
+    std::fs::write(wt.path().join(".xherd/job.json"), r#"{"id":"J1"}"#).unwrap();
+    let o = xherd(
+        home.path(),
+        wt.path(),
+        &["permission-request"],
+        &[],
+        PERM_INPUT,
+    );
+    assert!(o.status.success() && o.stdout.is_empty() && o.stderr.is_empty());
+    // Daemon unreachable, garbage input: nothing printed, nothing queued.
+    let down = format!("http://127.0.0.1:{}", free_port());
+    let env = [("XHERD_URL", down.as_str()), ("XHERD_JOB_TOKEN", "xh_t")];
+    for input in [PERM_INPUT, "not json", ""] {
+        let o = xherd(home.path(), wt.path(), &["permission-request"], &env, input);
+        assert!(
+            o.status.success() && o.stdout.is_empty() && o.stderr.is_empty(),
+            "{o:?}"
+        );
+    }
+    assert!(queue_lines(home.path()).is_empty());
+}

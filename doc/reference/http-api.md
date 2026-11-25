@@ -171,12 +171,23 @@ Creating or editing an agent that lists a skill the library does not have is ref
 |---|---|
 | `GET /ws/term/{id}?cols=&rows=` | A job's tmux session. Binary frames carry terminal bytes both ways; a text frame `{"type": "resize", "cols", "rows"}` resizes |
 | `GET /ws/setup/{id}` | The setup terminals: `git-login`, `plugin-login` (plugin logins and installs) |
+| `GET /ws/chat/{id}?after=<seq>` | A job's chat, server to client only (text frames). `{"type":"hello","unknown":n}`, then the logged events after `after` as `{"type":"event","event":{seq,…}}`, `{"type":"replayed"}`, the job's status as `{"type":"status","status":…}`, then live events, further `status` frames and `{"type":"unknown","count":n}` (transcript lines xherd could not read; never shown). A client that reconnects passes the last `seq` it saw. A job whose runtime has no chat (`chat: false` on its plugin in `GET /state`) is refused before the upgrade with 409 `chat_unsupported` |
+
+### Permission requests and questions
+
+A job waits for an answer in `Job.waiting` (omitted when empty): `{id, kind: "permission"|"question", since, tool?, summary, options?, questions?, answerable}`. A waiting permission request blocks the job until it is answered; a question does not.
+
+| Method and path | Does |
+|---|---|
+| `POST /jobs/{id}/permissions/{pid}` | Body `{answer: "allow"\|"allow-always"\|"deny", from: "chat"\|"inbox"\|"terminal"}`. The first answer wins. Answers `{job}`. Refusals: 400 `bad_answer`, 409 `already_answered` (it is not waiting any more), 409 `not_offered` (the runtime did not offer that answer) |
+| `POST /jobs/{id}/questions/{qid}` | Body `{option: <0-based index>, from}`. Typed into the session as keys, only after a screen check shows that question. Refusals: 400 `bad_answer`, 409 `already_answered`, 409 `question_not_answerable` (more than one question, or a multi-select), 409 `not_offered` (no such option, or answer it in the terminal), 409 `question_not_shown` (the screen does not show it yet) |
 
 ### Jobs and runtimes
 
 | Method and path | Does |
 |---|---|
 | `POST /hooks` | A runtime hook or `xherd report` (scope `hooks`). Reports carry a sequence number; an older one is ignored |
+| `POST /hooks/permission` | The runtime's blocking permission hook, called by `xherd permission-request` (scope `hooks`; body `{jobId, sessionId, toolName, toolInput, suggestions}`). It is held until the user answers and replies `{answer: "allow"\|"allow-always"\|"deny"\|null}`; `null` means xherd does not decide and the runtime asks in the terminal (also after `permissionWaitSec`) |
 | `POST /xap` | An XAP call (scope `xap`). See [XAP](xap.md) |
 
 ## Changes

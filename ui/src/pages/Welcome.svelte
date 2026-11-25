@@ -13,6 +13,7 @@
   import GitHosts from '../components/GitHosts.svelte';
   import PluginList from '../components/PluginList.svelte';
   import Panel from '../components/Panel.svelte';
+  import AppearanceSettings from '../components/AppearanceSettings.svelte';
   import type { ConfigView } from '../lib/types';
 
   const STEPS = ['Welcome', 'Plugins', 'Commit identity', 'Git access', 'Connect & check', 'Ready'];
@@ -84,7 +85,7 @@
     {#if step === 1}
       <h1 class="big">Run many coding agents, decide only what matters</h1>
       <p class="muted lead">xherd starts each agent in its own git worktree and terminal session, follows it through spec, design, tasks, build, review and ship, and stops it at the gates where your call is needed. Everything else runs on its own.</p>
-      <p class="muted">A few steps set it up: the plugins it uses, who commits, how it reaches your git hosts, and a check that everything works.</p>
+      <p class="muted">A few steps set it up: how it looks, the plugins it uses, who commits, how it reaches your git hosts, and a check that everything works.</p>
       <h2>Where xherd runs</h2>
       <Panel>
         <dl class="kv">
@@ -98,6 +99,8 @@
           <p class="hint">To run xherd in Docker instead, run <span class="mono">xherd docker init</span> on this computer. Change the workspace in Settings.</p>
         {/if}
       </Panel>
+      <h2>How it looks</h2>
+      <Panel><AppearanceSettings /></Panel>
     {:else if step === 2}
       <h1>Plugins</h1>
       <p class="muted">Everything starts off. Switch on what you use. Pick at least one agent runtime; once an agent runtime or a toolchain is on, the last one cannot be switched off. Git providers and issue trackers are optional. A card says whether the plugin is ready; open Options to set it up.</p>

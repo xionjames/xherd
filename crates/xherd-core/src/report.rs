@@ -185,7 +185,11 @@ pub fn apply_report(agent: &mut Job, r: &Report, origin: Origin, now: Millis) ->
             if origin == Origin::Daemon && !agent.screen_blocked {
                 return Outcome::Stale;
             }
-            agent.fire(Trigger::Working, now);
+            // Parallel tools: one allowed tool's PostToolUse must not
+            // unblock the others while a permission still waits (R19).
+            if !agent.permission_waiting() {
+                agent.fire(Trigger::Working, now);
+            }
             if r.event == E::UserPromptSubmit {
                 effects.push(Effect::DeliveryAck);
                 if let Some(p) = str_field(&r.payload, &["prompt"])
@@ -468,6 +472,45 @@ mod tests {
         assert_eq!(effects, vec![Effect::DeliveryAck]);
     }
 
+    fn permission() -> crate::job::Waiting {
+        crate::job::Waiting {
+            id: "p1".into(),
+            kind: crate::job::WaitKind::Permission,
+            since: 0,
+            tool: Some("Bash".into()),
+            summary: "Bash: ls".into(),
+            options: vec![crate::chat::PermOption::Allow],
+            questions: vec![],
+            answerable: true,
+        }
+    }
+
+    #[test]
+    fn a_waiting_permission_keeps_the_job_blocked() {
+        let mut a = running();
+        a.fire(Trigger::Blocked, 0);
+        a.waiting.push(permission());
+        for (i, ev) in [
+            ReportEvent::PostToolUse,
+            ReportEvent::SessionStart,
+            ReportEvent::UserPromptSubmit,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            apply_report(&mut a, &rep(ev, i as u64 + 1, Value::Null), Origin::Job, 1);
+            assert_eq!(a.status, Status::Blocked);
+        }
+        a.waiting.clear();
+        apply_report(
+            &mut a,
+            &rep(ReportEvent::PostToolUse, 9, Value::Null),
+            Origin::Job,
+            2,
+        );
+        assert_eq!(a.status, Status::Running);
+    }
+
     fn any_event() -> impl Strategy<Value = ReportEvent> {
         prop_oneof![
             Just(ReportEvent::SessionStart),
@@ -493,9 +536,16 @@ mod tests {
             let mut a = running();
             if !start_live { a.fire(Trigger::Pause, 0); }
             let initial = a.status;
+            let mut waits = false;
             for (i, (ev, seq, daemon)) in steps.into_iter().enumerate() {
                 let before = (a.last_seq, a.last_daemon_seq);
                 let origin = if daemon { Origin::Daemon } else { Origin::Job };
+                // A permission request blocks the job, as the actor does.
+                if i == 3 && start_live {
+                    a.fire(Trigger::Blocked, 0);
+                    a.waiting.push(permission());
+                    waits = true;
+                }
                 apply_report(&mut a, &rep(ev, seq, Value::Null), origin, i as i64);
                 prop_assert!(a.last_seq >= before.0 && a.last_daemon_seq >= before.1);
                 if start_live {
@@ -504,6 +554,15 @@ mod tests {
                     prop_assert_eq!(a.status, initial);
                 }
                 if a.status != Status::Blocked { prop_assert!(!a.screen_blocked); }
+                // Reports alone never unblock a job while a permission waits.
+                if waits && matches!(ev, ReportEvent::Stop | ReportEvent::Idle) {
+                    // A stop ends the turn: the actor resolves what waited.
+                    a.waiting.clear();
+                    waits = false;
+                }
+                if waits {
+                    prop_assert_eq!(a.status, Status::Blocked);
+                }
             }
         }
     }

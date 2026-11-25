@@ -15,6 +15,7 @@
   import PluginList from '../components/PluginList.svelte';
   import PageHead from '../components/PageHead.svelte';
   import Panel from '../components/Panel.svelte';
+  import AppearanceSettings from '../components/AppearanceSettings.svelte';
   import Tabs from '../components/Tabs.svelte';
   import SaveBar from '../components/SaveBar.svelte';
   import Callout from '../components/Callout.svelte';
@@ -131,6 +132,9 @@
     <p class="empty">Loading…</p>
   {:else if tab === 'general'}
     <div class="secs">
+      <Panel title="Appearance" hint="Theme and what a job opens on.">
+        <AppearanceSettings />
+      </Panel>
       <Panel title="Jobs" hint="How many run at once.">
         <label class="f">Max jobs running at once
           <span class="unit"><input type="number" min="1" max="64" bind:value={form.maxConcurrentJobs} /><span>jobs</span></span>

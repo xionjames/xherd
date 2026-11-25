@@ -88,6 +88,82 @@ pub fn next_seq(xherd_dir: Option<&Path>) -> u64 {
     inner().unwrap_or(now)
 }
 
+/// What Claude Code gets on stdout for the daemon's answer; `None` (nothing
+/// printed, Claude Code asks in the terminal) for no answer, an unknown one,
+/// or `allow-always` when the request had no suggestions to pass back (R18).
+fn permission_output(answer: Option<&str>, suggestions: Option<&Value>) -> Option<Value> {
+    let decision = match answer? {
+        "allow" => json!({"behavior": "allow"}),
+        "allow-always" => json!({"behavior": "allow", "updatedPermissions": suggestions?}),
+        "deny" => json!({"behavior": "deny", "message": "Denied in xherd."}),
+        _ => return None,
+    };
+    Some(json!({"hookSpecificOutput": {
+        "hookEventName": "PermissionRequest",
+        "decision": decision,
+    }}))
+}
+
+/// `xherd permission-request`: the runtime's blocking permission hook (R18).
+/// Waits for the user's answer through the daemon and prints Claude Code's
+/// decision. Prints nothing, never queues and never fails when there is no
+/// token, no answer, an error or a timeout, so Claude Code asks in the
+/// terminal: never a silent allow.
+pub fn permission_request() {
+    let mut raw = String::new();
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        let _ = stdin.lock().take(STDIN_LIMIT).read_to_string(&mut raw);
+    }
+    let (Some(target), Some(token)) = (find_job(), job_env("TOKEN")) else {
+        return;
+    };
+    let Ok(input) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    let suggestions = input
+        .get("permission_suggestions")
+        .filter(|s| s.as_array().is_some_and(|a| !a.is_empty()));
+    let text = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("");
+    let body = json!({
+        "jobId": target.job_id,
+        "sessionId": text("session_id"),
+        "toolName": text("tool_name"),
+        "toolInput": input.get("tool_input").cloned().unwrap_or(Value::Null),
+        "suggestions": suggestions.is_some(),
+    });
+    let url = std::env::var("XHERD_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_URL.into());
+    let agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_connect(Some(Duration::from_millis(300)))
+        .timeout_global(Some(Duration::from_secs(3630)))
+        .build()
+        .new_agent();
+    let Ok(resp) = agent
+        .post(format!(
+            "{}/api/v1/hooks/permission",
+            url.trim_end_matches('/')
+        ))
+        .header("Authorization", format!("Bearer {token}"))
+        .send_json(&body)
+    else {
+        return;
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let Ok(answer) = resp.into_body().read_json::<Value>() else {
+        return;
+    };
+    if let Some(out) = permission_output(answer.get("answer").and_then(Value::as_str), suggestions)
+    {
+        let _ = writeln!(std::io::stdout(), "{out}");
+    }
+}
+
 pub enum Delivered {
     Sent,
     Queued,

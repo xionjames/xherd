@@ -935,7 +935,7 @@ impl Resumer {
     ///
     /// Looked up as the agent user: the runtime keeps it in the agent's home
     /// (R-1203).
-    async fn transcript_file(
+    pub(crate) async fn transcript_file(
         &self,
         session: &str,
         env: &(dyn Fn(&str) -> Option<String> + Sync),
