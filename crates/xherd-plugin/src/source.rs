@@ -75,7 +75,7 @@ impl PluginSource {
 /// `https://github.com/o/r/tree/<ref>/<path…>` → (`https://github.com/o/r.git`,
 /// ref, path). Any other URL comes back unchanged. A ref with a slash is
 /// ambiguous in this form: only its first segment is taken (pass `--ref`).
-fn split_github_tree(url: &str) -> (String, Option<String>, Option<String>) {
+pub(crate) fn split_github_tree(url: &str) -> (String, Option<String>, Option<String>) {
     let Some(rest) = url.strip_prefix("https://github.com/") else {
         return (url.to_string(), None, None);
     };

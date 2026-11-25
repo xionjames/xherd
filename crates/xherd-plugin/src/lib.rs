@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use xherd_core::exec::{Cmd, ExecError, run};
 
+pub mod catalog;
 pub mod git;
 pub mod gitlab;
 pub mod host;

@@ -28,7 +28,7 @@ by theme; update it together with them.
 - [x] TODO condition checks for runtimes other than Claude Code: opencode and Codex declare `data.terminal.check`
 - [x] Live reload of the config: saving applies everything except port, bind, concurrency, workspace, tmux socket and plugin settings (`SettingsHandle`); editing `config.json` by hand still needs a restart
 - [x] Plugin secrets from the UI (write-only, live)
-- [x] Plugin install from a git URL: `xherd plugin ls|install|update|remove` and Settings → Plugins (preview, digest, manifest diff on update, recorded `url@sha`), restart by re-exec (`xherd daemon restart`, `POST /admin/restart`), `XHERD_PLUGIN_INSTALL=off`; no live reload, catalogue, archives or `plugin new|test|link`
+- [x] Plugin install from a git URL: `xherd plugin ls|install|update|remove` and Settings → Plugins (preview, digest, manifest diff on update, recorded `url@sha`), restart by re-exec (`xherd daemon restart`, `POST /admin/restart`), `XHERD_PLUGIN_INSTALL=off`; no live reload, archives or `plugin new|test|link`
 - [x] Herd views as plugins (#108): plugin kind `view`, a sandboxed frame with protocol v1 and the view kit; built-in `herd-tiles` as the example
 - [x] Job names (#114, #115): a lowercase name, an optional ticket (issue URL or key) that prefixes the branch; New job form with More options
 - [x] Needs attention and the job page (#120, #122, #124, #127, #128): the ✋ count is only what waits for you, *Approved by xherd* folded last; a gate autonomy will approve is not shown as waiting; one-row header; a file list in Changes
@@ -137,7 +137,7 @@ by theme; update it together with them.
 - [x] To review and Work log views (per-ticket cycle time, review loops and rework)
 - [x] Kanban Board: stages and tasks as work units, TODOs, swimlanes; jobs by stage on the Herd
 - [x] Toolchain plugins (`sdkman`, `nvm`, `uv`, `go`, `rustup`) with installs in Settings → Plugins
-- [ ] A plugin catalogue (install from a git URL is done)
+- [x] A plugin catalogue: GitHub topic `xherd-plugin` and https index files (`pluginCatalogs`), in Add plugin and `xherd plugin search`
 - [x] TODO reminders
 - [ ] Daily budget per profile, `never` autonomy (R-1209: one-time confirmation; the policy table already has it, creation and `autonomy` refuse it)
 

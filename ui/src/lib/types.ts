@@ -317,6 +317,34 @@ export interface PluginsList {
   installEnabled: boolean;
 }
 
+/** One plugin of the catalogue (`GET /plugins/catalog`). Its text is untrusted: show it as plain text. */
+export interface CatalogEntry {
+  name: string;
+  owner: string;
+  description?: string;
+  url: string;
+  ref?: string;
+  path?: string;
+  kind?: string;
+  stars?: number;
+  pushedAt?: string;
+  /** The configured source that listed it. */
+  source: string;
+  /** Installed plugins that come from this entry. */
+  installed: string[];
+}
+
+export interface CatalogSource {
+  source: string;
+  /** Milliseconds since the epoch; `null` when it never succeeded. */
+  fetchedAt: number | null;
+  error?: string;
+  /** Index entries left out because they were not valid. */
+  skipped?: number;
+}
+
+export interface PluginCatalog { entries: CatalogEntry[]; sources: CatalogSource[] }
+
 /** `POST /plugins/preview`: what a source holds, found without running any of its code. */
 export interface PluginPreview {
   url: string;
