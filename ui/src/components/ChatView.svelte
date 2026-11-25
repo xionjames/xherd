@@ -118,7 +118,7 @@
         </div>
       {:else if e.kind === 'tool'}
         {@const key = `t${e.id}`}
-        <div class="tool {e.status}">
+        <div class="call {e.status}">
           <button class="head" aria-expanded={!!open[key]} disabled={!e.result} onclick={() => (open[key] = !open[key])}>
             <span class="mk" aria-hidden="true">{e.status === 'running' ? '…' : e.status === 'error' ? '✗' : '✓'}</span>
             <span class="nm">{e.name}</span>
@@ -168,13 +168,13 @@
   .user .body { background: var(--accent-wash); border-radius: var(--r-card); padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .user.xherd .body { background: var(--pen-2); font-family: var(--mono); font-size: 12.5px; }
   .assistant .body { overflow-wrap: anywhere; }
-  .tool { border: 1px solid var(--fence); border-radius: var(--r-ctl); background: var(--well); padding: 2px 8px; }
-  .tool.error { border-color: var(--halt); }
-  .tool .head { all: unset; display: flex; gap: 8px; align-items: baseline; width: 100%; cursor: pointer; padding: 4px 0; font: 12.5px/1.5 var(--mono); }
-  .tool .head:disabled { cursor: default; }
-  .tool .head:focus-visible { outline: 2px solid var(--focus); }
-  .tool .nm { font-weight: 600; flex: none; }
-  .tool .sm { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .call { border: 1px solid var(--fence); border-radius: var(--r-ctl); background: var(--well); padding: 2px 8px; }
+  .call.error { border-color: var(--halt); }
+  .call .head { all: unset; display: flex; gap: 8px; align-items: baseline; width: 100%; cursor: pointer; padding: 4px 0; font: 12.5px/1.5 var(--mono); }
+  .call .head:disabled { cursor: default; }
+  .call .head:focus-visible { outline: 2px solid var(--focus); }
+  .call .nm { font-weight: 600; flex: none; }
+  .call .sm { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .res { margin: 4px 0; padding: 8px; background: var(--term); color: var(--term-ink); border-radius: var(--r-ctl); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
   .notice { align-self: center; color: var(--ink-3); font-size: 12.5px; }
   .working { color: var(--ink-3); font-size: 12.5px; }
