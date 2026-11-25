@@ -228,6 +228,15 @@ pub enum WorkResult {
         unpushed: Option<Vec<String>>,
         push_known: bool,
     },
+    /// A range of the session's transcript (R4): the file found (kept for the
+    /// next reads), the offset it was read from, and what came back (`None`:
+    /// no file yet) with the file's length.
+    ChatRead {
+        session: String,
+        file: Option<PathBuf>,
+        offset: u64,
+        read: Option<(Vec<u8>, u64)>,
+    },
     /// The pane of a running action is dead: its exit status (`None` when a
     /// signal killed it) and what it printed (R11, R13).
     /// `stopped`: the user (or the job's end) stopped it; `restart` carries
@@ -252,14 +261,17 @@ pub enum WorkResult {
 impl WorkResult {
     /// Results that stay valid when the agent's generation moved on: results
     /// about actions (hand-on, resume), since an action outlives the session,
-    /// and the branch check (R4), which the stop that starts it often ends.
-    fn about_action(&self) -> bool {
+    /// the branch check (R4), which the stop that starts it often ends, and
+    /// the transcript read (R4): its offset is checked against the follower,
+    /// not the generation.
+    fn outlives_generation(&self) -> bool {
         matches!(
             self,
             WorkResult::ActionEnded { .. }
                 | WorkResult::ActionAlive { .. }
                 | WorkResult::ActionGone { .. }
                 | WorkResult::BranchCommits { .. }
+                | WorkResult::ChatRead { .. }
         )
     }
 }
@@ -642,6 +654,8 @@ pub struct Env {
     pub skills: std::path::PathBuf,
     /// The data root: action logs live under it (R13).
     pub paths: xherd_core::paths::Paths,
+    /// One channel per job for the chat clients (R5).
+    pub chat: Arc<crate::chat::ChatHubs>,
 }
 
 /// Default limit for a task's `verify:` command.
@@ -680,6 +694,7 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         stopping: BTreeSet::new(),
         push_seq: 0,
         push_applied: 0,
+        chat: None,
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -741,6 +756,30 @@ struct Actor {
     /// In memory only.
     push_seq: u64,
     push_applied: u64,
+    /// The Chat view's follower of the session's transcript (R4). In memory;
+    /// rebuilt from the chat log after a restart.
+    chat: Option<ChatFollow>,
+}
+
+/// Most bytes of the transcript one read takes.
+const CHAT_READ_MAX: usize = 1024 * 1024;
+/// A transcript line longer than this is dropped (and counted unknown).
+const CHAT_LINE_MAX: usize = 16 * 1024 * 1024;
+
+/// Where the follower is in one session's transcript.
+struct ChatFollow {
+    session: String,
+    /// The transcript, once found.
+    file: Option<PathBuf>,
+    /// The next byte to read.
+    offset: u64,
+    /// The bytes before `offset` that did not end a line yet.
+    partial: Vec<u8>,
+    /// A read is in flight: one at a time.
+    reading: bool,
+    mapper: xherd_core::chat::Mapper,
+    log: crate::chat::ChatLog,
+    state: crate::chat::State,
 }
 
 impl Actor {
@@ -791,7 +830,7 @@ impl Actor {
                 Msg::Tick(t) => self.on_tick(t).await,
                 Msg::Sessions(alive) => self.kill_unknown_actions(&alive),
                 Msg::WorkDone { generation, result } => {
-                    if generation != self.job.generation && !result.about_action() {
+                    if generation != self.job.generation && !result.outlives_generation() {
                         tracing::debug!(agent = %self.job.name, "dropping stale async result");
                         continue;
                     }
@@ -1182,6 +1221,15 @@ impl Actor {
         if result == ReportResult::Applied && r.event == ReportEvent::SessionStart {
             self.resume_unconfirmed = false;
         }
+        // The runtime wrote to its transcript: read it now, not at the tick.
+        if result == ReportResult::Applied
+            && matches!(
+                r.event,
+                ReportEvent::PostToolUse | ReportEvent::UserPromptSubmit | ReportEvent::Stop
+            )
+        {
+            self.chat_poll();
+        }
         if result == ReportResult::Applied
             && r.event == ReportEvent::SessionStart
             && self.job.next_prompt.is_some()
@@ -1230,6 +1278,227 @@ impl Actor {
                 result: WorkResult::Usage { session, tokens },
             });
         });
+    }
+
+    /// Reads what the runtime appended to the session's transcript, for the
+    /// Chat view (R4). A no-op without a live session or a runtime with
+    /// `chat`; one read at a time, slow work spawned and back as
+    /// `WorkResult::ChatRead`.
+    fn chat_poll(&mut self) {
+        if !self.job.status.is_live() {
+            return;
+        }
+        let Some(session) = self.job.session.clone() else {
+            return;
+        };
+        let Some(resume) = self
+            .runtime_kit()
+            .filter(|k| k.terminal.as_ref().is_some_and(|t| t.chat.is_some()))
+            .and_then(|k| k.resume.clone())
+        else {
+            return;
+        };
+        if self.chat.as_ref().is_none_or(|f| f.session != session) {
+            self.chat = Some(self.new_chat_follow(&session));
+        }
+        let Some(f) = self.chat.as_mut().filter(|f| !f.reading) else {
+            return;
+        };
+        f.reading = true;
+        let (file, offset) = (f.file.clone(), f.offset);
+        let (tx, generation) = (self.tx.clone(), self.job.generation);
+        tokio::spawn(async move {
+            let env = xherd_core::runner::agent_env;
+            let file = match file {
+                Some(f) => Some(f),
+                None => resume.transcript_file(&session, &env).await,
+            };
+            let read = match &file {
+                Some(path) => xherd_core::runner::read_from(path, offset, CHAT_READ_MAX)
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            let _ = tx.send(Msg::WorkDone {
+                generation,
+                result: WorkResult::ChatRead {
+                    session,
+                    file,
+                    offset,
+                    read,
+                },
+            });
+        });
+    }
+
+    /// The follower of `session`, resumed from the chat log: the position is
+    /// the larger of `state.json` and the end of the last logged line of the
+    /// session, so a crash between the append and the state save neither
+    /// repeats nor skips lines; the mapper knows the tools and questions
+    /// already logged, so their results still update them (R5).
+    fn new_chat_follow(&self, session: &str) -> ChatFollow {
+        use xherd_core::chat::{ChatBody, Mapper, ToolMeta};
+        let log = crate::chat::ChatLog::new(&self.env.paths, &self.job.id);
+        let state = log.load_state();
+        let logged = log.replay(0);
+        let prefix = self
+            .job
+            .pack
+            .as_deref()
+            .and_then(|p| self.env.packs.get(p))
+            .and_then(|p| p.install.get(self.runtime_name()))
+            .map(|i| i.prefix.clone());
+        let mut mapper = Mapper::new(prefix);
+        for e in &logged {
+            match &e.body {
+                ChatBody::Tool {
+                    id,
+                    name,
+                    summary,
+                    path,
+                    ..
+                } => {
+                    let meta = ToolMeta {
+                        name: name.clone(),
+                        summary: summary.clone(),
+                        path: path.clone(),
+                    };
+                    mapper.tools.insert(id.clone(), meta);
+                }
+                ChatBody::Question { id, questions, .. } => {
+                    mapper.questions.insert(id.clone(), questions.clone());
+                }
+                _ => {}
+            }
+        }
+        let logged_end = logged.iter().rev().find_map(|e| {
+            (e.session.as_deref() == Some(session))
+                .then_some(e.end)
+                .flatten()
+        });
+        let offset = state
+            .positions
+            .get(session)
+            .copied()
+            .into_iter()
+            .chain(logged_end)
+            .max()
+            .unwrap_or(0);
+        ChatFollow {
+            session: session.to_string(),
+            file: None,
+            offset,
+            partial: Vec::new(),
+            reading: false,
+            mapper,
+            log,
+            state,
+        }
+    }
+
+    /// What `chat_poll` read: the complete lines become events, logged and
+    /// published (R4, R5). A file shorter than the position was replaced: it
+    /// is read again from its start. A full read is followed by another.
+    fn on_chat_read(
+        &mut self,
+        session: String,
+        file: Option<PathBuf>,
+        offset: u64,
+        read: Option<(Vec<u8>, u64)>,
+    ) {
+        use xherd_core::chat::{ChatBody, ChatEvent, NoticeKind};
+        let now = self.now();
+        let job_id = self.job.id.clone();
+        let Some(f) = self
+            .chat
+            .as_mut()
+            .filter(|f| f.session == session && f.offset == offset)
+        else {
+            return;
+        };
+        f.reading = false;
+        if f.file.is_none() {
+            f.file = file;
+        }
+        let Some((bytes, len)) = read else {
+            return;
+        };
+        let mut bodies: Vec<(ChatBody, Option<u64>)> = Vec::new();
+        let again;
+        if len < f.offset {
+            f.offset = 0;
+            f.partial.clear();
+            bodies.push((
+                ChatBody::Notice {
+                    notice: NoticeKind::NewSession,
+                    text: "The transcript was replaced".into(),
+                },
+                None,
+            ));
+            again = true;
+        } else {
+            again = bytes.len() >= CHAT_READ_MAX;
+            let new_offset = f.offset + bytes.len() as u64;
+            let mut buf = std::mem::take(&mut f.partial);
+            buf.extend_from_slice(&bytes);
+            let start = new_offset - buf.len() as u64;
+            let mut from = 0;
+            while let Some(nl) = buf[from..].iter().position(|b| *b == b'\n') {
+                let end = start + (from + nl + 1) as u64;
+                let text = String::from_utf8_lossy(&buf[from..from + nl]).into_owned();
+                from += nl + 1;
+                if text.trim().is_empty() {
+                    continue;
+                }
+                bodies.extend(f.mapper.line(&text).into_iter().map(|b| (b, Some(end))));
+            }
+            if buf.len() - from > CHAT_LINE_MAX {
+                f.state.unknown += 1;
+            } else {
+                f.partial = buf[from..].to_vec();
+            }
+            f.offset = new_offset;
+        }
+        let unknown_before = f.state.unknown;
+        let mut events = Vec::new();
+        for (body, end) in bodies {
+            if matches!(body, ChatBody::Unknown { .. }) {
+                f.state.unknown += 1;
+            }
+            f.state.seq += 1;
+            events.push(ChatEvent {
+                seq: f.state.seq,
+                at: now,
+                session: Some(session.clone()),
+                end,
+                body,
+            });
+        }
+        f.state.positions.insert(session, f.offset);
+        match f.log.append(&events) {
+            Ok(dropped) => f.mapper.forget(dropped.iter().map(String::as_str)),
+            Err(e) => tracing::warn!(job = %job_id, error = %e, "chat log not written"),
+        }
+        if let Err(e) = f.log.save_state(&f.state) {
+            tracing::warn!(job = %job_id, error = %e, "chat state not saved");
+        }
+        let unknown = f.state.unknown;
+        for e in events {
+            if !matches!(e.body, ChatBody::Unknown { .. }) {
+                self.env
+                    .chat
+                    .publish(&job_id, crate::chat::ChatMsg::Event(e));
+            }
+        }
+        if unknown != unknown_before {
+            self.env
+                .chat
+                .publish(&job_id, crate::chat::ChatMsg::Unknown(unknown));
+        }
+        if again {
+            self.chat_poll();
+        }
     }
 
     /// List the branch's commits since the job's base (slow: spawned, back
@@ -4822,6 +5091,7 @@ impl Actor {
                         }
                     });
                 }
+                self.chat_poll();
                 self.check_actions();
             }
             TickKind::PrPoll => self.poll_pr(),
@@ -4926,6 +5196,12 @@ impl Actor {
                 self.git_access_failed("pr-poll", &e).await;
             }
             WorkResult::Usage { session, tokens } => self.on_usage(&session, tokens).await,
+            WorkResult::ChatRead {
+                session,
+                file,
+                offset,
+                read,
+            } => self.on_chat_read(session, file, offset, read),
             WorkResult::BranchCommits {
                 on_branch,
                 found,

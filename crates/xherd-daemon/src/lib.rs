@@ -411,6 +411,7 @@ impl Daemon {
             runtimes,
             skills: paths.skills(),
             paths: paths.clone(),
+            chat: Arc::new(chat::ChatHubs::default()),
         };
         let agents = store.list_jobs().await?;
         let limits = store
