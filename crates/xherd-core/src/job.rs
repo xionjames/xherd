@@ -238,6 +238,11 @@ pub struct Job {
     /// Ids of the PR comments already handled or ignored (R-304).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pr_comments_seen: Vec<String>,
+    /// What the PR title and description last agreed on with the host.
+    #[serde(default, skip_serializing_if = "crate::pr::TextSync::is_empty")]
+    pub pr_title_sync: crate::pr::TextSync,
+    #[serde(default, skip_serializing_if = "crate::pr::TextSync::is_empty")]
+    pub pr_body_sync: crate::pr::TextSync,
     /// Times the agent came back to review after fixing (R-120).
     #[serde(default)]
     pub review_rounds: u32,
@@ -424,6 +429,8 @@ impl Job {
             review_rounds: 0,
             pr_state: None,
             pr_comments_seen: Vec::new(),
+            pr_title_sync: Default::default(),
+            pr_body_sync: Default::default(),
             pr_ci: None,
             pr_ci_failed: false,
             pr_conflict: false,
@@ -536,6 +543,21 @@ impl Job {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pr_text_baselines_are_omitted_when_empty_and_old_jobs_load() {
+        let j = Job::new("j", 1);
+        let v = serde_json::to_value(&j).unwrap();
+        assert!(v.get("prTitleSync").is_none() && v.get("prBodySync").is_none());
+        let old: Job = serde_json::from_value(v).unwrap();
+        assert!(old.pr_title_sync.is_empty() && old.pr_body_sync.is_empty());
+        let mut j2 = j.clone();
+        j2.pr_body_sync.baseline = Some("abc".into());
+        let v2 = serde_json::to_value(&j2).unwrap();
+        assert!(v2.get("prTitleSync").is_none());
+        let back: Job = serde_json::from_value(v2).unwrap();
+        assert_eq!(back.pr_body_sync.baseline.as_deref(), Some("abc"));
+    }
 
     #[test]
     fn a_job_without_actions_omits_them_and_reads_back() {
