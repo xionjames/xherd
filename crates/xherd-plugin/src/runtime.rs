@@ -77,7 +77,46 @@ pub struct Terminal {
     /// (R26); without it an agent's skills are skipped for this runtime (R27).
     #[serde(default)]
     pub skills: Option<SkillTarget>,
+    /// Where the Chat view reads the conversation from (R1); without it the
+    /// runtime has no Chat view.
+    #[serde(default)]
+    pub chat: Option<Chat>,
 }
+
+/// `data.terminal.chat`: the source of the Chat view's events (R1).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Chat {
+    pub source: ChatSource,
+    pub format: ChatFormat,
+    /// The CLI versions the format was checked against.
+    #[serde(default)]
+    pub tested_versions: Vec<String>,
+}
+
+/// Where chat events come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatSource {
+    /// The runtime's transcript file, found through `resume`.
+    Transcript,
+}
+
+/// How the transcript is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatFormat {
+    ClaudeJsonl,
+}
+
+/// The `hooks.events` value that makes `merge_hooks` write the blocking
+/// permission command instead of `xherd hook <event>` (R18).
+pub const PERMISSION_EVENT: &str = "permission-request";
+
+/// Claude Code's `timeout` for the permission hook, in seconds: above the
+/// longest wait the daemon allows (3600 s), so Claude Code never kills the
+/// hook first (R18).
+pub const PERMISSION_HOOK_TIMEOUT_SEC: u64 = 3660;
 
 /// `data.terminal.skills`: a folder of the worktree, and the layout of what
 /// goes in it.
@@ -770,6 +809,26 @@ impl Terminal {
                 PI_TRIGGERS.join(", ")
             ));
         }
+        if let Some(h) = &t.hooks
+            && h.format != HookFormat::ClaudeSettings
+            && h.events.values().any(|v| v == PERMISSION_EVENT)
+        {
+            return Err(format!(
+                "runtime {}: {PERMISSION_EVENT:?} is only for the Claude settings hook format",
+                m.name
+            ));
+        }
+        if t.chat.is_some()
+            && !t
+                .resume
+                .as_ref()
+                .is_some_and(|r| r.transcripts.is_some() && r.file.is_some())
+        {
+            return Err(format!(
+                "runtime {}: chat needs resume.transcripts and resume.file (the transcript is found through them)",
+                m.name
+            ));
+        }
         if let Some(r) = &t.resume {
             r.check().map_err(|e| format!("runtime {}: {e}", m.name))?;
         }
@@ -981,8 +1040,13 @@ pub fn merge_hooks(
     }
     hooks.retain(|_, v| v.as_array().is_none_or(|a| !a.is_empty()));
     for (event, ours) in &h.events {
-        let command = format!("{} hook {ours} {HOOK_TAG}", shell_quote(xherd_bin));
-        let entry = json!({"hooks": [{"type": "command", "command": command}]});
+        let entry = if ours == PERMISSION_EVENT {
+            let command = format!("{} {PERMISSION_EVENT} {HOOK_TAG}", shell_quote(xherd_bin));
+            json!({"hooks": [{"type": "command", "command": command, "timeout": PERMISSION_HOOK_TIMEOUT_SEC}]})
+        } else {
+            let command = format!("{} hook {ours} {HOOK_TAG}", shell_quote(xherd_bin));
+            json!({"hooks": [{"type": "command", "command": command}]})
+        };
         match hooks
             .entry(event.clone())
             .or_insert_with(|| Value::Array(Vec::new()))
@@ -1120,8 +1184,65 @@ mod tests {
             stop[1]["hooks"][0]["command"],
             "'/usr/bin/xherd' hook stop # xherd"
         );
-        assert_eq!(v["hooks"].as_object().unwrap().len(), 5);
+        assert_eq!(v["hooks"].as_object().unwrap().len(), 6);
         assert!(once.contains(r#"'/opt/x herd/xherd' hook session-start"#));
+    }
+
+    #[test]
+    fn permission_hook_is_its_own_command_with_a_long_timeout() {
+        // R18
+        let h = claude().hooks.unwrap();
+        let out = merge_hooks(None, &h, "/usr/bin/xherd", &Allow::default()).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let e = &v["hooks"]["PermissionRequest"][0]["hooks"][0];
+        assert_eq!(e["command"], "'/usr/bin/xherd' permission-request # xherd");
+        assert_eq!(e["timeout"], 3660);
+        assert!(v["hooks"]["Stop"][0]["hooks"][0].get("timeout").is_none());
+    }
+
+    #[test]
+    fn chat_is_declared_by_claude_code_and_checked() {
+        // R1
+        let t = claude();
+        let c = t.chat.unwrap();
+        assert_eq!(c.source, ChatSource::Transcript);
+        assert_eq!(c.format, ChatFormat::ClaudeJsonl);
+        assert!(!c.tested_versions.is_empty());
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "claude-code")
+            .unwrap();
+        let term = |m: &mut Manifest| m.data.get_mut("terminal").unwrap().take();
+        let mut tv = term(&mut m);
+        tv["chat"]["format"] = json!("html");
+        m.data.insert("terminal".into(), tv.clone());
+        assert!(Terminal::of(&m).unwrap_err().contains("html"));
+        tv["chat"]["format"] = json!("claude-jsonl");
+        tv["resume"].as_object_mut().unwrap().remove("transcripts");
+        m.data.insert("terminal".into(), tv);
+        assert!(Terminal::of(&m).unwrap_err().contains("chat needs resume"));
+        for name in ["opencode", "codex"] {
+            let m = crate::builtins()
+                .into_iter()
+                .find(|m| m.name == name)
+                .unwrap();
+            assert!(Terminal::of(&m).unwrap().chat.is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn permission_event_is_refused_outside_claude_settings() {
+        let mut m = crate::builtins()
+            .into_iter()
+            .find(|m| m.name == "codex")
+            .unwrap();
+        m.data.get_mut("terminal").unwrap()["hooks"]["events"]["PermissionRequest"] =
+            json!(PERMISSION_EVENT);
+        assert!(
+            Terminal::of(&m)
+                .unwrap_err()
+                .contains("only for the Claude settings")
+        );
     }
 
     #[test]
