@@ -1,5 +1,5 @@
 # xherd, the built-in flow pack (spec §7, design §6.2).
-# Flows: feature and bugfix.
+# Flows: feature, quick and bugfix.
 name: xherd
 version: 0.1.0
 protocol: 1
@@ -57,6 +57,16 @@ flows:
       - { id: tasks, role: tasks, class: routine, command: "{prefix}tasks", gate: { docs: [tasks.md] }, next: [{ run: "{prefix}next" }] }
       - { id: implement, role: implement, class: code, command: "{prefix}next", gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }], loopUntil: allTasksDone, then: review }
       - { id: review, role: review, class: routine, command: "{prefix}review", gate: { docs: [review.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: ship, role: ship, class: critical, command: "{prefix}ship", gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
+      - { id: pr-review, role: pr, class: human-only, command: "{prefix}pr-review", gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
+      - { id: pr, role: pr, class: human-only }
+  # A small change (a typo, a version bump, a short refactor): no spec, design,
+  # tasks or review documents. One commit gate, then the feature flow's ship
+  # and PR rounds. A job that turns out larger can be promoted to `feature`.
+  quick:
+    start: "{prefix}quick {key} {prompt}"
+    stages:
+      - { id: implement, role: implement, label: Change, class: code, command: "{prefix}quick", gate: { kind: commit }, next: [{ run: "{prefix}commit {commit}" }] }
       - { id: ship, role: ship, class: critical, command: "{prefix}ship", gate: { docs: [pr.md] }, next: [{ run: "{prefix}ship" }] }
       - { id: pr-review, role: pr, class: human-only, command: "{prefix}pr-review", gate: { docs: [pr-review.md] }, next: [{ run: "{prefix}pr-apply" }] }
       - { id: pr, role: pr, class: human-only }

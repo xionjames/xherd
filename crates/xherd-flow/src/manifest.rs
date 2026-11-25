@@ -633,6 +633,29 @@ mod tests {
         );
         assert_eq!(b.commit_stage(Some("reproduce")).unwrap().id, "reproduce");
         assert_eq!(b.commit_stage(Some("analysis")).unwrap().id, "reproduce");
+
+        let q = p.flow("quick").unwrap();
+        assert_eq!(q.start, "{prefix}quick {key} {prompt}");
+        let stages: Vec<(&str, Role, Class)> = q
+            .stages
+            .iter()
+            .map(|s| (s.id.as_str(), s.role, s.class))
+            .collect();
+        assert_eq!(
+            stages,
+            [
+                ("implement", Role::Implement, Class::Code),
+                ("ship", Role::Ship, Class::Critical),
+                ("pr-review", Role::Pr, Class::HumanOnly),
+                ("pr", Role::Pr, Class::HumanOnly),
+            ]
+        );
+        let change = q.stage("implement").unwrap();
+        assert!(change.is_commit_gate());
+        assert_eq!(change.label.as_deref(), Some("Change"));
+        assert_eq!(change.then, None);
+        assert_eq!(q.after("implement").unwrap().id, "ship");
+        assert_eq!(q.after("ship").unwrap().id, "pr-review");
     }
 
     #[test]
@@ -649,6 +672,7 @@ mod tests {
         };
         assert_eq!(eligible("feature"), ["spec", "design"]);
         assert_eq!(eligible("bugfix"), ["analysis"]);
+        assert!(eligible("quick").is_empty());
     }
 
     #[test]

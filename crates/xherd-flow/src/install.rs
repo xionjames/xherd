@@ -50,6 +50,10 @@ pub const BUILTIN_FILES: &[(&str, &str)] = &[
         include_str!("../../../packs/xherd/commands/pr-review.md"),
     ),
     (
+        "commands/quick.md",
+        include_str!("../../../packs/xherd/commands/quick.md"),
+    ),
+    (
         "commands/reproduce.md",
         include_str!("../../../packs/xherd/commands/reproduce.md"),
     ),
