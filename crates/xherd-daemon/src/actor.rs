@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
+use xherd_core::chat::{AnsweredFrom, PermOption};
 use xherd_core::config::Config;
 use xherd_core::domain::{Commit, CommitStatus, Gate, TaskStatus};
 use xherd_core::report::{Effect, Origin, Outcome, Report, ReportEvent, apply_report};
@@ -34,6 +35,10 @@ pub enum Msg {
     User(UserAction, oneshot::Sender<Result<Job, ActionError>>),
     Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
+    /// A tool's permission request from the runtime's hook (R19): the answer
+    /// goes back on the channel, `None` when xherd does not decide (the
+    /// runtime then asks in its own prompt).
+    Permission(PermRequest, oneshot::Sender<Option<PermOption>>),
     /// At the daemon's start: the terminal sessions that are not any job's
     /// own, so the job can kill the action sessions it does not know (R12).
     Sessions(Arc<Vec<String>>),
@@ -41,6 +46,15 @@ pub enum Msg {
         generation: u64,
         result: WorkResult,
     },
+}
+
+/// What the runtime's permission hook sends (R19).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermRequest {
+    pub tool: String,
+    pub input: Value,
+    /// The request carries `permission_suggestions`, so `allow-always` can be offered.
+    pub suggestions: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +182,12 @@ pub enum UserAction {
     },
     /// Hide the "Save actions to repo profile" card for this job (R23).
     ActionsCardDismiss,
+    /// Answer a waiting permission card (R20).
+    Permission {
+        pid: String,
+        answer: PermOption,
+        from: AnsweredFrom,
+    },
     Get,
 }
 
@@ -696,6 +716,7 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         push_applied: 0,
         chat: None,
         chat_resumed: false,
+        permission_replies: BTreeMap::new(),
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -763,7 +784,13 @@ struct Actor {
     /// The session being followed was started by a runtime resume: the notice
     /// of its switch says so (R4).
     chat_resumed: bool,
+    /// The hooks waiting for a permission answer, by card id (R19). In memory:
+    /// a restart drops them, so the runtime asks in its own prompt.
+    permission_replies: BTreeMap<String, oneshot::Sender<Option<PermOption>>>,
 }
+
+/// Most permission requests that wait at once for one job (R19).
+const PERMISSIONS_MAX: usize = 16;
 
 /// Most bytes of the transcript one read takes.
 const CHAT_READ_MAX: usize = 1024 * 1024;
@@ -835,6 +862,7 @@ impl Actor {
                     let _ = reply.send(self.on_xap(call).await);
                 }
                 Msg::Tick(t) => self.on_tick(t).await,
+                Msg::Permission(req, reply) => self.on_permission(req, reply).await,
                 Msg::Sessions(alive) => self.kill_unknown_actions(&alive),
                 Msg::WorkDone { generation, result } => {
                     if generation != self.job.generation && !result.outlives_generation() {
@@ -2925,6 +2953,10 @@ impl Actor {
         let mut payload = None;
         let kind = match &action {
             UserAction::Get => return Ok(()),
+            UserAction::Permission { pid, answer, from } => {
+                payload = Some(self.answer_permission(pid, *answer, *from).await?);
+                "user.permission"
+            }
             UserAction::Start { port_base } => {
                 self.start(*port_base).await?;
                 return Ok(());
@@ -3294,6 +3326,147 @@ impl Actor {
         self.log(None, kind, payload).await;
         self.commit(before).await;
         Ok(())
+    }
+
+    /// A permission request from the runtime's hook (R19): a card waits, the
+    /// job is blocked until the last one is answered.
+    async fn on_permission(
+        &mut self,
+        req: PermRequest,
+        reply: oneshot::Sender<Option<PermOption>>,
+    ) {
+        use xherd_core::chat::{ChatBody, Resolution};
+        use xherd_core::job::{WaitKind, Waiting};
+        let runtime = self
+            .job
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let has_chat = self
+            .env
+            .runtimes
+            .get(runtime)
+            .and_then(|k| k.terminal.as_ref())
+            .is_some_and(|t| t.chat.is_some());
+        let waiting = self.permission_replies.len();
+        if req.tool == xherd_core::chat::QUESTION_TOOL
+            || !self.job.status.is_live()
+            || !has_chat
+            || waiting >= PERMISSIONS_MAX
+        {
+            let _ = reply.send(None);
+            return;
+        }
+        let before = self.job.status;
+        let id = format!("p_{}", xherd_core::new_id());
+        let mut options = vec![PermOption::Allow];
+        if req.suggestions {
+            options.push(PermOption::AllowAlways);
+        }
+        options.push(PermOption::Deny);
+        let summary = xherd_core::chat::summary(&req.tool, &req.input);
+        self.job.waiting.push(Waiting {
+            id: id.clone(),
+            kind: WaitKind::Permission,
+            since: self.now(),
+            tool: Some(req.tool.clone()),
+            summary: summary.clone(),
+            options: options.clone(),
+            questions: Vec::new(),
+            answerable: true,
+        });
+        self.permission_replies.insert(id.clone(), reply);
+        self.job.fire(Trigger::Blocked, self.now());
+        if self.job.status == Status::Blocked {
+            self.job.screen_blocked = false;
+            let n = self.permission_replies.len();
+            self.job.block_reason = Some(if n == 1 {
+                "permission".into()
+            } else {
+                format!("{n} permissions")
+            });
+        }
+        if let Some(session) = self.chat.as_ref().map(|f| f.session.clone()) {
+            self.chat_emit(
+                &session,
+                vec![(
+                    ChatBody::Permission {
+                        id,
+                        tool: req.tool.clone(),
+                        summary,
+                        options,
+                        state: Resolution::Waiting,
+                    },
+                    None,
+                )],
+            );
+        }
+        // Never the command or paths: only which tool asks.
+        self.notify(
+            "blocked",
+            format!("{} waits for permission to use {}", self.job.name, req.tool),
+        );
+        self.commit(before).await;
+    }
+
+    /// The user's answer to a permission card (R20): the hook gets it, the
+    /// card leaves `waiting`, and the job runs again once none is left.
+    async fn answer_permission(
+        &mut self,
+        pid: &str,
+        answer: PermOption,
+        from: AnsweredFrom,
+    ) -> Result<Value, ActionError> {
+        use xherd_core::chat::{ChatBody, Resolution};
+        let Some(i) = self.job.waiting.iter().position(|w| w.id == pid) else {
+            return Err(refuse("already_answered", "that permission is not waiting"));
+        };
+        if !self.job.waiting[i].options.contains(&answer) {
+            return Err(refuse("not_offered", "that answer is not offered here"));
+        }
+        let w = self.job.waiting.remove(i);
+        if let Some(reply) = self.permission_replies.remove(pid) {
+            let _ = reply.send(Some(answer));
+        }
+        let name = match answer {
+            PermOption::Allow => "allow",
+            PermOption::AllowAlways => "allow-always",
+            PermOption::Deny => "deny",
+        };
+        if let Some(session) = self.chat.as_ref().map(|f| f.session.clone()) {
+            self.chat_emit(
+                &session,
+                vec![(
+                    ChatBody::Permission {
+                        id: w.id.clone(),
+                        tool: w.tool.clone().unwrap_or_default(),
+                        summary: w.summary.clone(),
+                        options: w.options.clone(),
+                        state: Resolution::Answered {
+                            answer: name.into(),
+                            from,
+                        },
+                    },
+                    None,
+                )],
+            );
+        }
+        let by_permission = self
+            .job
+            .block_reason
+            .as_deref()
+            .is_some_and(|r| r.ends_with("permission") || r.ends_with("permissions"));
+        if !self.job.permission_waiting() && self.job.status == Status::Blocked && by_permission {
+            self.job.fire(Trigger::Working, self.now());
+        } else if by_permission && self.job.status == Status::Blocked {
+            let n = self.permission_replies.len();
+            self.job.block_reason = Some(if n == 1 {
+                "permission".into()
+            } else {
+                format!("{n} permissions")
+            });
+        }
+        Ok(json!({"pid": w.id, "tool": w.tool, "answer": name, "from": from}))
     }
 
     /// Ask (#121, R5–R7): resume an agent that has no session with the

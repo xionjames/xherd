@@ -46,7 +46,7 @@ pub mod toolchains;
 pub mod uploads;
 pub mod worklog;
 
-pub use actor::{ActionError, ActorSettings, ReportResult, TickKind, UserAction};
+pub use actor::{ActionError, ActorSettings, PermRequest, ReportResult, TickKind, UserAction};
 pub use create::{Resumer, RuntimeKit, TrustWriter};
 pub use driver::{Driver, FakeDriver, JobCtx, TerminalDriver};
 pub use supervisor::SupervisorHandle;
@@ -537,6 +537,17 @@ impl Daemon {
 
     pub async fn action(&self, who: &str, a: UserAction) -> Result<Job, ActionError> {
         self.sup.action(who, a).await
+    }
+
+    /// A tool's permission request from the runtime's hook (R19): waits for
+    /// the user's answer. `None`: xherd does not decide, the runtime asks
+    /// in its own prompt.
+    pub async fn permission_request(
+        &self,
+        job_id: &str,
+        req: PermRequest,
+    ) -> Option<xherd_core::chat::PermOption> {
+        self.sup.permission(job_id, req).await
     }
 
     /// A chat client for a job (R6): subscribed first, then the log's events

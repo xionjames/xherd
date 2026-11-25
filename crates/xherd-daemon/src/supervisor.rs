@@ -31,6 +31,13 @@ pub enum SupMsg {
     ),
     Xap(XapCall, oneshot::Sender<Result<Value, Refusal>>),
     Tick(TickKind),
+    /// A permission request of a job (R19); the answer is `None` when xherd
+    /// does not decide.
+    Permission(
+        String,
+        crate::actor::PermRequest,
+        oneshot::Sender<Option<xherd_core::chat::PermOption>>,
+    ),
     /// Live session names from the driver (R-011).
     Reconcile(Vec<String>, bool),
     /// A saved agent's `maxLiveJobs` (R16); `None` once the agent is gone.
@@ -78,6 +85,18 @@ impl SupervisorHandle {
         let (tx, rx) = oneshot::channel();
         self.tx.send(SupMsg::Xap(call, tx)).map_err(|_| gone())?;
         rx.await.map_err(|_| gone())?
+    }
+
+    pub async fn permission(
+        &self,
+        job_id: &str,
+        req: crate::actor::PermRequest,
+    ) -> Option<xherd_core::chat::PermOption> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(SupMsg::Permission(job_id.to_string(), req, tx))
+            .ok()?;
+        rx.await.ok().flatten()
     }
 
     pub fn tick(&self, t: TickKind) {
@@ -254,6 +273,14 @@ impl Supervisor {
                 }
                 None => {
                     let _ = reply.send(Err(refuse("unknown_job", "no such job")));
+                }
+            },
+            SupMsg::Permission(id, req, reply) => match self.agents.get(&id) {
+                Some(e) => {
+                    let _ = e.tx.send(Msg::Permission(req, reply));
+                }
+                None => {
+                    let _ = reply.send(None);
                 }
             },
             SupMsg::Tick(t) => {
