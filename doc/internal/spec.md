@@ -443,7 +443,7 @@ SDD authors add a few `xherd` calls to their own commands; the SDD then works un
 | R-226 | Calls never break the SDD: exit 0 ok, 2 refused (fix and retry), 3 daemon unreachable (stop and wait); report-only calls queue offline. |
 | R-227 | xherd ships `doc/integrate-your-sdd.md` with snippets for prompt-based and script-based SDDs. |
 | R-228 | `xherd sdd check <dir>` reports the level an SDD reaches; `xherd sdd try <dir>` runs a fake job through its calls. |
-| R-229 | Compatible SDDs use the GitHub topic `xherd-sdd` and appear in the catalogue. |
+| R-229 | Compatible SDDs are listed in the plugin catalogue like any plugin (R-541): the GitHub topic `xherd-plugin` or an index file. |
 
 Example block for a prompt-based SDD command:
 
@@ -511,7 +511,7 @@ Host commands: `pr-for-branch {branch} → {url|null}`, `pr-status {url} → {st
 
 | ID | Requirement |
 |---|---|
-| R-541 | Settings → Plugins → Add: search the catalogue (GitHub topics `xherd-plugin`, `xherd-flow`, `xherd-sdd`, indexed periodically, several plugins per repo allowed, no central registry and no review), or paste a git or archive URL. |
+| R-541 | Settings → Plugins → Add: search the catalogue (one GitHub topic, `xherd-plugin`, plus `https://` index files the user adds in `pluginCatalogs`; fetched anonymously on demand and cached 24 h; several plugins per repo through an index file; no central registry and no review; choosing an entry only fills the form, the preview and digest still apply), or paste a git or archive URL. `xherd plugin search` prints the same list. |
 | R-542 | Before installing, show the manifest: kind, version, source, the commands, hooks and build steps it will run, checks, settings and secrets requested, files it will install into runtimes. The user confirms. If the manifest changes between preview and install, the install aborts. |
 | R-543 | Installs are pinned to a commit sha (or archive hash); updates are explicit and show the manifest diff. The old version stays until work using it has finished. |
 | R-544 | Installing is allowed for the local client and paired devices with full rights, never phones; `XHERD_PLUGIN_INSTALL=off` disables it on servers. |
