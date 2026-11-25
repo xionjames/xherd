@@ -592,7 +592,12 @@ pub fn apply(
                     format!("{id} was already used; pick the next id"),
                 ));
             }
-            if let Some(Gate::Docs { stage, .. }) = &a.gate {
+            // A flow with no review stage (quick) lets the ship gate ask for
+            // code: the commit gate replaces the open pr.md gate.
+            if let Some(Gate::Docs { stage, .. }) = &a.gate
+                && !(flow.stage(stage).is_some_and(|d| d.role == Role::Ship)
+                    && !flow.stages.iter().any(|d| d.role == Role::Review))
+            {
                 return Err(refuse(
                     "docs_gate_open",
                     format!("the {stage} gate is still open; wait for its approval"),
@@ -1417,6 +1422,51 @@ pub(crate) mod tests {
                 0
             )),
             "commit_id_used"
+        );
+    }
+
+    #[test]
+    fn commit_propose_at_the_ship_gate_of_a_flow_without_review() {
+        let p = pack();
+        let docs = |stage: &str| Gate::Docs {
+            stage: stage.into(),
+            role: Role::Ship,
+            files: vec![],
+            next: None,
+            needs_human: None,
+            questions: vec![],
+            asked: vec![],
+        };
+        // quick: the ship gate gives way to a commit gate (back to implement).
+        let mut a = agent();
+        a.flow = Some("quick".into());
+        a.stage = Some("ship".into());
+        a.gate = Some(docs("ship"));
+        assert!(
+            apply(
+                &mut a,
+                Some(&p),
+                &propose("C02", &["a.rs"], &[]),
+                Observed::Nothing,
+                0
+            )
+            .unwrap()
+        );
+        assert!(matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C02"));
+        assert_eq!(a.stage.as_deref(), Some("implement"));
+        // feature has a review stage: the ship gate still refuses.
+        let mut f = agent();
+        f.stage = Some("ship".into());
+        f.gate = Some(docs("ship"));
+        assert_eq!(
+            code(apply(
+                &mut f,
+                Some(&p),
+                &propose("C02", &["a.rs"], &[]),
+                Observed::Nothing,
+                0
+            )),
+            "docs_gate_open"
         );
     }
 
