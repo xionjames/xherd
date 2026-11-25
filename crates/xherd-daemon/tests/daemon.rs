@@ -373,6 +373,40 @@ async fn idle_alert_once_and_parking() {
     assert!(t.drv.calls().contains(&"stop SC-2".to_string()));
 }
 
+/// R12: a user message that starts like the pack's commands for the job's
+/// runtime gets that runtime's Enter count; other text gets one.
+#[tokio::test]
+async fn a_sent_slash_command_uses_the_runtimes_enter_count() {
+    let t = daemon(4).await;
+    let mut a = agent("SC-1", 1);
+    a.pack = Some("xherd".into());
+    a.runtime = Some("opencode".into());
+    let a = t.d.create_job(a).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Running).await;
+    t.d.report(rep(&a, "s1", ReportEvent::Stop, 1, Value::Null))
+        .await;
+    for text in ["/xherd/next", "plain words"] {
+        t.d.action("SC-1", UserAction::Send { text: text.into() })
+            .await
+            .unwrap();
+        t.d.report(rep(&a, text, ReportEvent::Stop, 10, Value::Null))
+            .await;
+    }
+    let sends: Vec<String> = t
+        .drv
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("send"))
+        .collect();
+    assert_eq!(
+        sends,
+        vec![
+            r#"send SC-1 "/xherd/next" 2"#,
+            r#"send SC-1 "plain words" 1"#
+        ]
+    );
+}
+
 #[tokio::test]
 async fn delivery_is_retried_once_when_not_acknowledged() {
     let dir = tempfile::tempdir().unwrap();

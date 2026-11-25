@@ -3030,7 +3030,8 @@ impl Actor {
                 if self.job.status == Status::Parked {
                     self.unpark_with(text.clone()).await;
                 } else {
-                    self.send(text, 1).await?;
+                    let enters = self.enters_for(text);
+                    self.send(text, enters).await?;
                 }
                 self.keep_note(text).await;
                 // A message while a question is open is its answer (xap.md `ask`).
