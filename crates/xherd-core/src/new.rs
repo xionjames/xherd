@@ -72,7 +72,9 @@ pub struct NewJob {
 }
 
 pub const FLOW_NONE: &str = "none";
-pub const DEFAULT_FLOW: &str = "feature";
+pub const FLOW_QUICK: &str = "quick";
+pub const FLOW_FEATURE: &str = "feature";
+pub const DEFAULT_FLOW: &str = FLOW_FEATURE;
 
 static KEY: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^#?[A-Z0-9][A-Z0-9_-]{0,39}$").unwrap());
