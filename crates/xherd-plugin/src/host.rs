@@ -442,11 +442,12 @@ impl Host {
 
 /// `{state, mergeable?, base?, reviewers?, title?, body?}` of `pr-status`, as
 /// a snapshot without checks. `title` and `body` are the pull request's text
-/// on the host; absent, `null` or not a string means the host did not say. State is `open`, `merged` or `closed` in any case;
-/// `mergeable` is a bool or text (`MERGEABLE`, `CONFLICTING`, `yes`, `no`…)
-/// and unknown when absent or not recognised. `reviewers` is
-/// `[{name, state}]`, state one of `pending`, `approved`,
-/// `changes-requested`, `commented`, `dismissed` (any case, `_` for `-`).
+/// on the host; absent, `null` or not a string means the host did not say.
+/// State is `open`, `merged` or `closed` in any case; `mergeable` is a bool or
+/// text (`MERGEABLE`, `CONFLICTING`, `yes`, `no`…) and unknown when absent or
+/// not recognised. `reviewers` is `[{name, state}]`, state one of `pending`,
+/// `approved`, `changes-requested`, `commented`, `dismissed` (any case, `_`
+/// for `-`).
 pub fn parse_status(v: &Value) -> Result<Snapshot, String> {
     let state = match v["state"].as_str().map(str::to_ascii_lowercase).as_deref() {
         Some("open") => PrState::Open,
@@ -506,9 +507,9 @@ pub fn parse_status(v: &Value) -> Result<Snapshot, String> {
 }
 
 /// `gh pr view --json state,mergeable,mergeStateStatus,baseRefName,
-/// reviewRequests,latestReviews,title,body` in the `pr-status` shape. A reviewer asked
-/// again after reviewing is `pending`; a merge state of `DIRTY` stands in
-/// for a `mergeable` GitHub has not computed yet.
+/// reviewRequests,latestReviews,title,body` in the `pr-status` shape. A
+/// reviewer asked again after reviewing is `pending`; a merge state of `DIRTY`
+/// stands in for a `mergeable` GitHub has not computed yet.
 fn github_status(v: &Value) -> Value {
     let mut reviewers: Vec<Value> = Vec::new();
     let requested = v["reviewRequests"].as_array().into_iter().flatten();
