@@ -202,6 +202,16 @@ fn host_plugins(
         .collect()
 }
 
+/// What `Daemon::chat_subscribe` hands a chat client.
+pub struct ChatSubscription {
+    pub job: Job,
+    /// How many transcript lines were not understood so far.
+    pub unknown: u64,
+    /// The logged events after the client's `after`, oldest first.
+    pub replay: Vec<xherd_core::chat::ChatEvent>,
+    pub rx: tokio::sync::broadcast::Receiver<chat::ChatMsg>,
+}
+
 /// Cheap to clone; every field is shared.
 #[derive(Clone)]
 pub struct Daemon {
@@ -238,6 +248,10 @@ pub struct Daemon {
     /// Held while `secrets.json` is read, changed and saved, so two saves
     /// (Git access tokens, plugin secrets) never drop each other's change.
     pub secrets_write: Arc<std::sync::Mutex<()>>,
+    /// The chat clients' channels, one per job (the actors publish to them).
+    pub chat: Arc<chat::ChatHubs>,
+    /// Each runtime plugin's kit, by name (`chat_subscribe` asks for `chat`).
+    pub runtimes: Arc<std::collections::BTreeMap<String, RuntimeKit>>,
     /// The same for `config.json` (Settings and Git access both save it).
     pub config_write: Arc<std::sync::Mutex<()>>,
     /// Held while saved agents are changed (create, edit, archive, delete, import).
@@ -382,6 +396,7 @@ impl Daemon {
             },
             pr_poll_override,
         ));
+        let chat_hubs = Arc::new(chat::ChatHubs::default());
         let runtimes = Arc::new(create::runtime_kits(
             &plugins,
             &config.workspace_root().join("worktrees"),
@@ -408,10 +423,10 @@ impl Daemon {
             hosts,
             secrets: paths.secrets(),
             toolchains: Arc::new(toolchains),
-            runtimes,
+            runtimes: runtimes.clone(),
             skills: paths.skills(),
             paths: paths.clone(),
-            chat: Arc::new(chat::ChatHubs::default()),
+            chat: chat_hubs.clone(),
         };
         let agents = store.list_jobs().await?;
         let limits = store
@@ -454,6 +469,8 @@ impl Daemon {
             plugin_state: Arc::new(std::sync::Mutex::new(loaded_plugins.clone())),
             loaded_plugins: Arc::new(loaded_plugins),
             restart: Arc::default(),
+            chat: chat_hubs,
+            runtimes,
         };
         d.import_ledgers().await;
         d.repair_restored().await;
@@ -520,6 +537,48 @@ impl Daemon {
 
     pub async fn action(&self, who: &str, a: UserAction) -> Result<Job, ActionError> {
         self.sup.action(who, a).await
+    }
+
+    /// A chat client for a job (R6): subscribed first, then the log's events
+    /// after `after` read, so no event falls between them (a live event with
+    /// a `seq` the replay already holds is the client's to skip). A runtime
+    /// without `chat` is `chat_unsupported`.
+    pub async fn chat_subscribe(
+        &self,
+        who: &str,
+        after: u64,
+    ) -> Result<ChatSubscription, ActionError> {
+        let job = self.action(who, UserAction::Get).await?;
+        let runtime = job
+            .runtime
+            .as_deref()
+            .unwrap_or(xherd_flow::approve::DEFAULT_RUNTIME);
+        let has_chat = self
+            .runtimes
+            .get(runtime)
+            .and_then(|k| k.terminal.as_ref())
+            .is_some_and(|t| t.chat.is_some());
+        if !has_chat {
+            return Err(ActionError {
+                code: "chat_unsupported",
+                message: format!("{} has no chat view ({runtime})", job.name),
+            });
+        }
+        let rx = self.chat.subscribe(&job.id);
+        let log = chat::ChatLog::new(&self.paths, &job.id);
+        let (unknown, replay) =
+            tokio::task::spawn_blocking(move || (log.load_state().unknown, log.replay(after)))
+                .await
+                .map_err(|e| ActionError {
+                    code: "io",
+                    message: e.to_string(),
+                })?;
+        Ok(ChatSubscription {
+            job,
+            unknown,
+            replay,
+            rx,
+        })
     }
 
     /// Change an agent's tool-permission mode (R-002a). The running session

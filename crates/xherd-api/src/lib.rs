@@ -20,6 +20,7 @@ use xherd_core::xap::XapCall;
 use xherd_daemon::support::{SCOPE_HOOKS, SCOPE_XAP, TOKEN_AGENT, TOKEN_JOB, TOKEN_USER};
 use xherd_daemon::{ActionError, Daemon, UserAction, hash_token};
 
+mod chat;
 mod term;
 mod ui;
 mod view;
@@ -46,6 +47,7 @@ pub fn router(d: Daemon) -> Router {
         .route("/api/v1/healthz", get(healthz))
         .route("/api/v1/ws", get(ws::state_stream))
         .route("/api/v1/ws/term/{id}", get(term::terminal))
+        .route("/api/v1/ws/chat/{id}", get(chat::chat))
         .route("/api/v1/ws/setup/{id}", get(term::setup_terminal))
         .route("/api/v1/state", get(state))
         .route("/api/v1/backups", get(backups).post(new_backup))
@@ -283,6 +285,7 @@ impl From<ActionError> for ApiError {
             | "bad_memory" | "unknown_skill" | "bad_fallback" | "bad_assignment"
             | "mixed_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_agent" | "no_such_skill" | "action_unknown" => StatusCode::NOT_FOUND,
+            "chat_unsupported" => StatusCode::CONFLICT,
             "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
             "plugin_install_off" => StatusCode::FORBIDDEN,
             "unknown_plugin" => StatusCode::NOT_FOUND,
@@ -522,6 +525,14 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
             {
                 info["view"] = json!({"entry": entry});
             }
+            if p.manifest.kind == xherd_plugin::Kind::Runtime {
+                let chat = xherd_plugin::runtime::Terminal::of(&p.manifest)
+                    .is_ok_and(|t| t.chat.is_some());
+                info["chat"] = json!(chat);
+                if chat {
+                    info["slashCommands"] = slash_commands(&d, p.name());
+                }
+            }
             info
         })
         .collect();
@@ -538,6 +549,25 @@ async fn state(_: User, State(d): State<Daemon>) -> ApiResult<Json<Value>> {
         "flows": flows(&d),
         "sandbox": d.sandbox,
     })))
+}
+
+/// The composer's slash menu for a runtime, by pack: what `xherd install`
+/// writes for it, plus the runtime's own `/compact` and `/clear` (R12).
+fn slash_commands(d: &Daemon, runtime: &str) -> Value {
+    let mut by_pack = serde_json::Map::new();
+    for (name, pack) in d.packs.iter() {
+        let files: Vec<(&str, &str)> = d.pack_sources.get(name).map_or_else(Vec::new, |s| {
+            s.files
+                .iter()
+                .map(|(p, t)| (p.as_str(), t.as_str()))
+                .collect()
+        });
+        let mut list = pack.slash_commands(runtime, &files);
+        list.push("/compact".into());
+        list.push("/clear".into());
+        by_pack.insert(name.clone(), json!(list));
+    }
+    Value::Object(by_pack)
 }
 
 /// Every pack flow with its stages, for progress lines.
