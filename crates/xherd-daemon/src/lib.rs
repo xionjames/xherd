@@ -18,6 +18,7 @@ pub mod actions;
 pub mod actor;
 pub mod agents;
 pub mod backup;
+pub mod chat;
 pub mod checks;
 mod create;
 pub mod driver;
