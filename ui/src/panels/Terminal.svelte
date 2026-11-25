@@ -4,12 +4,12 @@
   import Callout from '../components/Callout.svelte';
   import ChatView from '../components/ChatView.svelte';
   import ChatComposer from '../components/ChatComposer.svelte';
-  import Seg from '../components/Seg.svelte';
   import WaitingCard from '../components/WaitingCard.svelte';
   import type { Job, JobView } from '../lib/types';
   import { post } from '../lib/api';
   import { app, upsertJob } from '../lib/store.svelte';
-  import { cardFromWaiting, jobView, saveJobView } from '../lib/chat';
+  import { cardFromWaiting } from '../lib/chat';
+  import { chooseView, viewOf } from '../lib/jobView.svelte';
   import { showError } from '../lib/errors.svelte';
 
   let { agent }: { agent: Job } = $props();
@@ -25,11 +25,8 @@
   // the same session; the choice is kept per job in this browser.
   const hasChat = $derived(!!app.state?.plugins.find((p) => p.name === agent.runtime)?.chat);
   const configView = $derived((app.state?.config.ui as { jobView?: unknown } | undefined)?.jobView);
-  let chosen = $state<JobView | null>(null);
-  const view = $derived(chosen ?? jobView(id, hasChat, configView));
+  const view = $derived(viewOf(id, hasChat, configView));
   const chat = $derived(hasChat && view === 'chat');
-  function pick(v: JobView) { chosen = v; saveJobView(id, v); }
-  $effect(() => { void id; chosen = null; });
 
   let text = $state('');
   let busy = $state(false);
@@ -61,8 +58,11 @@
 
 <div class="stack">
   {#if hasChat}
-    <Seg label="View" value={view} onchange={pick}
-      options={[{ value: 'chat', label: 'Chat' }, { value: 'terminal', label: 'Terminal' }]} />
+    <div class="row">
+      <button class="btn ghost sm" onclick={() => chooseView(id, chat ? 'terminal' : 'chat')}>
+        {chat ? 'Open the terminal' : 'Open the chat'}
+      </button>
+    </div>
   {/if}
   <!-- The hook holds the request, so Claude Code shows no prompt in the terminal: the cards are here too. -->
   {#if !chat}
