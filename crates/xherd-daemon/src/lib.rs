@@ -27,6 +27,7 @@ pub mod install;
 pub mod notifier;
 pub mod open_in;
 pub mod packs;
+pub mod plugin_catalog;
 mod plugin_dirs;
 pub mod plugin_install;
 pub mod pr_round;
@@ -95,6 +96,8 @@ pub struct Options {
     /// start installs the pack for the runtimes switched on, then refreshes
     /// the hook files of live jobs; `None` (tests): neither runs.
     pub install_env: Option<InstallEnv>,
+    /// The `curl` the plugin catalogue runs; tests point it at a script.
+    pub catalog_curl: String,
 }
 
 /// Environment lookup for pack destinations (see [`Options::install_env`]).
@@ -118,6 +121,7 @@ impl Options {
             plugin_install: true,
             allow_local_plugin_sources: false,
             install_env: None,
+            catalog_curl: "curl".into(),
         }
     }
 }
@@ -249,6 +253,10 @@ pub struct Daemon {
     pub uploads: Arc<tokio::sync::Mutex<()>>,
     /// Held while plugins are installed, updated or removed.
     pub plugins_write: Arc<tokio::sync::Mutex<()>>,
+    /// See `Options::catalog_curl`.
+    pub catalog_curl: String,
+    /// Held while the plugin catalogue is read, fetched and saved.
+    pub catalog_lock: Arc<tokio::sync::Mutex<()>>,
     /// See `Options::plugin_install`.
     pub plugin_install: bool,
     /// See `Options::allow_local_plugin_sources`.
@@ -446,6 +454,8 @@ impl Daemon {
             agents_write: Arc::default(),
             profiles_write: Arc::default(),
             plugins_write: Arc::default(),
+            catalog_curl: opts.catalog_curl,
+            catalog_lock: Arc::default(),
             uploads: Arc::default(),
             plugin_install: opts.plugin_install,
             allow_local_plugin_sources: opts.allow_local_plugin_sources,
