@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use xherd_core::chat::{ChatBody, ChatEvent, Source, ToolStatus};
+use xherd_core::chat::{ChatBody, ChatEvent, NoticeKind, Source, ToolStatus};
 use xherd_core::paths::Paths;
 use xherd_core::report::{Report, ReportEvent};
 use xherd_core::{Job, Status};
@@ -246,4 +246,85 @@ async fn a_runtime_without_a_chat_view_is_not_followed() {
     append(&t.transcript, &user("hello"));
     events(&t.d, &t.job, 1).await;
     assert!(ChatLog::new(&t.d.paths, &other.id).replay(0).is_empty());
+}
+
+#[tokio::test]
+async fn a_new_session_is_read_after_the_old_one_is_drained_with_a_notice() {
+    let t = running().await;
+    append(&t.transcript, &user("first"));
+    events(&t.d, &t.job, 1).await;
+    // A line written to the old session is not read before the switch.
+    append(&t.transcript, &user("last words"));
+    t.d.report(report(
+        &t.job,
+        "r2",
+        ReportEvent::SessionStart,
+        2,
+        json!({"session_id": "s2"}),
+    ))
+    .await;
+    let second = t.transcript.with_file_name("s2.jsonl");
+    append(&second, &user("again"));
+    let e = events(&t.d, &t.job, 4).await;
+    assert!(matches!(&e[1].body, ChatBody::User { text, .. } if text == "last words"));
+    assert_eq!(e[1].session.as_deref(), Some("s1"));
+    assert!(matches!(
+        &e[2].body,
+        ChatBody::Notice {
+            notice: NoticeKind::NewSession,
+            ..
+        }
+    ));
+    assert!(matches!(&e[3].body, ChatBody::User { text, .. } if text == "again"));
+    assert_eq!(e[3].session.as_deref(), Some("s2"));
+    assert_eq!(e.iter().map(|e| e.seq).collect::<Vec<_>>(), [1, 2, 3, 4]);
+}
+
+#[tokio::test]
+async fn leaving_the_live_states_reads_what_is_left_and_stops() {
+    let t = running().await;
+    append(&t.transcript, &user("before"));
+    events(&t.d, &t.job, 1).await;
+    append(&t.transcript, &user("after"));
+    t.d.action("SC-1", UserAction::PauseNow).await.unwrap();
+    wait_status(&t.d, "SC-1", Status::Paused).await;
+    // No tick comes for a paused job: the drain alone reads the line.
+    let log = ChatLog::new(&t.d.paths, &t.job.id);
+    for _ in 0..400 {
+        if log.replay(0).len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let e = log.replay(0);
+    assert!(matches!(&e[1].body, ChatBody::User { text, .. } if text == "after"));
+    // Stopped: later writes are not followed.
+    append(&t.transcript, &user("never"));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(log.replay(0).len(), 2);
+}
+
+#[tokio::test]
+async fn a_log_past_its_cap_is_folded_and_the_newest_events_stay() {
+    let t = running().await;
+    let big = "x".repeat(200 * 1024);
+    for i in 0..24 {
+        append(&t.transcript, &user(&format!("{i} {big}")));
+    }
+    let log = ChatLog::new(&t.d.paths, &t.job.id);
+    for _ in 0..800 {
+        t.d.sup.tick(TickKind::ScreenScan);
+        if log.load_state().seq >= 24 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(log.load_state().seq, 24);
+    let e = log.replay(0);
+    assert!(e.len() < 24, "the oldest events were dropped");
+    assert!(matches!(
+        &e.last().unwrap().body,
+        ChatBody::User { text, .. } if text.starts_with("23 ")
+    ));
+    assert!(e[0].seq > 1);
 }

@@ -695,6 +695,7 @@ pub fn spawn(agent: Job, env: Env) -> AgentTx {
         push_seq: 0,
         push_applied: 0,
         chat: None,
+        chat_resumed: false,
     };
     tokio::spawn(actor.run(rx));
     tx
@@ -759,6 +760,9 @@ struct Actor {
     /// The Chat view's follower of the session's transcript (R4). In memory;
     /// rebuilt from the chat log after a restart.
     chat: Option<ChatFollow>,
+    /// The session being followed was started by a runtime resume: the notice
+    /// of its switch says so (R4).
+    chat_resumed: bool,
 }
 
 /// Most bytes of the transcript one read takes.
@@ -777,6 +781,9 @@ struct ChatFollow {
     partial: Vec<u8>,
     /// A read is in flight: one at a time.
     reading: bool,
+    /// The session changed or the job left the live states: read to the end
+    /// of the file, then switch (or stop).
+    leaving: bool,
     mapper: xherd_core::chat::Mapper,
     log: crate::chat::ChatLog,
     state: crate::chat::State,
@@ -1107,6 +1114,10 @@ impl Actor {
                 id: self.job.id.clone(),
                 to: self.job.status,
             });
+            // No tick or hook reads the transcript any more: read what is left (R4).
+            if before.is_live() && !self.job.status.is_live() {
+                self.chat_poll();
+            }
         }
     }
 
@@ -1285,12 +1296,7 @@ impl Actor {
     /// `chat`; one read at a time, slow work spawned and back as
     /// `WorkResult::ChatRead`.
     fn chat_poll(&mut self) {
-        if !self.job.status.is_live() {
-            return;
-        }
-        let Some(session) = self.job.session.clone() else {
-            return;
-        };
+        let live = self.job.status.is_live();
         let Some(resume) = self
             .runtime_kit()
             .filter(|k| k.terminal.as_ref().is_some_and(|t| t.chat.is_some()))
@@ -1298,13 +1304,24 @@ impl Actor {
         else {
             return;
         };
-        if self.chat.as_ref().is_none_or(|f| f.session != session) {
+        if self.chat.is_none() {
+            let (true, Some(session)) = (live, self.job.session.clone()) else {
+                return;
+            };
             self.chat = Some(self.new_chat_follow(&session));
         }
-        let Some(f) = self.chat.as_mut().filter(|f| !f.reading) else {
+        // A session change or the end of the live states: the followed file
+        // is read to its end first (no tick or hook comes after that).
+        let leaving = self.chat_leaving();
+        let Some(f) = self.chat.as_mut() else {
             return;
         };
+        f.leaving = leaving;
+        if f.reading {
+            return;
+        }
         f.reading = true;
+        let session = f.session.clone();
         let (file, offset) = (f.file.clone(), f.offset);
         let (tx, generation) = (self.tx.clone(), self.job.generation);
         tokio::spawn(async move {
@@ -1330,6 +1347,17 @@ impl Actor {
                 },
             });
         });
+    }
+
+    /// The follower's file is to be read to its end and left: the job is no
+    /// longer live, or its session is another one (R4).
+    fn chat_leaving(&self) -> bool {
+        !self.job.status.is_live()
+            || self
+                .job
+                .session
+                .as_deref()
+                .is_some_and(|s| self.chat.as_ref().is_some_and(|f| f.session != s))
     }
 
     /// The follower of `session`, resumed from the chat log: the position is
@@ -1391,6 +1419,7 @@ impl Actor {
             offset,
             partial: Vec::new(),
             reading: false,
+            leaving: false,
             mapper,
             log,
             state,
@@ -1407,9 +1436,7 @@ impl Actor {
         offset: u64,
         read: Option<(Vec<u8>, u64)>,
     ) {
-        use xherd_core::chat::{ChatBody, ChatEvent, NoticeKind};
-        let now = self.now();
-        let job_id = self.job.id.clone();
+        use xherd_core::chat::{ChatBody, NoticeKind};
         let Some(f) = self
             .chat
             .as_mut()
@@ -1422,6 +1449,10 @@ impl Actor {
             f.file = file;
         }
         let Some((bytes, len)) = read else {
+            // No transcript to read: nothing is left to drain.
+            if self.chat_leaving() {
+                self.chat_finish();
+            }
             return;
         };
         let mut bodies: Vec<(ChatBody, Option<u64>)> = Vec::new();
@@ -1460,6 +1491,23 @@ impl Actor {
             }
             f.offset = new_offset;
         }
+        self.chat_emit(&session, bodies);
+        if again {
+            self.chat_poll();
+        } else if self.chat_leaving() {
+            self.chat_finish();
+        }
+    }
+
+    /// Logs and publishes bodies as the followed session's events: one append
+    /// and one state save for the batch (R4, R5).
+    fn chat_emit(&mut self, session: &str, bodies: Vec<(xherd_core::chat::ChatBody, Option<u64>)>) {
+        use xherd_core::chat::{ChatBody, ChatEvent};
+        let now = self.now();
+        let job_id = self.job.id.clone();
+        let Some(f) = self.chat.as_mut() else {
+            return;
+        };
         let unknown_before = f.state.unknown;
         let mut events = Vec::new();
         for (body, end) in bodies {
@@ -1470,12 +1518,12 @@ impl Actor {
             events.push(ChatEvent {
                 seq: f.state.seq,
                 at: now,
-                session: Some(session.clone()),
+                session: Some(session.to_string()),
                 end,
                 body,
             });
         }
-        f.state.positions.insert(session, f.offset);
+        f.state.positions.insert(session.to_string(), f.offset);
         match f.log.append(&events) {
             Ok(dropped) => f.mapper.forget(dropped.iter().map(String::as_str)),
             Err(e) => tracing::warn!(job = %job_id, error = %e, "chat log not written"),
@@ -1496,9 +1544,31 @@ impl Actor {
                 .chat
                 .publish(&job_id, crate::chat::ChatMsg::Unknown(unknown));
         }
-        if again {
-            self.chat_poll();
-        }
+    }
+
+    /// The followed file was read to its end and is left: the follower stops
+    /// (the job is no longer live) or moves to the job's new session, with a
+    /// notice saying why (an Ask, a runtime resume, a new session) (R4).
+    fn chat_finish(&mut self) {
+        use xherd_core::chat::{ChatBody, NoticeKind};
+        self.chat = None;
+        let (true, Some(session)) = (self.job.status.is_live(), self.job.session.clone()) else {
+            return;
+        };
+        let (notice, text) = if self.job.ask_hold.is_some() {
+            (NoticeKind::Ask, "A question is answered in a new session")
+        } else if std::mem::take(&mut self.chat_resumed) {
+            (NoticeKind::Resume, "The session was resumed")
+        } else {
+            (NoticeKind::NewSession, "A new session started")
+        };
+        self.chat = Some(self.new_chat_follow(&session));
+        let body = ChatBody::Notice {
+            notice,
+            text: text.into(),
+        };
+        self.chat_emit(&session, vec![(body, None)]);
+        self.chat_poll();
     }
 
     /// List the branch's commits since the job's base (slow: spawned, back
@@ -3499,6 +3569,7 @@ impl Actor {
             (Some(id), Some(r)) => match r.argv(&id, &xherd_core::runner::agent_env).await {
                 Some(extra) => {
                     self.resume_unconfirmed = true;
+                    self.chat_resumed = true;
                     // A continued session takes its prompt from `promptEnv`
                     // or the resume `promptArgs` when the runtime has them,
                     // else it is typed.
