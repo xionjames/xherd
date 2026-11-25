@@ -4,6 +4,7 @@
 pub mod action;
 pub mod agent_def;
 pub mod autonomy;
+pub mod chat;
 pub mod config;
 pub mod container;
 pub mod domain;
