@@ -18,7 +18,7 @@ Cite requirement ids (`R-009`) in doc comments where code implements one.
 
 - **Job**: one unit of work (worktree + tmux session + branch). Code: `Job`, table `jobs`, `/api/v1/jobs/…`, `XHERD_JOB_ID`, `.xherd/job.json`.
 - **Agent**: a saved persona (`AgentDef`: runtime, model, mode, autonomy, instructions, skills, memory). A flow stage can be assigned an agent; `Job.agents` holds snapshots, `Job.current_agent` the one running.
-- **Flow / pack / stage**: a flow pack (`packs/xherd`) defines flows (`feature`, `bugfix`), each a list of stages with gates.
+- **Flow / pack / stage**: a flow pack (`packs/xherd`) defines flows (`feature`, `bugfix`, `quick`), each a list of stages with gates. `quick` (implement, ship, pr-review, pr: one commit gate, no spec/review) can be promoted to `feature` by the user (`Daemon::promote`, `xherd promote`, never an agent).
 - **Action**: a named command a job registers (`xherd action add`) and the user runs in its own tmux session `xherd-<job>-act-<id>`; `service` or `task`. Code: `xherd_core::action` (`ActionDef`, `JobAction`), `Job.actions`/`port_base`, `Profile.actions`, daemon `actions.rs`, `/api/v1/jobs/…/actions`. Not a flow command or a saved agent.
 - **Runtime**: a plugin that provides the coding CLI (`claude-code`, `opencode`, `codex`). The OS user that runs sessions is the "agents' user" (`as_agent`, `XHERD_AGENT_*` are about that user, not saved agents).
 
