@@ -3,6 +3,7 @@
   import TermView from '../components/TermView.svelte';
   import Callout from '../components/Callout.svelte';
   import ChatView from '../components/ChatView.svelte';
+  import ChatComposer from '../components/ChatComposer.svelte';
   import Seg from '../components/Seg.svelte';
   import type { Job, JobView } from '../lib/types';
   import { post } from '../lib/api';
@@ -63,6 +64,7 @@
       options={[{ value: 'chat', label: 'Chat' }, { value: 'terminal', label: 'Terminal' }]} />
   {/if}
   {#if chat}<ChatView {agent} />{/if}
+  {#if chat && live}<ChatComposer {agent} />{/if}
   {#if agent.askHold}
     <Callout tone="info">
       <div class="row" style="justify-content:space-between">
