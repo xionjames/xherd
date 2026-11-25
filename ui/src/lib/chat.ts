@@ -2,7 +2,7 @@
 // draws, the Chat / Terminal choice, the slash menu and path links.
 
 import { pathUnder } from './termLinks';
-import type { ChatEvent, JobView, PlanItem, Resolution } from './types';
+import type { ChatEvent, ChatQuestion, JobView, PermOption, PlanItem, Resolution, Waiting } from './types';
 
 /** An event the list shows; `xherd` marks a message the flow typed, not the person. */
 export type Item = ChatEvent & { xherd?: boolean };
@@ -103,4 +103,54 @@ export function linkPaths(html: string, workdir: string, href: (path: string) =>
       });
     })
     .join('');
+}
+
+/** What `WaitingCard` draws: a permission or a question with how it stands. */
+export interface Card {
+  kind: 'permission' | 'question';
+  id: string;
+  /** A permission's tool, or a question's header. */
+  title: string;
+  /** A permission's one-line summary, or a question's text. */
+  text: string;
+  options: PermOption[];
+  questions: ChatQuestion[];
+  /** A question with buttons: one single-select question (R21). */
+  answerable: boolean;
+  res: Resolution;
+}
+
+export function cardFromEvent(e: ChatEvent): Card | null {
+  if (e.kind === 'permission') {
+    return { kind: 'permission', id: e.id, title: e.tool, text: e.summary, options: e.options, questions: [], answerable: true, res: e };
+  }
+  if (e.kind === 'question') {
+    const q = e.questions[0];
+    return { kind: 'question', id: e.id, title: q?.header || 'Question', text: q?.question ?? '', options: [], questions: e.questions, answerable: e.answerable, res: e };
+  }
+  return null;
+}
+
+/** A card for what `Job.waiting` lists: always waiting. */
+export function cardFromWaiting(w: Waiting): Card {
+  const q = w.questions?.[0];
+  return w.kind === 'permission'
+    ? { kind: 'permission', id: w.id, title: w.tool ?? 'Tool', text: w.summary, options: w.options ?? [], questions: [], answerable: true, res: { state: 'waiting' } }
+    : { kind: 'question', id: w.id, title: q?.header || 'Question', text: q?.question ?? w.summary, options: [], questions: w.questions ?? [], answerable: w.answerable, res: { state: 'waiting' } };
+}
+
+export const PERM_LABEL: Record<PermOption, string> = { allow: 'Allow', 'allow-always': 'Always allow', deny: 'Deny' };
+
+/** The buttons of a card: one per option while it waits, none after.
+ * `value` is what the route takes (the answer, or the 0-based option). */
+export function cardButtons(c: Card): { label: string; value: PermOption | number }[] {
+  if (c.res.state !== 'waiting' || !c.answerable) return [];
+  if (c.kind === 'permission') return c.options.map((o) => ({ label: PERM_LABEL[o], value: o }));
+  return (c.questions[0]?.options ?? []).map((o, i) => ({ label: o.label, value: i }));
+}
+
+/** The line under a waiting card that cannot be answered here. */
+export function cardNote(c: Card): string | null {
+  if (c.res.state === 'waiting' && !c.answerable) return 'Answer in the terminal.';
+  return resolutionText(c.res);
 }

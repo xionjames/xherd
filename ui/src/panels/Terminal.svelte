@@ -5,10 +5,11 @@
   import ChatView from '../components/ChatView.svelte';
   import ChatComposer from '../components/ChatComposer.svelte';
   import Seg from '../components/Seg.svelte';
+  import WaitingCard from '../components/WaitingCard.svelte';
   import type { Job, JobView } from '../lib/types';
   import { post } from '../lib/api';
   import { app, upsertJob } from '../lib/store.svelte';
-  import { jobView, saveJobView } from '../lib/chat';
+  import { cardFromWaiting, jobView, saveJobView } from '../lib/chat';
   import { showError } from '../lib/errors.svelte';
 
   let { agent }: { agent: Job } = $props();
@@ -62,6 +63,10 @@
   {#if hasChat}
     <Seg label="View" value={view} onchange={pick}
       options={[{ value: 'chat', label: 'Chat' }, { value: 'terminal', label: 'Terminal' }]} />
+  {/if}
+  <!-- The hook holds the request, so Claude Code shows no prompt in the terminal: the cards are here too. -->
+  {#if !chat}
+    {#each agent.waiting ?? [] as w (w.id)}<WaitingCard jobId={id} card={cardFromWaiting(w)} from="terminal" />{/each}
   {/if}
   {#if chat}<ChatView {agent} />{/if}
   {#if chat && live}<ChatComposer {agent} />{/if}

@@ -16,11 +16,18 @@
   import PageHead from '../components/PageHead.svelte';
   import Seg from '../components/Seg.svelte';
   import StageTrack from '../components/StageTrack.svelte';
+  import WaitingCard from '../components/WaitingCard.svelte';
+  import { cardFromWaiting } from '../lib/chat';
   import type { Job } from '../lib/types';
 
   $effect(() => { refresh(); });
 
-  const waiting = $derived(waitingAgents());
+  // A question does not block its job, so a job with something waiting joins the list too.
+  const waiting = $derived.by(() => {
+    const need = waitingAgents();
+    const extra = (app.state?.jobs ?? []).filter((j) => j.waiting?.length && !need.includes(j));
+    return [...need, ...extra].sort((a, b) => a.statusSince - b.statusSince);
+  });
   const todos = $derived(dueTodos());
   const unseen = $derived(unseenApprovals());
   const flows = $derived(app.state?.flows ?? []);
@@ -109,6 +116,7 @@
             <div class="row"><StageTrack job={j} {flows} />{#if stageNow(j, flows)}<span class="muted" style="font-size:12px">at {stageNow(j, flows)?.name}</span>{/if}</div>
             <p class="wrap-any" style="margin:0" class:mono={j.gate?.kind === 'commit'}>{waitText(j)}</p>
             <p class="hint" style="margin:0">{waitMeta(j)}</p>
+            {#each j.waiting ?? [] as w (w.id)}<WaitingCard jobId={j.id} card={cardFromWaiting(w)} from="inbox" />{/each}
           </div>
           <div class="dec"><button class="btn gate" onclick={() => go(`/jobs/${j.name}`, { s: decisionTab(j) })}>{actionLabel(j)}</button><span class="hint">Opens the job on the tab that holds the decision.</span></div>
         {:else if sel?.kind === 'todo'}

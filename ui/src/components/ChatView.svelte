@@ -4,7 +4,8 @@
   import { render } from '../lib/markdown';
   import { downloadUrl } from '../lib/api';
   import { href } from '../lib/router.svelte';
-  import { fold, linkPaths, resolutionText, runningTool } from '../lib/chat';
+  import { cardFromEvent, fold, linkPaths, runningTool } from '../lib/chat';
+  import WaitingCard from './WaitingCard.svelte';
   import type { ChatEvent, Job } from '../lib/types';
 
   let { agent }: { agent: Job } = $props();
@@ -137,11 +138,7 @@
       {:else if e.kind === 'notice'}
         <div class="notice">{e.text}</div>
       {:else if e.kind === 'permission' || e.kind === 'question'}
-        <!-- Answerable cards come with T24; a resolved one shows how it ended. -->
-        <div class="notice">
-          {e.kind === 'permission' ? `${e.tool}: ${e.summary}` : (e.questions[0]?.question ?? 'Question')}
-          {#if resolutionText(e)} · {resolutionText(e)}{:else} · waiting for an answer{/if}
-        </div>
+        <WaitingCard jobId={id} card={cardFromEvent(e)!} from="chat" />
       {/if}
     {/each}
     {#if working}

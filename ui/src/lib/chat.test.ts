@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { fold, jobView, linkPaths, resolutionText, runningTool, saveJobView, slashMatches } from './chat';
+import { cardButtons, cardFromEvent, cardFromWaiting, cardNote, fold, jobView, linkPaths, resolutionText, runningTool, saveJobView, slashMatches } from './chat';
 import type { ChatBody, ChatEvent } from './types';
 
 let seq = 0;
@@ -115,5 +115,47 @@ describe('linkPaths (R9)', () => {
   });
   it('does not take the closing parenthesis or a final dot', () => {
     expect(linkPaths('<p>(/w/job/a.rs).</p>', wd, href)).toContain('>/w/job/a.rs</a>).');
+  });
+});
+
+describe('cards (R23)', () => {
+  const perm = (extra: object = {}) =>
+    ev({ kind: 'permission', id: 'p1', tool: 'Bash', summary: 'ls', options: ['allow', 'allow-always', 'deny'], state: 'waiting', ...extra } as ChatBody);
+  const question = (answerable: boolean, extra: object = {}) =>
+    ev({
+      kind: 'question', id: 'q1', answerable, state: 'waiting',
+      questions: [{ question: 'Which?', header: 'Pick', multiSelect: false, options: [{ label: 'A', description: '' }, { label: 'B', description: '' }] }],
+      ...extra,
+    } as ChatBody);
+
+  it('offers one button per option while a permission waits', () => {
+    const c = cardFromEvent(perm())!;
+    expect(cardButtons(c)).toEqual([
+      { label: 'Allow', value: 'allow' }, { label: 'Always allow', value: 'allow-always' }, { label: 'Deny', value: 'deny' },
+    ]);
+    expect(cardNote(c)).toBeNull();
+  });
+  it('offers the question options by index only when answerable', () => {
+    expect(cardButtons(cardFromEvent(question(true))!)).toEqual([{ label: 'A', value: 0 }, { label: 'B', value: 1 }]);
+    const c = cardFromEvent(question(false))!;
+    expect(cardButtons(c)).toEqual([]);
+    expect(cardNote(c)).toBe('Answer in the terminal.');
+  });
+  it('has no buttons once resolved and says how it ended', () => {
+    const a = cardFromEvent(perm({ state: 'answered', answer: 'allow', from: 'inbox' }))!;
+    expect(cardButtons(a)).toEqual([]);
+    expect(cardNote(a)).toBe('allow · in the Inbox');
+    expect(cardNote(cardFromEvent(perm({ state: 'timed-out' }))!)).toContain('No answer in time');
+    expect(cardNote(cardFromEvent(question(true, { state: 'in-terminal' }))!)).toBe('Answered in the terminal');
+  });
+  it('builds a waiting card from Job.waiting', () => {
+    const c = cardFromWaiting({ id: 'p2', kind: 'permission', since: 1, tool: 'Edit', summary: 'a.rs', options: ['allow', 'deny'], answerable: true });
+    expect(c).toMatchObject({ title: 'Edit', text: 'a.rs' });
+    expect(cardButtons(c).map((b) => b.value)).toEqual(['allow', 'deny']);
+    const q = cardFromWaiting({ id: 'q2', kind: 'question', since: 1, summary: 'Which?', answerable: false, questions: [] });
+    expect(cardNote(q)).toBe('Answer in the terminal.');
+  });
+  it('is not a card for other events', () => {
+    expect(cardFromEvent(ev({ kind: 'assistant', text: 'x' }))).toBeNull();
   });
 });
