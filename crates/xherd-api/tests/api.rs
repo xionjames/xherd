@@ -2157,6 +2157,121 @@ async fn plugin_install_off_is_forbidden() {
     );
 }
 
+/// A fake `curl` that logs nothing and answers by URL from `dir` (`<key>.body`,
+/// key = the URL with every non-alphanumeric turned into `_`), status 200.
+fn fake_catalog_curl(dir: &std::path::Path, answers: &[(&str, String)]) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    for (url, body) in answers {
+        let k: String = url
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        std::fs::write(dir.join(format!("{k}.body")), body).unwrap();
+    }
+    let script = dir.join("curl");
+    std::fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+for a in "$@"; do URL="$a"; done
+K=$(printf %s "$URL" | tr -c 'A-Za-z0-9' '_')
+if [ ! -f '{d}/'"$K.body" ]; then echo "curl: (6) Could not resolve host" >&2; exit 6; fi
+printf 'HTTP/2 200\r\n\r\n' >&2
+cat '{d}/'"$K.body"
+"#,
+            d = dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script.display().to_string()
+}
+
+#[tokio::test]
+async fn plugin_catalog_route() {
+    const GH: &str =
+        "https://api.github.com/search/repositories?q=topic:xherd-plugin&sort=stars&per_page=100";
+    const INDEX: &str = "https://example.org/xherd-catalog.json";
+    let fake = tempfile::tempdir().unwrap();
+    let github = json!({"items": [
+        {"name": "xherd-forgejo", "owner": {"login": "acme"}, "description": "Forgejo host",
+         "clone_url": "https://github.com/acme/xherd-forgejo.git", "stargazers_count": 3,
+         "pushed_at": "2026-10-01T10:00:00Z"},
+        {"name": "xherd-other", "owner": {"login": "bob"}, "description": "Something else",
+         "clone_url": "https://github.com/bob/xherd-other.git", "stargazers_count": 1,
+         "pushed_at": "2026-10-02T10:00:00Z"}
+    ]})
+    .to_string();
+    // The same repository again, listed by the second source: the first wins.
+    let index = json!({"xherdCatalog": 1, "plugins": [
+        {"name": "dup", "url": "https://github.com/acme/xherd-forgejo", "description": "later"}
+    ]})
+    .to_string();
+    let curl = fake_catalog_curl(fake.path(), &[(GH, github), (INDEX, index)]);
+    let (_dir, d, _a) = setup_opts(
+        |o| o.catalog_curl = curl,
+        |paths| {
+            let (mut cfg, _) = xherd_core::config::Config::load(&paths.config()).unwrap();
+            cfg.plugin_catalogs = vec!["github".into(), INDEX.into()];
+            cfg.save(&paths.config()).unwrap();
+        },
+    )
+    .await;
+    d.store
+        .upsert_plugin_record(&xherd_store::PluginRecord {
+            name: "forgejo".into(),
+            kind: "host".into(),
+            source: "https://github.com/acme/xherd-forgejo".into(),
+            sha: None,
+            enabled: true,
+            data: json!({}),
+        })
+        .await
+        .unwrap();
+    let local = xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+
+    let (s, v) = call(
+        local.clone(),
+        get("/api/v1/plugins/catalog").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let entries = v["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2, "the duplicate from the index is dropped");
+    assert_eq!(entries[0]["name"], "xherd-forgejo");
+    assert_eq!(entries[0]["source"], "github");
+    assert_eq!(entries[0]["installed"], json!(["forgejo"]));
+    assert_eq!(entries[1]["installed"], json!([]));
+    assert_eq!(v["sources"].as_array().unwrap().len(), 2);
+
+    let (s, v) = call(
+        local.clone(),
+        get("/api/v1/plugins/catalog?q=Other&refresh=1")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let entries = v["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["name"], "xherd-other");
+}
+
+#[tokio::test]
+async fn plugin_catalog_install_off_is_forbidden() {
+    let (_dir, d, _a) = setup_opts(|o| o.plugin_install = false, |_| {}).await;
+    let local = xherd_api::router(d).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 1))));
+    let (s, v) = call(
+        local,
+        get("/api/v1/plugins/catalog").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (s, v["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("plugin_install_off"))
+    );
+}
+
 /// Job actions (R28): the routes need the user, refuse a command nobody
 /// approved, run an approved one, and the terminal takes only the job's own
 /// actions.

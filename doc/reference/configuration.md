@@ -49,6 +49,7 @@ Files are written atomically. Keys this version does not know are kept when savi
 | `gitHosts` | `[]` | Git access per host (Settings → Git access): `host`, `protocols`, `provider` (a host plugin: `github`, `gitlab`, `bitbucket` or an external one; unset = the first whose host patterns claim the name), `credential` (where git gets the HTTPS token: `provider` = the provider's CLI helper such as `gh auth git-credential`, `xherd` = the token kept in `secrets.json`, `none` = git's own configuration), `username`, `caFile`, `preferHttps` / `preferSsh` (rewrite remotes) |
 | `toolchainDefaults` | `{}` | Tool → version used when a worktree has no version file for it (`{"java": "21.0.5-tem"}`); set from Settings → Plugins → a toolchain. Version files always win |
 | `pluginSettings` | `{}` | Non-secret settings by plugin name (for example `github.gh`, the `gh` binary). Removing a plugin with *forget* drops its entry |
+| `pluginCatalogs` | `["github"]` | Sources of the plugin catalogue (Settings → Plugins → Catalogue sources, one per line; live): `github` is the search for repositories with the topic `xherd-plugin`, any other entry is the `https://` URL of an [index file](../extend/plugins.md#get-listed) (at most 20 entries). Earlier sources win a duplicate. `http://` and other schemes are refused with `bad_catalog_url`; a bad entry in a hand-edited file is skipped and shown as that source's error. An empty list turns the catalogue off |
 | `disabledPlugins` | `[]` | Plugins switched off. The last agent runtime or toolchain that is on cannot be switched off. A first run (no `config.json`) writes every plugin here, so Welcome starts with all of them off; a native run leaves out the plugins whose main tool (the first `requires` entry, optional or not) it finds on the computer |
 | `updateCheck` | `true` | Check for new versions |
 | `welcomed` | `false` | The first-run Welcome screen was completed or skipped |
@@ -87,7 +88,7 @@ Changes apply to running jobs at once, except `instructions`, which is written a
 | Open in | `openIn` |
 | Git access | `gitUserName`, `gitUserEmail`, `gitIdentities`, `gitHosts` and their tokens |
 | Repo profiles | Profiles (in the database) |
-| Plugins | `disabledPlugins`, `pluginSettings`, plugin secrets, `toolchainDefaults`, `runtimeModels` (a runtime's Options) |
+| Plugins | `disabledPlugins`, `pluginCatalogs`, `pluginSettings`, plugin secrets, `toolchainDefaults`, `runtimeModels` (a runtime's Options) |
 
 The other keys (`maxSessionMinutes`, `prPollMinutes`, `maxReviewLoops`, the budgets, `maxDiffLines`, `sensitivePaths`) have no form yet. `PUT /api/v1/config` sets them with range checks and they apply at once:
 

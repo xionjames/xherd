@@ -66,7 +66,13 @@ pub struct ConfigPatch {
     pub ui: Option<xherd_core::config::UiSettings>,
     /// Seconds a permission request waits for an answer (30 to 3600).
     pub permission_wait_sec: Option<u64>,
+    /// Replaces the plugin catalogue sources (`github` or `https://` index
+    /// URLs; at most 20, R1).
+    pub plugin_catalogs: Option<Vec<String>>,
 }
+
+/// Most catalogue sources a save accepts.
+const MAX_CATALOGS: usize = 20;
 
 fn bad(message: impl Into<String>) -> ActionError {
     ActionError {
@@ -328,6 +334,29 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             out.insert(tool, v);
         }
         c.toolchain_defaults = out;
+    }
+    if let Some(list) = p.plugin_catalogs {
+        let mut out: Vec<String> = Vec::new();
+        for s in list {
+            let s = s.trim();
+            if s.is_empty() || out.iter().any(|o| o == s) {
+                continue;
+            }
+            if let Err(why) = xherd_plugin::catalog::Source::parse(s) {
+                return Err(ActionError {
+                    code: "bad_catalog_url",
+                    message: format!("pluginCatalogs: {why}"),
+                });
+            }
+            out.push(s.to_string());
+        }
+        if out.len() > MAX_CATALOGS {
+            return Err(ActionError {
+                code: "bad_catalog_url",
+                message: format!("pluginCatalogs: at most {MAX_CATALOGS} sources"),
+            });
+        }
+        c.plugin_catalogs = out;
     }
     if let Some(v) = p.ntfy_server {
         let v = v.trim().trim_end_matches('/');
@@ -755,6 +784,41 @@ mod tests {
         assert!(c.open_in.dropped_commands.is_empty());
         let back = open_in_patch(json!({"droppedCommands": ["Tower"]}));
         assert_eq!(apply(&mut c, back).unwrap_err().code, "bad_config");
+    }
+
+    #[test]
+    fn plugin_catalogs_are_cleaned_and_validated() {
+        let patch = |v: Value| -> ConfigPatch {
+            serde_json::from_value(json!({ "pluginCatalogs": v })).unwrap()
+        };
+        let mut c = Config::default();
+        apply(
+            &mut c,
+            patch(json!([
+                " github ",
+                "",
+                "https://example.com/c.json",
+                "github"
+            ])),
+        )
+        .unwrap();
+        assert_eq!(c.plugin_catalogs, ["github", "https://example.com/c.json"]);
+        apply(&mut c, patch(json!([]))).unwrap();
+        assert!(c.plugin_catalogs.is_empty());
+
+        let many: Vec<String> = (0..21).map(|i| format!("https://e.com/{i}")).collect();
+        for bad in [
+            json!(["http://example.com/c.json"]),
+            json!(["github", "ftp://x"]),
+            json!(many),
+        ] {
+            let err = apply(&mut c, patch(bad)).unwrap_err();
+            assert_eq!(err.code, "bad_catalog_url");
+        }
+        assert!(
+            c.plugin_catalogs.is_empty(),
+            "a refused save changes nothing"
+        );
     }
 
     #[test]

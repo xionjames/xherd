@@ -28,11 +28,11 @@
   const broken = $derived(app.state?.brokenPlugins ?? []);
 
   type Form = Record<string, string | boolean>;
-  const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications', 'suggestAgents', 'uploadMaxBytes', 'uploadMaxJobBytes', 'uploadMaxFiles'];
+  const FIELDS = ['maxConcurrentJobs', 'pauseTimeoutSec', 'workspace', 'eventRetentionDays', 'idleAlertMinutes', 'gateParkMinutes', 'freshSessions', 'autonomy', 'permissionMode', 'defaultRuntime', 'maxAutoApprovalsInRow', 'ntfyServer', 'ntfyTopic', 'mutedNotifications', 'desktopNotifications', 'suggestAgents', 'uploadMaxBytes', 'uploadMaxJobBytes', 'uploadMaxFiles', 'pluginCatalogs'];
   // Upload sizes are shown in MiB and stored in bytes (R3a).
   const MIB = ['uploadMaxBytes', 'uploadMaxJobBytes'];
   const shown = (c: Record<string, unknown>, k: string): string | boolean =>
-    typeof c[k] === 'boolean' ? (c[k] as boolean) : MIB.includes(k) && c[k] != null ? String(Number(c[k]) / 1048576) : String(c[k] ?? '');
+    typeof c[k] === 'boolean' ? (c[k] as boolean) : Array.isArray(c[k]) ? (c[k] as string[]).join('\n') : MIB.includes(k) && c[k] != null ? String(Number(c[k]) / 1048576) : String(c[k] ?? '');
   let form = $state<Form>({});
   const KINDS: [string, string][] = [['gate', 'A gate needs your approval'], ['blocked', 'A job is blocked'], ['idle', 'A job went idle'], ['delivery', 'A message was not acknowledged'], ['error', 'An agent failed'], ['recovery', 'An agent was recovered'], ['budget', 'Token budget'], ['limit', 'A limit was reached'], ['pr', 'Pull request news'], ['pr-comments', 'New PR comments'], ['todo', 'A TODO came due'], ['suggestion', 'Save a job\'s setup as an agent'], ['outside-commit', 'A commit was made outside xherd']];
   const muted = $derived(new Set(String(form.mutedNotifications ?? '').split(',').filter(Boolean)));
@@ -63,7 +63,7 @@
   async function save() {
     saving = true;
     const body: Record<string, unknown> = {};
-    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'permissionMode' || k === 'defaultRuntime' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : MIB.includes(k) ? Math.round(Number(form[k]) * 1048576) : Number(form[k]);
+    for (const k of changed) body[k] = typeof form[k] === 'boolean' ? form[k] : k === 'mutedNotifications' ? String(form[k]).split(',').filter(Boolean) : k === 'pluginCatalogs' ? String(form[k]).split('\n').map((l) => l.trim()).filter(Boolean) : k === 'workspace' || k === 'autonomy' || k === 'permissionMode' || k === 'defaultRuntime' || k === 'ntfyServer' || k === 'ntfyTopic' ? form[k] : MIB.includes(k) ? Math.round(Number(form[k]) * 1048576) : Number(form[k]);
     try {
       setup.config = await put<ConfigView>('/config', body);
       fill(setup.config);
@@ -227,9 +227,14 @@
       </Panel>
     </div>
   {:else if tab === 'plugins'}
+    <Panel title="Catalogue sources" hint="Where Add plugin searches. One per line: github (repositories with the xherd-plugin topic) or an https:// link to an index file.">
+      <label class="f">Sources
+        <textarea class="mono" rows="3" bind:value={form.pluginCatalogs} placeholder="github"></textarea>
+        <span class="hint">An empty list turns the catalogue off. Anonymous requests only.</span></label>
+    </Panel>
     <PluginList selected={route.query.get('plugin')} onselect={(n) => go('/settings', n ? { tab: 'plugins', plugin: n } : { tab: 'plugins' })} />
   {/if}
-  {#if setup.config && ready && ['general', 'gates', 'notifications'].includes(tab)}
+  {#if setup.config && ready && ['general', 'gates', 'notifications', 'plugins'].includes(tab)}
     <SaveBar {dirty} busy={saving} onsave={save} ondiscard={() => setup.config && fill(setup.config)} />
   {/if}
 </div>

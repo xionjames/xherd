@@ -66,6 +66,10 @@ pub struct Config {
     pub tmux_socket: Option<String>,
     /// Plugin settings by plugin name (non-secret).
     pub plugin_settings: Map<String, Value>,
+    /// Where the plugin catalogue is read from: `github` (repositories with
+    /// the topic `xherd-plugin`) and https index files. Always written, so an
+    /// empty list stays empty instead of coming back as the default. Live.
+    pub plugin_catalogs: Vec<String>,
     /// Plugins switched off in Welcome/Settings; read live, no restart.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled_plugins: Vec<String>,
@@ -180,6 +184,7 @@ impl Default for Config {
             workspace: None,
             tmux_socket: None,
             plugin_settings: Map::new(),
+            plugin_catalogs: vec!["github".into()],
             disabled_plugins: Vec::new(),
             git_user_name: None,
             git_user_email: None,
@@ -439,6 +444,7 @@ impl Config {
         self.event_retention_days = s.event_retention_days;
         self.welcomed = s.welcomed;
         self.disabled_plugins = s.disabled_plugins;
+        self.plugin_catalogs = s.plugin_catalogs;
         self.git_user_name = s.git_user_name;
         self.git_user_email = s.git_user_email;
         self.git_identities = s.git_identities;
@@ -786,6 +792,27 @@ mod tests {
         running.apply_live_from(&saved);
         assert!(!running.job_actions);
         assert_eq!(running.max_actions_per_job, 3);
+    }
+
+    /// R1: the default is GitHub, a missing key loads as the default, an empty
+    /// list is written and read back as empty, and the key is live.
+    #[test]
+    fn plugin_catalogs_default_round_trip_and_live() {
+        let c = Config::default();
+        assert_eq!(c.plugin_catalogs, vec!["github".to_string()]);
+        let missing: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.plugin_catalogs, vec!["github".to_string()]);
+        let empty = Config {
+            plugin_catalogs: Vec::new(),
+            ..Config::default()
+        };
+        let v = serde_json::to_value(&empty).unwrap();
+        assert_eq!(v["pluginCatalogs"], serde_json::json!([]));
+        let back: Config = serde_json::from_value(v).unwrap();
+        assert!(back.plugin_catalogs.is_empty());
+        let mut running = Config::default();
+        running.apply_live_from(&back);
+        assert!(running.plugin_catalogs.is_empty());
     }
 
     #[test]

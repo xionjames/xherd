@@ -100,4 +100,4 @@ xherd sdd check ./path/to/your-sdd     # which level you reach, missing roles or
 xherd sdd try ./path/to/your-sdd       # runs a fake job through your calls
 ```
 
-Tag your repository with the GitHub topic `xherd-sdd` so it appears in xherd's catalogue.
+To let people find your integration, list it in the plugin catalogue (see [Get listed](plugins.md#get-listed)): add the GitHub topic `xherd-plugin` to the repository, or put it in an index file.

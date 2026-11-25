@@ -13,6 +13,14 @@ use crate::Client;
 pub enum PluginCmd {
     /// List the plugins with where each external one came from.
     Ls,
+    /// Search the plugin catalogues (GitHub topic `xherd-plugin` and index files).
+    Search {
+        /// Words to look for in the name, owner and description (default: everything).
+        text: Option<String>,
+        /// Fetch the catalogues again, even when they are fresh.
+        #[arg(long)]
+        refresh: bool,
+    },
     /// Install an external plugin from a git repository (shows what it is first).
     Install {
         /// `https://…`, `git@host:owner/repo`, `ssh://…` or a GitHub `tree/<ref>/<path>` URL.
@@ -110,6 +118,77 @@ pub fn plugins_table(v: &Value) -> String {
         .collect();
     if v["restartNeeded"] == json!(true) {
         out.push_str("\nRestart needed to load the changes: xherd daemon restart\n");
+    }
+    out
+}
+
+/// Percent-encode a query value: everything but unreserved characters.
+pub fn query_escape(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// `xherd plugin search`: one line per entry, then what went wrong with a
+/// source (R7). Catalogue text is already cleaned by the daemon.
+pub fn catalog_text(v: &Value) -> String {
+    let entries: Vec<&Value> = v["entries"].as_array().into_iter().flatten().collect();
+    let mut out = String::new();
+    if entries.is_empty() {
+        out.push_str("No plugins found.\n");
+    } else {
+        let mut rows = vec![["NAME", "KIND", "SOURCE", "URL", "INSTALLED"].map(String::from)];
+        for e in entries {
+            let installed: Vec<&str> = e["installed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let mut url = e["url"].as_str().unwrap_or("?").to_string();
+            if let Some(p) = e["path"].as_str() {
+                url.push_str(&format!(" ({p})"));
+            }
+            rows.push([
+                e["name"].as_str().unwrap_or("?").into(),
+                e["kind"].as_str().unwrap_or("-").into(),
+                e["source"].as_str().unwrap_or("?").into(),
+                url,
+                installed.join(", "),
+            ]);
+        }
+        let w: [usize; 4] =
+            std::array::from_fn(|i| rows.iter().map(|r| r[i].chars().count()).max().unwrap_or(0));
+        for r in &rows {
+            let line = format!(
+                "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {}",
+                r[0],
+                r[1],
+                r[2],
+                r[3],
+                r[4],
+                w0 = w[0],
+                w1 = w[1],
+                w2 = w[2],
+                w3 = w[3]
+            );
+            out.push_str(line.trim_end());
+            out.push('\n');
+        }
+    }
+    for s in v["sources"].as_array().into_iter().flatten() {
+        let name = s["source"].as_str().unwrap_or("?");
+        if let Some(e) = s["error"].as_str() {
+            out.push_str(&format!("\nSource {name} failed: {e}\n"));
+        }
+        if let Some(n) = s["skipped"].as_u64().filter(|n| *n > 0) {
+            out.push_str(&format!("Source {name}: {n} entries skipped as invalid\n"));
+        }
     }
     out
 }
@@ -399,6 +478,20 @@ pub fn run(cmd: PluginCmd, json: bool) -> i32 {
             }
             Err(e) => fail("ls", e),
         },
+        PluginCmd::Search { text, refresh } => {
+            let mut path = format!("/plugins/catalog?refresh={refresh}");
+            if let Some(t) = text {
+                path.push_str(&format!("&q={}", query_escape(&t)));
+            }
+            match c.call_slow("GET", &path, None) {
+                Ok(v) if json => print_json(&v),
+                Ok(v) => {
+                    print!("{}", catalog_text(&v));
+                    0
+                }
+                Err(e) => fail("search", e),
+            }
+        }
         PluginCmd::Install {
             url,
             git_ref,
@@ -469,6 +562,8 @@ mod tests {
     fn every_subcommand_parses() {
         for a in [
             &["ls"][..],
+            &["search"],
+            &["search", "git hub", "--refresh"],
             &["install", "https://github.com/o/r"],
             &[
                 "install",
@@ -513,5 +608,52 @@ mod tests {
         ]}));
         assert!(t.contains("--path") && t.contains("plugins/a  (a)"));
         assert!(t.contains("plugins/b  (b, unusable: bad manifest)"));
+    }
+
+    #[test]
+    fn search_text_lists_entries_and_source_problems() {
+        let v = json!({
+            "entries": [
+                {"name": "gitea", "kind": "host", "source": "github", "url": "https://github.com/o/gitea",
+                 "installed": ["gitea"]},
+                {"name": "jira2", "source": "https://x.org/i.json", "url": "https://github.com/o/mono",
+                 "path": "plugins/jira2", "installed": []},
+            ],
+            "sources": [
+                {"source": "github", "fetchedAt": 1},
+                {"source": "https://x.org/i.json", "fetchedAt": null, "error": "HTTP 500", "skipped": 2},
+            ]
+        });
+        let t = catalog_text(&v);
+        let mut lines = t.lines();
+        let head = lines.next().unwrap();
+        assert!(
+            head.starts_with("NAME") && head.ends_with("INSTALLED"),
+            "{t}"
+        );
+        assert!(
+            t.lines()
+                .any(|l| l.starts_with("gitea") && l.ends_with("gitea")),
+            "{t}"
+        );
+        assert!(
+            t.contains("https://github.com/o/mono (plugins/jira2)"),
+            "{t}"
+        );
+        assert!(
+            t.contains("Source https://x.org/i.json failed: HTTP 500"),
+            "{t}"
+        );
+        assert!(t.contains("2 entries skipped"), "{t}");
+        assert_eq!(
+            catalog_text(&json!({"entries": [], "sources": []})),
+            "No plugins found.\n"
+        );
+    }
+
+    #[test]
+    fn the_query_is_escaped() {
+        assert_eq!(query_escape("a b&c=d/é"), "a%20b%26c%3Dd%2F%C3%A9");
+        assert_eq!(query_escape("Az09-_.~"), "Az09-_.~");
     }
 }

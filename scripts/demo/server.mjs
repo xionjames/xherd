@@ -178,6 +178,16 @@ let packResolved = false;
 const packFiles = [{ runtime: 'claude-code', path: '~/.claude/commands/xherd/design.md', state: 'edited', edited: true }, { runtime: 'claude-code', path: '~/.claude/commands/xherd/old-notes.md', state: 'obsolete', edited: true }];
 const installingCheck = { id: 'plugin:opencode:requires:opencode', group: 'plugins', label: 'opencode · requires:opencode', required: false, ok: false, detail: 'Installing opencode 1.19.0…', installing: true };
 const packChecks = () => ({ checks: [installingCheck, ...(packResolved ? [] : [{ id: 'pack-files:claude-code', group: 'runtime', label: 'Pack files (claude-code)', required: true, ok: false, detail: '2 files need a decision', fix: { kind: 'review', label: 'Review files' } }])] });
+const catalogEntries = [
+  { name: 'xherd-forgejo', owner: 'acme', description: 'Forgejo host plugin: pull requests and reviews', url: 'https://github.com/acme/xherd-forgejo', stars: 42, pushedAt: '2026-11-02T09:30:00Z', source: 'github', installed: [] },
+  { name: 'linear', owner: 'tools', description: 'Linear tracker', url: 'https://github.com/tools/xherd-plugins', path: 'plugins/linear', ref: 'v1.2.0', kind: 'tracker', source: 'https://tools.example.com/xherd-index.json', installed: [] },
+  { name: 'xherd-gitea', owner: 'acme', description: 'Gitea host plugin', url: 'https://github.com/acme/xherd-gitea', stars: 7, source: 'github', installed: ['gitea'] },
+];
+const catalogSources = [
+  { source: 'github', fetchedAt: Date.now() },
+  { source: 'https://tools.example.com/xherd-index.json', fetchedAt: Date.now(), skipped: 1 },
+  { source: 'https://down.example.com/index.json', fetchedAt: null, error: 'could not be fetched (HTTP 503)' },
+];
 const routes = { '/state': state, '/config': { config: state.config, running: state.config, restartNeeded: false }, '/todos': { todos }, '/reviews': { reviews }, '/agents': { agents: AG }, '/skills': { skills }, '/healthz': { ok: true }, '/worklog': { days: [], tickets: [] } };
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.json': 'application/json' };
 const json = (r, o) => { r.setHeader('content-type', 'application/json'); r.end(JSON.stringify(o)); };
@@ -191,6 +201,11 @@ const srv = http.createServer((q, r) => {
     if (k === '/install/resolve') { packResolved = true; return json(r, packChecks()); }
     if (routes[k]) return json(r, routes[k]);
     if (k === '/plugins') return json(r, pluginsList());
+    if (k === '/plugins/catalog') {
+      const text = (url.searchParams.get('q') ?? '').toLowerCase();
+      const entries = catalogEntries.filter((e) => !text || `${e.name} ${e.owner} ${e.description ?? ''}`.toLowerCase().includes(text));
+      return json(r, { entries, sources: catalogSources });
+    }
     if (k === '/plugins/preview') return json(r, pluginPreview('https://github.com/acme/xherd-forgejo'));
     if (k === '/plugins/install') return json(r, { name: 'forgejo', kind: 'host', version: '0.1.0', url: 'https://github.com/acme/xherd-forgejo', sha: '9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c', digest: 'b'.repeat(64) });
     if (k === '/admin/restart') return json(r, { restarting: true });

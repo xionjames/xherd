@@ -73,6 +73,10 @@ impl Paths {
     pub fn plugins(&self) -> PathBuf {
         self.root.join("plugins")
     }
+    /// The plugin catalogue's cache (R4), written by the daemon.
+    pub fn plugin_catalog(&self) -> PathBuf {
+        self.root.join("plugin-catalog.json")
+    }
     pub fn scratch(&self) -> PathBuf {
         self.root.join("scratch")
     }
@@ -166,6 +170,14 @@ mod tests {
         assert_eq!(
             Paths::at("/x").action_log("j1", "dev"),
             PathBuf::from("/x/action-logs/j1/dev.log")
+        );
+    }
+
+    #[test]
+    fn plugin_catalog_cache_is_in_the_root() {
+        assert_eq!(
+            Paths::at("/x").plugin_catalog(),
+            PathBuf::from("/x/plugin-catalog.json")
         );
     }
 

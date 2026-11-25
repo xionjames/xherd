@@ -321,4 +321,29 @@ Claude Code, opencode, Codex and Pi are built in. A job's runtime is chosen when
 
 **Restart needed.** Plugins load at daemon start. After an install, update or removal Settings shows *Restart xherd* (or run `xherd daemon restart`): the daemon re-executes itself, and agent sessions in tmux keep running.
 
-**By hand.** Put the plugin's folder in `<data root>/plugins/<name>/` and restart the daemon; it is listed as *installed by hand, not pinned*. In the container the daemon copies that folder at start to one the agents' user can read, and runs the plugin's commands, checks and hooks as that user (see [Security](../user/security.md#plugins)); its own config and state folders are `~/.local/share/xherd-plugins/{config,state}/<name>` in the agents' home. The name `git` is reserved. There is no catalogue yet: you give the URL.
+**By hand.** Put the plugin's folder in `<data root>/plugins/<name>/` and restart the daemon; it is listed as *installed by hand, not pinned*. In the container the daemon copies that folder at start to one the agents' user can read, and runs the plugin's commands, checks and hooks as that user (see [Security](../user/security.md#plugins)); its own config and state folders are `~/.local/share/xherd-plugins/{config,state}/<name>` in the agents' home. The name `git` is reserved.
+
+### Get listed
+
+Settings → Plugins → *Add plugin* and `xherd plugin search` show a catalogue of plugins that authors have listed. There is no central registry and no review: anyone can list a repository, so users read the preview before installing. Two ways to be listed:
+
+- **The GitHub topic.** Add the topic `xherd-plugin` to your repository. The `github` source (on by default) searches for it. The plugin is at the repository's root unless an index file says otherwise.
+- **An index file.** Publish a JSON file over `https://` and ask users to add its URL under *Catalogue sources* (the `pluginCatalogs` setting). Use it for several plugins in one repository, a folder, a branch, or a host other than GitHub:
+
+```json
+{
+  "xherdCatalog": 1,
+  "plugins": [
+    {
+      "name": "forgejo-host",
+      "url": "https://codeberg.org/acme/xherd-plugins",
+      "path": "forgejo",
+      "ref": "v1.2.0",
+      "kind": "host",
+      "description": "Pull requests on Forgejo"
+    }
+  ]
+}
+```
+
+`name` and `url` are required and `url` must be `https://`. `path` (a folder in the repository, no `..`), `ref` (a branch, tag or commit), `kind` (`runtime`, `tracker`, `host`, `flow`, `notifier`, `toolchain`, `panel` or `view`) and `description` are optional; text is cut to a short length. An entry that is not valid is skipped and counted, and a file whose `xherdCatalog` is not `1` is refused as a whole. The file is fetched anonymously (no credentials sent), at most 1 MiB, and cached for 24 hours. Choosing an entry only fills the install form; the user still previews and installs it.
