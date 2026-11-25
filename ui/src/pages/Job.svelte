@@ -15,6 +15,7 @@
   import { app, upsertJob } from '../lib/store.svelte';
   import { route, href } from '../lib/router.svelte';
   import { PANELS, agentTabs } from '../lib/panels';
+  import { viewOf } from '../lib/jobView.svelte';
   import { canPush, flowOf, prGate } from '../lib/flow';
   import { agentRunning, agoText, needsYou, repoName, shortBase, waitsAtGate } from '../lib/format';
   import { get, post } from '../lib/api';
@@ -61,7 +62,11 @@
   const def = $derived(agentOf(agent, app.state?.agents));
   const newer = $derived(changedSince(agent, def));
   const queuedForAgent = $derived(waitsForAgent(agent, app.state?.agents ?? []));
-  const tabs = $derived(agentTabs(agent));
+  // The first tab is the chat when the job opens in it (the choice of this job, else Settings).
+  const chatOn = $derived(
+    viewOf(agent.id, !!app.state?.plugins.find((p) => p.name === agent.runtime)?.chat,
+      (app.state?.config.ui as { jobView?: unknown } | undefined)?.jobView) === 'chat');
+  const tabs = $derived(agentTabs(agent).map((t) => (t.id === 'terminal' && chatOn ? { ...t, label: 'Chat' } : t)));
   const fallback = $derived.by(() => {
     const g = agent.gate;
     if (g?.kind === 'commit') return 'changes';
