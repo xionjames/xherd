@@ -4,8 +4,8 @@
   // Nothing from the repository runs before the user installs.
   import Dialog from './Dialog.svelte';
   import Callout from './Callout.svelte';
-  import { pluginPreview, pluginInstall } from '../lib/api';
-  import type { InstalledPlugin, PluginPreview } from '../lib/types';
+  import { pluginPreview, pluginInstall, pluginCatalog } from '../lib/api';
+  import type { CatalogEntry, InstalledPlugin, PluginCatalog, PluginPreview } from '../lib/types';
 
   let { onclose, oninstalled }: { onclose: () => void; oninstalled: () => void } = $props();
 
@@ -16,6 +16,44 @@
   let done = $state<InstalledPlugin | null>(null);
   let busy = $state(false);
   let error = $state('');
+
+  // The catalogue: entries come from other people's repositories, so their
+  // text is shown as plain text only.
+  let query = $state('');
+  let catalog = $state<PluginCatalog | null>(null);
+  let listing = $state(false);
+  let catalogError = $state('');
+  let seq = 0;
+  async function loadCatalog(q: string, refresh = false) {
+    const mine = ++seq;
+    listing = true;
+    catalogError = '';
+    try {
+      const c = await pluginCatalog(q.trim(), refresh);
+      if (mine === seq) catalog = c;
+    } catch (e) {
+      if (mine === seq) catalogError = message(e);
+    } finally {
+      if (mine === seq) listing = false;
+    }
+  }
+  // First load at once, then 250 ms after the last keystroke.
+  let first = true;
+  $effect(() => {
+    const q = query;
+    const t = setTimeout(() => loadCatalog(q), first ? 0 : 250);
+    first = false;
+    return () => clearTimeout(t);
+  });
+  function choose(e: CatalogEntry) {
+    url = e.url;
+    gitRef = e.ref ?? '';
+    preview = null;
+    done = null;
+    look(e.path);
+  }
+  const failed = $derived((catalog?.sources ?? []).filter((s) => s.error));
+  const skipped = $derived((catalog?.sources ?? []).reduce((n, s) => n + (s.skipped ?? 0), 0));
 
   const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
   // Any change to the source makes the previewed digest stale.
@@ -60,6 +98,28 @@
     <Callout tone="ok">Installed <b>{done.name}</b> {done.version} from <span class="mono">{done.url}@{done.sha.slice(0, 7)}</span>.</Callout>
     <p>Restart needed: the plugin loads when xherd restarts. Running agents keep going.</p>
   {:else}
+    <section class="stack-in" aria-label="Catalogue">
+      <label class="f">Find a plugin
+        <input type="search" bind:value={query} placeholder="Search the catalogue" autocomplete="off" spellcheck="false" /></label>
+      {#if catalogError}<Callout tone="bad"><span class="wrap-any">{catalogError}</span></Callout>{/if}
+      {#if catalog}
+        {#if catalog.entries.length}
+          <ul class="plain catalog">
+            {#each catalog.entries as e (e.source + e.url + (e.path ?? ''))}
+              <li><button class="btn sm" disabled={busy} onclick={() => choose(e)}>{e.name}</button>
+                <span class="hint">{e.owner}{e.kind ? ` · ${e.kind}` : ''}{e.stars !== undefined ? ` · ${e.stars} stars` : ''}{e.installed.length ? ' · installed' : ''}</span>
+                {#if e.description}<span class="desc wrap-any">{e.description}</span>{/if}</li>
+            {/each}
+          </ul>
+        {:else if !listing}
+          <p class="hint">Nothing in the catalogue{query.trim() ? ' matches' : ' yet'}. You can still paste a Git URL below.</p>
+        {/if}
+        {#each failed as s (s.source)}<span class="hint wrap-any">Source {s.source} failed: {s.error}</span>{/each}
+        {#if skipped}<span class="hint">{skipped} catalogue {skipped === 1 ? 'entry was' : 'entries were'} skipped because {skipped === 1 ? 'it was' : 'they were'} not valid.</span>{/if}
+      {/if}
+      <div class="row"><button class="btn sm" type="button" disabled={listing} onclick={() => loadCatalog(query, true)}>{listing ? 'Searching…' : 'Refresh'}</button></div>
+    </section>
+
     <form class="stack-in" onsubmit={(e) => { e.preventDefault(); look(); }}>
       <label class="f">Git URL
         <input class="mono" bind:value={url} oninput={edited} placeholder="https://github.com/owner/plugin" autocomplete="off" spellcheck="false" />
@@ -152,5 +212,8 @@
   .stack-in, .preview { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
   .preview { margin-top: 12px; }
   .preview h3, .preview p { margin: 0; }
+  .catalog { max-height: 220px; overflow-y: auto; }
+  .catalog li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+  .desc { flex-basis: 100%; }
   .plain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 </style>

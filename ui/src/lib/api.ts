@@ -1,7 +1,7 @@
 // HTTP calls to the daemon. Local browsers are trusted by address (design §7.2),
 // so no token is sent.
 
-import type { InstalledPlugin, PluginPreview, PluginsList, PluginUpdatePreview, UploadResult } from './types';
+import type { InstalledPlugin, PluginCatalog, PluginPreview, PluginsList, PluginUpdatePreview, UploadResult } from './types';
 
 export class ApiError extends Error {
   constructor(public status: number, public code: string, message: string) {
@@ -31,6 +31,8 @@ export const del = <T>(path: string) => call<T>('DELETE', path);
 // Installing plugins from a git URL (the CLI's `xherd plugin`). Install and
 // update send back the digest the user saw in the preview.
 export const pluginsList = () => get<PluginsList>('/plugins');
+export const pluginCatalog = (q: string, refresh = false) =>
+  get<PluginCatalog>(`/plugins/catalog?q=${encodeURIComponent(q)}${refresh ? '&refresh=1' : ''}`);
 export const pluginPreview = (url: string, ref?: string, path?: string) =>
   post<PluginPreview>('/plugins/preview', { url, ref: ref || undefined, path: path || undefined });
 export const pluginInstall = (url: string, digest: string, ref?: string, path?: string) =>
