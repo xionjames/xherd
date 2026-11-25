@@ -2,7 +2,7 @@
 //! (#202, R2, R3). Pure: no IO and no clock; the daemon's actor reads the
 //! transcript, feeds lines to [`Mapper::line`], stamps `seq`/`at`/`end` and logs.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -13,6 +13,10 @@ use crate::job::Millis;
 const SUMMARY_MAX: usize = 120;
 /// Longest raw line kept in an `Unknown` body.
 const UNKNOWN_MAX: usize = 4096;
+/// Longest tool result kept, in bytes.
+const RESULT_MAX: usize = 4096;
+/// The tool whose use is a question for the person.
+pub const QUESTION_TOOL: &str = "AskUserQuestion";
 
 /// One entry of a job's chat log. `end` is the transcript offset just after
 /// the line the event came from (used to resume after a restart).
@@ -177,15 +181,24 @@ pub struct QuestionOption {
     pub description: String,
 }
 
-/// Turns transcript lines into chat bodies. It remembers which tool and
-/// question ids are in the log, so a later `tool_result` can update them.
+/// What a later `tool_result` needs to re-emit a tool call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolMeta {
+    pub name: String,
+    pub summary: String,
+    pub path: Option<String>,
+}
+
+/// Turns transcript lines into chat bodies. It remembers the tool and
+/// question ids that are in the log, so a later `tool_result` can update
+/// them (and is dropped when its id is not known).
 #[derive(Debug, Clone, Default)]
 pub struct Mapper {
     /// Prefix of the commands xherd types (`/xherd:`), to tell them from the
     /// person's own messages.
     pub prefix: Option<String>,
-    pub tools: BTreeSet<String>,
-    pub questions: BTreeSet<String>,
+    pub tools: BTreeMap<String, ToolMeta>,
+    pub questions: BTreeMap<String, Vec<Question>>,
 }
 
 impl Mapper {
@@ -230,6 +243,15 @@ pub fn summary(tool: &str, input: &Value) -> String {
     cut(&line.replace('\n', " "), SUMMARY_MAX)
 }
 
+/// The first `max` bytes of `s`, cut at a character boundary.
+fn head(s: &str, max: usize) -> &str {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// `s` cut to `max` characters, ending in `…` when it was longer.
 fn cut(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -249,11 +271,20 @@ mod claude {
             return vec![unknown(line)];
         };
         let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
-        if !matches!(kind, "user" | "assistant") {
+        let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+        if flag("isSidechain") || flag("isMeta") || flag("isCompactSummary") {
             return Vec::new();
         }
-        let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
-        if flag("isSidechain") || flag("isMeta") {
+        if kind == "system" {
+            return match v.get("subtype").and_then(Value::as_str) {
+                Some("compact_boundary") => vec![ChatBody::Notice {
+                    notice: NoticeKind::Compaction,
+                    text: "Conversation compacted".to_string(),
+                }],
+                _ => Vec::new(),
+            };
+        }
+        if !matches!(kind, "user" | "assistant") {
             return Vec::new();
         }
         let Some(content) = v.pointer("/message/content") else {
@@ -282,8 +313,16 @@ mod claude {
                         user_text.push(text);
                     }
                 }
-                // Mapped by T07: tools, results, plan, question.
-                Some("tool_use" | "tool_result") => recognised = true,
+                Some("tool_use") => {
+                    if let Some(body) = tool_use(b, m) {
+                        recognised = true;
+                        out.push(body);
+                    }
+                }
+                Some("tool_result") => {
+                    recognised = true;
+                    out.extend(tool_result(b, m));
+                }
                 Some("thinking" | "redacted_thinking" | "image") => recognised = true,
                 _ => {}
             }
@@ -327,13 +366,144 @@ mod claude {
     }
 
     fn unknown(line: &str) -> ChatBody {
-        let mut end = line.len().min(UNKNOWN_MAX);
-        while !line.is_char_boundary(end) {
-            end -= 1;
-        }
         ChatBody::Unknown {
-            raw: line[..end].to_string(),
+            raw: head(line, UNKNOWN_MAX).to_string(),
         }
+    }
+
+    /// A `tool_use` block: a tool call, the plan, or a question.
+    fn tool_use(b: &Value, m: &mut Mapper) -> Option<ChatBody> {
+        let id = b.get("id").and_then(Value::as_str)?.to_string();
+        let name = b.get("name").and_then(Value::as_str)?.to_string();
+        let input = b.get("input").unwrap_or(&Value::Null);
+        match name.as_str() {
+            "TodoWrite" => Some(ChatBody::Plan {
+                items: input
+                    .get("todos")
+                    .and_then(Value::as_array)
+                    .map(|todos| todos.iter().map(plan_item).collect())
+                    .unwrap_or_default(),
+            }),
+            QUESTION_TOOL => {
+                let questions = questions_of(input);
+                m.questions.insert(id.clone(), questions.clone());
+                Some(ChatBody::Question {
+                    id,
+                    answerable: answerable(&questions),
+                    questions,
+                    state: Resolution::Waiting,
+                })
+            }
+            _ => {
+                let path = matches!(
+                    name.as_str(),
+                    "Edit" | "Write" | "MultiEdit" | "NotebookEdit"
+                )
+                .then(|| input.get("file_path").and_then(Value::as_str))
+                .flatten()
+                .map(str::to_string);
+                let meta = ToolMeta {
+                    summary: summary(&name, input),
+                    name,
+                    path,
+                };
+                m.tools.insert(id.clone(), meta.clone());
+                Some(ChatBody::Tool {
+                    id,
+                    name: meta.name,
+                    summary: meta.summary,
+                    status: ToolStatus::Running,
+                    result: None,
+                    path: meta.path,
+                })
+            }
+        }
+    }
+
+    /// A `tool_result` block: the finished tool, or the question's end. Nothing
+    /// when the id is not in the log.
+    fn tool_result(b: &Value, m: &Mapper) -> Option<ChatBody> {
+        let id = b.get("tool_use_id").and_then(Value::as_str)?.to_string();
+        if let Some(questions) = m.questions.get(&id) {
+            return Some(ChatBody::Question {
+                id,
+                answerable: answerable(questions),
+                questions: questions.clone(),
+                state: Resolution::InTerminal,
+            });
+        }
+        let meta = m.tools.get(&id)?;
+        let failed = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+        let text = match b.get("content") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(blocks)) => blocks
+                .iter()
+                .filter_map(|x| x.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        Some(ChatBody::Tool {
+            id,
+            name: meta.name.clone(),
+            summary: meta.summary.clone(),
+            status: if failed {
+                ToolStatus::Error
+            } else {
+                ToolStatus::Ok
+            },
+            result: (!text.is_empty()).then(|| head(&text, RESULT_MAX).to_string()),
+            path: meta.path.clone(),
+        })
+    }
+
+    fn plan_item(todo: &Value) -> PlanItem {
+        let text = |k: &str| todo.get(k).and_then(Value::as_str).unwrap_or("");
+        PlanItem {
+            text: text("content").to_string(),
+            status: match text("status") {
+                "in_progress" => PlanStatus::InProgress,
+                "completed" => PlanStatus::Completed,
+                _ => PlanStatus::Pending,
+            },
+        }
+    }
+
+    fn questions_of(input: &Value) -> Vec<Question> {
+        let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        input
+            .get("questions")
+            .and_then(Value::as_array)
+            .map(|qs| {
+                qs.iter()
+                    .map(|q| Question {
+                        question: text(q, "question"),
+                        header: text(q, "header"),
+                        multi_select: q
+                            .get("multiSelect")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        options: q
+                            .get("options")
+                            .and_then(Value::as_array)
+                            .map(|os| {
+                                os.iter()
+                                    .map(|o| QuestionOption {
+                                        label: text(o, "label"),
+                                        description: text(o, "description"),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Only one single-choice question can be answered with a key press.
+    fn answerable(questions: &[Question]) -> bool {
+        matches!(questions, [q] if !q.multi_select)
     }
 }
 
@@ -369,8 +539,156 @@ mod tests {
                 ChatBody::Assistant {
                     text: "Done.".into()
                 },
+                tool("toolu_1", "Bash", "Bash: cargo test", ToolStatus::Running, None, None),
+                tool(
+                    "toolu_1",
+                    "Bash",
+                    "Bash: cargo test",
+                    ToolStatus::Ok,
+                    Some("test result: ok. 3 passed"),
+                    None
+                ),
+                tool("toolu_2", "Bash", "Bash: cargo clippy", ToolStatus::Running, None, None),
+                tool(
+                    "toolu_2",
+                    "Bash",
+                    "Bash: cargo clippy",
+                    ToolStatus::Error,
+                    Some("error: boom"),
+                    None
+                ),
+                tool("toolu_3", "Edit", "Edit src/a.rs", ToolStatus::Running, None, Some("src/a.rs")),
+                tool(
+                    "toolu_3",
+                    "Edit",
+                    "Edit src/a.rs",
+                    ToolStatus::Ok,
+                    Some("The file src/a.rs has been updated."),
+                    Some("src/a.rs")
+                ),
+                ChatBody::Plan {
+                    items: vec![
+                        PlanItem {
+                            text: "Write the mapper".into(),
+                            status: PlanStatus::InProgress
+                        },
+                        PlanItem {
+                            text: "Test it".into(),
+                            status: PlanStatus::Pending
+                        },
+                        PlanItem {
+                            text: "Read the design".into(),
+                            status: PlanStatus::Completed
+                        },
+                    ]
+                },
+                ChatBody::Question {
+                    id: "toolu_5".into(),
+                    questions: vec![store_question()],
+                    answerable: true,
+                    state: Resolution::Waiting,
+                },
+                ChatBody::Question {
+                    id: "toolu_5".into(),
+                    questions: vec![store_question()],
+                    answerable: true,
+                    state: Resolution::InTerminal,
+                },
+                ChatBody::Notice {
+                    notice: NoticeKind::Compaction,
+                    text: "Conversation compacted".into()
+                },
             ]
         );
+    }
+
+    fn tool(
+        id: &str,
+        name: &str,
+        summary: &str,
+        status: ToolStatus,
+        result: Option<&str>,
+        path: Option<&str>,
+    ) -> ChatBody {
+        ChatBody::Tool {
+            id: id.into(),
+            name: name.into(),
+            summary: summary.into(),
+            status,
+            result: result.map(str::to_string),
+            path: path.map(str::to_string),
+        }
+    }
+
+    fn store_question() -> Question {
+        Question {
+            question: "Which store should the cache use?".into(),
+            header: "Store".into(),
+            multi_select: false,
+            options: vec![
+                QuestionOption {
+                    label: "SQLite".into(),
+                    description: "One file, already a dependency".into(),
+                },
+                QuestionOption {
+                    label: "Memory".into(),
+                    description: "Lost at restart".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn results_of_unknown_tools_are_dropped_and_forgotten_ids_too() {
+        let call = json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"x"}}]}})
+        .to_string();
+        let result = |text: String| {
+            json!({"type":"user","message":{"content":[
+                {"type":"tool_result","tool_use_id":"t1","content":text}]}})
+            .to_string()
+        };
+        let mut m = Mapper::default();
+        assert_eq!(m.line(&call).len(), 1);
+        let ChatBody::Tool {
+            result: Some(r), ..
+        } = &m.line(&result("é".repeat(RESULT_MAX)))[0]
+        else {
+            panic!("tool expected");
+        };
+        assert!(r.len() <= RESULT_MAX);
+        m.forget(["t1"]);
+        assert_eq!(m.line(&result("late".into())), vec![]);
+    }
+
+    #[test]
+    fn only_one_single_choice_question_is_answerable() {
+        let ask = |qs: Value| {
+            json!({"type":"assistant","message":{"content":[
+                {"type":"tool_use","id":"q","name":QUESTION_TOOL,"input":{"questions":qs}}]}})
+            .to_string()
+        };
+        let one = json!({"question":"a?","options":[{"label":"x"}]});
+        let multi = json!({"question":"b?","multiSelect":true,"options":[{"label":"x"}]});
+        let answerable = |qs: Value| {
+            let mut m = Mapper::default();
+            let ChatBody::Question { answerable, .. } = m.line(&ask(qs)).remove(0) else {
+                panic!("question expected");
+            };
+            answerable
+        };
+        assert!(answerable(json!([one.clone()])));
+        assert!(!answerable(json!([multi])));
+        assert!(!answerable(json!([one.clone(), one])));
+    }
+
+    #[test]
+    fn a_tool_use_without_an_id_is_unknown() {
+        let mut m = Mapper::default();
+        let line =
+            json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}})
+                .to_string();
+        assert!(matches!(m.line(&line)[..], [ChatBody::Unknown { .. }]));
     }
 
     #[test]
