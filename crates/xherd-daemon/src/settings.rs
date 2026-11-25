@@ -62,6 +62,10 @@ pub struct ConfigPatch {
     pub sensitive_paths: Option<Vec<String>>,
     /// Tool → default version; an empty version removes the tool's default.
     pub toolchain_defaults: Option<std::collections::BTreeMap<String, String>>,
+    /// Appearance (#202, R13): what a job page opens on.
+    pub ui: Option<xherd_core::config::UiSettings>,
+    /// Seconds a permission request waits for an answer (30 to 3600).
+    pub permission_wait_sec: Option<u64>,
 }
 
 fn bad(message: impl Into<String>) -> ActionError {
@@ -209,6 +213,15 @@ pub fn apply(c: &mut Config, p: ConfigPatch) -> Result<(), ActionError> {
             return Err(bad("pauseTimeoutSec must be 5 to 3600"));
         }
         c.pause_timeout_sec = n;
+    }
+    if let Some(u) = p.ui {
+        c.ui = u;
+    }
+    if let Some(n) = p.permission_wait_sec {
+        if !(30..=3600).contains(&n) {
+            return Err(bad("permissionWaitSec must be 30 to 3600"));
+        }
+        c.permission_wait_sec = n;
     }
     if let Some(n) = p.event_retention_days {
         if n == 0 {
@@ -583,6 +596,28 @@ mod tests {
         }
         assert!(serde_json::from_value::<ConfigPatch>(json!({"port": 1})).is_err());
         assert!(serde_json::from_value::<ConfigPatch>(json!({"userToken": "x"})).is_err());
+    }
+
+    /// #202 R13: `ui.jobView` and `permissionWaitSec` are patched and checked.
+    #[test]
+    fn ui_and_permission_wait_are_patched() {
+        let patch = |v: Value| -> ConfigPatch { serde_json::from_value(v).unwrap() };
+        let mut c = Config::default();
+        apply(
+            &mut c,
+            patch(json!({"ui": {"jobView": "terminal"}, "permissionWaitSec": 60})),
+        )
+        .unwrap();
+        assert_eq!(c.ui.job_view, xherd_core::config::JobView::Terminal);
+        assert_eq!(c.permission_wait_sec, 60);
+        for bad in [
+            json!({"permissionWaitSec": 29}),
+            json!({"permissionWaitSec": 3601}),
+        ] {
+            assert_eq!(apply(&mut c, patch(bad)).unwrap_err().code, "bad_config");
+        }
+        assert_eq!(c.permission_wait_sec, 60);
+        assert!(serde_json::from_value::<ConfigPatch>(json!({"ui": {"jobView": "x"}})).is_err());
     }
 
     /// #192 R3a: the upload limits apply together and refuse nonsense.
