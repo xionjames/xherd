@@ -1659,6 +1659,10 @@ impl Actor {
         use xherd_core::chat::{ChatBody, NoticeKind};
         self.chat = None;
         let (true, Some(session)) = (self.job.status.is_live(), self.job.session.clone()) else {
+            // No transcript line will ever close a question now (R23).
+            self.job
+                .waiting
+                .retain(|w| w.kind != xherd_core::job::WaitKind::Question);
             return;
         };
         let (notice, text) = if self.job.ask_hold.is_some() {

@@ -294,3 +294,19 @@ async fn a_blocked_job_still_takes_the_answer() {
     answer(&t, "q1", 0).await.unwrap();
     assert!(t.drv.calls().contains(&"send-keys SC-1 1".to_string()));
 }
+
+#[tokio::test]
+async fn a_question_card_does_not_outlive_the_job() {
+    let t = running().await;
+    append(&t.transcript, &ask("q1", store_question()));
+    cards(&t, 1).await;
+    t.d.action(
+        "SC-1",
+        UserAction::Cancel {
+            remove_worktree: false,
+        },
+    )
+    .await
+    .unwrap();
+    cards(&t, 0).await;
+}
