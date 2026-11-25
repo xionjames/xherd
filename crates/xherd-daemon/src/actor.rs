@@ -333,10 +333,10 @@ pub struct ActionError {
 
 /// Lines of scrollback an action's pane keeps for its log (R13).
 const ACTION_HISTORY_LINES: u32 = 20_000;
-/// How long Stop waits after Ctrl-C before killing the session (R11).
 /// The feature start command's prompt for a promoted job (R7).
 const PROMOTE_NOTE: &str = "This job was promoted from the quick flow: .xherd/spec/ticket.md holds what was asked, the commits on the branch are already made and memory.md says what was done. Run git status: uncommitted changes left by a dropped proposal belong in the tasks' files. Delete the stale .xherd/spec/pr.md if there is one.";
 
+/// How long Stop waits after Ctrl-C before killing the session (R11).
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
 /// R3: an action's folder, once symlinks are followed, stays inside the
