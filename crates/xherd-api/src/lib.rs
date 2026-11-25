@@ -283,7 +283,7 @@ impl From<ActionError> for ApiError {
             | "bad_memory" | "unknown_skill" | "bad_fallback" | "bad_assignment"
             | "mixed_runtime" => StatusCode::UNPROCESSABLE_ENTITY,
             "unknown_agent" | "no_such_skill" | "action_unknown" => StatusCode::NOT_FOUND,
-            "bad_path" | "bad_config" => StatusCode::BAD_REQUEST,
+            "bad_path" | "bad_config" | "bad_catalog_url" => StatusCode::BAD_REQUEST,
             "plugin_install_off" => StatusCode::FORBIDDEN,
             "unknown_plugin" => StatusCode::NOT_FOUND,
             "bad_plugin_source"
