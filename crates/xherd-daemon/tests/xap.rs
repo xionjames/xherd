@@ -2120,6 +2120,78 @@ async fn a_quick_jobs_large_commit_hold_suggests_promoting() {
     assert!(!why.contains("promote"), "{why}");
 }
 
+/// R2, R3, R3a: a quick job proposes its commit with no task, the approved
+/// commit is handed on as `commit`, and the job reaches the ship gate with a
+/// `pr.md` and no spec; a change request for code at the ship gate becomes
+/// one more commit.
+#[tokio::test]
+async fn a_quick_job_goes_from_its_commit_to_the_ship_gate() {
+    let t = setup_flow("quick").await;
+    git(t.wt.path(), &["config", "user.email", "t@t"]);
+    git(t.wt.path(), &["config", "user.name", "t"]);
+    std::fs::write(t.wt.path().join(".git/info/exclude"), ".xherd/\n").unwrap();
+    xap(&t, "q1", "stage.enter", json!({"stage": "implement"}))
+        .await
+        .unwrap();
+    std::fs::write(t.wt.path().join("a.txt"), "a\n").unwrap();
+    xap(
+        &t,
+        "q2",
+        "commit.propose",
+        json!({"id": "C01", "subject": "Add a", "files": ["a.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 1).await;
+    let a = get(&t).await;
+    assert_eq!(a.status, Status::WaitingInput);
+    assert!(matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C01"));
+
+    // Approval commits and hands the agent the commit command, not `next`.
+    act(&t, approve(None)).await.unwrap();
+    let a = get(&t).await;
+    assert_eq!(a.commits[0].status, CommitStatus::Done);
+    assert_eq!(a.next_prompt.as_deref(), Some("/xherd:commit C01"));
+    session_start(&t, 2).await;
+
+    // No review stage: the agent goes to ship and drafts `pr.md` without a spec.
+    xap(&t, "q3", "stage.enter", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    std::fs::write(t.wt.path().join(".xherd/spec/pr.md"), "# Add a\n").unwrap();
+    xap(&t, "q4", "gate.open", json!({"stage": "ship"}))
+        .await
+        .unwrap();
+    stop(&t, 3).await;
+    let a = get(&t).await;
+    assert_eq!(a.stage.as_deref(), Some("ship"));
+    assert!(
+        matches!(&a.gate, Some(Gate::Docs { stage, .. }) if stage == "ship"),
+        "{:?}",
+        a.gate
+    );
+    assert!(!t.wt.path().join(".xherd/spec/spec.md").exists());
+
+    // The user asks for more code at the ship gate: it becomes C02.
+    std::fs::write(t.wt.path().join("b.txt"), "b\n").unwrap();
+    xap(
+        &t,
+        "q5",
+        "commit.propose",
+        json!({"id": "C02", "subject": "Add b", "files": ["b.txt"]}),
+    )
+    .await
+    .unwrap();
+    stop(&t, 4).await;
+    let a = get(&t).await;
+    assert!(matches!(&a.gate, Some(Gate::Commit(c)) if c.id == "C02"));
+    act(&t, approve(None)).await.unwrap();
+    assert_eq!(
+        get(&t).await.next_prompt.as_deref(),
+        Some("/xherd:commit C02")
+    );
+}
+
 #[tokio::test]
 async fn a_file_too_large_to_scan_holds_a_commit() {
     let t = setup().await;
