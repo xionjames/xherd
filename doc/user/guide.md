@@ -44,7 +44,7 @@ After an upgrade xherd also rewrites the hook file and push guard of jobs that a
 
 **New job** (or `xherd new`) asks for:
 
-- a **name** (`refund-retry`: lowercase letters, digits and `-`), which is what the UI shows, the tmux session and the worktree folder, and the **workflow** (`feature`, `bugfix`, or *No workflow* for a plain session with your instructions and no gates; see [Picking a workflow](#picking-a-workflow));
+- a **name** (`refund-retry`: lowercase letters, digits and `-`), which is what the UI shows, the tmux session and the worktree folder, and the **workflow** (`feature`, `bugfix`, `quick`, or *No workflow* for a plain session with your instructions and no gates; see [Picking a workflow](#picking-a-workflow));
 - optionally a **ticket**: an issue URL or a key (`PROJ-123`, `#12`). The form says which tracker reads it; its key starts the branch name (`PROJ-123-refund-retry`), and it shows as a label beside the name. A URL no tracker reads is kept as a link;
 - the **repository**: a path inside the workspace, or a URL, cloned once into `<workspace>/repos/<host>/<path>` and fetched before each later use, and optionally the **base branch**. A repository given as a path is fetched from its `origin` before each job too (a failed fetch is only a hint; a repository without `origin` is left alone), and a plain local base branch (`main`) is fast-forwarded to `origin/main` when that is possible: when it is ahead, diverged, dirty or checked out in another worktree it is used as it is. When the ticket is an issue URL a tracker reads, the field fills in the issue's repository (marked "from the ticket") until you type your own, and may stay empty;
 - or, instead of a repository, **New project** (`xherd new --new-project`): xherd creates `<workspace>/projects/<project>`, runs `git init` there (branch `main`) with one empty commit, and the job's worktree branches from it. The project name defaults to the job's name; it follows the same rules and is refused with `path_exists` when the folder exists. There is no base branch (it is `main`), and a ticket URL does not fill a repository. The project then shows in the repository suggestions, so later jobs can use it as a local repository. If creation fails, the folder is removed again;
@@ -80,9 +80,22 @@ The built-in `bugfix` flow is for a defect: find the cause, prove it with a fail
 | implement (shown as *Fix*) | a commit proposal per fix task | The fix. Each fix task's `verify:` is the reproduction command: xherd runs it, and the task cannot be marked done while it fails |
 | review, ship, pr-review | as in the feature flow | The PR text also names the reproduction test and how it failed before the fix |
 
+## The quick flow
+
+The built-in `quick` flow is for a change that takes minutes: a typo, a version bump, a small refactor. It skips the spec, design and tasks gates and the review: the job makes the change, runs the repository's tests, and proposes one commit.
+
+| Stage | Gate | You review |
+|---|---|---|
+| implement (shown as *Change*) | a commit proposal | The diff of exactly the proposed files. xherd makes the commit when you approve |
+| ship, pr-review | as in the feature flow | The PR text, which is drafted from `ticket.md`, `memory.md` and the branch's commits (a quick job has no spec), and the decisions on PR comments |
+
+The job writes `.xherd/spec/ticket.md` (what was asked) and `memory.md`, and no `spec.md`, `design.md`, `tasks.md` or `review.md`. Asking for changes at the commit gate revises the proposal; at the ship gate, a request for more code becomes one more commit (`C02`…) and the job returns to ship. Every tripwire applies as in other flows.
+
+When the change turns out bigger than expected, the job may ask whether to promote it (a held large diff says so too). **Promote to feature** (a button in the job page header, or `xherd promote <job>`) moves the job to the feature flow, at the spec stage, when it is `waiting-input`, `idle`, `paused` or `error` and has no pull request yet. The worktree, branch, committed work and `memory.md` stay; an open commit proposal is dropped (its changes stay in the worktree, uncommitted); the session ends and a new one starts with the feature command, which reads `ticket.md` and the work already done and plans only what remains. Only you can promote a job, never the agent or autonomy, and it is one way: there is no demotion.
+
 ### Picking a workflow
 
-Use **feature** for new behaviour or a change that needs a spec and a design; **bugfix** when something that should work does not and a test can show it; **No workflow** for a plain session with no documents and no gates. The workflow is chosen when the job is created (`xherd new --flow bugfix`) and stays for its life.
+Use **quick** for a small, obvious change; **feature** for new behaviour or a change that needs a spec and a design (its `spec.md` and `design.md` are sized to the change, and a small one says in its assumptions that **quick** would have fitted); **bugfix** when something that should work does not and a test can show it; **No workflow** for a plain session with no documents and no gates. The workflow is chosen when the job is created (`xherd new --flow bugfix`) and stays for its life, except that a quick job can be promoted to feature.
 
 ## Sessions and memory
 
@@ -283,6 +296,7 @@ In Docker, prefix these with `docker exec -u xherd-daemon xherd` (for example `d
 | `xherd approve <job>` / `xherd changes <job> "<comment>"` | Approve, or ask for revisions |
 | `xherd send <job> "<text>"` | Type into the job's session (also answers a question) |
 | `xherd pause\|resume\|cancel <job>` | Lifecycle; `xherd pause --all` stops every job at once; `cancel --remove-worktree` also deletes the worktree |
+| `xherd promote <job>` | Move a waiting quick job (no PR yet) to the feature flow |
 | `xherd actions <job>`, `xherd run <job> <action> [--approve]`, `xherd stop <job> <action>` | List, run and stop a job's actions |
 | `xherd upload <job> FILE…`, `xherd download <job> PATH [-o FILE]` | Send files to a job, or fetch one from its worktree |
 | `xherd talk <job> "<text>"` / `xherd finish <job>` | Ask a stopped job something, and end that session |
