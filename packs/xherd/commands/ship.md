@@ -53,8 +53,9 @@ Read the xherd rules in `{{path:rules}}` first and follow them.
      another. GitHub: `gh pr edit --body-file .xherd/pr-body.md`, and the title with
      `gh api -X PATCH repos/<owner>/<repo>/pulls/<number> -F title=@.xherd/pr-title.txt`.
      GitLab: `glab api -X PUT projects/<id>/merge_requests/<iid> -F title=@.xherd/pr-title.txt -F description=@.xherd/pr-body.md`
-     (if `glab api` refuses `@file`, say so with `xherd ask`; do not put the
-     text on the command line).
+     (if `glab api` refuses `@file`, ask the user, for example
+     `xherd ask "glab api refuses @file for the MR title: how should I update it?"`;
+     do not put the text on the command line).
 8. Report it, after an update too: `xherd pr opened --url https://github.com/acme/app/pull/42`
    (with the real URL).
 9. Update `memory.md` and stop.
